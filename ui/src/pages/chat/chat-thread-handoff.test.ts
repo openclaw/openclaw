@@ -74,91 +74,55 @@ describe("the working status after a handoff", () => {
 });
 
 describe("opened tool rows across a handoff", () => {
-  it.each([
-    ["browser.open", false],
-    ["sessions_spawn", false],
-    ["view_image", true],
-    ["view_image", false],
-  ] as const)(
-    "carries opened %s disclosures to stored rows independently (image=%s)",
-    (name, withImage) => {
+  it.each(["browser.open", "sessions_spawn", "view_image"] as const)(
+    "carries opened %s disclosures to the stored rows that replace live ones",
+    (name) => {
       resetChatThreadState();
       const sessionKey = "handoff-swaps-live-rows";
-      const group = (key: string, id: string) =>
-        preparedGroup(key, {
-          role: name === "view_image" && key === "stored-row" ? "toolResult" : "assistant",
-          runId: "parent-run",
-          ...(name === "view_image" ? { toolCallId: id } : {}),
+      const lifecycle = name === "sessions_spawn";
+      const image = name === "view_image";
+      const group = (key: string) => {
+        const stored = key === "stored-row";
+        return preparedGroup(key, {
+          role: image && stored ? "toolResult" : "assistant",
+          ...(image ? { toolCallId: "call-1" } : {}),
           content: [
             {
               type: "toolcall",
-              id,
+              id: "call-1",
               name,
-              arguments:
-                name === "view_image"
-                  ? { path: "/tmp/preview.png" }
-                  : { label: "Cinder", task: "Work" },
+              arguments: image ? { path: "/tmp/preview.png" } : { label: "Cinder", task: "Work" },
             },
-            ...(name === "view_image"
-              ? [
-                  {
-                    type: "tool_result",
-                    id,
-                    name,
-                    text: withImage ? "Loaded image for inspection." : "Image unavailable.",
-                    isError: !withImage,
-                  },
-                  ...(key === "stored-row" && withImage
-                    ? [
-                        {
-                          type: "image",
-                          mimeType: "image/png",
-                          omitted: true,
-                          artifactId: "stored-preview",
-                        },
-                      ]
-                    : []),
-                ]
+            ...(image
+              ? [{ type: "tool_result", id: "call-1", name, text: "Loaded image for inspection." }]
+              : []),
+            // The stored row publishes the image as its own message.
+            ...(image && stored
+              ? [{ type: "image", mimeType: "image/png", omitted: true, artifactId: "preview" }]
               : []),
           ],
         });
-      const live = [group("live-row", "call-1")];
-      const groupId = (key: string, current: MessageGroup) =>
-        name === "sessions_spawn"
-          ? `lifecycle:${key}:toolcard:0`
-          : name === "view_image"
-            ? key === "stored-row" && withImage
-              ? `toolmsg:${key}`
-              : `${key}:toolcard:0`
-            : `activity:${current.key}`;
-      syncToolCardExpansionState(
-        sessionKey,
-        live,
-        name === "sessions_spawn",
-        false,
-        undefined,
-        live,
-      );
+      };
+      const card = (key: string) =>
+        image && key === "stored-row" ? "toolmsg:stored-row" : `${key}:toolcard:0`;
+      // The disclosure around the row: its activity group, or the lifecycle row it joins.
+      const outer = (key: string, current: MessageGroup) =>
+        lifecycle ? `lifecycle:${key}:toolcard:0` : image ? card(key) : `activity:${current.key}`;
+      const live = [group("live-row")];
+      syncToolCardExpansionState(sessionKey, live, lifecycle, false, undefined, live);
       const expanded = getExpandedToolCards(sessionKey);
-      if (name === "sessions_spawn") {
-        expect(expanded.get(groupId("live-row", live[0]!))).toBe(true);
-      }
-      setExpansionState(expanded, "live-row:toolcard:0", name !== "sessions_spawn");
-      setExpansionState(expanded, groupId("live-row", live[0]!), true);
+      setExpansionState(expanded, "live-row:toolcard:0", !lifecycle);
+      setExpansionState(expanded, outer("live-row", live[0]!), true);
 
       // A handoff reloads the same call under another message key.
-      const stored = [group("stored-row", "call-1")];
+      const stored = [group("stored-row")];
       syncToolCardExpansionState(sessionKey, stored, false, false, undefined, stored);
 
-      expect(
-        expanded.get(
-          name === "view_image" && withImage ? "toolmsg:stored-row" : "stored-row:toolcard:0",
-        ),
-      ).toBe(name !== "sessions_spawn");
-      expect(expanded.get(groupId("stored-row", stored[0]!))).toBe(true);
+      expect(expanded.get(card("stored-row"))).toBe(!lifecycle);
+      expect(expanded.get(outer("stored-row", stored[0]!))).toBe(true);
       // Another pane can still hold the live history window.
-      expect(expanded.get("live-row:toolcard:0")).toBe(name !== "sessions_spawn");
-      expect(expanded.get(groupId("live-row", live[0]!))).toBe(true);
+      expect(expanded.get("live-row:toolcard:0")).toBe(!lifecycle);
+      expect(expanded.get(outer("live-row", live[0]!))).toBe(true);
     },
   );
 

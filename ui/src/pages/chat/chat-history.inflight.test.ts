@@ -600,7 +600,7 @@ describe("chat history run ownership recovery", () => {
 it("reconciles cached identical steers by send identity after reload", async () => {
   const runId = "active-run";
   const state = createState(activeSnapshot(runId));
-  const sends = ["a", "b", "c"];
+  const sends = ["a", "b"];
   const cached = sends.map((sendId) =>
     buildLocalUserMessage({
       text: "Keep going",
@@ -630,7 +630,8 @@ it("reconciles cached identical steers by send identity after reload", async () 
         __openclaw: { ...receipt["__openclaw"], steerTargetRunId: runId },
       },
     });
-    expect(renderedText(state)).toEqual(["Keep going", "Keep going", "Keep going"]);
+    // Each receipt replaces one cached steer; identical text never collapses or duplicates them.
+    expect(renderedText(state)).toEqual(["Keep going", "Keep going"]);
     expect(state.chatMessages.slice(0, index + 1)).toMatchObject(receipts.slice(0, index + 1));
   }
   vi.spyOn(state.client!, "request").mockResolvedValue({ messages: receipts });

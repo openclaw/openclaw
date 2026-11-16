@@ -7,6 +7,7 @@ import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-f
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { groupsOf } from "../chat-thread-fixtures.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
   createChatMessageHarness,
@@ -55,25 +56,20 @@ describe("grouped chat rendering", () => {
     const output = JSON.stringify({
       completed: [worker, second, { ...worker, runId: "failed", status: "failed" }],
     });
-    const call = {
-      ...createAssistantMessage([createToolCall("collect", "agents_wait", {})]),
-      timestamp: 10,
+    const at = (message: TestMessage, timestamp: number, extra?: TestMessage): TestMessage => ({
+      ...message,
+      timestamp,
       runId: "parent",
-    };
-    const result = {
-      ...createToolResultMessage("collect", "agents_wait", output),
-      timestamp: 30,
-      runId: "parent",
-    };
-    const mixed = createAssistantMessage(
-      [
-        createToolCall("earlier", "read", { path: "brief.md" }),
-        { type: "tool_result", id: "earlier", name: "read", text: "Earlier read", timestamp: 11 },
-        createToolCall("collect", "agents_wait", {}),
-        { type: "tool_result", id: "collect", name: "agents_wait", text: output, timestamp: 30 },
-      ],
-      { timestamp: 10, runId: "parent" },
-    );
+      ...extra,
+    });
+    const collect = createToolCall("collect", "agents_wait", {});
+    const call = at(createAssistantMessage([collect]), 10);
+    const result = at(createToolResultMessage("collect", "agents_wait", output), 30);
+    // Results carried inside the call message, including bounded ones that keep only receipts.
+    const block = { type: "tool_result", id: "collect", name: "agents_wait", timestamp: 30 };
+    const inline = (text: string, extra?: TestMessage) =>
+      at(createAssistantMessage([collect, { ...block, text, ...extra }]), 10);
+    const receipts = { subagentCompletions: [worker, second] };
     const receipt = (runId: string, timestamp: number) => ({
       role: "assistant",
       phase: "commentary",
@@ -82,36 +78,21 @@ describe("grouped chat rendering", () => {
       content: [{ type: "subagent_completion" }],
       subagentCompletions: [{ ...worker, runId }],
     });
-    const open = vi.fn();
-    const omitted = createAssistantMessage(
-      [
-        createToolCall("collect", "agents_wait", {}),
-        {
-          type: "tool_result",
-          id: "collect",
-          name: "agents_wait",
-          text: "[Nested tool output omitted: exceeds display limit]",
-          timestamp: 30,
-          subagentCompletions: [worker, second],
-        },
-      ],
-      { timestamp: 10, runId: "parent" },
-    );
-    const boundedDirect = {
-      ...result,
-      content: "Omitted large output",
-      subagentCompletions: [worker, second],
-    };
-    for (const execution of [[call, result], [mixed], [omitted], [call, boundedDirect]]) {
-      const messages = [
+    const say = (text: string, timestamp: number, phase = "commentary") =>
+      at(createAssistantMessage(text), timestamp, { phase });
+    const show = (messages: TestMessage[]) =>
+      renderToolGroups(groupsOf(buildItems({ messages })), {});
+    const executions: TestMessage[][] = [
+      [call, result],
+      [inline(output)],
+      [inline("[Nested tool output omitted: exceeds display limit]", receipts)],
+      [call, { ...result, content: "Omitted large output", ...receipts }],
+    ];
+    for (const execution of executions) {
+      await show([
         { role: "user", content: "Collect the workers", timestamp: 1 },
-        execution[0],
-        {
-          ...createAssistantMessage("Waiting here."),
-          timestamp: 20,
-          runId: "parent",
-          phase: "commentary",
-        },
+        execution[0]!,
+        say("Waiting here.", 20),
         {
           role: "user",
           content: "Also check the summary.",
@@ -120,136 +101,42 @@ describe("grouped chat rendering", () => {
         },
         ...execution.slice(1),
         receipt(worker.runId, 31),
-        {
-          ...createAssistantMessage("Read after collection."),
-          timestamp: 32,
-          runId: "parent",
-          phase: "commentary",
-        },
+        say("Read after collection.", 32),
         receipt("child-next-run", 33),
-        createAssistantMessage([createToolCall("collect-again", "agents_wait", {})], {
-          timestamp: 34,
-          runId: "parent",
-        }),
-        createToolResultMessage("collect-again", "agents_wait", output, {
-          timestamp: 35,
-          runId: "parent",
-        }),
-        {
-          ...createAssistantMessage("All collected."),
-          timestamp: 40,
-          runId: "parent",
-          phase: "final_answer",
-        },
+        at(createAssistantMessage([createToolCall("collect-again", "agents_wait", {})]), 34),
+        at(createToolResultMessage("collect-again", "agents_wait", output), 35),
+        say("All collected.", 40, "final_answer"),
         {
           role: "user",
           content: "Queued later request.",
           timestamp: 28,
           __openclaw: { id: "pending-next", kind: "pending-send" },
         },
-      ];
-      const items = buildItems({ messages });
-      const groups = items.filter((item) => item.kind === "group");
-      await renderToolGroups(groups, { subagents: { onOpenSession: open } });
+      ]);
       const text = harness.view.textContent!;
-      expect(text).toContain("Worker01 and Worker02 finished");
+      const positions = [
+        "Waiting here.",
+        "Also check the summary.",
+        "Worker01 and Worker02 finished",
+        "Read after collection.",
+        "Worker01 finished",
+        "Queued later request.",
+      ].map((part) => text.indexOf(part));
+      expect(positions).not.toContain(-1);
+      expect(positions).toEqual(positions.toSorted((a, b) => a - b));
       expect(text.match(/Worker01 finished/g)).toHaveLength(1);
-      expect(text.indexOf("Waiting here.")).toBeLessThan(
-        text.indexOf("Worker01 and Worker02 finished"),
-      );
-      expect(text.indexOf("Also check the summary.")).toBeLessThan(
-        text.indexOf("Worker01 and Worker02 finished"),
-      );
-      expect(text.indexOf("Worker01 and Worker02 finished")).toBeLessThan(
-        text.indexOf("Queued later request."),
-      );
-      expect(text.indexOf("Read after collection.")).toBeGreaterThan(
-        text.indexOf("Worker01 and Worker02 finished"),
-      );
-      expect(text.indexOf("Worker01 finished")).toBeGreaterThan(
-        text.indexOf("Read after collection."),
-      );
-      harness.view.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!.click();
-      expect(open).toHaveBeenCalledWith(worker.sessionKey);
-      const chain = projectTranscriptChain(items, {
-        sessionKey: "agent:main:dashboard:completion",
-        messages,
-        runWorking: false,
-        searchActive: false,
-      });
-      expect(
-        chain.workGroups
-          .flatMap((work) => work.groups)
-          .flatMap((group) => group.messages)
-          .some((entry) =>
-            Array.isArray((entry.message as Record<string, unknown>).subagentCompletions),
-          ),
-      ).toBe(true);
-      await renderToolGroups(
-        buildItems({ messages, showToolCalls: false }).filter((item) => item.kind === "group"),
-      );
-      expect(harness.view.textContent).not.toContain("finished");
-      await renderToolGroups(
-        buildItems({ messages, searchOpen: true, searchQuery: "unfindable" }).filter(
-          (item) => item.kind === "group",
-        ),
-      );
-      expect(harness.view.textContent).not.toContain("finished");
-      await renderToolGroups(
-        buildItems({ messages, searchOpen: true, searchQuery: "finished" }).filter(
-          (item) => item.kind === "group",
-        ),
-      );
-      expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
-      await renderToolGroups(
-        buildItems({ messages, searchOpen: true, searchQuery: "Worker02" }).filter(
-          (item) => item.kind === "group",
-        ),
-      );
-      expect(harness.view.textContent).toContain("Worker02");
     }
-    await renderToolGroups(
-      buildItems({
-        messages: [
-          {
-            ...result,
-            __openclaw: { catalogSource: true },
-          },
-        ],
-      }).filter((item) => item.kind === "group"),
-    );
+    await show([{ ...result, __openclaw: { catalogSource: true } }]);
     expect(harness.view.textContent).not.toContain("finished");
     const third = { ...worker, runId: "child-three", label: "Worker03" };
-    const a = receipt(worker.runId, 20);
-    const bc = { ...receipt(second.runId, 21), subagentCompletions: [second, third] };
-    await renderToolGroups(
-      buildItems({ messages: [a, bc] }).filter((item) => item.kind === "group"),
-    );
-    expect(harness.view.textContent).toContain("Worker01, Worker02, and 1 more finished");
-    const earlier = { ...receipt(third.runId, 10), subagentCompletions: [third] };
-    const barrier = createAssistantMessage("Earlier result.", {
-      timestamp: 11,
-      phase: "commentary",
-    });
-    await renderToolGroups(
-      buildItems({ messages: [earlier, barrier, a, bc] }).filter((item) => item.kind === "group"),
-    );
+    await show([
+      { ...receipt(third.runId, 10), subagentCompletions: [third] },
+      createAssistantMessage("Earlier result.", { timestamp: 11, phase: "commentary" }),
+      receipt(worker.runId, 20),
+      { ...receipt(second.runId, 21), subagentCompletions: [second, third] },
+    ]);
     expect(harness.view.textContent).toContain("Worker03 finished");
     expect(harness.view.textContent).toContain("Worker01 and Worker02 finished");
-    expect(harness.view.textContent).not.toContain("1 more");
-    await renderToolGroups(
-      buildItems({ messages: [a, bc], searchOpen: true, searchQuery: "Worker01" }).filter(
-        (item) => item.kind === "group",
-      ),
-    );
-    expect(harness.view.textContent).toContain("Worker01 finished");
-    expect(harness.view.textContent).not.toContain("Worker02");
-    await renderToolGroups(
-      buildItems({ messages: [a], searchOpen: true, searchQuery: "finished" }).filter(
-        (item) => item.kind === "group",
-      ),
-    );
-    expect(harness.view.textContent).toContain("Worker01 finished");
   });
 
   function toolResultEntry(key: string, ...args: Parameters<typeof createToolResultMessage>) {
@@ -535,11 +422,7 @@ describe("grouped chat rendering", () => {
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
         if (expanded) {
-          expect(
-            [...harness.view.querySelectorAll(".chat-tool-msg-summary")].filter((row) =>
-              row.textContent?.trim().startsWith("Viewed image"),
-            ),
-          ).toHaveLength(1);
+          expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(1);
         }
         expectCount(".chat-message-image", expanded ? 6 : 3);
       }

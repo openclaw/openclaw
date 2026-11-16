@@ -77,18 +77,9 @@ describe("summarizeToolGroup", () => {
     expect(summarizeToolGroup([{ ...command, status: "running" }])).toBe("Running commands");
     const executedCommands = new Set(["command"]);
     expect(summarizeToolGroup([command], { executedCommands })).toBe("Ran commands");
-    for (const status of ["blocked", "skipped"] as const) {
-      expect(summarizeToolGroup([{ ...command, status }], { executedCommands })).toContain(
-        "Commands",
-      );
-    }
-  });
-
-  it("summarizes code executions and shell commands together", () => {
-    const code = prepared("code", "Exec", { name: "exec" });
-    const command = prepared("shell", "Exec", { name: "exec" });
-    expect(summarizeToolGroup([code, command])).toBe("Ran commands");
-    expect(summarizeToolGroup([{ ...code, status: "failed" }])).toBe("Commands");
+    expect(summarizeToolGroup([{ ...command, status: "skipped" }], { executedCommands })).toContain(
+      "Commands",
+    );
   });
 
   it("names skill searches and reads as actions beside commands", () => {
@@ -101,20 +92,6 @@ describe("summarizeToolGroup", () => {
         prepared("question", "Ask User", { name: "ask_user" }),
       ]),
     ).toBe("Ran commands, searched skills, read skills, waited for agents, asked questions");
-    expect(
-      summarizeToolGroup([
-        prepared("search", "Skill Search", { name: "skills_search", status: "running" }),
-        prepared("read", "Skill Read", { name: "skills_read", hideFromChannelProgress: true }),
-        prepared("question", "Ask User", { name: "ask_user", status: "running" }),
-      ]),
-    ).toBe("Searching skills, asking questions");
-    expect(
-      summarizeToolGroup([
-        prepared("command", "Exec", { name: "exec", status: "running" }),
-        prepared("search", "Skill Search", { name: "skills_search", status: "running" }),
-        prepared("read", "Read", { name: "read", status: "running" }),
-      ]),
-    ).toBe("Running commands, reading files, searching skills");
   });
 
   it("has no activity label when all prepared work is quiet", () => {

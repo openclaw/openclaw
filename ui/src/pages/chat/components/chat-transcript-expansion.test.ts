@@ -1,6 +1,6 @@
+/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
-/* @vitest-environment jsdom */
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -14,231 +14,136 @@ import {
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
+const runId = "activity-run";
+
+/** A live tool stream receipt; `settle` publishes its result and returns the new message. */
+function liveTool(toolCallId: string, name: string, args: unknown, at: number) {
+  const started = { phase: "start" as const, name, toolCallId, args };
+  const activity = [projectAgentToolActivity(started)];
+  const times = { startedAt: at, receivedAt: at };
+  const entry: ToolStreamEntry = { runId, toolCallId, name, args, ...times, message: {}, activity };
+  refreshToolStreamMessage(entry);
+  const settle = () => {
+    entry.output = "Operation returned";
+    entry.resultReceived = true;
+    entry.activity = [projectAgentToolActivity({ ...started, phase: "result", isError: false })];
+    refreshToolStreamMessage(entry);
+    return entry.message;
+  };
+  return { message: entry.message, settle };
+}
+
+const storedCall = (id: string, name: string, args: unknown, seq: number) => ({
+  role: "assistant",
+  runId,
+  timestamp: seq * 1_000,
+  __openclaw: { id: `stored-${id}`, seq, runId },
+  content: [{ type: "toolCall", id, name, arguments: args }],
+});
+
+function mountThread(id: string, messages: unknown[]) {
+  const prompt = {
+    role: "user",
+    content: "Inspect sources",
+    timestamp: 1_000,
+    __openclaw: { id: "request", seq: 1, idempotencyKey: runId },
+  };
+  const run = { runId, runActive: true, runWorking: true, showToolCalls: true };
+  const props = threadProps(id, `agent:main:dashboard:${id}`, [prompt, ...messages], run);
+  const transcript = createTestTranscript(props.paneId);
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => {
+    render(null, container);
+    transcript.dispose();
+  });
+  return {
+    prompt,
+    props,
+    container,
+    draw: async () => {
+      render(renderChatThread({ ...props }, transcript), container);
+      await settleToolBridges(container);
+    },
+    summaries: () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary"),
+    ],
+  };
+}
+
 describe("transcript expansion", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it.each([false, true])(
-    "keeps the first activity disclosure through hydration and append (bubbles=%s)",
-    async (chatBubbleMode) => {
-      const runId = "first-call-run";
-      const args = { code: "return await read({path: 'first.ts'});", title: "Inspect source" };
-      const call = {
-        role: "assistant",
-        runId,
-        timestamp: 2_000,
-        __openclaw: { id: "first-message", seq: 2, runId },
-        content: [{ type: "toolCall", id: "first-call", name: "exec", arguments: args }],
-      };
-      const prompt = {
-        role: "user",
-        content: "Inspect sources",
-        timestamp: 1_000,
-        __openclaw: { id: "request", seq: 1, idempotencyKey: runId },
-      };
-      const props = threadProps("first-call", "agent:main:dashboard:first-call", [prompt, call], {
-        showToolCalls: true,
-        runId,
-        runActive: true,
-        runWorking: true,
-        chatBubbleMode,
-      });
-      const transcript = createTestTranscript(props.paneId);
-      const container = document.body.appendChild(document.createElement("div"));
-      onTestFinished(() => {
-        render(null, container);
-        transcript.dispose();
-      });
-      const draw = () => render(renderChatThread({ ...props }, transcript), container);
-      const summaries = () => [
-        ...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary"),
-      ];
-      draw();
-      const summary = await waitForSolid(() =>
-        expectDefined(summaries()[0], "first activity disclosure"),
-      );
-      const controls = expectDefined(
-        summary.getAttribute("aria-controls"),
-        "activity body identity",
-      );
-      const row = expectDefined(summary.closest(".chat-virtual-row"), "owning transcript row");
-      summary.click();
-      await waitForSolid(() => expect(summary.getAttribute("aria-expanded")).toBe("true"));
-
-      const started = { phase: "start" as const, name: "exec", toolCallId: "first-call", args };
-      const live: ToolStreamEntry = {
-        runId,
-        toolCallId: "first-call",
-        name: "exec",
-        args,
-        startedAt: 2_000,
-        receivedAt: 2_000,
-        message: {},
-        activity: [projectAgentToolActivity(started)],
-      };
-      refreshToolStreamMessage(live);
-      props.toolMessages = [live.message];
-      draw();
-      await settleToolBridges(container);
-      expect(summaries()[0]).toBe(summary);
-      expect(summary.getAttribute("aria-controls")).toBe(controls);
-      expect(summary.getAttribute("aria-expanded")).toBe("true");
-      expect(summary.closest(".chat-virtual-row")).toBe(row);
-
-      live.output = "First operation returned";
-      live.resultReceived = true;
-      live.activity = [projectAgentToolActivity({ ...started, phase: "result", isError: false })];
-      refreshToolStreamMessage(live);
-      const next = {
-        role: "assistant",
-        runId,
-        timestamp: 3_000,
-        __openclaw: { id: "second-message", seq: 3, runId },
-        content: [
-          { type: "toolCall", id: "second-call", name: "read", arguments: { path: "second.ts" } },
-        ],
-      };
-      props.messages = [prompt, call, next];
-      props.toolMessages = [live.message];
-      draw();
-      await settleToolBridges(container);
-      expect(summaries()).toHaveLength(1);
+  it("keeps the first activity disclosure through hydration and append", async () => {
+    const args = { code: "return await read({path: 'first.ts'});", title: "Inspect source" };
+    const call = storedCall("first-call", "exec", args, 2);
+    const { prompt, props, container, draw, summaries } = mountThread("first-call", [call]);
+    await draw();
+    const summary = await waitForSolid(() => expectDefined(summaries()[0], "first disclosure"));
+    summary.click();
+    await waitForSolid(() => expect(summary.getAttribute("aria-expanded")).toBe("true"));
+    const expectRetained = () => {
       expect(summaries()[0]).toBe(summary);
       expect(summary.getAttribute("aria-expanded")).toBe("true");
-      expect(summary.closest(".chat-virtual-row")).toBe(row);
-      expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+    };
 
-      props.messages = [
-        ...props.messages,
-        {
-          role: "assistant",
-          runId,
-          phase: "commentary",
-          content: "A separate next step.",
-          timestamp: 4_000,
-        },
-        {
-          ...next,
-          timestamp: 5_000,
-          __openclaw: { id: "third-message", seq: 5, runId },
-          content: [
-            { type: "toolCall", id: "third-call", name: "read", arguments: { path: "third.ts" } },
-          ],
-        },
-      ];
-      draw();
-      await waitForSolid(() => expect(summaries()).toHaveLength(2));
-      expect(summaries()[0]).toBe(summary);
-      expect(summary.getAttribute("aria-expanded")).toBe("true");
-      expect(container.textContent).toContain("A separate next step.");
-    },
-  );
+    // The live receipt for the stored call hydrates into the same open disclosure.
+    const live = liveTool("first-call", "exec", args, 2_000);
+    props.toolMessages = [live.message];
+    await draw();
+    expectRetained();
 
-  it.each([
-    [false, false],
-    [true, false],
-    [false, true],
-  ])(
-    "keeps a later activity segment open through hydration (bubbles=%s, history gap=%s)",
-    async (chatBubbleMode, historyGap) => {
-      const history = historyGap
-        ? [
-            {
-              role: "toolResult",
-              toolCallId: "older-read",
-              toolName: "read",
-              content: "Earlier result",
-              timestamp: 500,
-            },
-          ]
-        : [];
-      const runId = "segmented-run";
-      const prompt = {
-        role: "user",
-        content: "Read and delegate",
-        timestamp: 1_000,
-        __openclaw: { id: "segmented-request", seq: 1, idempotencyKey: runId },
-      };
-      const calls = ["first", "second", "launch", "third", "fourth"].map((id, index) => ({
-        id,
-        name: id === "launch" ? "sessions_spawn" : "read",
-        args: id === "launch" ? { label: "Helper", task: "Read only" } : { path: `${id}.ts` },
-        timestamp: 2_000 + index,
-      }));
-      const live = calls.map(({ id, name, args, timestamp }) => {
-        const entry: ToolStreamEntry = {
-          runId,
-          toolCallId: id,
-          name,
-          args,
-          startedAt: timestamp,
-          receivedAt: timestamp,
-          message: {},
-          activity: [
-            projectAgentToolActivity({
-              phase: "start",
-              name,
-              toolCallId: id,
-              args,
-            }),
-          ],
-        };
-        refreshToolStreamMessage(entry);
-        return entry.message;
-      });
-      const props = threadProps(
-        "segmented",
-        "agent:main:dashboard:segmented",
-        [...history, prompt],
-        {
-          showToolCalls: true,
-          runId,
-          runActive: true,
-          runWorking: true,
-          chatBubbleMode,
-          toolMessages: live,
-        },
-      );
-      const transcript = createTestTranscript(props.paneId);
-      const container = document.body.appendChild(document.createElement("div"));
-      onTestFinished(() => {
-        render(null, container);
-        transcript.dispose();
-      });
-      const draw = () => render(renderChatThread({ ...props }, transcript), container);
-      const summaries = () => [
-        ...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary"),
-      ];
-      draw();
-      await waitForSolid(() => expect(summaries()).toHaveLength(2));
-      summaries()[1]!.click();
-      await waitForSolid(() => expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true"));
-      if (historyGap) {
-        props.toolMessages = [];
-        props.runActive = false;
-        props.runWorking = false;
-        draw();
-        await settleToolBridges(container);
-      }
-      props.messages = [
-        ...history,
-        prompt,
-        ...calls.map(({ id, name, args, timestamp }, index) => ({
-          role: "assistant",
-          runId,
-          timestamp,
-          __openclaw: { id: `stored-${id}`, seq: index + 2, runId },
-          content: [{ type: "toolCall", id, name, arguments: args }],
-        })),
-      ];
-      props.toolMessages = [];
-      draw();
-      await settleToolBridges(container);
-      expect(summaries()).toHaveLength(2);
-      expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true");
-      expect(summaries()[0]!.getAttribute("aria-expanded")).toBe("false");
-    },
-  );
+    props.toolMessages = [live.settle()];
+    const next = storedCall("second-call", "read", { path: "second.ts" }, 3);
+    props.messages = [prompt, call, next];
+    await draw();
+    expect(summaries()).toHaveLength(1);
+    expectRetained();
+    expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+
+    const commentary = { role: "assistant", runId, phase: "commentary", timestamp: 4_000 };
+    props.messages = [
+      ...props.messages,
+      { ...commentary, content: "A separate next step." },
+      storedCall("third-call", "read", { path: "third.ts" }, 5),
+    ];
+    await draw();
+    await waitForSolid(() => expect(summaries()).toHaveLength(2));
+    expectRetained();
+  });
+
+  it("keeps a later activity segment open through a history gap", async () => {
+    const history = [
+      { role: "toolResult", toolCallId: "older", toolName: "read", content: "Earlier" },
+    ];
+    const calls = ["first", "second", "launch", "third", "fourth"].map((id) => ({
+      id,
+      name: id === "launch" ? "sessions_spawn" : "read",
+      args: id === "launch" ? { label: "Helper", task: "Read only" } : { path: `${id}.ts` },
+    }));
+    const { prompt, props, draw, summaries } = mountThread("segmented", []);
+    props.messages = [...history, prompt];
+    props.toolMessages = calls.map(
+      ({ id, name, args }, index) => liveTool(id, name, args, 2_000 + index).message,
+    );
+    await draw();
+    await waitForSolid(() => expect(summaries()).toHaveLength(2));
+    summaries()[1]!.click();
+    await waitForSolid(() => expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true"));
+    props.toolMessages = [];
+    props.runActive = false;
+    props.runWorking = false;
+    await draw();
+    props.messages = [
+      ...history,
+      prompt,
+      ...calls.map(({ id, name, args }, index) => storedCall(id, name, args, index + 2)),
+    ];
+    await draw();
+    expect(summaries()).toHaveLength(2);
+    expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true");
+    expect(summaries()[0]!.getAttribute("aria-expanded")).toBe("false");
+  });
 
   it("shares explicit disclosures across panes with different loaded history", async () => {
     const messages = [

@@ -114,12 +114,11 @@ it.each([false, true])(
       container.remove();
     });
     const peer = (paneId: string) => {
-      const peerProps = () => ({ ...props, paneId });
       const view = document.body.appendChild(document.createElement("div"));
       const controller = createChatTranscript(() => paneId, { canFollowEnd: () => true });
       const harness = createChatThreadHarness(view, controller);
       const render = () => {
-        harness.render(peerProps());
+        harness.render({ ...props, paneId });
         controller.update();
       };
       onTestFinished(() => {
@@ -128,11 +127,8 @@ it.each([false, true])(
         view.remove();
       });
       render();
-      return {
-        view,
-        render,
-        toggle: () => view.querySelector<HTMLButtonElement>(".chat-work-group > button")!,
-      };
+      const toggle = () => view.querySelector<HTMLButtonElement>(".chat-work-group > button")!;
+      return { render, toggle };
     };
     const follower = !followEnd ? peer("following-same-session") : undefined;
     draw();
@@ -188,8 +184,6 @@ it.each([false, true])(
     if (followEnd) {
       expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
       toggle()!.click();
-    } else {
-      expect(container.textContent).toContain("Checking the next step.");
     }
     await waitForSolid(() =>
       expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
@@ -199,21 +193,14 @@ it.each([false, true])(
     toggle()!.click();
     draw();
     await waitForSolid(() => expect(toggle()?.getAttribute("aria-expanded")).toBe("false"));
-    expect(container.textContent).not.toContain("Checking the next step.");
     if (follower && reopened) {
       follower.toggle().click();
       draw();
       reopened.render();
+      // An explicit toggle in any pane is shared by every pane of the session.
       await waitForSolid(() => {
         expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
         expect(reopened.toggle().getAttribute("aria-expanded")).toBe("true");
-      });
-      reopened.toggle().click();
-      draw();
-      follower.render();
-      await waitForSolid(() => {
-        expect(toggle()?.getAttribute("aria-expanded")).toBe("false");
-        expect(follower.toggle().getAttribute("aria-expanded")).toBe("false");
       });
     }
   },

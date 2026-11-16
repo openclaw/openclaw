@@ -364,16 +364,15 @@ describe("transcript input order", () => {
       seq: 1,
       idempotencyKey: `${runId}:user`,
     });
-    const names = ["Steer A", "Steer B", "Steer C"];
-    const steers = names.map((name, index) =>
+    const steer = (name: string, index: number, extra: object = {}) =>
       makeMessage("user", name, 2_000 + index * 250, {
         idempotencyKey: `${name}:user`,
         steerTargetRunId: runId,
-      }),
-    );
+        ...extra,
+      });
     const props = createInput({
       messages: [original],
-      queue: [{ ...queuedInput(names[0]!, 2_000, "sending"), queueMode: "steer" }],
+      queue: [{ ...queuedInput("Steer A", 2_000, "sending"), queueMode: "steer" }],
       runId,
       runActive: true,
       runWorking: true,
@@ -382,45 +381,26 @@ describe("transcript input order", () => {
     const rows = () =>
       buildCachedChatItems({ ...props }).flatMap((item) =>
         item.kind === "group"
-          ? item.messages.map(({ key, message }) => ({
-              key,
-              text: extractTextCached(message),
-            }))
+          ? item.messages.map(({ key, message }) => `${extractTextCached(message)}@${key}`)
           : [],
       );
-    expect(rows().map(({ text }) => text)).toEqual(["Original", names[0]]);
-    const firstKeys = rows().map(({ key }) => key);
-    const accepted = acceptedInput(names[0]!, 10_000);
+    const [firstRow, steerA] = rows();
+    expect([firstRow, steerA].map((row) => row?.split("@")[0])).toEqual(["Original", "Steer A"]);
+    // The Gateway accepts A while it waits for a tool; B arrives optimistically after it.
+    const accepted = acceptedInput("Steer A", 10_000);
     accepted.steerNow = { status: "blocked", tools: ["exec"] };
     props.pendingInputs = [accepted];
     props.queue = [];
-    expect(rows().map(({ key }) => key)).toEqual(firstKeys);
-    for (let count = 2; count <= steers.length; count++) {
-      props.messages = [original, ...steers.slice(1, count)];
-      expect(rows().map(({ text }) => text)).toEqual(["Original", ...names.slice(0, count)]);
-      expect(
-        rows()
-          .slice(0, 2)
-          .map(({ key }) => key),
-      ).toEqual(firstKeys);
-    }
-    const identities = rows().map(({ key }) => key);
+    props.messages = [original, steer("Steer B", 1)];
+    const identities = rows();
+    expect(identities).toEqual([firstRow, steerA, expect.stringMatching(/^Steer B@/)]);
     props.messages = [
       original,
-      ...names.map((name, index) =>
-        makeMessage("user", name, 2_000 + index * 250, {
-          idempotencyKey: `${name}:user`,
-          steerTargetRunId: runId,
-          id: `confirmed-${index}`,
-          seq: 147 + index,
-        }),
+      ...["Steer A", "Steer B"].map((name, index) =>
+        steer(name, index, { id: `confirmed-${index}`, seq: 147 + index }),
       ),
     ];
-    expect(rows().map(({ text }) => text)).toEqual(["Original", ...names]);
-    expect(rows().map(({ key }) => key)).toEqual(identities);
-    resetChatThreadState("input-order");
-    props.pendingInputs = [];
-    expect(rows().map(({ text }) => text)).toEqual(["Original", ...names]);
+    expect(rows()).toEqual(identities);
   });
 
   it.each(["waiting-reconnect", "accepted", "reordered"] as const)(

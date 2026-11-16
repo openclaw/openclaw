@@ -423,10 +423,9 @@ describe("chat run publication", () => {
 
 it("settles unfinished tool activity when Stop ends the owning run", () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   const { state } = createSessionEventState({ chatRunId: "run" });
+  const summary = () => summarizeToolGroup(state.chatToolMessages.flatMap(readPreparedActivity));
   agentEvent(state, "run", 1, "tool", {
     name: "exec",
     toolCallId: "slow",
@@ -443,14 +442,10 @@ it("settles unfinished tool activity when Stop ends the owning run", () => {
     status: "running",
   });
   vi.advanceTimersByTime(80);
-  expect(summarizeToolGroup(state.chatToolMessages.flatMap(readPreparedActivity))).toBe(
-    "Running commands",
-  );
+  expect(summary()).toBe("Running commands");
   chatEvent(state, "run", "aborted", "");
   const cards = state.chatToolMessages.flatMap(extractToolCardsCached);
   expect(cards).toHaveLength(1);
   expect(resolveToolCardOutcome(cards[0]!, false)).toBe("unrecorded");
-  expect(summarizeToolGroup(state.chatToolMessages.flatMap(readPreparedActivity))).not.toContain(
-    "Running",
-  );
+  expect(summary()).not.toContain("Running");
 });

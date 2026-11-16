@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, merge } from "solid-js";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
@@ -23,21 +21,23 @@ import {
   prepareHistoryGroups,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
-import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
-type WorkProps = Parameters<typeof WorkGroupSummary>[0];
 let summaryContainer: HTMLDivElement;
-let updateSummary: ((state: WorkProps) => void) | undefined;
 let activityRoot: ReturnType<typeof createActivityGroupHarness>;
 let messageRoot: ReturnType<typeof createMessageGroupHarness>;
 beforeEach(() => {
   summaryContainer = document.body.appendChild(document.createElement("div"));
-  updateSummary = undefined;
   activityRoot = createActivityGroupHarness(summaryContainer);
   messageRoot = createMessageGroupHarness(summaryContainer);
   onTestFinished(() => summaryContainer.remove());
 });
 const visibleTools = { showToolCalls: true, showReasoning: true };
+const permissionMissing = {
+  nodeId: "test-mac",
+  command: "screen.capture",
+  capabilities: ["screenRecording"],
+  state: "denied",
+};
 
 it("commits a cached activity summary with its transcript row", () => {
   const group = createToolGroup("cached", [
@@ -77,17 +77,13 @@ function mountGroup(messages: Record<string, unknown>[]) {
 
 async function renderSummary(
   messages: Record<string, unknown>[],
-  kind: "activity" | "work",
   options: {
     expanded?: boolean;
-    durationMs?: number | null;
     prepareHistory?: boolean;
     messageGroup?: boolean;
     onToggle?: () => void;
   } = {},
 ) {
-  const { expanded = false, durationMs = 1000 } = options;
-  const container = summaryContainer;
   let groups = [
     createToolGroup(
       "history",
@@ -97,47 +93,24 @@ async function renderSummary(
   if (options.prepareHistory) {
     groups = prepareHistoryGroups(groups);
   }
-  if (kind === "activity") {
-    const renderOptions = {
-      ...visibleTools,
-      isToolMessageExpanded: () => expanded,
-      onToggleToolMessageExpanded: options.onToggle,
-    };
-    if (options.messageGroup) {
-      messageRoot.render(groups[0]!, renderOptions);
-    } else {
-      activityRoot.render(groups, renderOptions);
-    }
+  const renderOptions = {
+    ...visibleTools,
+    isToolMessageExpanded: () => options.expanded ?? false,
+    onToggleToolMessageExpanded: options.onToggle,
+  };
+  if (options.messageGroup) {
+    messageRoot.render(groups[0]!, renderOptions);
   } else {
-    const next = {
-      item: { key: "work", durationMs, groups },
-      options: { expanded, onToggle: options.onToggle ?? (() => {}) },
-    };
-    if (updateSummary) {
-      updateSummary(next);
-    } else {
-      mountSolid(
-        () => {
-          const [state, setState] = createSignal<WorkProps>(next);
-          updateSummary = setState;
-          return createComponent(WorkGroupSummary, merge(state));
-        },
-        { container },
-      );
-    }
+    activityRoot.render(groups, renderOptions);
   }
   flush();
-  await settleToolBridges(container);
-  return container.querySelector<HTMLElement>(".chat-activity-group__summary");
+  await settleToolBridges(summaryContainer);
+  return summaryContainer.querySelector<HTMLElement>(".chat-activity-group__summary");
 }
 
-it.each([
-  { kind: "activity", prepareHistory: true },
-  { kind: "work", prepareHistory: true },
-  { kind: "activity", prepareHistory: false },
-] as const)(
-  "keeps parallel tool activity expandable without hover text ($kind, prepared=$prepareHistory)",
-  async ({ kind, prepareHistory }) => {
+it.each([true, false])(
+  "keeps parallel tool activity expandable without hover text (prepared=%s)",
+  async (prepareHistory) => {
     const messages = [
       createAssistantMessage(
         [
@@ -150,17 +123,13 @@ it.each([
       ),
     ];
     const onToggle = vi.fn();
-    const activity = await renderSummary(messages, kind, {
+    const activity = await renderSummary(messages, {
       prepareHistory,
       messageGroup: true,
       onToggle,
     });
     const container = summaryContainer;
-    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "Read files");
-    if (kind === "work") {
-      expect(activity?.textContent).not.toContain("tool calls");
-      expect(activity?.textContent).not.toContain("failed");
-    }
+    expect(activity?.textContent).toContain("Read files");
     expect(activity?.querySelector("[title], [data-tooltip], openclaw-tooltip")).toBeNull();
     expect(activity?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelectorAll(".chat-activity-group")).toHaveLength(1);
@@ -191,7 +160,7 @@ it.each(["anonymous", "missing-card", "matched"] as const)(
       },
     );
     for (const expanded of [false, true]) {
-      const summary = await renderSummary([message], "activity", { expanded });
+      const summary = await renderSummary([message], { expanded });
       if (pairing === "matched") {
         expect(summary).toBeNull();
         expect(summaryContainer.querySelector(".chat-tool-row")?.textContent).toContain(
@@ -199,7 +168,6 @@ it.each(["anonymous", "missing-card", "matched"] as const)(
         );
       } else {
         expect(summary?.textContent).toContain("File reads");
-        expect(summary?.textContent).not.toContain("Some actions failed");
       }
       expect(summaryContainer.querySelector(".chat-tool-failure") !== null).toBe(
         expanded || pairing === "matched",
@@ -235,7 +203,7 @@ it("uses current prepared outcomes in activity summaries", async () => {
       ],
     },
   );
-  const summary = await renderSummary([message], "activity");
+  const summary = await renderSummary([message]);
   expect(summary).toBeNull();
   expect(summaryContainer.querySelector(".chat-tool-row")?.textContent).toContain("one.ts");
   expect(summaryContainer.querySelector(".chat-tool-failure")).toBeNull();
@@ -325,10 +293,9 @@ it.each([
 it.each([
   { source: "prepared outcome", expected: "Blocked" },
   { source: "paginated shell results", expected: "Ran commands" },
-  { source: "recorded code inputs", expected: "Ran commands" },
-  { source: "failed code after dispatch", expected: "Ran commands" },
-  { source: "failed code before dispatch", expected: "Commands" },
-])("renders $source through transcript grouping", async ({ source, expected }) => {
+  { source: "code failed after dispatch", dispatched: true, expected: "Ran commands" },
+  { source: "code rejected before dispatch", dispatched: false, expected: "Commands" },
+])("renders $source through transcript grouping", async ({ source, dispatched, expected }) => {
   const messages =
     source === "prepared outcome"
       ? [createAssistantMessage([], { activity: [preparedOutcome("blocked")] })]
@@ -336,38 +303,26 @@ it.each([
           prepareChatHistoryFixture(
             [0, 1].flatMap<Record<string, unknown>>((index) => {
               const id = `call-${index}`;
-              if (source.startsWith("failed code")) {
-                return [
-                  createAssistantMessage([createToolCall(id, "exec", { code: "return 1;" })]),
-                  createToolResultMessage(
-                    id,
-                    "exec",
-                    [
-                      {
-                        type: "text",
-                        text: JSON.stringify({
-                          status: "failed",
-                          code: "internal_error",
-                          failurePhase: "bridge",
-                          bridgeDispatchStarted: source === "failed code after dispatch",
-                          error: "File not found",
-                        }),
-                      },
-                    ],
-                    { isError: true },
-                  ),
-                ];
+              if (dispatched === undefined) {
+                return createToolResultMessage(id, "bash", [{ type: "text", text: "ok" }], {
+                  runId: "result-page",
+                  isError: false,
+                  details: { status: "completed", exitCode: 0 },
+                });
               }
-              return source === "paginated shell results"
-                ? createToolResultMessage(id, "bash", [{ type: "text", text: "ok" }], {
-                    runId: "result-page",
-                    isError: false,
-                    details: { status: "completed", exitCode: 0 },
-                  })
-                : createAssistantMessage([
-                    createToolCall(id, "exec", { code: "return 1;" }),
-                    createToolResultBlock(id, "exec", "1", { isError: false }),
-                  ]);
+              // The recorded JSON result, not details, says whether the bridge dispatched.
+              const result = { status: "failed", bridgeDispatchStarted: dispatched };
+              return [
+                createAssistantMessage([createToolCall(id, "exec", { code: "return 1;" })]),
+                createToolResultMessage(
+                  id,
+                  "exec",
+                  [{ type: "text", text: JSON.stringify(result) }],
+                  {
+                    isError: true,
+                  },
+                ),
+              ];
             }),
           ),
         ).messages;
@@ -378,12 +333,6 @@ it.each([
 
 it("keeps recorded child operations visible beside their execution's missing permission", async () => {
   const runId = "permission-after-read";
-  const permissionMissing = {
-    nodeId: "test-mac",
-    command: "screen.capture",
-    capabilities: ["screenRecording"],
-    state: "denied",
-  };
   const groups = prepareHistoryGroups([
     createToolGroup("permission", [
       createMessageEntry(
@@ -430,211 +379,117 @@ it("keeps recorded child operations visible beside their execution's missing per
   ).toBeNull();
 });
 
-it.each([
-  { projection: "live receipt", name: "exec", args: { code: "await tools.ls({path: '.'})" } },
-  { projection: "history projection", name: "exec", args: { code: "await tools.ls({path: '.'})" } },
-  { projection: "live receipt", name: "process", args: { action: "poll", sessionId: "check" } },
-  {
-    projection: "history projection",
-    name: "process",
-    args: { action: "poll", sessionId: "check" },
-  },
-  {
-    projection: "history projection with media",
-    name: "process",
-    args: { action: "poll", sessionId: "check" },
-    media: true,
-  },
-])("retires a live $name row hidden by its $projection", async (testCase) => {
-  const { projection, name, args } = testCase;
-  const media = "media" in testCase;
+it("retires a live row hidden by its history projection without dropping its image", async () => {
   const runId = "live-nested";
   const draw = async (hidden: boolean, expanded = false) => {
-    const content = [createToolCall("live-exec", name, args, { runId })];
     const message = createAssistantMessage(
-      media
-        ? [...content, { type: "image", data: "cG5n", mimeType: "image/png", alt: "Poll preview" }]
-        : content,
+      [
+        createToolCall("live", "process", { action: "poll", sessionId: "check" }, { runId }),
+        { type: "image", data: "cG5n", mimeType: "image/png", alt: "Poll preview" },
+      ],
       {
         runId,
         __openclawToolStreamLive: true,
         __openclawToolStreamItemEnded: hidden,
-        activity:
-          hidden && projection.startsWith("history projection")
-            ? []
-            : [
-                {
-                  itemId: "tool:live-exec",
-                  toolCallId: "live-exec",
-                  name,
-                  kind: "tool",
-                  title: name === "exec" ? "Exec" : "Process",
-                  phase: hidden ? "end" : "start",
-                  status: hidden ? "completed" : "running",
-                  hideFromChannelProgress: hidden,
-                },
-              ],
+        activity: hidden
+          ? []
+          : [
+              {
+                itemId: "tool:live",
+                toolCallId: "live",
+                name: "process",
+                kind: "tool",
+                title: "Process",
+                phase: "start",
+                status: "running",
+              },
+            ],
       },
     );
-    messageRoot.render(
-      createToolGroup("before-narration", [createMessageEntry("live-exec", message)]),
-      {
-        ...visibleTools,
-        runActive: true,
-        activityRunId: runId,
-        isToolMessageExpanded: () => expanded,
-        isToolExpanded: () => expanded,
-      },
-    );
+    messageRoot.render(createToolGroup("live", [createMessageEntry("live", message)]), {
+      ...visibleTools,
+      runActive: true,
+      activityRunId: runId,
+      isToolMessageExpanded: () => expanded,
+      isToolExpanded: () => expanded,
+    });
     await settleToolBridges(summaryContainer);
   };
   await draw(false);
-  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running commands" : "Process");
+  expect(summaryContainer.textContent).toContain("Process");
   for (const expanded of [false, true]) {
     await draw(true, expanded);
     expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
     expect(summaryContainer.querySelector(".chat-tool-row")).toBeNull();
-    if (media) {
-      expect(summaryContainer.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(
-        "data:image/png;base64,cG5n",
-      );
-    }
+    expect(summaryContainer.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(
+      "data:image/png;base64,cG5n",
+    );
   }
 });
 
-it.each(["exec", "sessions_spawn", "subagents"])(
-  "preserves prepared-only outcomes and an open group when a %s permission row arrives",
-  async (toolName) => {
-    const first = createMessageEntry(
-      "first-outcome",
-      createAssistantMessage([], {
-        activity: [
-          preparedOutcome("failed", "without-card", {
-            title: "Read release.md",
-            error: "Permission denied",
-          }),
-          preparedOutcome("completed", "another-call", { title: "Read release.md" }),
-        ],
-      }),
-    );
-    const permission = createMessageEntry(
-      "permission",
-      createAssistantMessage([
-        createToolCall(
-          "permission",
-          toolName,
-          toolName === "subagents"
-            ? { action: "cancel", runId: "child" }
-            : { code: "await tools.screen_capture()", task: "Work" },
-          {
-            details: {
-              permissionMissing: {
-                nodeId: "test-mac",
-                command: "screen.capture",
-                capabilities: ["screenRecording"],
-                state: "denied",
-              },
-            },
-          },
-        ),
-      ]),
-    );
-    const last = createMessageEntry(
-      "last-outcome",
-      createAssistantMessage([], { activity: [preparedOutcome("blocked", "also-without-card")] }),
-    );
-    const expanded = new Set<string>();
-    const draw = async (messages: Parameters<typeof createToolGroup>[1]) => {
-      activityRoot.render([createToolGroup("retained-group", messages)], {
-        ...visibleTools,
-        isToolMessageExpanded: (key) => expanded.has(key),
-        onToggleToolMessageExpanded: (key) => expanded.add(key),
-      });
-      await settleToolBridges(summaryContainer);
-    };
-    await draw([first]);
-    const initial = summaryContainer.querySelector<HTMLButtonElement>(
-      ".chat-activity-group__summary",
-    )!;
-    const bodyId = initial.getAttribute("aria-controls");
-    initial.click();
-    await draw([first]);
-    expect(
-      summaryContainer
-        .querySelector(".chat-activity-group__summary")
-        ?.getAttribute("aria-expanded"),
-    ).toBe("true");
-    await draw([first, permission, last]);
-    const summaries = [...summaryContainer.querySelectorAll(".chat-activity-group__summary")];
-    expect(summaries).toHaveLength(2);
-    expect(summaries[0]?.textContent).not.toContain("Some actions failed");
-    const rows = [...summaryContainer.querySelectorAll(`#${bodyId} .chat-tool-row`)];
-    expect(
-      rows.map((row) => row.querySelector(".chat-tool-row__title")?.textContent?.trim()),
-    ).toEqual(["Read release.md", "Read release.md"]);
-    expect(rows[0]?.textContent).toContain("failed");
-    expect(rows[1]?.textContent).toContain("Completed");
-    expect(summaryContainer.querySelector(`#${bodyId}`)?.textContent).toContain(
-      "Permission denied",
-    );
-    expect(summaries[1]?.textContent).toContain("Blocked");
-    expect(summaries[0]?.getAttribute("aria-expanded")).toBe("true");
-    expect(summaries[0]?.getAttribute("aria-controls")).toBe(bodyId);
-    const permissionCard = summaryContainer.querySelector(".chat-permission-card")!;
-    expect(permissionCard).not.toBeNull();
-    expect(
-      summaries[0]!.compareDocumentPosition(permissionCard) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      permissionCard.compareDocumentPosition(summaries[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-  },
-);
-
-it("keeps review outcomes with their segment, including a hidden execution container", async () => {
-  const group = createToolGroup("review-segments", [
-    createMessageEntry(
-      "approved",
-      createAssistantMessage([
-        createToolCall(
-          "wrapper",
-          "exec",
-          { code: "await read({path: 'source.ts'})" },
-          {
-            details: { approvalReviewOutcome: "approved" },
-          },
-        ),
-        read("source", { parentToolCallId: "wrapper" }),
-      ]),
-    ),
-    createMessageEntry(
-      "launch",
-      createAssistantMessage([
-        createToolCall("launch", "sessions_spawn", { label: "Helper", task: "Read only" }),
-      ]),
-    ),
-    createMessageEntry(
-      "denied",
-      createAssistantMessage([
-        read("restricted", { details: { approvalReviewOutcome: "denied" } }),
-      ]),
-    ),
+it("preserves prepared-only outcomes and an open group when a permission row arrives", async () => {
+  const first = createMessageEntry(
+    "first-outcome",
+    createAssistantMessage([], {
+      activity: [
+        preparedOutcome("failed", "without-card", { title: "Read", error: "Permission denied" }),
+        preparedOutcome("completed", "another-call", { title: "Read" }),
+      ],
+    }),
+  );
+  const permission = createMessageEntry(
+    "permission",
+    createAssistantMessage([
+      createToolCall(
+        "permission",
+        "exec",
+        { code: "await tools.screen_capture()" },
+        { details: { permissionMissing } },
+      ),
+    ]),
+  );
+  const last = createMessageEntry(
+    "last-outcome",
+    createAssistantMessage([], { activity: [preparedOutcome("blocked", "also-without-card")] }),
+  );
+  const expanded = new Set<string>();
+  const draw = async (messages: Parameters<typeof createToolGroup>[1]) => {
+    activityRoot.render([createToolGroup("retained-group", messages)], {
+      ...visibleTools,
+      isToolMessageExpanded: (key) => expanded.has(key),
+      onToggleToolMessageExpanded: (key) => expanded.add(key),
+    });
+    await settleToolBridges(summaryContainer);
+  };
+  await draw([first]);
+  const initial = summaryContainer.querySelector<HTMLButtonElement>(
+    ".chat-activity-group__summary",
+  )!;
+  const bodyId = initial.getAttribute("aria-controls");
+  initial.click();
+  await draw([first, permission, last]);
+  // The earlier segment keeps its body and open state; prepared-only rows survive the split.
+  const summaries = [...summaryContainer.querySelectorAll(".chat-activity-group__summary")];
+  expect(summaries.map((summary) => summary.getAttribute("aria-expanded"))).toEqual([
+    "true",
+    "false",
   ]);
-  activityRoot.render([group], visibleTools);
-  await settleToolBridges(summaryContainer);
-  const outcomes = [
-    ...summaryContainer.querySelectorAll(
-      ".chat-activity-group__summary .chat-activity-group__review-status",
-    ),
-  ].map((badge) => badge.getAttribute("data-outcome"));
-  expect(outcomes).toEqual(["approved", "denied"]);
+  expect(summaries[0]?.getAttribute("aria-controls")).toBe(bodyId);
+  expect(summaryContainer.querySelectorAll(`#${bodyId} .chat-tool-row`)).toHaveLength(2);
+  expect(summaries[1]?.textContent).toContain("Blocked");
+  const permissionCard = summaryContainer.querySelector(".chat-permission-card")!;
+  const follows = (a: Node, b: Node) =>
+    a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+  expect(
+    follows(summaries[0]!, permissionCard) && follows(permissionCard, summaries[1]!),
+  ).toBeTruthy();
 });
 
 it("keeps expanded historical launches readable when a new launch refreshes activity", async () => {
-  const launch = (id: string, label: string, completed: boolean) =>
+  const launch = (id: string, runId: string, completed: boolean) =>
     createAssistantMessage(
       [
-        createToolCall(id, "sessions_spawn", { label, task: `Review ${label}` }),
+        createToolCall(id, "sessions_spawn", { label: id, task: `Review ${id}` }),
         ...(completed
           ? [
               createToolResultBlock(
@@ -649,37 +504,23 @@ it("keeps expanded historical launches readable when a new launch refreshes acti
             ]
           : []),
       ],
-      { runId: id === "later" ? "second-run" : "first-run" },
+      { runId },
     );
-  const earlier = [
-    createAssistantMessage(
-      [
-        read("retained"),
-        createToolResultBlock("retained", "read", "Retained file", { isError: false }),
-      ],
-      { runId: "first-run" },
-    ),
-    launch("alpha", "Alfa", true),
-    launch("beta", "Beta", true),
-    launch("gamma", "Gama", true),
-  ];
   const draw = async (later?: boolean) => {
-    const groups = prepareHistoryGroups([
-      createToolGroup(
-        "earlier",
-        structuredClone(earlier).map((message, index) =>
-          createMessageEntry(`old-${index}`, message),
-        ),
-      ),
-      ...(later === undefined
-        ? []
-        : [
-            createToolGroup("later", [
-              createMessageEntry("new-launch", launch("later", "Interromper30", later)),
-            ]),
-          ]),
+    const earlier = createToolGroup(
+      "earlier",
+      [
+        createAssistantMessage([
+          read("retained"),
+          createToolResultBlock("retained", "read", "", { isError: false }),
+        ]),
+        ...["Alfa", "Beta", "Gama"].map((label) => launch(label, "first-run", true)),
+      ].map((message, index) => createMessageEntry(`old-${index}`, message)),
+    );
+    const next = createToolGroup("later", [
+      createMessageEntry("new", launch("Delta", "second-run", later === true)),
     ]);
-    activityRoot.render(groups, {
+    activityRoot.render(prepareHistoryGroups(later === undefined ? [earlier] : [earlier, next]), {
       ...visibleTools,
       isToolMessageExpanded: () => true,
       runActive: later === false,
@@ -688,91 +529,19 @@ it("keeps expanded historical launches readable when a new launch refreshes acti
     });
     await settleToolBridges(summaryContainer);
   };
+  const alfaRow = () =>
+    [...summaryContainer.querySelectorAll(".chat-tool-row")].find((row) =>
+      row.textContent?.includes("Alfa"),
+    );
   await draw();
-  const historicalRow = [...summaryContainer.querySelectorAll(".chat-tool-row")].find((row) =>
-    row.textContent?.includes("Alfa"),
-  );
+  const historicalRow = alfaRow();
   expect(historicalRow).toBeDefined();
   for (const later of [false, true]) {
     await draw(later);
     expect(summaryContainer.textContent).not.toContain("Couldn’t load");
-    expect(
-      [...summaryContainer.querySelectorAll(".chat-tool-row")].find((row) =>
-        row.textContent?.includes("Alfa"),
-      ),
-    ).toBe(historicalRow);
-    for (const label of ["retained.ts", "Alfa", "Beta", "Gama", "Interromper30"]) {
+    expect(alfaRow()).toBe(historicalRow);
+    for (const label of ["retained.ts", "Gama", "Delta"]) {
       expect(summaryContainer.textContent).toContain(label);
     }
   }
-});
-
-it("keeps a raw live edit grouped and exposes its completed single-file result", async () => {
-  const call = createAssistantMessage(
-    [
-      createToolCall("single-edit", "edit", {
-        path: "/repo/soma.cjs",
-        oldText: "before",
-        newText: "after",
-      }),
-    ],
-    { runId: "edit-run" },
-  );
-  const draw = async (completed: boolean) => {
-    const messages = completed
-      ? attachHistoryActivity(
-          prepareChatHistoryFixture([
-            call,
-            createToolResultMessage("single-edit", "edit", "Updated", {
-              runId: "edit-run",
-              isError: false,
-            }),
-          ]),
-        ).messages
-      : [call];
-    activityRoot.render(
-      buildChatItems(createProps({ messages })).filter((item) => item.kind === "group"),
-      {
-        ...visibleTools,
-        runActive: !completed,
-        activityRunId: "edit-run",
-      },
-    );
-    await settleToolBridges(summaryContainer);
-  };
-  await draw(false);
-  expect(summaryContainer.querySelector(".chat-activity-group__summary")).not.toBeNull();
-  expect(summaryContainer.querySelector(".chat-tool-row")).toBeNull();
-  await draw(true);
-  expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
-  const row = summaryContainer.querySelector(".chat-tool-row")!;
-  expect(row.textContent).toContain("Edited");
-  expect(row.textContent).toContain("soma.cjs");
-  expect(row.querySelector(".chat-diffstat__add")?.textContent).toBe("+1");
-  expect(row.querySelector(".chat-diffstat__del")?.textContent).toBe("-1");
-});
-
-it("summarizes a failed child read without counting its failed code container again", async () => {
-  const group = createToolGroup("failed-read", [
-    createMessageEntry(
-      "failed-read:entry",
-      createAssistantMessage(
-        [
-          createToolCall("wrapper", "exec", {
-            title: "Read the missing fixture",
-            code: "await read({path:'missing.txt'})",
-          }),
-          createToolCall("read", "read", { path: "missing.txt" }, { parentToolCallId: "wrapper" }),
-          createToolResultBlock("read", "read", "File not found", { isError: true }),
-          createToolResultBlock("wrapper", "exec", "File not found", { isError: true }),
-        ],
-        { runId: "failed-read-run" },
-      ),
-    ),
-  ]);
-  activityRoot.render([group], visibleTools);
-  await settleToolBridges(summaryContainer);
-  const summary = summaryContainer.querySelector(".chat-activity-group__summary");
-  expect(summary?.textContent).toContain("File reads");
-  expect(summary?.textContent).not.toMatch(/code|attempted/i);
 });

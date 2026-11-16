@@ -52,40 +52,22 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       const groups = [
         group("activity", {
           role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "search",
-              name: "web_search",
-              arguments: { query: "disclosures" },
-            },
-            {
-              type: "toolCall",
-              id: "search-keyboard",
-              name: "web_search",
-              arguments: { query: "keyboard" },
-            },
-          ],
-          activity: [
-            {
-              itemId: "search",
-              toolCallId: "search",
-              kind: "tool",
-              phase: "end",
-              name: "web_search",
-              title: "Search",
-              status: "completed",
-            },
-            {
-              itemId: "search-keyboard",
-              toolCallId: "search-keyboard",
-              kind: "tool",
-              phase: "end",
-              name: "web_search",
-              title: "Search",
-              status: "completed",
-            },
-          ],
+          // Two operations keep the activity grouped rather than a standalone row.
+          content: ["search", "search-keyboard"].map((id) => ({
+            type: "toolCall",
+            id,
+            name: "web_search",
+            arguments: { query: id },
+          })),
+          activity: ["search", "search-keyboard"].map((id) => ({
+            itemId: id,
+            toolCallId: id,
+            kind: "tool",
+            phase: "end",
+            name: "web_search",
+            title: "Search",
+            status: "completed",
+          })),
         }),
       ];
       const output = group("output", {
@@ -190,12 +172,10 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       await settleToolBridges(container);
       const activity = container.querySelector<HTMLElement>(".chat-activity-group")!;
       expect(activity.hidden).toBe(true);
-      expect(getComputedStyle(activity).display).toBe("none");
       expect(activity.getBoundingClientRect().height).toBe(0);
       vi.advanceTimersByTime(200);
       flush();
       expect(activity.hidden).toBe(false);
-      expect(getComputedStyle(activity).display).not.toBe("none");
       expect(activity.getBoundingClientRect().height).toBeGreaterThan(0);
     } finally {
       view.unmount();

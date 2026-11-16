@@ -924,31 +924,18 @@ it("opens the original execution receipt without repeating it in the expanded ch
     id: "execution",
     name: "exec",
     args: { code: "return await exec({command: 'npm test'})" },
-    inputText: JSON.stringify({ code: "return await exec({command: 'npm test'})" }),
     outputText: "Original wrapper receipt",
     completed: true,
   };
   const onOpenSidebar = vi.fn();
-  const container = await mountTool(
-    "exec",
-    {
-      args: { command: "npm test" },
-      outputText: "Tests passed",
-      completed: true,
-    },
-    { executionCards: [execution], onOpenSidebar },
-  );
+  const card = { args: { command: "npm test" }, outputText: "Tests passed", completed: true };
+  const container = await mountTool("exec", card, { executionCards: [execution], onOpenSidebar });
   expect(container.textContent).toContain("Tests passed");
   expect(container.textContent).not.toContain("Original wrapper receipt");
-  const inspect = [...container.querySelectorAll("button")].find(
-    (button) => button.textContent === "Execution details",
-  );
-  expect(inspect).toBeDefined();
-  inspect!.click();
+  [...container.querySelectorAll("button")]
+    .find((button) => button.textContent === "Execution details")!
+    .click();
   expect(onOpenSidebar).toHaveBeenCalledWith(
-    expect.objectContaining({
-      kind: "tool-output",
-      card: execution,
-    }),
+    expect.objectContaining({ kind: "tool-output", card: execution }),
   );
 });

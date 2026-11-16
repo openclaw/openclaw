@@ -33,18 +33,9 @@ function commentaryHarness() {
   const agent = (
     stream: "item" | "tool",
     data: Record<string, unknown>,
-    source: "live" | "history" = "live",
+    source?: "live" | "history",
   ) =>
-    handleAgentEvent(
-      host,
-      {
-        ...envelope(),
-        stream,
-        ts: TOOL_STREAM_TEST_NOW + seq,
-        data,
-      },
-      source,
-    );
+    handleAgentEvent(host, { ...envelope(), stream, ts: TOOL_STREAM_TEST_NOW + seq, data }, source);
   const deliver = () => {
     const projected = gateway.resolveBuffer(RUN_ID);
     const delta = gateway.takeBufferDelta(RUN_ID, projected.text);
@@ -67,20 +58,19 @@ function commentaryHarness() {
     }
     agent("item", { kind: "preamble", itemId, progressText: text });
   };
+  const save = (id: string, message: object, order = ++messageSeq) => {
+    const durable = { ...message, __openclaw: { id, seq: order, runId: RUN_ID } };
+    const payload = { runId: RUN_ID, messageId: id, messageSeq: order, message: durable };
+    applySessionMessagePayload(host, payload, true, { kind: "live", activeRunId: RUN_ID });
+    return durable;
+  };
   const persist = (itemId: string, text: string) => {
-    const messageId = `saved-${itemId}`;
-    const durable = {
-      ...assistant(text),
-      __openclaw: { id: messageId, seq: ++messageSeq, runId: RUN_ID },
-      openclawStreamFallback: { source: "segment", itemId },
-    };
     gateway.retireBuffer(RUN_ID, [itemId]);
-    applySessionMessagePayload(
-      host,
-      { runId: RUN_ID, messageId, messageSeq, message: durable },
-      true,
-      { kind: "live", activeRunId: RUN_ID },
-    );
+    const fallback = { source: "segment", itemId };
+    const durable = save(`saved-${itemId}`, {
+      ...assistant(text),
+      openclawStreamFallback: fallback,
+    });
     deliver();
     return durable;
   };
@@ -90,7 +80,7 @@ function commentaryHarness() {
     visibleAssistantStreamParts(host, { includeCurrent: true, isHiddenStreamText });
   const expectParts = (...expected: [string, string | undefined][]) =>
     expect(parts().map((part) => [part.text.trim(), part.itemId])).toEqual(expected);
-  return { host, stream, preamble, persist, tool, expectParts, agent };
+  return { host, stream, preamble, persist, tool, expectParts, agent, save };
 }
 
 afterEach(() => {
@@ -98,121 +88,59 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([
-  { source: "live", steered: false },
-  { source: "history", steered: false },
-  { source: "history", steered: true },
-] as const)(
-  "keeps a nested wait after $source commentary (steered=$steered)",
-  ({ source, steered }) => {
-    const h = commentaryHarness();
-    h.host.chatMessages = [
-      {
-        role: "user",
-        content: "Collect the results",
-        timestamp: 1,
-        __openclaw: { id: "collect-user", idempotencyKey: "run-1:user", seq: 1 },
-      },
-    ];
-    h.agent(
-      "item",
-      {
-        kind: "preamble",
-        itemId: "collect-commentary",
-        progressText: "Waiting for the collected results.",
-      },
-      source,
-    );
-    if (steered) {
-      h.host.chatMessages.push({
-        role: "user",
-        content: "Keep the existing collection",
-        timestamp: TOOL_STREAM_TEST_NOW + 2,
-        __openclaw: {
-          id: "steer-user",
-          idempotencyKey: "steer:user",
-          steerTargetRunId: RUN_ID,
-          seq: 2,
-        },
-      });
-    }
-    const args = { title: "Collect results", code: "return await agents_wait({ids: ['child']});" };
-    h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
-    applySessionMessagePayload(
-      h.host,
-      {
-        runId: RUN_ID,
-        messageId: "saved-collect",
-        messageSeq: steered ? 3 : 2,
-        message: {
-          role: "assistant",
-          timestamp: TOOL_STREAM_TEST_NOW - 1_000,
-          content: [{ type: "toolCall", id: "collect", name: "exec", arguments: args }],
-          __openclaw: { id: "saved-collect", seq: steered ? 3 : 2, runId: RUN_ID },
-        },
-      },
-      true,
-      { kind: "live", activeRunId: RUN_ID },
-    );
-    h.agent("tool", {
-      phase: "start",
-      toolCallId: "wait",
-      parentToolCallId: "collect",
-      name: "agents_wait",
-      args: { ids: ["child"] },
-    });
-    vi.advanceTimersByTime(100);
-    const order = buildStateItems(h.host).flatMap((item) =>
-      item.kind === "group"
-        ? item.messages.flatMap(({ message }) => {
-            const cards = extractToolCards(message);
-            return cards.length ? cards.map((card) => card.callId) : [item.role];
-          })
-        : [item.kind],
-    );
-    expect(order).toEqual(
-      steered
-        ? ["user", "stream", "user", "collect", "wait"]
-        : ["user", "stream", "collect", "wait"],
-    );
-    const materialized = materializeVisibleStreamState(h.host.chatMessages, h.host, {
-      persistCommentary: true,
-      isHiddenAssistantMessage: () => false,
-      isHiddenStreamText,
-    });
-    expect(
-      materialized.flatMap((message) => {
-        const cards = extractToolCards(message);
-        return cards.length ? cards.map((card) => card.callId) : [extractText(message)];
-      }),
-    ).toEqual([
-      "Collect the results",
-      "Waiting for the collected results.",
-      ...(steered ? ["Keep the existing collection"] : []),
-      "collect",
-    ]);
-  },
-);
+const callIdsOrText = (message: unknown, fallback: string) => {
+  const cards = extractToolCards(message);
+  return cards.length ? cards.map((card) => card.callId) : [fallback];
+};
 
-it("does not anchor new commentary to a reused call ID from an older run", () => {
+// Live and replayed starts carry different send anchors; the saved call is older than the
+// commentary, and nested work must not claim it. Commentary stays before a steer, and an
+// older run's reused call ID is not an anchor.
+it.each(["live", "history"] as const)("binds %s commentary to the next root call", (source) => {
   const h = commentaryHarness();
+  const steered = source === "history";
+  const user = (content: string, seq: number, idempotencyKey: string, steer?: string) => ({
+    role: "user",
+    content,
+    timestamp: steer ? TOOL_STREAM_TEST_NOW + seq : seq,
+    __openclaw: { id: `user-${seq}`, idempotencyKey, steerTargetRunId: steer, seq },
+  });
+  const args = { code: "return await agents_wait({ids: ['child']});" };
+  const call = { type: "toolCall", id: "collect", name: "exec", arguments: args };
   h.host.chatMessages = [
-    { role: "user", content: "Earlier request", timestamp: 1 },
-    {
-      role: "assistant",
-      timestamp: 2,
-      content: [{ type: "toolCall", id: "collect", name: "exec", arguments: {} }],
-      __openclaw: { id: "old-collect", seq: 1, runId: "old-run" },
-    },
-    { role: "user", content: "Collect the results", timestamp: 3 },
+    { role: "assistant", timestamp: 0, content: [call], __openclaw: { runId: "old-run" } },
+    user("Collect the results", 1, `${RUN_ID}:user`),
   ];
-  h.preamble("collect-commentary", "Waiting for the collected results.");
-  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args: {} });
+  const progressText = "Waiting for the collected results.";
+  h.agent("item", { kind: "preamble", itemId: "commentary", progressText }, source);
+  if (steered) {
+    h.host.chatMessages.push(user("Keep the existing collection", 2, "steer:user", RUN_ID));
+  }
+  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
+  const savedAt = TOOL_STREAM_TEST_NOW - 1_000;
+  h.save("saved-collect", { role: "assistant", timestamp: savedAt, content: [call] }, 3);
+  const wait = { toolCallId: "wait", parentToolCallId: "collect", name: "agents_wait" };
+  h.agent("tool", { ...wait, phase: "start" });
   vi.advanceTimersByTime(100);
-  const rows = buildStateItems(h.host).flatMap((item) =>
-    item.kind === "group" ? [item.role] : [item.kind],
-  );
-  expect(rows.indexOf("stream")).toBeGreaterThan(rows.lastIndexOf("user"));
+  expect(
+    buildStateItems(h.host).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) => callIdsOrText(message, item.role))
+        : [item.kind],
+    ),
+  ).toEqual(["collect", "user", "stream", ...(steered ? ["user"] : []), "collect", "wait"]);
+  const materialized = materializeVisibleStreamState(h.host.chatMessages, h.host, {
+    persistCommentary: true,
+    isHiddenAssistantMessage: () => false,
+    isHiddenStreamText,
+  });
+  expect(materialized.flatMap((m) => callIdsOrText(m, extractText(m) ?? ""))).toEqual([
+    "collect",
+    "Collect the results",
+    progressText,
+    ...(steered ? ["Keep the existing collection"] : []),
+    "collect",
+  ]);
 });
 
 it("does not let stale item identity prune a newer unscoped append", () => {

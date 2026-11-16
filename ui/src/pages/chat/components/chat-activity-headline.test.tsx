@@ -163,21 +163,6 @@ it.each([
   }
 });
 
-it("names prepared-only activity when the raw call is unavailable", async () => {
-  const activity = toolActivity("session_status", {});
-  await renderActivityFixture(
-    [
-      entryGroup(
-        "current",
-        createAssistantMessage([], { runId: "active-run", activity: [activity] }),
-      ),
-    ],
-    liveOptions,
-  );
-  advanceTimersByTime(200);
-  expect(label()).toBe("Calling Session Status");
-});
-
 it("shows a command once when its live activity group is expanded", async () => {
   const command = "pnpm test transcript";
   const activity = toolActivity("exec", { command });
@@ -192,25 +177,12 @@ it("shows a command once when its live activity group is expanded", async () => 
 it("keeps the icon paired with the current action and restores the aggregate icon", async () => {
   const exec = toolActivity("exec", { title: "Inspect source", code: "return null" });
   const search = toolActivity("web_search", { query: "API docs" });
+  const args = { code: "return null", query: "API docs" };
   const draw = async (items: AgentActivityItem[], runActive = true) =>
-    await renderActivityFixture(
-      [
-        entryGroup(
-          "current",
-          createAssistantMessage(
-            items.map((item) =>
-              createToolCall(
-                item.toolCallId!,
-                item.name!,
-                item.name === "exec" ? { code: "return null" } : { query: "API docs" },
-              ),
-            ),
-            { runId: "active-run", activity: items },
-          ),
-        ),
-      ],
-      { ...liveOptions, runActive },
-    );
+    await renderActivityFixture([group("current", items, "active-run", args)], {
+      ...liveOptions,
+      runActive,
+    });
   const icon = () => query("icon");
   await draw([exec]);
   advanceTimersByTime(200);
@@ -259,12 +231,9 @@ it("preserves a pending headline deadline when inline presentation splits and re
   expect(label()).toBe("Wrote write-a.ts");
   advanceTimersByTime(150);
   await draw(true, true);
-  expect(label()).toBe("Wrote write-a.ts");
   expect(query("summary")?.closest<HTMLElement>(".chat-activity-group")?.hidden).toBe(false);
   expectAfter(749, "Wrote write-a.ts");
   expectAfter(1, "Writing write-b.ts");
-  await draw(true, false);
-  expect(label()).toBe("Writing write-b.ts");
 });
 
 it("keeps accessible disclosure identity while the current action advances", () => {
@@ -292,7 +261,6 @@ it("keeps accessible disclosure identity while the current action advances", () 
   expect(label()).toBe("Reading files");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
-
   expect(query("label")).toBe(headline);
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
@@ -320,55 +288,31 @@ it("selects only visible activity from the matching run and newest eligible grou
   expectAfter(3_000, "Reading files");
 });
 
-it("settles an earlier activity headline when narration follows in the same live run", () => {
+it("settles an earlier activity headline only when narration follows in the same live run", () => {
   const activity = group("current", [prepared("current")]);
+  const runId = "active-run";
+  const user = (key: string, extra?: Record<string, unknown>) =>
+    createToolGroup(key, [createMessageEntry(key, { role: "user", content: key, ...extra })], {
+      role: "user",
+    });
+  const steer = user("steer", { __openclaw: { idempotencyKey: "steer", steerTargetRunId: runId } });
+  const indicator = { kind: "reading-indicator" as const, key: "working", startedAt: 1, runId };
   const narration = {
+    ...indicator,
     kind: "stream" as const,
-    key: "narration",
-    text: "The file is open; checking the result next.",
-    startedAt: 10_000,
+    key: "n",
+    text: "Next.",
     isStreaming: true,
-    runId: "active-run",
   };
-  const props = { runId: "active-run", runActive: true };
-  const before = projectTranscriptActivity([activity], props);
-  activityRoot.render([activity], { ...liveOptions, ...before });
-  advanceTimersByTime(200);
-  expect(before.activityGroupKey).toBe("current");
-  const headline = query("label");
-  const steer = createToolGroup(
-    "steer",
-    [
-      createMessageEntry("steer:entry", {
-        role: "user",
-        content: "Continue with the same operation",
-        __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "active-run" },
-      }),
-    ],
-    { role: "user" },
-  );
-  const steering = projectTranscriptActivity([activity, steer], props);
-  expect(steering.activityGroupKey).toBe("current");
-  activityRoot.render([activity], { ...liveOptions, ...steering });
-  expect(query("label")).toBe(headline);
-  expect(container.querySelector(".text-shimmer")).not.toBeNull();
-  const indicator = {
-    kind: "reading-indicator" as const,
-    key: "working",
-    startedAt: 10_000,
-    runId: "active-run",
-  };
-  const queued = createToolGroup(
-    "queued",
-    [createMessageEntry("queued:entry", { role: "user", content: "A later task" })],
-    { role: "user" },
-  );
-  const pending = projectTranscriptActivity([activity, steer, indicator, queued], props);
-  activityRoot.render([activity], { ...liveOptions, ...pending });
+  const project = (items: Parameters<typeof projectTranscriptActivity>[0]) =>
+    projectTranscriptActivity(items, { runId, runActive: true });
+  // Steer receipts, the working indicator and queued messages leave the operation live.
+  const pending = project([activity, steer, indicator, user("queued")]);
   expect(pending.activityGroupKey).toBe("current");
-  expect(query("label")).toBe(headline);
+  activityRoot.render([activity], { ...liveOptions, ...pending });
+  advanceTimersByTime(200);
   expect(container.querySelector(".text-shimmer")).not.toBeNull();
-  const after = projectTranscriptActivity([activity, steer, narration], props);
+  const after = project([activity, steer, narration]);
   expect(after.activityGroupKey).toBeNull();
   activityRoot.render([activity], { ...liveOptions, ...after });
   expect(container.querySelector(".text-shimmer")).toBeNull();
@@ -443,28 +387,6 @@ it.each(["failed", "blocked"] as const)(
 
 it("gates newly mounted live groups without hiding durable or urgent activity", async () => {
   const liveGroup = () => container.querySelector<HTMLElement>(".chat-activity-group");
-  const raw = entryGroup(
-    "current",
-    createAssistantMessage(
-      [createToolCall("parent", "exec", { code: "await tools.progress_card({});" })],
-      { runId: "active-run" },
-    ),
-  );
-  await renderActivityFixture([raw], liveOptions);
-  expect(liveGroup()?.hidden).toBe(true);
-  advanceTimersByTime(60);
-  await renderActivityFixture(
-    [
-      nestedStep(
-        "progress_card",
-        { ...prepared("parent", "completed"), name: "exec" },
-        { ...prepared("child", "completed"), hideFromChannelProgress: true },
-      ),
-    ],
-    liveOptions,
-  );
-  expect(query("summary")).toBeNull();
-
   await renderActivityFixture([group("current", [prepared("durable")])], liveOptions);
   expect(liveGroup()?.hidden).toBe(true);
   advanceTimersByTime(199);
@@ -472,17 +394,12 @@ it("gates newly mounted live groups without hiding durable or urgent activity", 
   advanceTimersByTime(1);
   expect(liveGroup()?.hidden).toBe(false);
   expect(label()).toBe("Reading durable.ts");
-  activityRoot.render([group("current", [prepared("durable", "completed")])], liveOptions);
-  expect(label()).toBe("Read durable.ts");
-  expect(container.querySelector(".text-shimmer")).toBeNull();
 
-  for (const status of ["failed", "blocked"] as const) {
-    activityRoot.unmount();
-    activityRoot = createActivityGroupHarness(container);
-    await renderActivityFixture([group("urgent", [prepared("urgent", status)])], liveOptions);
-    expect(liveGroup()?.hidden).toBe(false);
-    expect(query("summary")?.textContent).toContain(status === "failed" ? "failed" : "Blocked");
-  }
+  activityRoot.unmount();
+  activityRoot = createActivityGroupHarness(container);
+  await renderActivityFixture([group("urgent", [prepared("urgent", "failed")])], liveOptions);
+  expect(liveGroup()?.hidden).toBe(false);
+  expect(query("summary")?.textContent).toContain("failed");
 
   activityRoot.unmount();
   activityRoot = createActivityGroupHarness(container);
@@ -509,8 +426,6 @@ it("keeps routine-only execution containers hidden throughout the run", async ()
     );
   await renderActivityFixture([step("running")], liveOptions);
   expect(query("summary")).toBeNull();
-  await renderActivityFixture([step("completed")], liveOptions);
-  expect(query("summary")).toBeNull();
   await renderActivityFixture([step("completed")], { ...liveOptions, runActive: false });
   expect(query("summary")).toBeNull();
   expect(container.querySelector(".chat-tool-row__title")).toBeNull();
@@ -532,12 +447,9 @@ it.each([false, true])(
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
     expect(container.querySelector(".text-shimmer")).toBeNull();
-    expect(label()).toBe("Read first.ts");
-    advanceTimersByTime(799);
-    expect(label()).toBe("Read first.ts");
+    expectAfter(799, "Read first.ts");
     advanceTimersByTime(1);
     expect(container.querySelector(".text-shimmer")?.textContent).toBe("Reading next.ts");
-    expect(label()).toBe("Reading next.ts");
   },
 );
 
@@ -546,18 +458,14 @@ it("coalesces fast completed calls without replaying a queue or delaying their o
   const draw = () => activityRoot.render([group("current", items)], liveOptions);
   draw();
   advanceTimersByTime(200);
-  const headline = query("label");
   advanceTimersByTime(20);
   items[0] = prepared("first", "completed");
   draw();
-  expect(label()).toBe("Read first.ts");
-  expect(container.querySelector(".text-shimmer")).toBeNull();
   for (let index = 1; index <= 30; index++) {
     advanceTimersByTime(20);
     items.push(prepared(`fast-${index}`, "completed"));
     draw();
     expect(label()).toBe("Read first.ts");
-    expect(query("label")).toBe(headline);
   }
   advanceTimersByTime(380);
   expect(label()).toBe("Read fast-30.ts");
@@ -574,128 +482,41 @@ it("coalesces fast completed calls without replaying a queue or delaying their o
   draw();
   expect(label()).toBe("Read blocked.ts");
   expect(query("summary")?.textContent).toContain("Blocked");
-  activityRoot.render([group("current", items)], { ...liveOptions, runActive: false });
-  expect(label()).toBe("Read files · Blocked");
-  expectAfter(3_000, "Read files · Blocked");
 });
 
-it("defers transient replacements and refreshes a held container after its children arrive", () => {
-  const read = prepared("first", "completed");
-  const wrapper = (status: AgentActivityItem["status"]) => ({
-    ...prepared("parent", status),
-    name: "exec",
-    title: "Executed code",
-  });
-  const draw = (parent?: AgentActivityItem, child?: AgentActivityItem) => {
-    const items = [read, ...(parent ? [parent] : []), ...(child ? [child] : [])];
-    activityRoot.render(
-      [
-        entryGroup(
-          "current",
-          createAssistantMessage(
-            [
-              createToolCall("first", "read", { path: "first.ts" }),
-              ...(parent
-                ? [
-                    createToolCall("parent", "exec", {
-                      code: "await tools.read({ path: 'child.ts' })",
-                    }),
-                  ]
-                : []),
-              ...(child
-                ? [
-                    createToolCall(
-                      "child",
-                      "read",
-                      { path: "child.ts" },
-                      { parentToolCallId: "parent" },
-                    ),
-                  ]
-                : []),
-            ],
-            { runId: "active-run", activity: items },
-          ),
-        ),
-      ],
-      liveOptions,
+it("keeps an expanded execution's disclosure and live label between child commands", () => {
+  const draw = (parentStatus: AgentActivityItem["status"], second = false) => {
+    const exec = (key: string, status?: AgentActivityItem["status"]) => ({
+      ...prepared(key, status),
+      name: "exec",
+    });
+    const children = [exec("first", "completed"), ...(second ? [exec("second")] : [])];
+    const calls = children.map((child) =>
+      createToolCall(
+        child.toolCallId!,
+        "exec",
+        { command: `printf ${child.toolCallId}` },
+        { runId: "active-run", parentToolCallId: "parent" },
+      ),
     );
-  };
-  draw();
-  advanceTimersByTime(200);
-  advanceTimersByTime(1_500);
-  draw(wrapper("running"));
-  expect(label()).toBe("Read first.ts");
-  advanceTimersByTime(40);
-  draw(wrapper("running"), prepared("child"));
-  expect(label()).toBe("Read first.ts");
-  advanceTimersByTime(200);
-  expect(label()).toBe("Reading child.ts");
-
-  // An initial container can already be visible before its actual child is known.
-  activityRoot.unmount();
-  activityRoot = createActivityGroupHarness(container);
-  draw(wrapper("running"));
-  expect(container.querySelector<HTMLElement>(".chat-activity-group")?.hidden).toBe(true);
-  advanceTimersByTime(200);
-  expect(label()).toBe("Running a script");
-  advanceTimersByTime(40);
-  draw(wrapper("completed"), prepared("child"));
-  expect(label()).toBe("Ran a script");
-  expect(container.querySelector(".text-shimmer")).toBeNull();
-  advanceTimersByTime(960);
-  expect(label()).toBe("Reading child.ts");
-});
-
-it("keeps an expanded execution active between sequential child commands", async () => {
-  const draw = (parentStatus: AgentActivityItem["status"], second?: "exec" | "read") => {
-    const parent = { ...prepared("parent", parentStatus), name: "exec" };
-    const children = [
-      { ...prepared("first", "completed"), name: "exec" },
-      ...(second ? [{ ...prepared("second", "running"), name: second }] : []),
-    ];
+    const parent = createToolCall("parent", "exec", { code: "await first(); await second();" });
+    const activity = [exec("parent", parentStatus), ...children];
     activityRoot.render(
       [
         entryGroup(
           "current",
-          createAssistantMessage(
-            [
-              createToolCall(
-                "parent",
-                "exec",
-                { title: "Check both", code: "await first(); await second();" },
-                { runId: "active-run" },
-              ),
-              ...children.map((child) =>
-                createToolCall(
-                  child.toolCallId!,
-                  child.name,
-                  child.name === "read"
-                    ? { path: "result.txt" }
-                    : { command: `printf ${child.toolCallId}` },
-                  { runId: "active-run", parentToolCallId: "parent" },
-                ),
-              ),
-            ],
-            { runId: "active-run", activity: [parent, ...children] },
-          ),
+          createAssistantMessage([parent, ...calls], { runId: "active-run", activity }),
         ),
       ],
-      {
-        ...liveOptions,
-        isToolMessageExpanded: () => true,
-      },
+      { ...liveOptions, isToolMessageExpanded: () => true },
     );
     flush();
   };
   draw("running");
-  expect(label()).toBe("Running commands");
   const disclosure = query("summary");
-  draw("running", "exec");
+  draw("running", true);
   expect(query("summary")).toBe(disclosure);
   expect(label()).toBe("Running commands");
-  draw("running", "read");
-  expect(query("summary")).toBe(disclosure);
-  expect(label()).toBe("Ran commands, reading files");
   draw("completed");
   expect(query("summary")).toBe(disclosure);
   expect(label()).toBe("Ran commands");

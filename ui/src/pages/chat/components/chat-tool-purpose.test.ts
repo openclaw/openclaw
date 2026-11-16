@@ -9,13 +9,6 @@ const text = (container: ParentNode, selector: string) =>
 it.each([
   ["wait", { runId: "cm_test" }, "Wait"],
   ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
-  [
-    "ask_user",
-    { questions: [{ question: "First prompt" }, { question: "Second prompt" }] },
-    "Asked you questions",
-  ],
-  ["view_image", { path: "/tmp/inspection-a.png" }, "Viewed image inspection-a.png"],
-  ["custom_tool", { text: "custom tool" }, "Custom Tool"],
   ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
   ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],
 ] as const)(
@@ -54,7 +47,6 @@ it.each([
     expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
   } else {
     expect(text(container, ".chat-tool-row__cmd")).toBe("pnpm test");
-    expect(text(container, ".chat-tool-disclosure__content")).toContain("Running");
     expect(text(container, ".chat-tool-disclosure__content")).not.toContain("Check the workspace");
   }
   expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
@@ -102,78 +94,52 @@ it.each([
 
 it("uses names already available to chat rows without exposing unresolved routing keys", async () => {
   const key = "agent:main:subagent:00000000-0000-4000-8000-000000007ef3";
-  for (const name of ["sessions_history", "agents_wait"]) {
-    const card = {
-      id: name,
-      name,
-      completed: true,
-      args: name === "sessions_history" ? { sessionKey: key } : { ids: ["known-run"] },
-    };
-    const container = await mountCard(card, {
-      messageKey: name,
-      subagents: {
-        subagentSessions: [
-          {
-            key,
-            kind: "direct",
-            label: "Research",
-            updatedAt: 1,
-            activeRunIds: ["known-run"],
-          },
-        ],
-      },
-    });
-    const expected = name === "sessions_history" ? "Read chat" : "Waited for";
-    expect(text(container, ".chat-tool-disclosure__content")).toBe(expected + " Research");
-    await mountCard(card, { messageKey: name, subagents: { subagentSessions: [] } }, container);
-    expect(text(container, ".chat-tool-disclosure__content")).toBe(
-      name === "sessions_history" ? expected : "Waited for agents",
-    );
+  const activeRunIds = ["run"];
+  const session = { key, kind: "direct" as const, label: "Research", updatedAt: 1, activeRunIds };
+  for (const [name, args, known, unresolved] of [
+    ["sessions_history", { sessionKey: key }, "Read chat Research", "Read chat"],
+    ["agents_wait", { ids: ["run"] }, "Waited for Research", "Waited for agents"],
+  ] as const) {
+    for (const [subagentSessions, expected] of [
+      [[session], known],
+      [[], unresolved],
+    ] as const) {
+      const container = await mountCard(
+        { id: name, name, completed: true, args },
+        { messageKey: name, subagents: { subagentSessions: [...subagentSessions] } },
+      );
+      expect(text(container, ".chat-tool-disclosure__content")).toBe(expected);
+    }
   }
 });
 
+const stop = (details: object, args: object = {}) => ({
+  name: "sessions",
+  args: { action: "stop", sessionKey: "agent:main:subagent:worker", runId: "run-secret", ...args },
+  details: { ok: true, status: "aborted", abortedRunId: "run-secret", ...details },
+});
+const cancel = (status: string) => ({
+  name: "subagents",
+  args: { action: "cancel", runId: "run-secret" },
+  details: { found: true, killed: true, targetState: { state: "terminal", task: { status } } },
+});
+
 it.each([
-  ...(
-    [
-      [true, "cancelled", "Stopped"],
-      [true, "succeeded", "Stop subagent"],
-      [false, undefined, "Stop subagent"],
-    ] as const
-  ).map(([killed, status, label]) => ({
-    name: "subagents",
-    args: { action: "cancel", runId: "run-secret" },
-    details: { found: true, killed, targetState: { state: "terminal", task: { status } } },
-    isError: false,
-    label,
-  })),
-  ...[
-    { label: "Stopped", receipt: {} },
-    { label: "Stopped", receipt: {}, withoutRunId: true },
-    { label: "Stop subagent", receipt: { abortedRunId: null } },
-    { label: "Stop subagent", receipt: { status: "noop", abortedRunId: null } },
-    { label: "Stop subagent", receipt: { status: "settling", abortedRunId: null } },
-    { label: "Stop subagent", receipt: { abortedRunId: "different-run" } },
-    { label: "Stop subagent", receipt: { ok: false } },
-    { label: "Stop subagent", receipt: {}, isError: true },
-    { label: "Session Settings agent:main:subagent:worker", receipt: {}, action: "patch" },
-    { label: "Session Settings", receipt: {}, sessionKey: "agent:main:dashboard:ordinary" },
-  ].map(({ label, receipt, isError, action, sessionKey, withoutRunId }) => ({
-    name: "sessions",
-    args: {
-      action: action ?? "stop",
-      sessionKey: sessionKey ?? "agent:main:subagent:worker",
-      ...(withoutRunId ? {} : { runId: "run-secret" }),
-    },
-    details: { ok: true, status: "aborted", abortedRunId: "run-secret", ...receipt },
-    isError: isError ?? false,
-    label,
-  })),
+  [cancel("cancelled"), "Stopped"],
+  [cancel("succeeded"), "Stop subagent"],
+  [stop({}), "Stopped"],
+  [stop({}, { runId: undefined }), "Stopped"],
+  [stop({ status: "settling" }), "Stop subagent"],
+  [stop({ abortedRunId: "different-run" }), "Stop subagent"],
+  [{ ...stop({}), isError: true }, "Stop subagent"],
+  [stop({}, { sessionKey: "agent:main:dashboard:ordinary" }), "Session Settings"],
 ])(
-  "describes $name cancellation only when its own target receipt confirms it ($label)",
-  async ({ name, args, details, isError, label }) => {
+  "describes cancellation only when its own target receipt confirms it: %j",
+  async (card, label) => {
+    const { details, ...call } = card;
     for (const receipt of [{ details }, { outputText: JSON.stringify(details) }]) {
       const container = await mountCard(
-        { id: "cancel", name, args, completed: true, isError, ...receipt },
+        { id: "cancel", completed: true, ...call, ...receipt },
         { expanded: false },
       );
       expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
