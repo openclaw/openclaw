@@ -150,7 +150,9 @@ describe("personal navigation rail", () => {
   it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
     const { sidebar, dom } = await fixture();
     expect(
-      [...dom.all("[data-navigation-view]")].map((button) => button.dataset.navigationView),
+      [...dom.all("[data-navigation-view]")].map((button) =>
+        button.getAttribute("data-navigation-view"),
+      ),
     ).toEqual(["sessions", "online", "pages"]);
     const frame = dom.query("aside.sidebar")!;
     const bottom = dom.query(".sidebar-rail__bottom")!;
