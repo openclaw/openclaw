@@ -26,7 +26,21 @@ export function createReferenceComposerBinding(
       | typeof import("../../pages/chat/components/composer-editor-references.ts")
       | undefined;
     let editor: ReturnType<NonNullable<typeof feature>["mountReferenceComposerEditor"]> | undefined;
+    let readSkills:
+      | typeof import("../chat/skill-references.ts").readComposerSkillReferences
+      | undefined;
+    const skillsLoader = createIdleImport(
+      () => import("../chat/skill-references.ts"),
+      (module) => {
+        readSkills = module.readComposerSkillReferences;
+      },
+    );
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    const editingAt = () =>
+      (nativeEdit?.inputType === "insertText" && !nativeEdit.defaultPrevented) ||
+      editingSkillValue === node.value
+        ? node.selectionStart
+        : undefined;
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
       if (!native.signal.aborted && !composing && feature) {
@@ -37,10 +51,7 @@ export function createReferenceComposerBinding(
           entryHistory,
           avatarUrls,
           forTransfer,
-          (nativeEdit?.inputType === "insertText" && !nativeEdit.defaultPrevented) ||
-            editingSkillValue === node.value
-            ? node.selectionStart
-            : undefined,
+          editingAt(),
           previousInput,
         );
         if (!editor) {
@@ -89,7 +100,7 @@ export function createReferenceComposerBinding(
           // Keep both sides until the lazy feature can distinguish a skill
           // insertion from a literal dollar followed by a person query.
           previousInput = entryHistory;
-          if (!feature || !feature.readComposerSkillReferences(node.value).length) {
+          if (!readSkills?.(node.value).length) {
             entryHistory = snapshot();
           }
           requestActivation();
@@ -113,12 +124,29 @@ export function createReferenceComposerBinding(
       if (editor) {
         editor.sync();
       } else if (!composing && (mentions().length || node.value.includes("$"))) {
-        // Handoff stays outside the Solid apply phase even after this module
-        // loaded for an earlier literal dollar. Mention widgets create roots.
-        void loader.load().then(
-          () => activate(),
-          () => undefined,
-        );
+        void loadAndActivate();
+      }
+    }
+    async function loadAndActivate() {
+      try {
+        if (!mentions().length) {
+          const skills = await skillsLoader.load();
+          if (
+            native.signal.aborted ||
+            composing ||
+            (!mentions().length &&
+              !skills.readComposerSkillReferences(node.value, editingAt()).length)
+          ) {
+            return;
+          }
+        }
+        // Only admitted references need the rich editor. Literal dollars may
+        // load the small parser, never CodeMirror. Await also keeps widget
+        // roots outside the Solid apply phase after a module has loaded.
+        await loader.load();
+        activate();
+      } catch {
+        // Optional decoration failed to load; keep the usable native draft.
       }
     }
     const stopActivation = registerComposerActivation(node, requestActivation);
@@ -212,6 +240,7 @@ export function createReferenceComposerBinding(
       observer.disconnect();
       editor?.destroy();
       loader.dispose();
+      skillsLoader.dispose();
     };
   });
 }

@@ -8,8 +8,6 @@ import {
 } from "./composer-editor-mentions.tsx";
 import { composerSkillExtension } from "./composer-editor-skills.ts";
 
-export { readComposerSkillReferences };
-
 /** The lazy integration boundary composes features through native CM extensions.
  * Recipient identity remains mention-owned; skills derive from canonical text. */
 export function mountReferenceComposerEditor(
