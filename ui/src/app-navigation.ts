@@ -59,6 +59,7 @@ export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
 export const SIDEBAR_NAVIGATION_VIEWS = [
   "dashboards",
   "automations",
+  "portals",
   "customize",
   "sessions",
   "online",
@@ -69,16 +70,18 @@ export type SidebarNavigationView = (typeof SIDEBAR_NAVIGATION_VIEWS)[number];
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,
-): "dashboards" | "automations" | "customize" | "online" | undefined {
+): "dashboards" | "automations" | "portals" | "customize" | "online" | undefined {
   return route === "dashboards"
     ? "dashboards"
     : route === "cron"
       ? "automations"
-      : isPluginsHubRoute(route)
-        ? "customize"
-        : route === "activity"
-          ? "online"
-          : undefined;
+      : route === "portals"
+        ? "portals"
+        : isPluginsHubRoute(route)
+          ? "customize"
+          : route === "activity"
+            ? "online"
+            : undefined;
 }
 
 /**

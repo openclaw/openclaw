@@ -29,6 +29,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
+import { PortalsPageAddress } from "./portals-page-address.tsx";
 import { PendingEnvironment, PortalProbeLoading } from "./portals-read-states.tsx";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
 import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
@@ -546,6 +547,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
           when={props.model.presentation().embedded}
           fallback={
             <ShellLayoutBoundary traits={{ portalsPage: true }}>
+              <PortalsPageAddress model={props.model} selectedPortal={selectedPortal} />
               <HubPageHeader
                 active="portals"
                 wide

@@ -173,12 +173,13 @@ it("reads a namespaced tab reference from the generic URL", () => {
   expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
 });
 
-it("gives Dashboards, Automations, Customize and Activity a sidebar section of their own", () => {
+it("gives Dashboards, Automations, Portals, Customize and Activity a sidebar section of their own", () => {
   expect(
     (
       [
         "dashboards",
         "cron",
+        "portals",
         "plugins",
         "skills",
         "skill-workshop",
@@ -191,6 +192,7 @@ it("gives Dashboards, Automations, Customize and Activity a sidebar section of t
   ).toEqual([
     "dashboards",
     "automations",
+    "portals",
     "customize",
     "customize",
     "customize",
@@ -225,6 +227,7 @@ function expectRoutedPath(path: string, route: RouteId, base = "") {
 it("lets each page decide its sidebar: its section, Sessions, or none", () => {
   expect(sidebarViewForPage("cron")).toBe("automations");
   expect(sidebarViewForPage("activity")).toBe("online");
+  expect(sidebarViewForPage("portals")).toBe("portals");
   expect(sidebarViewForPage("chat")).toBe("sessions");
   expect(sidebarViewForPage("new-session")).toBe("sessions");
   expect(sidebarViewForPage("terminal")).toBe("sessions");

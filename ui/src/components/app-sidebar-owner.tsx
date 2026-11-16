@@ -77,6 +77,9 @@ const SidebarDashboards = lazy(() => import("./app-sidebar-pages.tsx"), {
 const SidebarAutomations = lazy(() => import("./app-sidebar-automations.tsx"), {
   export: "SidebarAutomations",
 });
+const SidebarPortals = lazy(() => import("./app-sidebar-portals.tsx"), {
+  export: "SidebarPortals",
+});
 const SidebarCustomize = lazy(() => import("./app-sidebar-customize.tsx"), {
   export: "SidebarCustomize",
 });
@@ -606,6 +609,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   <Match when={this.navigationView === "automations"}>
                     <SidebarAutomationsHeader host={this} />
                   </Match>
+                  <Match when={this.navigationView === "portals"}>
+                    <SidebarPageHeader host={this} route="portals" />
+                  </Match>
                   <Match when={this.navigationView === "customize"}>
                     <SidebarCustomizeHeader host={this} />
                   </Match>
@@ -654,6 +660,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       <SidebarViewBoundary>
                         <SidebarReady />
                         <SidebarAutomations host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
+                    <Match when={this.navigationView === "portals"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarPortals host={this} />
                       </SidebarViewBoundary>
                     </Match>
                     <Match when={this.navigationView === "customize"}>

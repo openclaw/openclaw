@@ -20,6 +20,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
+import { portalsSidebarSource } from "../lib/portals-sidebar-source.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
@@ -112,7 +113,9 @@ function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => vo
       return view;
     }
     const entry = parseSidebarEntry(item?.getAttribute("data-sidebar-entry"));
-    return entry?.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+    const section = entry?.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+    // Portals lists what its open page has read, so it peeks only beside that page.
+    return section === "portals" && !portalsSidebarSource() ? undefined : section;
   };
   const over = (event: PointerEvent) => {
     if (!sidebar) {

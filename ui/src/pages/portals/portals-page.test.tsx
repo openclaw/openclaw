@@ -51,7 +51,12 @@ function createContext(methods: string[] | null, request: Request, scopes = ["op
   });
   gateway.connection.gatewayUrl = "wss://gateway.example.test:18789/control";
   return {
-    context: { gateway } as unknown as ApplicationContext,
+    // The standalone page reads its address from the router; these pages open on /portals.
+    context: {
+      gateway,
+      router: { getState: () => ({ matches: [] }), subscribe: () => () => {} },
+      replace: vi.fn(),
+    } as unknown as ApplicationContext,
     updateSnapshot,
     emitPortals(portals: Protocol.PortalSummary[]) {
       publishEvent({ type: "event", event: "portal.changed", payload: { portals } });
