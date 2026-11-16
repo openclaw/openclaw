@@ -102,9 +102,8 @@ const nodeHostMocks = await vi.hoisted(async () => {
 // mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
 vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
-function projectFile(home: string, ...parts: string[]): string {
-  return path.join(home, ".claude", "projects", "-workspace", ...parts);
-}
+const projectFile = (home: string, ...parts: string[]) =>
+  path.join(home, ".claude", "projects", "-workspace", ...parts);
 
 async function writeClaudeExecutable(directory: string, source = "#!/bin/sh\n"): Promise<string> {
   await fs.mkdir(directory, { recursive: true });
@@ -1585,15 +1584,16 @@ describe("Claude session catalog", () => {
     expect(listNodes).not.toHaveBeenCalled();
   });
 
-  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+  it("preserves paired-node metadata and cursors, rejecting malformed cursors", async () => {
     const catalogCursor = "catalog+/=_cursor";
     const transcriptCursor = "transcript+/=_cursor";
+    const sessions = [nodeSession("session-a", { customGroup: "相談ごと 🦞" })];
     let catalogNextCursor = "catalog+/=_next";
     let transcriptNextCursor = "transcript+/=_next";
     const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
       payloadJSON: JSON.stringify(
         command === CLAUDE_SESSIONS_LIST_COMMAND
-          ? { sessions: [], nextCursor: catalogNextCursor }
+          ? { sessions, nextCursor: catalogNextCursor }
           : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
       ),
     }));
@@ -1612,7 +1612,7 @@ describe("Claude session catalog", () => {
 
     await expect(
       provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
-    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor, sessions }]);
     expect(invoke).toHaveBeenLastCalledWith(
       expect.objectContaining({
         command: CLAUDE_SESSIONS_LIST_COMMAND,
