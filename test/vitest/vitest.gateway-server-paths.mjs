@@ -12,6 +12,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
+  "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
 // Native database consumers retain lifecycle cleanup within each forked process.
@@ -74,7 +75,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/gateway.continuation-skip-bootstrap.integration.test.ts",
   "src/gateway/github-personal-publication-outcomes.test.ts",
   "src/gateway/github-personal-publication.lifecycle.test.ts",
-  "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-pr-attribution.test.ts",
   "src/gateway/github-pr-workspace-acquisition.test.ts",
   "src/gateway/github-pr-workspace-preparation.test.ts",
@@ -656,7 +656,6 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/users-preferences.test.ts",
   "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
-  "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
 
 export const gatewayMethodsTestInclude = [
