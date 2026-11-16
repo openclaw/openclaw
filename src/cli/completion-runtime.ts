@@ -21,11 +21,12 @@ import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { escapeRegExp, pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
-import { quotePowerShellArg } from "./quote-cli-arg.js";
+import { quoteCompletionPath } from "./quote-cli-arg.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
 export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS";
+const BASH_COMPLETION_PROFILES = [".bashrc", ".bash_profile", ".bash_login", ".profile"];
 
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
@@ -142,16 +143,6 @@ export async function completionCacheExists(
   return pathExists(cachePath);
 }
 
-function quoteCompletionPath(shell: CompletionShell, value: string): string {
-  if (shell === "powershell") {
-    return quotePowerShellArg(value);
-  }
-  // Single quotes also keep pasted reload hints literal when interactive history expansion is on.
-  const escaped =
-    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
-  return `'${escaped}'`;
-}
-
 function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
   const quotedPath = quoteCompletionPath(shell, cachePath);
   if (shell === "powershell") {
@@ -161,6 +152,12 @@ function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): 
     return `test -f ${quotedPath}; and source ${quotedPath}`;
   }
   return `[ -f ${quotedPath} ] && source ${quotedPath}`;
+}
+
+function formatSharedBashCompletionSourceLine(cachePath: string): string {
+  const quotedPath = quoteCompletionPath("bash", cachePath);
+  // .profile is also read by POSIX shells; only Bash may load its completion script.
+  return `if [ -n "\${BASH_VERSION-}" ]; then [ -f ${quotedPath} ] && . ${quotedPath}; fi`;
 }
 
 function appendCompletionProfilePath(
@@ -200,6 +197,7 @@ function cachedCompletionSourceLines(cachePath: string): string[] {
     `source "${cachePath}"`,
     `[ -f "${cachePath}" ] && source "${cachePath}"`,
     `test -f "${cachePath}"; and source "${cachePath}"`,
+    formatSharedBashCompletionSourceLine(cachePath),
     ...COMPLETION_SHELLS.map((shell) => formatCompletionSourceLine(shell, cachePath)),
   ];
 }
@@ -210,9 +208,11 @@ function isPreviousCompletionSourceLine(
   shell: CompletionShell,
 ): boolean {
   const trimmed = line.trim();
-  const guarded = /^(?:\[\s+-f|test\s+-f)\s+(.+?)\s*(?:\]\s*&&|;\s*and)\s+source\s+\1$/u.exec(
-    trimmed,
-  );
+  const sharedBash = /^if \[ -n "\$\{BASH_VERSION-\}" \]; then (.+); fi$/u.exec(trimmed);
+  const guarded =
+    /^(?:\[\s+-f|test\s+-f)\s+(.+?)\s*(?:\]\s*&&|;\s*and)\s+(?:source|\.)\s+\1$/u.exec(
+      sharedBash?.[1] ?? trimmed,
+    );
   const direct = /^(source|\.)\s+(.+)$/u.exec(trimmed);
   const quotedPath = guarded?.[1] ?? direct?.[2];
   if (!quotedPath) {
@@ -406,11 +406,12 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
     return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
   }
   if (shell === "bash") {
-    // Installation, status, and repairs must inspect the same real Bash profile.
-    const bashrc = appendCompletionProfilePath(home, pathApi, ".bashrc");
-    return existsSync(bashrc)
-      ? bashrc
-      : appendCompletionProfilePath(home, pathApi, ".bash_profile");
+    // Keep .bashrc preferred, but never shadow an existing login profile by creating a new one.
+    return (
+      BASH_COMPLETION_PROFILES.map((name) => appendCompletionProfilePath(home, pathApi, name)).find(
+        (profile) => existsSync(profile),
+      ) ?? appendCompletionProfilePath(home, pathApi, ".bash_profile")
+    );
   }
   if (shell === "fish") {
     const configuredHome = env.XDG_CONFIG_HOME;
@@ -461,9 +462,7 @@ export async function removeCompletionRegistrations(
   for (const shell of COMPLETION_SHELLS) {
     const profiles =
       shell === "bash"
-        ? [".bashrc", ".bash_profile"].map((name) =>
-            appendCompletionProfilePath(home, pathApi, name),
-          )
+        ? BASH_COMPLETION_PROFILES.map((name) => appendCompletionProfilePath(home, pathApi, name))
         : shell === "powershell" && process.platform === "win32"
           ? ["PowerShell", "WindowsPowerShell"].map((directory) =>
               appendCompletionProfilePath(
@@ -745,7 +744,11 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       next = filtered.join("\n");
     } else {
       const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
-      const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
+      const sourceLine =
+        shell === "bash" && path.basename(profilePath) === ".profile"
+          ? formatSharedBashCompletionSourceLine(cachePath)
+          : formatCompletionSourceLine(shell, cachePath);
+      const block = `# OpenClaw Completion\n${sourceLine}`;
       next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
     }
     // Windows PowerShell treats BOM-less scripts as ANSI, including literal cache paths.

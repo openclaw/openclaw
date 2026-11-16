@@ -1,3 +1,5 @@
+import type { CompletionShell } from "./completion-runtime.js";
+
 export function quotePowerShellArg(value: string): string {
   // PowerShell recognizes typographic single quotes as delimiters too.
   return `'${value.replace(/['‘-‛]/gu, "$&$&")}'`;
@@ -8,4 +10,14 @@ export function quoteCliArg(value: string): string {
     return value;
   }
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function quoteCompletionPath(shell: CompletionShell, value: string): string {
+  if (shell === "powershell") {
+    return quotePowerShellArg(value);
+  }
+  // Single quotes also keep pasted reload hints literal when interactive history expansion is on.
+  const escaped =
+    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
 }
