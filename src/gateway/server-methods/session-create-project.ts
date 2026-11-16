@@ -104,18 +104,17 @@ export function resolveSessionCreateProjectSelection(
   if (!params.repositorySource) {
     return ok(undefined);
   }
-  const url = params.repository?.url ?? params.projectGitUrl;
-  if (!url) {
-    return invalidSessionRequest("repositorySource requires projectGitUrl or repository.");
+  if (params.repository) {
+    return invalidSessionRequest(
+      "Plugin repository sources run sessions on this Gateway; cloud workers do not support them yet. Choose a local placement.",
+    );
+  }
+  if (!params.projectGitUrl) {
+    return invalidSessionRequest("repositorySource requires projectGitUrl.");
   }
   try {
-    const source = resolvePluginRepositorySource(params.repositorySource, url);
-    if (params.repository) {
-      params.repository.url = source.url;
-    }
-    if (params.projectGitUrl) {
-      params.projectGitUrl = source.url;
-    }
+    const source = resolvePluginRepositorySource(params.repositorySource, params.projectGitUrl);
+    params.projectGitUrl = source.url;
     return ok(source);
   } catch (error) {
     return invalidSessionRequest(error instanceof Error ? error.message : String(error));
@@ -129,7 +128,7 @@ export function resolveSessionRepositoryCreation(
   if (!params.repository) {
     return ok(undefined);
   }
-  const url = normalizeSessionProjectGitUrl(params.repository.url, params.repositorySource);
+  const url = normalizeSessionProjectGitUrl(params.repository.url);
   const ref = params.repository.ref?.trim();
   if (!url || (ref !== undefined && (!ref || ref.startsWith("-") || /\s|\0/u.test(ref)))) {
     return invalidSessionRequest(

@@ -97,7 +97,8 @@ export function createRepositoryGatewayMovePreparation(options: {
     );
 }
 
-export type RepositoryGatewayMaterializationParams = {
+/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
+async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
   sessionKey: string;
@@ -113,18 +114,11 @@ export type RepositoryGatewayMaterializationParams = {
       verifyCurrent: () => Promise<void>,
     ) => Promise<void>,
   ) => Promise<void>;
-};
-
-/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
-async function materializeSessionRepositoryWorkspaceOnGateway(
-  params: RepositoryGatewayMaterializationParams,
-): Promise<void> {
+}): Promise<void> {
   const initial = await retainGatewaySessionEntryReadOnly(
     params.sessionKey,
     params.agentId,
-    (previous, current) =>
-      previous.repositoryWorkspaceId === current.repositoryWorkspaceId &&
-      previous.repositorySourceId === current.repositorySourceId,
+    (previous, current) => previous.repositoryWorkspaceId === current.repositoryWorkspaceId,
     params.cfg,
   );
   try {
@@ -265,51 +259,6 @@ async function materializeCapturedRepositoryWorkspace(
     !repository.baseCommit
   ) {
     throw new Error("Repository workspace has no pinned source; retry its cloud preparation");
-  }
-  if (initial.entry.repositorySourceId) {
-    const assertRepositoryCurrent = composeSessionSourceAssertion(
-      [params.assertCurrent, assertEntryCurrent],
-      (assertSources) => {
-        params.signal?.throwIfAborted();
-        assertSources();
-        preparedRepository.assertSourceCurrent();
-        if (preparedRepository.current()?.revision !== repository.revision) {
-          throw new Error(
-            "Repository workspace changed during Gateway materialization; retry move",
-          );
-        }
-      },
-    );
-    if (repository.diskAuthority && !diskExport) {
-      if (!params.exportDisk) {
-        throw new Error(
-          "Moving this repository to the Gateway requires a fresh disk export; preserve the original runner and retry after export support is available.",
-        );
-      }
-      return await params.exportDisk(
-        repository,
-        assertRepositoryCurrent,
-        async (snapshot, verifyCurrent) =>
-          await materializeCapturedRepositoryWorkspace(params, initial, assertEntryCurrent, {
-            snapshot,
-            verifyCurrent,
-          }),
-      );
-    }
-    return (
-      await import("./session-repository-source-materialization.js")
-    ).materializePluginRepositoryWorkspace({
-      ...params,
-      initial,
-      repository,
-      repositorySourceId: initial.entry.repositorySourceId,
-      assertRepositoryCurrent,
-      snapshot: diskExport?.snapshot ?? {
-        checkpointRef: repository.checkpointRef,
-        manifestHash: repository.manifestHash,
-      },
-      verifyDisk: diskExport?.verifyCurrent,
-    });
   }
   const exportDisk = params.exportDisk;
   if (repository.diskAuthority && !diskExport && !exportDisk) {

@@ -10,14 +10,11 @@ export function createRepositorySourceRegistrar(state: PluginRegistryState) {
       !instance ||
       !record.repositorySources?.some((declared) => declared.id === source.id) ||
       typeof source.resolve !== "function" ||
-      typeof source.prepare !== "function" ||
-      (source.worker !== undefined &&
-        (typeof source.worker.prepare !== "function" ||
-          typeof source.worker.checkout !== "function"))
+      typeof source.prepare !== "function"
     ) {
       state.reportRegistrationError(
         record,
-        "repository source requires its declared ID and managed preparers",
+        "repository source requires its declared ID and managed preparer",
       );
       return;
     }
@@ -30,19 +27,6 @@ export function createRepositorySourceRegistrar(state: PluginRegistryState) {
       return;
     }
     instance.admitFactory(source.prepare, ["assertCurrent", "resolveBase"]);
-    if (source.worker) {
-      if (source.worker.restore) {
-        instance.admitFactory(source.worker.restore, ["assertCurrent", "readRemoteHead"]);
-      }
-      instance.admitFactory(source.worker.prepare, [
-        "assertCurrent",
-        "confirmAdmission",
-        "revalidate",
-        "readTree",
-        "readBlob",
-        "prepareGitPack",
-      ]);
-    }
     state.registry.repositorySources.push(
       state.createRegistration(record, { provider: source, assertCurrent() {} }),
     );

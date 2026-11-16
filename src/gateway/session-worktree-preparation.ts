@@ -574,9 +574,6 @@ export async function prepareSessionWorktreeCreation(params: {
         });
     return ok({
       repositoryWorkspaceId: workspace.workspaceId,
-      ...(parentSource.repositorySourceId
-        ? { repositorySourceId: parentSource.repositorySourceId }
-        : {}),
       withCommit: (run) => run(assertCurrent, signal),
       rollback: () =>
         store.delete({

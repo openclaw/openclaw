@@ -102,11 +102,8 @@ it("does not resolve remote node paths on the Gateway", async () => {
 });
 
 it("rejects changing a native session to a plugin source while preserving exact source retries", () => {
-  const params = {
-    repositorySource: "example/remote",
-    repository: { url: "https://git.example/project.git" },
-  };
-  const native = { sessionId: "existing", updatedAt: 1, repositoryWorkspaceId: "native-workspace" };
+  const params = { repositorySource: "example/remote" };
+  const native = { sessionId: "existing", updatedAt: 1 };
   expect(sessionWorkspaceReuseError(params, false, native)).toMatchObject({
     code: "INVALID_REQUEST",
     message: expect.stringContaining("repository source cannot be changed"),

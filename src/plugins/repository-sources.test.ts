@@ -157,58 +157,6 @@ it("keeps plugin clones, registration and refresh with the managed checkout owne
   });
 });
 
-it("binds worker reads and restoration to the initiating source authority", async () => {
-  let current = true;
-  const assertCurrent = () => {
-    if (!current) {
-      throw new Error("Repository caller retired");
-    }
-  };
-  const fixture = createRepositorySourceFixture({
-    id: "remote",
-    resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
-    async prepare() {
-      throw new Error("No local checkout");
-    },
-    worker: {
-      async restore() {
-        return {
-          project: { id: "restored", repoRoot: "/synthetic/project", source: "registered" },
-          assertCurrent() {},
-          readRemoteHead: async () => "a".repeat(40),
-        };
-      },
-      async prepare() {
-        return {
-          repositoryId: "repository_fixture",
-          identityKey: "selected-reader",
-          baseCommit: "a".repeat(40),
-          tree: "b".repeat(40),
-          assertCurrent() {},
-          confirmAdmission: async () => {},
-          revalidate: async () => {},
-          readTree: async () => {
-            current = false;
-            return [];
-          },
-          readBlob: async () => "",
-        };
-      },
-      async checkout() {},
-    },
-  });
-  const source = resolvePluginRepositorySource(fixture.id, url, fixture.registry);
-  const restored = await source.restoreWorker({
-    agentId: "main",
-    requiredCommit: "a".repeat(40),
-    assertCurrent,
-  });
-  const prepared = await source.prepareWorker({ agentId: "main", assertCurrent });
-  expect(prepared.prepareGitPack).toBeUndefined();
-  await expect(prepared.readTree("b".repeat(40))).rejects.toThrow("Repository caller retired");
-  await expect(restored.readRemoteHead("main")).rejects.toThrow("Repository caller retired");
-});
-
 it("resolves an unambiguous source without overriding an explicit selection", () => {
   const fixture = createRepositorySourceFixture({
     id: "remote",

@@ -32,9 +32,9 @@ without adding imports from Gateway internals.
   [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
 
-The `repository-sources` entrypoint exposes repository preparation and bounded
+The `repository-sources` entrypoint exposes repository preparation and managed
 checkout contracts. Plugins declare discovery metadata and register their source;
-the existing picker, session creation, and cloud workspace owners consume it.
+the existing picker, session creation, and worktree owners consume it.
 See [Repository sources](/plugins/sdk-repository-sources).
 
 ## Where each section moved

@@ -21,7 +21,6 @@ import * as sessionEntries from "../config/sessions/session-accessor.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createRepositorySourceFixture } from "../plugins/repository-source.test-support.js";
 import * as cloneRuntime from "../projects/project-clone-runtime.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import * as projectCloning from "../projects/project-clone.js";
@@ -288,10 +287,6 @@ it.each([
 
 it.each([
   "enterprise",
-  "plugin",
-  "plugin worker commits",
-  "plugin disk export",
-  "plugin disk changed",
   "revoked",
   "postcommit failure",
   "publication unavailable",
@@ -311,8 +306,6 @@ it.each([
         readToken: async () => undefined,
       }),
   );
-  const plugin = outcome === "plugin" || outcome.startsWith("plugin ");
-  const diskChanged = outcome === "disk changed" || outcome === "plugin disk changed";
   await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
     const cfg = {
       ...(outcome === "enterprise" ? { gateway: { github: enterpriseGitHub } } : {}),
@@ -333,35 +326,14 @@ it.each([
     await git(source, ["add", "."]);
     await git(source, ["commit", "-m", "base"]);
     const baseCommit = await git(source, ["rev-parse", "HEAD"]);
-    const url = `https://${plugin ? "code.example.test" : outcome === "enterprise" ? "ghe.example.test" : "github.com"}/openclaw/materialization-fixture.git`;
-    const project = await registerClonedProjectRegistry({
-      path: source,
-      name: "Fixture",
-      originUrl: url,
-    });
-    const pluginSource = plugin
-      ? createRepositorySourceFixture({
-          id: "repositories",
-          resolve: (candidate) => (candidate === url ? { url, name: "Fixture" } : undefined),
-          async prepare(input) {
-            expect(input.requiredCommit).toBe(baseCommit);
-            input.assertCurrent();
-            return {
-              project,
-              assertCurrent: input.assertCurrent,
-              resolveBase: async () => {
-                throw new Error("Retained workspace preparation must use its accepted commit");
-              },
-            };
-          },
-        })
-      : undefined;
+    const url = `https://${outcome === "enterprise" ? "ghe.example.test" : "github.com"}/openclaw/materialization-fixture.git`;
+    await registerClonedProjectRegistry({ path: source, name: "Fixture", originUrl: url });
     const base = await captureWorkspaceManifest({ root: source, baseCommit });
     const remote = state.path("remote");
     await exec("git", ["clone", "--", source, remote]);
     let workerHistory: { gitHistory: WorkerWorkspaceGitHistory; gitPackPath: string } | undefined;
-    const diskExport = outcome === "disk export" || outcome === "plugin disk export" || diskChanged;
-    if (outcome === "worker commits" || outcome === "plugin worker commits" || diskExport) {
+    const diskExport = outcome === "disk export" || outcome === "disk changed";
+    if (outcome === "worker commits" || diskExport) {
       await fsp.writeFile(path.join(remote, "committed.txt"), "worker commit\n");
       await git(remote, ["add", "committed.txt"]);
       await git(remote, [
@@ -400,7 +372,7 @@ it.each([
     const current = await captureWorkspaceManifest({ root: remote, baseCommit });
     const publicationStagingRoot = state.path("publication-snapshot");
     const publicationDigest =
-      outcome === "publication unavailable" || plugin
+      outcome === "publication unavailable"
         ? undefined
         : (
             await exec(process.execPath, [
@@ -476,11 +448,7 @@ it.each([
     const readEntry = () =>
       owner ? owner.readSession(scope.sessionKey, authority)?.entry : loadSessionEntry(scope);
     try {
-      const entry = {
-        sessionId,
-        repositoryWorkspaceId: repository.workspaceId,
-        ...(pluginSource ? { repositorySourceId: pluginSource.id } : {}),
-      };
+      const entry = { sessionId, repositoryWorkspaceId: repository.workspaceId };
       if (actor) {
         const created = await actor.storage!.mutate(
           {
@@ -517,7 +485,7 @@ it.each([
         );
       }
       const verifyDisk = vi.fn(async () => {
-        if (diskChanged) {
+        if (outcome === "disk changed") {
           throw new Error("source disk changed before handoff");
         }
       });
@@ -533,17 +501,17 @@ it.each([
         );
       }
       const move = prepareGatewayMove(cfg);
-      const materialize = () =>
-        move({
-          ...scope,
-          sessionId,
-          assertCurrent,
-          quiescence: diskExport ? { assertActive: verifyDisk, resume: async () => {} } : undefined,
-        });
-      const operation = pluginSource ? pluginSource.run(materialize) : materialize();
-      if (outcome === "revoked" || diskChanged) {
+      const operation = move({
+        ...scope,
+        sessionId,
+        assertCurrent,
+        quiescence: diskExport ? { assertActive: verifyDisk, resume: async () => {} } : undefined,
+      });
+      if (outcome === "revoked" || outcome === "disk changed") {
         await expect(operation).rejects.toThrow(
-          diskChanged ? "source disk changed before handoff" : "move authority revoked",
+          outcome === "disk changed"
+            ? "source disk changed before handoff"
+            : "move authority revoked",
         );
         expect(readEntry()?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
@@ -554,10 +522,6 @@ it.each([
           await operation;
         }
         const materialized = readEntry()!;
-        expect(materialized.repositorySourceId).toBe(pluginSource?.id);
-        if (pluginSource) {
-          expect(repositoryGitHubIdentity.prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
-        }
         const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
         expect(materialized.repositoryWorkspaceId).toBeUndefined();
         expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");

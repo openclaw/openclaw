@@ -62,13 +62,3 @@ export async function prepareWorkerProviderProject(params: {
     },
   });
 }
-
-/** Fixed source selection retained through provider preparation. */
-export type WorkerProviderRepositoryIntent = {
-  agentId: string;
-  url: string;
-  ref?: string;
-  baseCommit?: string;
-  repositorySourceId?: string;
-  workspaceId?: string;
-};

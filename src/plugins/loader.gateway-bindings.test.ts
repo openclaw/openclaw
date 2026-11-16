@@ -9,7 +9,6 @@ import {
   GatewayOperatorAccessDeniedError,
   resolveGatewayOperatorAccessAuthority as resolveAccess,
 } from "../gateway/operator-access-policy.js";
-import type { WorkerWorkspaceSyncRequest } from "../gateway/worker-environments/tunnel-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
@@ -31,10 +30,6 @@ import {
 } from "./loader.test-fixtures.js";
 import { bindPluginRegistryRuntime, getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import {
-  createRepositoryCheckoutTransfer,
-  type RepositoryCheckoutTransfer,
-} from "./repository-checkout-transfer.js";
 import {
   clearActivePluginRegistry,
   getActivePluginRegistry,
@@ -322,89 +317,3 @@ it.each(["missing manifest", "registration failure", "disabled", "loaded"] as co
     });
   },
 );
-
-it("performs a host-issued repository checkout once through a public SDK consumer", async () => {
-  await withOpenClawTestState({ label: "loader-repository-checkout" }, async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "repository-checkout-probe",
-      filename: "index.cjs",
-      body: `const { performRepositoryCheckout } = require("openclaw/plugin-sdk/repository-sources");
-module.exports = { id: "repository-checkout-probe", register(api) {
-  api.registerTool({ name: "repository_checkout_probe", description: "Redeem a host checkout transfer",
-    parameters: { type: "object", properties: {} },
-    async execute(_id, { checkout }) {
-      await performRepositoryCheckout(checkout, {
-        token: "synthetic-checkout",
-        assertCurrent() {},
-        start: async (run) => await run(),
-      });
-      return { content: [], details: {} };
-    }
-  });
-} };`,
-    });
-    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
-      id: plugin.id,
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-      contracts: { tools: ["repository_checkout_probe"] },
-    });
-    const config = pluginFixtureConfig(plugin);
-    const registry = loadPluginRegistryHandle({ config });
-    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
-    const redeem = async (checkout: RepositoryCheckoutTransfer) => {
-      const tool = registry.tools[0]?.factory({ config });
-      if (!tool || Array.isArray(tool)) {
-        throw new Error("Expected one repository checkout probe tool");
-      }
-      return await tool.execute("checkout-probe", { checkout });
-    };
-    const lifetime = new AbortController();
-    const checkoutRequest: WorkerWorkspaceSyncRequest = {
-      sessionId: "sdk-checkout",
-      generation: 1,
-      source: {
-        kind: "repository",
-        url: "https://forge.example/synthetic/repository.git",
-        branch: "proof/checkout",
-      },
-    };
-    let checkouts = 0;
-    const acceptCheckout = () =>
-      createRepositoryCheckoutTransfer(
-        {
-          async syncWorkspace(request) {
-            request.authorize?.();
-            expect(request).toMatchObject({
-              ...checkoutRequest,
-              source: { ...checkoutRequest.source, gitToken: "synthetic-checkout" },
-            });
-            checkouts++;
-            return {
-              mode: "repository",
-              remoteWorkspaceDir: "/worker/sdk-checkout",
-              manifestRef: "prepared-checkout",
-              baseCommit: "a".repeat(40),
-              baseManifestRef: "base-checkout",
-            };
-          },
-        },
-        checkoutRequest,
-        () => lifetime.signal.throwIfAborted(),
-      );
-    const checkout = acceptCheckout();
-    await redeem(checkout.transfer);
-    expect(checkout.result()).toMatchObject({
-      remoteWorkspaceDir: "/worker/sdk-checkout",
-      manifestRef: "prepared-checkout",
-    });
-    // The host issues each transfer for one dispatch; a replay cannot reuse its credential path.
-    await expect(redeem(checkout.transfer)).rejects.toThrow("no longer available");
-    expect(checkouts).toBe(1);
-    const cancelled = acceptCheckout();
-    lifetime.abort(new Error("Gateway closed"));
-    await expect(redeem(cancelled.transfer)).rejects.toThrow("Gateway closed");
-    expect(() => cancelled.result()).toThrow("did not dispatch");
-    expect(checkouts).toBe(1);
-  });
-});

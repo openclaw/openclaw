@@ -5,7 +5,7 @@ import {
 import { createGitLabTransport } from "./transport.js";
 import { parseGitLabProjectUrl } from "./url.js";
 
-/** Public GitLab projects through host-managed checkouts; cloud preparation is not offered yet. */
+/** Public GitLab projects through host-managed local checkouts. */
 export function createGitLabRepositorySource(origin: string): RepositorySourceV1 {
   const admit = (url: string) => parseGitLabProjectUrl(url, origin);
   const checkout = createManagedProjectCheckoutV1(

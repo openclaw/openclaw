@@ -17,9 +17,6 @@ export function isSessionDeviceFolder(
 export function isSessionRepository(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["repository"];
-export function isSessionRepositorySource(
-  value: unknown,
-): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["repositorySource"];
 export function isSessionFastMode(
   value: unknown,
 ): value is import("../../../../packages/gateway-protocol/src/schema/sessions-create.js").SessionsCreateParams["fastMode"];

@@ -55,8 +55,8 @@ on the same server.
 
 - Public projects only. The plugin sends no GitLab credentials for search or
   clone.
-- Local sessions only. Cloud workers report that this source cannot prepare
-  cloud workspaces.
+- Local sessions only. A GitLab project sent to a cloud worker is rejected with a
+  request to choose a local placement.
 - No merge requests yet; sessions can change files but not publish to GitLab.
 
 Plugin authors can build their own repository sources with

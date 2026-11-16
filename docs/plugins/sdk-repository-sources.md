@@ -1,9 +1,9 @@
 ---
-summary: "Plugin repository discovery, checkout, and cloud workspace preparation"
+summary: "Plugin repository discovery and managed local checkout"
 title: "Repository sources"
 read_when:
   - Adding a repository host integration through a plugin
-  - Preparing plugin repository sources for local or cloud sessions
+  - Preparing plugin repository sources for local sessions
 ---
 
 # Repository sources
@@ -75,47 +75,12 @@ external effects and honor cancellation. Registration binds callbacks and return
 operations to the managed plugin lifetime; a retained reference cannot revive a
 retired source.
 
-## Cloud preparation and recovery
+## Cloud workers
 
-Cloud support is optional. A source with a `worker` adapter supplies immutable
-repository/object identities, an opaque nonsecret `identityKey`, tree/blob reads,
-access revalidation, authenticated Git-pack preparation, and checkout. These
-operations feed the existing recipe, provisioning, and workspace owners. A source
-without that adapter reports that cloud preparation is unavailable.
-
-Without `prepareGitPack`, the worker fetches an admitted public HTTPS URL
-without ambient credentials or redirects. Other transports require a source-owned
-pack. Pack installation preserves the admitted HTTPS, SSH, or SCP-style origin
-without contacting it; repository hosts and nested paths remain source-owned.
-
-`identityKey` partitions prepared content; it does not authorize access. Returned
-facts contain no account records or bearer credentials. Providers revalidate
-current access and repository identity at the supplied boundaries. The host
-retains the selected source and pinned commit through dispatch, restart, and
-Gateway recovery.
-
-Prepared-worker retention uses the source's optional `worker.isIdentityCurrent`
-callback for its saved identity key, not native GitHub account selection. The
-callback is a local selection check and must not acquire credentials or remote
-access. Sources without it do not retain prepared workers; source retirement or
-an identity change makes existing preparations ineligible for reuse.
-
-Worker preparation and checkout can receive an optional `readCredential` capability
-from the admitted dispatch owner. It retains its current-actor assertion and
-admission operation; a plugin must not replace required dispatch admission with
-stored credentials. When `retainCredentialCleanup` is supplied, register each
-issued credential's revocation callback immediately so the host can clean it up
-when the accepted work ends. These callbacks do not become prepared metadata.
-
-The host revalidates the worker lease before and after `prepareGitPack`. The
-provider keeps current caller and captured credential assertions at each transport
-effect; it does not repeat the host's remote lease revalidation.
-
-Cold checkout uses a host-owned one-use `RepositoryCheckoutTransfer`. Pass it to
-`performRepositoryCheckout` with transport authorization when needed. The transfer
-selects the operation and destination; a plugin does not receive the workspace
-transport or gain authority to redirect it. Credentials supplied to that effect
-are neither returned as source metadata nor persisted in prepared snapshots.
+Plugin repository sources run sessions on the Gateway only. A `sessions.create`
+request that combines `repositorySource` with a cloud `repository` workspace is
+rejected with a message asking for a local placement. A later stage adds cloud
+preparation together with the first source that uses it.
 
 ## Compatibility
 

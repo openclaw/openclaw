@@ -44,7 +44,6 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^goalId$|^operationId$|^issuedAtMs$)/u,
     /(^deviceId$|^path$)/u,
     /(^url$|^ref$)/u,
-    /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/u,
     /(^mcpServers$|^mcpToolsDeny$|^skills$|^webSearch$)/u,
     /^.*$/u,
     /^.*$/u,
@@ -267,54 +266,52 @@ var External = [
     (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
     (value.length <= 1024 || (value.length <= 2048 && CodePointCount(value) <= 1024)),
   check_53 = (value) => check_54(value),
-  check_54 = (value) => typeof value == "string" && External[8].test(value),
-  check_55 = (value) => check_56(value),
-  check_56 = (value) => check_57(value) || check_58(value) || check_59(value),
-  check_57 = (value) => typeof value == "boolean",
-  check_58 = (value) => typeof value == "string" && value === "auto",
-  check_59 = (value) => typeof value == "string" && value === "ultrafast",
-  check_60 = (value) => check_61(value),
-  check_61 = (value) => check_62(value) || check_21(value),
-  check_62 = (value) => check_63(value) || check_64(value) || check_65(value),
-  check_63 = (value) => typeof value == "string" && value === "standard",
-  check_64 = (value) => typeof value == "string" && value === "daybreak_blue",
-  check_65 = (value) => typeof value == "string" && value === "daybreak_red",
-  check_66 = (value) => check_67(value),
-  check_67 = (value) =>
+  check_54 = (value) => check_55(value) || check_56(value) || check_57(value),
+  check_55 = (value) => typeof value == "boolean",
+  check_56 = (value) => typeof value == "string" && value === "auto",
+  check_57 = (value) => typeof value == "string" && value === "ultrafast",
+  check_58 = (value) => check_59(value),
+  check_59 = (value) => check_60(value) || check_21(value),
+  check_60 = (value) => check_61(value) || check_62(value) || check_63(value),
+  check_61 = (value) => typeof value == "string" && value === "standard",
+  check_62 = (value) => typeof value == "string" && value === "daybreak_blue",
+  check_63 = (value) => typeof value == "string" && value === "daybreak_red",
+  check_64 = (value) => check_65(value),
+  check_65 = (value) =>
     typeof value == "string" &&
     (value.length <= 1e3 || (value.length <= 2e3 && CodePointCount(value) <= 1e3)),
-  check_68 = (value) => check_16(value),
-  check_69 = (value) => check_70(value),
-  check_70 = (value) =>
+  check_66 = (value) => check_16(value),
+  check_67 = (value) => check_68(value),
+  check_68 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
     Object.getOwnPropertyNames(value).every(
-      (unique_16, unique_17) => External[9].test(unique_16) || check_2(value[unique_16]),
+      (unique_16, unique_17) => External[8].test(unique_16) || check_2(value[unique_16]),
     ) &&
-    (value.mcpServers === void 0 || !("mcpServers" in value) || check_71(value.mcpServers)) &&
-    (value.mcpToolsDeny === void 0 || !("mcpToolsDeny" in value) || check_72(value.mcpToolsDeny)) &&
-    (value.skills === void 0 || !("skills" in value) || check_71(value.skills)) &&
-    (value.webSearch === void 0 || !("webSearch" in value) || check_74(value.webSearch)),
+    (value.mcpServers === void 0 || !("mcpServers" in value) || check_69(value.mcpServers)) &&
+    (value.mcpToolsDeny === void 0 || !("mcpToolsDeny" in value) || check_70(value.mcpToolsDeny)) &&
+    (value.skills === void 0 || !("skills" in value) || check_69(value.skills)) &&
+    (value.webSearch === void 0 || !("webSearch" in value) || check_72(value.webSearch)),
+  check_69 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([unique_18, unique_19], _) => !External[9].test(unique_18) || check_55(unique_19),
+    ),
+  check_70 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([unique_20, unique_21], _) => !External[10].test(unique_20) || check_71(unique_21),
+    ),
   check_71 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.entries(value).every(
-      ([unique_18, unique_19], _) => !External[10].test(unique_18) || check_57(unique_19),
-    ),
-  check_72 = (value) =>
-    typeof value == "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.entries(value).every(
-      ([unique_20, unique_21], _) => !External[11].test(unique_20) || check_73(unique_21),
-    ),
-  check_73 = (value) =>
     Array.isArray(value) && value.every((unique_22, index) => check_4(unique_22)),
-  check_74 = (value) => typeof value == "boolean",
-  check_75 = (value) => check_76(value),
-  check_76 = (value) =>
+  check_72 = (value) => typeof value == "boolean",
+  check_73 = (value) => check_74(value),
+  check_74 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -324,24 +321,24 @@ var External = [
     "voice" in value &&
     "phase" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_23, unique_24) => External[12].test(unique_23) || check_2(value[unique_23]),
+      (unique_23, unique_24) => External[11].test(unique_23) || check_2(value[unique_23]),
     ) &&
     check_4(value.changeId) &&
     check_4(value.voiceSessionId) &&
     check_4(value.sessionKey) &&
     check_4(value.voice) &&
-    check_77(value.phase),
-  check_77 = (value) => check_78(value) || check_79(value),
-  check_78 = (value) => typeof value == "string" && value === "requested",
-  check_79 = (value) => typeof value == "string" && value === "cancelled",
-  check_80 = (value) => check_81(value),
-  check_81 = (value) =>
+    check_75(value.phase),
+  check_75 = (value) => check_76(value) || check_77(value),
+  check_76 = (value) => typeof value == "string" && value === "requested",
+  check_77 = (value) => typeof value == "string" && value === "cancelled",
+  check_78 = (value) => check_79(value),
+  check_79 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    (value.source === void 0 || !("source" in value) || check_82(value.source)) &&
+    (value.source === void 0 || !("source" in value) || check_80(value.source)) &&
     (value.root === void 0 || !("root" in value) || check_14(value.root)),
-  check_82 = (value) =>
+  check_80 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
@@ -349,7 +346,7 @@ var External = [
     "root" in value &&
     "fileRoot" in value &&
     Object.getOwnPropertyNames(value).every(
-      (unique_25, unique_26) => External[13].test(unique_25) || check_2(value[unique_25]),
+      (unique_25, unique_26) => External[12].test(unique_25) || check_2(value[unique_25]),
     ) &&
     check_4(value.workspaceId) &&
     check_24(value.root) &&
@@ -360,14 +357,13 @@ var External = [
   isSessionWorktreeSource = (value) => check_44(value),
   isSessionDeviceFolder = (value) => check_46(value),
   isSessionRepository = (value) => check_49(value),
-  isSessionRepositorySource = (value) => check_53(value),
-  isSessionFastMode = (value) => check_55(value),
-  isSessionCyberAccessProgram = (value) => check_60(value),
-  isSessionTitleSource = (value) => check_66(value),
-  isSessionPermissionMode = (value) => check_68(value),
-  isSessionToolOverrides = (value) => check_69(value),
-  isTalkVoiceChangeEvent = (value) => check_75(value),
-  isSessionFileReadMetadata = (value) => check_80(value);
+  isSessionFastMode = (value) => check_53(value),
+  isSessionCyberAccessProgram = (value) => check_58(value),
+  isSessionTitleSource = (value) => check_64(value),
+  isSessionPermissionMode = (value) => check_66(value),
+  isSessionToolOverrides = (value) => check_67(value),
+  isTalkVoiceChangeEvent = (value) => check_73(value),
+  isSessionFileReadMetadata = (value) => check_78(value);
 export {
   isAgentRuntimeRestrictionErrorDetails,
   isSessionCyberAccessProgram,
@@ -376,7 +372,6 @@ export {
   isSessionFileReadMetadata,
   isSessionPermissionMode,
   isSessionRepository,
-  isSessionRepositorySource,
   isSessionTitleSource,
   isSessionToolOverrides,
   isSessionWorktreeSource,

@@ -107,7 +107,8 @@ export const SessionsCreateParamsSchema = closedObject({
   repositorySource: Type.Optional(
     Type.String({
       pattern: "^[a-z0-9][a-z0-9._-]{0,127}/[a-z0-9][a-z0-9._-]{0,127}$",
-      description: "Explicit plugin/source contribution for projectGitUrl or repository.",
+      description:
+        "Explicit plugin/source contribution for projectGitUrl. Plugin sources run on the Gateway; cloud repository workspaces reject them.",
     }),
   ),
   repository: Type.Optional(SessionRepositorySourceSchema),

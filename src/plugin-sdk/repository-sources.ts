@@ -18,13 +18,7 @@ export type {
   RepositorySourceV1,
   RepositorySourceProject,
   RepositorySourcePreparation,
-  RepositoryWorkerReadLease,
-  RepositoryTreeEntry,
 } from "../plugins/repository-source-types.js";
-export {
-  performRepositoryCheckout,
-  type RepositoryCheckoutTransfer,
-} from "../plugins/repository-checkout-transfer.js";
 export type {
   ManagedProjectOptions,
   ManagedProjectSourceV1,
@@ -103,15 +97,4 @@ export function createManagedProjectCheckoutV1(source: ManagedProjectSourceV1) {
       await refreshProjectClone(project, admitted.options, admitted.source);
     },
   };
-}
-
-/** Native pack custody is loaded only for admitted source transport. */
-export async function prepareRepositoryCheckoutPack(
-  ...args: Parameters<
-    typeof import("../gateway/worker-environments/repository-git-pack.js").fetchRepositoryCheckoutPack
-  >
-) {
-  return await (
-    await import("../gateway/worker-environments/repository-git-pack.js")
-  ).fetchRepositoryCheckoutPack(...args);
 }

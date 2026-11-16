@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as agents from "../../agents/agent-lifecycle-registry.js";
 import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
+import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
@@ -16,18 +17,12 @@ import {
 import * as prep from "./preparation-identity.schema.js";
 import * as projects from "./project-preparation.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
-import type {
-  WorkerProviderRepositorySource,
-  WorkerProviderRepositoryIntent,
-} from "./provider-project-preparation.js";
+import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import {
   prepareWorkerRetentionPolicy,
   requireAdmittedWorkerRetentionPolicy,
 } from "./provider-retention-policy.js";
-import {
-  isRepositoryWorkerProjectOwnerCurrent,
-  prepareRepositoryWorkerProjectSource,
-} from "./repository-project-admission.js";
+import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as validation from "./service-validation.js";
@@ -63,7 +58,13 @@ export type WorkerProviderIntentPreparationOptions = {
   emptyWorkspace?: true;
   /** Dedicated runtime capacity without repository contents or read authority. */
   imageReserve?: true;
-  repository?: WorkerProviderRepositoryIntent;
+  repository?: {
+    agentId: string;
+    url: string;
+    ref?: string;
+    baseCommit?: string;
+    workspaceId?: string;
+  };
   projectRepository?: RepositoryWorkerProjectSnapshot;
   runSetupScript?: boolean;
   signal?: AbortSignal;
@@ -427,10 +428,34 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     ) {
       return invalid("configured profile changed");
     }
-    const isSourceOwnerCurrent = () =>
-      !project ||
-      !("source" in project) ||
-      isRepositoryWorkerProjectOwnerCurrent(project, options.getConfig());
+    const isSourceOwnerCurrent = () => {
+      const sourceConfig = options.getConfig();
+      if (project && "source" in project) {
+        const { agent, identity } = project.source.owner;
+        const agentIdentity = resolveConfiguredGitHubToolIdentity({
+          config: sourceConfig,
+          agentId: agent.agentId,
+          scope: "agent",
+        });
+        const systemIdentity = resolveConfiguredGitHubToolIdentity({
+          config: sourceConfig,
+          agentId: agent.agentId,
+          scope: "system",
+        });
+        const selected = agentIdentity ?? systemIdentity;
+        const selectedSource = agentIdentity ? "agent-override" : "system-configured";
+        if (
+          selected
+            ? identity.source !== selectedSource ||
+              !("profileId" in identity) ||
+              identity.profileId !== selected.profileId
+            : identity.source !== "anonymous" && identity.source !== "system-detected"
+        ) {
+          return false;
+        }
+      }
+      return true;
+    };
     if (!isSourceOwnerCurrent()) {
       return invalid("repository owner changed");
     }

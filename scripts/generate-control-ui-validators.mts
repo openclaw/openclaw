@@ -143,7 +143,6 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
       "worktreeSource",
       "deviceFolder",
       "repository",
-      "repositorySource",
       "fastMode",
       "cyberAccessProgram",
       "titleSource",

@@ -445,3 +445,25 @@ test("sessions.create refreshes a reused custom source after its remote default 
     await cleanupRun(context, storePath, created.key);
   }
 });
+
+test("sessions.create keeps plugin repository sources off cloud repository workspaces", async () => {
+  const url = "https://forge.example.invalid/team/project.git";
+  const source = createRepositorySourceFixture({
+    id: "custom",
+    resolve: () => ({ url, name: "project" }),
+    async prepare() {
+      throw new Error("A rejected request must not prepare a checkout");
+    },
+  });
+  const response = await source.run(() =>
+    directSessionReq(
+      "sessions.create",
+      { agentId: "main", message: "start", repository: { url }, repositorySource: source.id },
+      { ...controlUiClient, context: runContext() },
+    ),
+  );
+  expect(response).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("cloud workers do not support them") },
+  });
+});

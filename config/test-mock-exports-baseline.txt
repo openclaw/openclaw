@@ -5081,6 +5081,7 @@
 ["src/gateway/user-profiles-http.test.ts","../state/user-profiles-avatar.js","1ae03afa70253d304b5cb53f56e07eb4ad8d65b18187412f7ba59bdbdc1898b2",1]
 ["src/gateway/worker-environments/cloud-transcript-write-admission.test.ts","../../agents/sessions/session-manager-write-admission.js","b511618e4d80ee71e853cceaa47fe6fdf97b72414f64f4dd9766edde22ea5726",1]
 ["src/gateway/worker-environments/node-enrollment.test.ts","../../infra/device-bootstrap.js","4baee8751ee76dd830f4e38e27a8de20017c0e488a3119f696ffb006e81caba1",1]
+["src/gateway/worker-environments/provider-project-retention.test.ts","./repository-project-admission.js","be008742b618bdbfeb80d87bc9c72f93886d7cc520577c42365a2c83555ff3c8",1]
 ["src/gateway/worker-environments/repository-project-access.test.ts","./repository-project-admission.js","e2746ebcd475943df5e401a13c52cd1eabffff30bd239a1b7b15c36f7b2e5194",1]
 ["src/gateway/worker-environments/repository-project-admission.test.ts","../../agents/github-tool-identity.js","93dd7005db27dd93923221e9ab903e922c86b32d5a0ef8d7b0b3275c2069087b",1]
 ["src/gateway/worker-environments/repository-project-admission.test.ts","../../secrets/runtime-state.js","cb9ce62f767335ec79ea824006b3ad34cba008d3487c8e93e0f4771024d20e7c",1]
