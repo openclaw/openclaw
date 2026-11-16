@@ -208,15 +208,13 @@ export function createGatewayChatMetadataRuntime(params: {
         ? generation.neutralProjectionByAgentId
         : generation.sessionProjectionByKey;
     const key = neutral ? agent.agentId : sessionProjectionKey(agent.agentId, profiles);
-    for (let existing = projections.get(key); existing; existing = projections.get(key)) {
+    const existing = projections.get(key);
+    if (existing) {
       const prepared = existing.state === "ready" ? existing.projection : await existing.promise;
       if (await withCurrentReadAuthority(authority, () => prepared.isCurrent())) {
         return prepared;
       }
-      // Another waiter may already have replaced the stale projection.
-      if (projections.get(key) === existing) {
-        projections.delete(key);
-      }
+      projections.delete(key);
     }
     const projection = prepareChatMetadataModelProjection({
       context: params.getContext(),
@@ -232,23 +230,17 @@ export function createGatewayChatMetadataRuntime(params: {
             ...prepared,
             agent,
           };
-          // Evicted work may finish for its caller without replacing the current slot.
-          if (projections.get(key) === entry) {
-            projections.set(key, { state: "ready", projection: preparedProjection });
-            pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
-          }
+          projections.set(key, { state: "ready", projection: preparedProjection });
+          pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
           return preparedProjection;
         }),
       )
       .catch((error: unknown) => {
-        if (projections.get(key) === entry) {
-          projections.delete(key);
-        }
+        projections.delete(key);
         throw error;
       });
     void trackWork(projection);
-    const entry: AgentProjectionEntry = { state: "pending", promise: projection };
-    projections.set(key, entry);
+    projections.set(key, { state: "pending", promise: projection });
     // Cold history reads omit evicted projections; canonical reads prepare them on demand.
     pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
     return projection;

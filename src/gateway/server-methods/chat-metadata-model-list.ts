@@ -182,15 +182,13 @@ export function createChatMetadataModelList(params: {
     { request, key }: SharedModelsListSelection,
     authority?: CurrentReadAuthority,
   ): Promise<PreparedModels> => {
-    for (let existing = projections.get(key); existing; existing = projections.get(key)) {
+    const existing = projections.get(key);
+    if (existing) {
       const projection = await existing;
       if (projection.isCurrent()) {
         return projection;
       }
-      // A stale waiter must join the successor, not delete its replacement.
-      if (projections.get(key) === existing) {
-        projections.delete(key);
-      }
+      projections.delete(key);
     }
     const facts = agents.get(request.agentId);
     if (!facts?.owner.catalogOwner || !facts.owner.isCurrent()) {
@@ -223,9 +221,7 @@ export function createChatMetadataModelList(params: {
     projections.set(key, pending);
     pruneMapToMaxSize(projections, params.maxEntries);
     void pending.catch(() => {
-      if (projections.get(key) === pending) {
-        projections.delete(key);
-      }
+      projections.delete(key);
     });
     return pending;
   };
