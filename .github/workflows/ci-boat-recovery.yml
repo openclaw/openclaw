@@ -59,7 +59,7 @@ jobs:
                 ...context.repo, check_run_id: checkRunId, per_page: 100,
               });
               if (!annotations.some((annotation) => annotation.title === 'Paused by plan limit' &&
-                  /You used all [\d,]+ sandbox starts included in the last 24 hours\./.test(annotation.message))) return;
+                  /\bsandbox starts\b/i.test(annotation.message))) return;
             }
             const currentHead = async () => {
               if (run.event === 'pull_request') {

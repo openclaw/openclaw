@@ -8,6 +8,7 @@ async function recover(
     currentHead?: string;
     nextAttempt?: number;
     event?: string;
+    quotaMessage?: string;
   } = {},
 ) {
   const run = {
@@ -44,7 +45,8 @@ async function recover(
       message:
         options.failure === "other-error"
           ? "Unknown error"
-          : "You used all 2,400 sandbox starts included in the last 24 hours.",
+          : (options.quotaMessage ??
+            "You used all 2,400 sandbox starts included in the last 24 hours."),
     },
   ];
   let reads = 0;
@@ -84,6 +86,10 @@ async function recover(
 it("recovers an actual quota setup signature when the run omits pull request metadata", async () => {
   expect(await recover()).toEqual([{ owner: "openclaw", repo: "openclaw", run_id: 42 }]);
   expect(await recover({ event: "push" })).toHaveLength(1);
+  expect(await recover({ quotaMessage: "Hourly sandbox starts limit reached." })).toHaveLength(1);
+  expect(await recover({ quotaMessage: "Sandbox starts per minute limit reached." })).toHaveLength(
+    1,
+  );
 });
 
 it("does not turn test failures or stale CI into automatic retries", async () => {
@@ -91,6 +97,7 @@ it("does not turn test failures or stale CI into automatic retries", async () =>
     { failure: "test" as const },
     { failure: "other-provider" as const },
     { failure: "other-error" as const },
+    { quotaMessage: "You used all included VM hours." },
     { currentHead: "newer" },
     { event: "push", currentHead: "newer" },
     { nextAttempt: 2 },

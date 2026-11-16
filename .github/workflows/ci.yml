@@ -2708,7 +2708,7 @@ jobs:
           cache-mode: *cache_mode
           node-version: "24.22.1"
           install-bun: "false"
-          dependency-cache: &trusted_first_attempt_dependency_cache ${{ (needs.preflight.outputs.effective_runner_backend == 'boat' || startsWith(matrix.runner_label || matrix.runner || '', 'boat')) && 'false' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          dependency-cache: &trusted_first_attempt_dependency_cache ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && 'false' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           restore-test-caches: *restore_test_caches
 
       - *install_playwright_chromium
@@ -3817,7 +3817,7 @@ jobs:
           native-secret-service: ${{ matrix.requires_native_secret_service == true && 'true' || 'false' }}
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
-          dependency-cache: *trusted_first_attempt_dependency_cache
+          dependency-cache: ${{ (needs.preflight.outputs.effective_runner_backend == 'boat' || startsWith(matrix.runner_label || matrix.runner, 'boat')) && 'false' || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           vitest-worker-preset: ${{ matrix.worker_cache_preset || 'full' }}

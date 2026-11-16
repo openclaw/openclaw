@@ -27,7 +27,7 @@ overlap but is not a hard account-wide cap. Explicit qualification and release
 workflows retain their own admission. No wallet top-up or paid overflow is enabled.
 
 `CI Boat Recovery` handles a completed first attempt whose only failed workload
-jobs stopped in Boat runner setup with the daily-start limit annotation. It
+jobs stopped in Boat runner setup with a sandbox-start plan-limit annotation. It
 rechecks the current same-repository PR or branch head and requests one failed-job
 retry. Existing retry routing uses GitHub-hosted runners. It does not retry actual
 test failures, cancelled runs, superseded heads, or a second attempt. The recovery
