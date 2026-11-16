@@ -15,10 +15,8 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("shows the recorded cost hint through ordinary Usage filters", async () => {
-    const normalHint = "Known cost, including estimates, divided by all user and agent messages.";
-    const missingHint =
-      "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data.";
+  it("marks the cost total only while filtered usage has no cost data", async () => {
+    const missingHint = "Some usage has no cost data.";
     const updatedAt = Date.now();
     const fixture = createRecordedCostUsage(updatedAt);
     const responses = {
@@ -47,18 +45,36 @@ suite.define(() => {
         await page.clock.setFixedTime(new Date(updatedAt));
         const gateway = await installMockGateway(page, { methodResponses: responses });
         await page.goto(`${suite.server.baseUrl}usage`);
-        const hintButton = page.locator("#usage-summary-hint-average-cost");
-        const card = page.locator(".usage-summary-card").filter({ has: hintButton });
+        const badge = page.locator(".usage-metric-badge").filter({ hasText: "Cost" });
+        const hintButton = badge.locator("#usage-summary-hint-cost");
         const tooltipHost = hintButton.locator("xpath=..");
         const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         const hintContent = tooltipHost.locator('[slot="content"]');
-        const value = card.locator(".usage-summary-value");
+        const value = badge.locator("strong");
         const steps = [
-          { stage: "mixed", query: "", count: 3, value: "$0.03" },
-          { stage: "known-zero", query: 'label:"Known zero"', count: 1, value: "$0.00" },
-          { stage: "cleared", query: "", count: 3, value: "$0.03" },
-          { stage: "positive", query: 'label:"Known positive"', count: 1, value: "$0.10" },
-          { stage: "unknown", query: 'label:"Unpriced usage"', count: 1, value: "$0.00" },
+          { stage: "mixed", query: "", count: 3, value: "$0.20", missing: true },
+          {
+            stage: "known-zero",
+            query: 'label:"Known zero"',
+            count: 1,
+            value: "$0.00",
+            missing: false,
+          },
+          { stage: "cleared", query: "", count: 3, value: "$0.20", missing: true },
+          {
+            stage: "positive",
+            query: 'label:"Known positive"',
+            count: 1,
+            value: "$0.20",
+            missing: false,
+          },
+          {
+            stage: "unknown",
+            query: 'label:"Unpriced usage"',
+            count: 1,
+            value: "$0.00",
+            missing: true,
+          },
         ];
         for (const step of steps) {
           if (step.stage === "cleared") {
@@ -67,24 +83,23 @@ suite.define(() => {
             await applyUsageQuery(page, step.query);
           }
           await expect.poll(() => page.locator(".session-bar-title").count()).toBe(step.count);
-          await expect.poll(async () => (await value.textContent())?.trim()).toBe(step.value);
-          await card.evaluate((element) =>
-            element.scrollIntoView({ block: "center", behavior: "instant" }),
-          );
+          await expect
+            .poll(async () => (await value.textContent())?.trim(), step.stage)
+            .toBe(step.value);
+          await expect.poll(() => hintButton.count(), step.stage).toBe(step.missing ? 1 : 0);
+          if (!step.missing) {
+            continue;
+          }
           await hintButton.click();
           await expect
             .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
             .toBe(true);
-          await expect.poll(() => tooltip.isVisible()).toBe(true);
           await expect.poll(() => hintContent.isVisible()).toBe(true);
-          expect((await hintContent.textContent())?.trim() ?? "", step.stage).toBe(
-            ["known-zero", "positive"].includes(step.stage) ? normalHint : missingHint,
-          );
+          expect((await hintContent.textContent())?.trim()).toBe(missingHint);
           await hintButton.press("Escape");
           await expect
             .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
             .toBe(false);
-          await expect.poll(() => tooltip.isVisible()).toBe(false);
         }
         const requests = await gateway.getRequests();
         expect(requests.some(({ method }) => method === "sessions.usage")).toBe(true);

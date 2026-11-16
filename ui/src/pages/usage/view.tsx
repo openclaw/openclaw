@@ -59,11 +59,6 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
   // Retain presentation only within the owner's strict scope while its text query changes.
   const analyticsData = createMemo(() => retainedChartSnapshot() ?? props.data);
   const analyticsTotals = () => analyticsData().totals;
-  const analyticsSessionCount = () =>
-    analyticsData().overview?.selectedSessionCount ??
-    analyticsData().overview?.total ??
-    analyticsData().aggregates?.sessionCount ??
-    analyticsData().sessions.length;
   const analyticsTotalSessions = () =>
     analyticsData().overview?.unfilteredSessionCount ??
     analyticsData().aggregates?.sessionCount ??
@@ -126,9 +121,14 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     const sessions = displaySessionCount();
     return [
       [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
-      [totals ? formatUsageCost(totals.totalCost) : empty, t("usage.metrics.cost")],
+      // Usage without a known price is excluded from the total, so say so beside it.
+      [
+        totals ? formatUsageCost(totals.totalCost) : empty,
+        t("usage.metrics.cost"),
+        (totals?.missingCostEntries ?? 0) > 0,
+      ],
       [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
-    ];
+    ] as const;
   });
   const insightStats = createMemo(() => {
     const durationMs = analyticsData().overview?.durationMs ?? 0;
@@ -169,9 +169,26 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
             {/* Carapace summary strip: fixed cells, so placeholders and loaded totals share one layout. */}
             <div class="usage-summary-strip">
               <For each={metricBadges()}>
-                {([value, label]) => (
+                {([value, label, missingCost]) => (
                   <div class="usage-metric-badge">
-                    <strong>{value}</strong> <small>{label}</small>
+                    <strong>{value}</strong>{" "}
+                    <small>
+                      {label}
+                      <Show when={missingCost}>
+                        <openclaw-tooltip open-on-click>
+                          <button
+                            id="usage-summary-hint-cost"
+                            type="button"
+                            class="usage-summary-hint"
+                            aria-label={label}
+                            onClick={(event) => event.currentTarget.focus()}
+                          >
+                            ?
+                          </button>
+                          <span slot="content">{t("usage.overview.missingCostHint")}</span>
+                        </openclaw-tooltip>
+                      </Show>
+                    </small>
                   </div>
                 )}
               </For>
@@ -287,13 +304,10 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
               totals={analyticsTotals()}
               aggregates={activeAggregates()}
               stats={insightStats()}
-              showCostHint={(analyticsTotals()?.missingCostEntries ?? 0) > 0}
               errorHours={buildPeakErrorHours(
                 analyticsData().overview?.hourlyMessages ?? [],
                 analyticsData().overview?.hourlyErrors ?? [],
               )}
-              sessionCount={analyticsSessionCount()}
-              totalSessions={analyticsTotalSessions()}
             />
             <CostWindowComparison
               daily={analyticsData().aggregates?.costDaily ?? props.data.costDaily}
