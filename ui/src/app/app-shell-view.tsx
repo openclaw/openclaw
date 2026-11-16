@@ -110,10 +110,11 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
-  // A section's sidebar stands beside its page only when expanded on a desktop layout.
+  // A section's sidebar stands beside its page only when expanded on a desktop layout; a native
+  // embed shows no section sidebar.
   createSectionSidebarSource(() => {
     const current = view();
-    return current.navCollapsed || current.mobileNavLayout
+    return current.navCollapsed || current.mobileNavLayout || current.nativeEmbed
       ? undefined
       : sidebarSectionForRoute(current.activeRoute);
   });
