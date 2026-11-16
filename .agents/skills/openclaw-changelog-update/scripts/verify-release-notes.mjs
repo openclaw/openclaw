@@ -1154,26 +1154,33 @@ function canonicalMainCommits(base, mainRef) {
   }
   const mainCommit = /** @type {string} */ (gitCommit(mainRef, true));
   const mainBase = git(["merge-base", base, mainCommit]);
-  const output = git([
-    "log",
-    "--reverse",
-    "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
-    `${mainBase}..${mainCommit}`,
-  ]);
+  const hashes = git(["rev-list", "--reverse", `${mainBase}..${mainCommit}`])
+    .split("\n")
+    .filter(Boolean);
   const commits = [];
-  for (const record of output.split("\x1e")) {
-    if (!record) {
-      continue;
+  // Long-lived release branches can exceed the subprocess buffer even with a small delta.
+  // Preserve every canonical commit and its order, but bound each body read.
+  for (let offset = 0; offset < hashes.length; offset += 32) {
+    const output = git([
+      "log",
+      "--no-walk=unsorted",
+      "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
+      ...hashes.slice(offset, offset + 32),
+    ]);
+    for (const record of output.split("\x1e")) {
+      if (!record) {
+        continue;
+      }
+      const [rawHash, subject, authorName, authorEmail, ...bodyParts] = record.split("\x1f");
+      const hash = rawHash.trim();
+      commits.push({
+        authorEmail,
+        authorName,
+        body: bodyParts.join("\x1f"),
+        hash,
+        subject,
+      });
     }
-    const [rawHash, subject, authorName, authorEmail, ...bodyParts] = record.split("\x1f");
-    const hash = rawHash.trim();
-    commits.push({
-      authorEmail,
-      authorName,
-      body: bodyParts.join("\x1f"),
-      hash,
-      subject,
-    });
   }
   return commits;
 }

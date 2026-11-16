@@ -132,6 +132,31 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("retains canonical main provenance when history exceeds the Git output buffer", () => {
+    const cwd = tempDirs.make("openclaw-large-main-notes-");
+    git(cwd, ["init", "-q", "-b", "release"]);
+    git(cwd, ["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(cwd, "CHANGELOG.md"), createReleaseNotesFixtureLines().join("\n"));
+    splitChangelog({ rootDir: cwd });
+    const base = commitAll(cwd, "chore: baseline");
+    // Match a long-lived canonical main range without creating thousands of commits.
+    const message = "chore: history\n\n" + "x".repeat(300_000) + "\n";
+    const records = Array.from({ length: 64 }, (_, index) =>
+      [
+        "commit refs/heads/main",
+        "committer OpenClaw Test <test@openclaw.invalid> 1700000000 +0000",
+        "data " + Buffer.byteLength(message),
+        message.trimEnd(),
+        ...(index === 0 ? ["from " + base] : []),
+        "",
+      ].join("\n"),
+    ).join("\n");
+    execFileSync("git", ["fast-import", "--quiet"], { cwd, input: records });
+    const result = runVerifier(cwd, { base, target: base, mainRef: "main" });
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(JSON.parse(result.stdout).source).toMatchObject({ inRangePullRequests: 0 });
+  });
+
   it("prefers the pushed canonical release branch over a stale local branch", () => {
     const resolved = new Map([
       ["refs/remotes/origin/release/2026.7.1", "remote"],
