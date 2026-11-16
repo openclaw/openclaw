@@ -152,6 +152,7 @@ async function workspaceIdentity(workspace: string): Promise<string> {
 async function commitConfig(
   transform: Parameters<ConfigCommit>[0],
   options: StatelessTemplateAddOptions,
+  allowedAgentRosterRemovals?: readonly string[],
 ): Promise<void> {
   if (options.commitConfig) {
     await options.prepareEffect?.();
@@ -163,6 +164,7 @@ async function commitConfig(
     afterWrite: { mode: "auto" },
     writeOptions: copyRuntimeConfigWriteApplication(options.configWriteOptions, {
       assertCurrent: options.assertCurrent,
+      ...(allowedAgentRosterRemovals ? { allowedAgentRosterRemovals } : {}),
       beforeCommit: async () => {
         await options.configWriteOptions?.beforeCommit?.();
         await options.prepareEffect?.();
@@ -284,15 +286,19 @@ export async function stageTemplateAddHostRequirementsStateless(
               expectedConfigRevision: revision,
             });
           }
-          await commitConfig((config) => {
-            const existing = listAgentEntries(config).find(
-              (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
-            );
-            if (!existing || !sameCommittedAgent(existing, plan)) {
-              throw new Error("The new agent changed after Add; automatic rollback stopped.");
-            }
-            return pruneAgentConfig(config, plan.agent.finalId).config;
-          }, options);
+          await commitConfig(
+            (config) => {
+              const existing = listAgentEntries(config).find(
+                (entry) => normalizeAgentId(entry.id) === normalizeAgentId(plan.agent.finalId),
+              );
+              if (!existing || !sameCommittedAgent(existing, plan)) {
+                throw new Error("The new agent changed after Add; automatic rollback stopped.");
+              }
+              return pruneAgentConfig(config, plan.agent.finalId).config;
+            },
+            options,
+            [plan.agent.finalId],
+          );
         }
         configCommitted = false;
       } catch (error) {

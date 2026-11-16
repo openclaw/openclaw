@@ -36,6 +36,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   applyTemplateAddPlanStateless,
+  stageTemplateAddHostRequirementsStateless,
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import * as cronInstall from "./cron.js";
@@ -287,6 +288,29 @@ describe("stateless Template Add", () => {
     expect(result.error?.message).toContain("Workspace changed");
     expect(Object.keys(config.agents.entries)).toEqual(["main", "workspace-agent"]);
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
+  });
+
+  it("removes the new agent from the config file when runtime activation fails", async () => {
+    const plan = await buildPlan();
+    const stage = await stageTemplateAddHostRequirementsStateless(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+    });
+    assert(stage.kind !== "partial");
+    const agentStage = await stage.stageAgent();
+    assert(agentStage.kind !== "partial");
+    const result = await agentStage.fail(new Error("runtime unavailable"), "add_failed");
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      workspaceCreated: false,
+      error: { code: "add_failed", message: "runtime unavailable" },
+    });
+    const written = JSON.parse(await readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    expect(Object.keys(written.agents.entries)).toEqual(["main"]);
+    expect(existsSync(plan.agent.workspace)).toBe(false);
+    config = written;
+    expect((await buildPlan()).agent.finalId).toBe(plan.agent.finalId);
   });
 
   const configured = { command: "npx", args: ["example-mcp"] };
