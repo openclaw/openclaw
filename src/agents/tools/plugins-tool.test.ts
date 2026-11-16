@@ -1,3 +1,4 @@
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import * as refreshes from "../plugin-runtime-refresh.js";
@@ -98,21 +99,6 @@ it.each([
       expectedIntegrity: "sha256:" + "a".repeat(64),
     },
   },
-  {
-    args: {
-      action: "update",
-      source: "clawhub",
-      packageName: "local-tool",
-      version: "1.0.1",
-    },
-    method: "plugins.install",
-    params: { source: "clawhub", packageName: "local-tool", version: "1.0.1", mode: "update" },
-  },
-  {
-    args: { action: "update", source: "official", pluginId: "local-tool" },
-    method: "plugins.install",
-    params: { source: "official", pluginId: "local-tool", mode: "update" },
-  },
 ])(
   "routes $args.action through the authorized management owner",
   async ({ args, method, params }) => {
@@ -133,6 +119,37 @@ it.each([
       await expect(tool.execute("stale", args, signal)).rejects.toThrow("Plugin runtime changed");
       expect(callGateway).toHaveBeenCalledOnce();
     });
+  },
+);
+
+it.each([
+  {
+    args: { action: "update", source: "clawhub", packageName: "local-tool", version: "1.0.1" },
+    params: { source: "clawhub", packageName: "local-tool", version: "1.0.1", mode: "update" },
+  },
+  {
+    args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.1" },
+    params: { source: "clawhub", packageName: "local-tool", version: "1.0.1" },
+  },
+  {
+    args: { action: "update", source: "official", pluginId: "local-tool" },
+    params: { source: "official", pluginId: "local-tool", mode: "update" },
+  },
+])(
+  "accepts $args.action from $args.source at the tool schema; only update replaces",
+  async ({ args, params }) => {
+    callGateway.mockResolvedValue({ runtime, restartRequired: false });
+    const tool = createPluginsTool();
+    const validated = validateToolArguments(tool, {
+      type: "toolCall",
+      id: "replace",
+      name: "plugins",
+      arguments: args,
+    });
+    await tool.execute("replace", validated);
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ method: "plugins.install", params }),
+    );
   },
 );
 
