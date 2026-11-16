@@ -179,6 +179,8 @@ export function* createPluginFrozenGenerationSteps(
     retainSourceCustody: markPluginSourceCaptureOperation(() => ({
       source: recover(),
       files: artifact.sourceSnapshotFacts!.files,
+      executionAliases: artifact.executionAliases,
+      executionSources: artifact.executionSources,
     })),
     hasSource: (source) => snapshot.sourcePaths.has(inputFor(sourceInputFor(source))),
     resolve: (source, rejectHardlinks) => {

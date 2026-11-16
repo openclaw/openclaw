@@ -44,7 +44,7 @@ import {
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   createSqliteWorkerOperationAdmission,

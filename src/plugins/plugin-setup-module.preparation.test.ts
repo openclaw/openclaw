@@ -214,6 +214,8 @@ it.for(["readdirSync", "lstatSync", "realpathSync", "escape", "cycle", "nonregul
                 : undefined,
           },
           receipt: createPluginGenerationReceipt(),
+          executionAliases: new Map(),
+          executionSources: new Map(),
           onPackageMetadata() {},
         })(original, directory);
       const realpath = fs.realpathSync;
