@@ -76,6 +76,10 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, key)
             : `${suite.server.baseUrl}${route}`,
         );
+        if (route === "dashboards") {
+          // The gallery shows only while the Dashboards sidebar is closed.
+          await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+        }
         const foreground = page.locator(selector);
         await foreground.first().waitFor();
         if (route === "dashboards") {
