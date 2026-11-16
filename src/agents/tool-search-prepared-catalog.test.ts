@@ -19,6 +19,7 @@ describe("prepareToolSearchCatalogDescriptors", () => {
     const { prepared } = prepareToolSearchCatalogDescriptors([entry]);
 
     expect(prepared.descriptors[0]!.mcp).toEqual({ serverName: "server", toolName: "lookup" });
+    expect(prepared.descriptors[0]!.mcp).not.toHaveProperty("mode");
     expect(Object.isFrozen(prepared.descriptors[0]!.mcp)).toBe(true);
   });
 });
