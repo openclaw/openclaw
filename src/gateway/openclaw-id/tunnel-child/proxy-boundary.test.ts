@@ -50,12 +50,14 @@ describe("tunnel proxy boundary", () => {
     contentLength: string | undefined;
     transferEncoding: string | undefined;
   }> = [];
+  const requestHeads: Array<{ path: string | undefined; socket: object }> = [];
   const upgrades: Array<{ path: string | undefined; host: string | undefined }> = [];
   const decoyUpgrades: string[] = [];
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-id-proxy-"));
     gateway = http.createServer((req, res) => {
+      requestHeads.push({ path: req.url, socket: req.socket });
       const transport = readGatewayIngressTransport(req);
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -151,6 +153,57 @@ describe("tunnel proxy boundary", () => {
       { contentLength: undefined, transferEncoding: "chunked" },
       { contentLength: undefined, transferEncoding: "chunked" },
     ]);
+  });
+
+  it("sends headers on a reused connection before the first DATA frame completes", async () => {
+    expect(
+      await proxyHttp({
+        head: { kind: "http", method: "GET", path: "/warm", headers: [] },
+        reader: frameReader(),
+        send,
+        headers: headers(owner),
+        target: listener,
+      }),
+    ).toBe(200);
+    const warmSocket = requests.at(-1)?.socket;
+    let releaseBody!: () => void;
+    const bodyReady = new Promise<void>((resolve) => {
+      releaseBody = resolve;
+    });
+    const wire = Buffer.from(encodeFrame(Buffer.from("deferred body")));
+    let reads = 0;
+    const pending = proxyHttp({
+      head: { kind: "http", method: "POST", path: "/deferred-body", headers: [] },
+      reader: new FrameReader({
+        read: async () => {
+          if (reads++ === 0) {
+            return wire.subarray(0, 4);
+          }
+          if (reads === 2) {
+            await bodyReady;
+            return wire.subarray(4);
+          }
+          return null;
+        },
+        stop: async () => {},
+      }),
+      send,
+      headers: headers(owner),
+      target: listener,
+    });
+    let status: Awaited<typeof pending>;
+    try {
+      await expect
+        .poll(() => requestHeads.find((request) => request.path === "/deferred-body"))
+        .toBeDefined();
+      expect(requestHeads.at(-1)?.socket).toBe(warmSocket);
+      expect(requests.some((request) => request.path === "/deferred-body")).toBe(false);
+    } finally {
+      releaseBody();
+      status = await pending;
+    }
+    expect(status).toBe(200);
+    expect(requests.at(-1)).toMatchObject({ path: "/deferred-body", body: "deferred body" });
   });
 
   it.each(["GET", "HEAD", "DELETE", "OPTIONS", "TRACE"])(
