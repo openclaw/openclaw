@@ -315,8 +315,8 @@ The callback is a separate capability, not another ordinary attempt. It must:
   those restrictions.
 
 The built-in runtime reopens the session for finalization within the same
-replay byte bound as ordinary attempts (eight bytes per context token), with
-`toolResultOverflow: "omit"`: when large tool results such as screenshots would
+replay byte bound and `toolResultOverflow: "omit"` policy as ordinary attempts
+(eight bytes per context token): when large tool results such as screenshots would
 push the turn's request out of that bound, their bodies are replaced with an
 omission notice before older messages are dropped. If the notices alone exceed
 the bound, older messages can still be dropped. The stored transcript is
