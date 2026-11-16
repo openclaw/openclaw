@@ -887,6 +887,16 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         } else {
           assert.equal(switched.exitCode, 0, "The candidate's own update failed");
           assert.equal(output("follow-up-update").status, "ok");
+          if (before.packageRoot.type === "directory") {
+            // The update adopted the directory. The image has a system perl, so the
+            // exchange runs here and the two-rename fallback does not.
+            assert.match(
+              (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+                ?.stdoutTail ?? "",
+              /became that release by an atomic exchange \(/u,
+              "Adoption did not use the atomic exchange",
+            );
+          }
           const secondRelease = releaseOf(fixture.targetVersion);
           assert.equal(selectedRelease(), secondRelease, "The link does not name the new release");
           assert.deepEqual(

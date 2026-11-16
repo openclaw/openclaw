@@ -12,6 +12,7 @@ import {
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
+import { exchangePaths, type PathExchangeResult } from "./path-exchange.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import {
   resolveExpectedInstalledVersionFromSpec,
@@ -218,9 +219,12 @@ export async function switchPackageReleaseLink(params: {
 
 /**
  * Turn a plain package directory into a release behind a link that still names
- * it. The package path is missing between the two renames; a process killed there
- * leaves `.openclaw.release-link-*` naming the unchanged previous release, and
- * renaming that link onto the package path restores the installation.
+ * it. One atomic exchange puts the link on the package path and the directory in
+ * its release, so the package path always resolves. Where no exchange is
+ * available, two renames do it instead and the package path is missing between
+ * them; a process killed there leaves `.openclaw.release-link-*` naming the
+ * unchanged previous release, and renaming that link onto the package path
+ * restores the installation.
  */
 export async function adoptPackageReleaseSlot(params: {
   slot: string;
@@ -228,46 +232,79 @@ export async function adoptPackageReleaseSlot(params: {
   releasePrefix: string;
   expected: { identity: string };
   assertCurrent: () => void;
-}): Promise<{ identity: string; target: string; releaseRoot: string }> {
+}): Promise<{
+  identity: string;
+  target: string;
+  releaseRoot: string;
+  /** `unavailable` says why the two renames ran instead. */
+  exchange: PathExchangeResult;
+}> {
   const globalRoot = path.dirname(params.slot);
   const releaseGlobalRoot = packageReleaseGlobalRoot(params.releasePrefix);
   const releaseRoot = path.join(releaseGlobalRoot, path.basename(params.slot));
   const target = packageReleaseLinkTarget(params.slot, releaseRoot);
-  let temporary: string | undefined;
-  try {
-    await fs.mkdir(releaseGlobalRoot, { recursive: true });
-    await sweepPackageReleaseTemporaryLinks(globalRoot);
-    const created = await createTemporaryLink(globalRoot, target);
-    temporary = created.temporary;
+  const assertCaptured = async () => {
     params.assertCurrent();
     const current = await fs.lstat(params.slot, { bigint: true });
     if (!current.isDirectory() || statIdentity(current) !== params.expected.identity) {
       throw new Error(`Package directory ${params.slot} changed since it was captured.`);
     }
-    await fs.rename(params.slot, releaseRoot);
-    try {
-      await fs.rename(temporary, params.slot);
-    } catch (error) {
-      // Put the directory back. If that fails too, keep the temporary link: it
-      // names the moved directory and is the documented way back.
-      const restored = await fs.rename(releaseRoot, params.slot).then(
-        () => true,
-        () => false,
-      );
-      if (!restored) {
-        temporary = undefined;
+  };
+  let temporary: string | undefined;
+  try {
+    await fs.mkdir(releaseGlobalRoot, { recursive: true });
+    await sweepPackageReleaseTemporaryLinks(globalRoot);
+    // The link waits where the directory will live. Its text is relative to the
+    // package path's directory, so it names nothing until the exchange moves it.
+    await fs.symlink(target, releaseRoot);
+    const waiting = statIdentity(await fs.lstat(releaseRoot, { bigint: true }));
+    await syncDirectoryIfSupported(releaseGlobalRoot);
+    await assertCaptured();
+    const exchange = await exchangePaths(params.slot, releaseRoot);
+    let identity = waiting;
+    if (exchange.status === "unavailable") {
+      await fs.unlink(releaseRoot).catch(ignoreMissingPath);
+      const created = await createTemporaryLink(globalRoot, target);
+      temporary = created.temporary;
+      identity = created.identity;
+      await assertCaptured();
+      await fs.rename(params.slot, releaseRoot);
+      try {
+        await fs.rename(temporary, params.slot);
+      } catch (error) {
+        // Put the directory back. If that fails too, keep the temporary link: it
+        // names the moved directory and is the documented way back.
+        const restored = await fs.rename(releaseRoot, params.slot).then(
+          () => true,
+          () => false,
+        );
+        if (!restored) {
+          temporary = undefined;
+        }
+        throw error;
       }
-      throw error;
     }
     await syncDirectoryIfSupported(releaseGlobalRoot);
     await syncDirectoryIfSupported(globalRoot);
-    return { identity: created.identity, target, releaseRoot };
+    return { identity, target, releaseRoot, exchange };
   } catch (error) {
     if (temporary) {
       await fs.unlink(temporary).catch(ignoreMissingPath);
     }
-    if (!(await fs.lstat(releaseRoot).catch(() => null))) {
-      await fs.rm(params.releasePrefix, { recursive: true, force: true });
+    // Never recursive: the waiting link and the empty directories go, a moved package stays.
+    const waits = await fs.lstat(releaseRoot).then(
+      (entry) => entry.isSymbolicLink(),
+      () => false,
+    );
+    if (waits) {
+      await fs.unlink(releaseRoot).catch(() => {});
+    }
+    for (const empty of [
+      releaseGlobalRoot,
+      path.dirname(releaseGlobalRoot),
+      params.releasePrefix,
+    ]) {
+      await fs.rmdir(empty).catch(() => {});
     }
     throw error;
   }
