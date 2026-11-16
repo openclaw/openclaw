@@ -26,6 +26,7 @@ import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -516,7 +517,7 @@ function enqueueSessionEventAttempt(
     isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
     assertOwnerCurrent();
     const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
-    const { prepareSessionGenerationFacts } =
+    const { prepareChatLease } =
       await import("../../config/sessions/session-delivery-generation.js");
     target ??= await captureSessionEventTargetForHost(agentId, sessionKey, {
       env,
@@ -736,13 +737,7 @@ function enqueueSessionEventAttempt(
             ) {
               generationLease?.release();
               generationLease = undefined;
-              generationLease = await prepareSessionGenerationFacts({
-                agentId,
-                storePath,
-                sessionKey,
-                sessionId: preparedBinding.sessionId,
-                lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
-              });
+              generationLease = await prepareChatLease(chatRef({ agentId, storePath, sessionKey }));
             }
             await prepareCurrent();
             await options.onAdopted?.();
