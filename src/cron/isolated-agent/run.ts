@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { findAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-error.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  type AgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
+import { findErrorProperty, isFailoverError } from "../../agents/failover/error.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
@@ -47,7 +53,7 @@ import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
+import { resolveCronAgentErrorClassification } from "../run-error-reason.js";
 import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
@@ -375,6 +381,7 @@ async function runCronIsolatedAgentTurnInTrace(
             };
             // The execution owner spans model fallback retries. Individual
             // attempts must not retire the shared run before that execution settles.
+            let terminalOutcome: AgentRunTerminalOutcome | undefined;
             const lifecycle = createAgentLifecycleTerminalBackstop({
               runId,
               sessionKey: prepared.context.runSessionKey,
@@ -494,6 +501,16 @@ async function runCronIsolatedAgentTurnInTrace(
               );
               // Publish the execution fact captured before bookkeeping; cron persistence
               // and delivery retain their separate workflow outcome.
+              terminalOutcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+                phase: "end",
+                data: {
+                  ...execution.runResult.meta,
+                  ...resolveAgentRunErrorLifecycleFields(
+                    undefined,
+                    ownReplyOperation?.abortSignal ?? abortSignal,
+                  ),
+                },
+              });
               lifecycle.emit("end", execution.runResult, resolveUnstartedTerminalMetadata());
               finalModelResponse = resolveDiagnosticModelContentCapturePolicy(params.cfg)
                 .outputMessages
@@ -524,6 +541,8 @@ async function runCronIsolatedAgentTurnInTrace(
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
+                finalized.errorClassification =
+                  resolveCronAgentErrorClassification(terminalOutcome);
                 finalized.interruptedByRestart =
                   resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
                   "restart";
@@ -537,6 +556,15 @@ async function runCronIsolatedAgentTurnInTrace(
                 ? finalized
                 : { ...finalized, nextCheck: { delayMs } };
             } catch (err) {
+              terminalOutcome ??=
+                findAgentRunTerminalOutcome(err) ??
+                buildAgentRunTerminalOutcomeFromLifecycleEvent({
+                  phase: "error",
+                  data: resolveAgentRunErrorLifecycleFields(
+                    err,
+                    ownReplyOperation?.abortSignal ?? abortSignal,
+                  ),
+                });
               lifecycle.emit("error", err, resolveUnstartedTerminalMetadata());
               const interruptedByRestart =
                 resolveAgentRunErrorLifecycleFields(err, abortSignal).stopReason === "restart";
@@ -563,9 +591,8 @@ async function runCronIsolatedAgentTurnInTrace(
                     ? abortReason()
                     : normalizeCronRunErrorText(err);
               // Preserve the provider's closed reason before user-facing text replaces the error object.
-              const errorReason = resolveCronRunErrorReason(
-                isCronLaneTimeout ? error : err,
-                prepared.context.liveSelection.provider,
+              const errorReason = findErrorProperty(err, (candidate) =>
+                isFailoverError(candidate) ? candidate.reason : undefined,
               );
               outcome = "error";
               outcomeError = error;
@@ -612,13 +639,10 @@ async function runCronIsolatedAgentTurnInTrace(
                   ? { agentTerminal: readAgentTerminalSnapshot(err) }
                   : {}),
                 interruptedByRestart,
-                errorClassification: interruptedByRestart
-                  ? { kind: "aborted" }
-                  : err instanceof CronOperatorSourceError
+                errorClassification:
+                  err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }
-                    : errorReason
-                      ? { kind: "reason", reason: errorReason }
-                      : undefined,
+                    : resolveCronAgentErrorClassification(terminalOutcome, errorReason),
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

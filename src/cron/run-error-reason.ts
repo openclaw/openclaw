@@ -1,6 +1,33 @@
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { CronRunErrorClassification } from "./types.js";
+
+/** Cron policy consumes settled run facts; display text cannot turn them into retries. */
+export function resolveCronAgentErrorClassification(
+  terminal: AgentRunTerminalOutcome,
+  reason?: FailoverReason,
+): CronRunErrorClassification | undefined {
+  if (terminal.stopReason === "auth-revoked" && terminal.reason !== "hard_timeout") {
+    return { kind: "reason", reason: "auth_permanent" };
+  }
+  switch (terminal.reason) {
+    case "completed":
+      return undefined;
+    case "hard_timeout":
+    case "timed_out":
+    case "aborted":
+      return { kind: "reason", reason: "timeout" };
+    case "cancelled":
+    case "superseded":
+      return { kind: "aborted" };
+    case "blocked":
+    case "abandoned":
+    case "failed":
+      return reason ? { kind: "reason", reason } : { kind: "permanent" };
+  }
+  return terminal.reason satisfies never;
+}
 
 /** Resolve one cron-owned classification before falling back to provider error inference. */
 export function resolveCronRunErrorReason(

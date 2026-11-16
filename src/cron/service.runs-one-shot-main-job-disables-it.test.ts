@@ -236,7 +236,7 @@ it.each([false, true])(
       });
       expect(stored?.state.nextRunAtMs).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('Automation "one-shot" failed'),
+        expect.stringContaining('Automation "one-shot" was auto-disabled'),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

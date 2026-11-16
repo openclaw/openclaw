@@ -277,6 +277,7 @@ function buildFailureAlertPayload(params: {
       job: params.job,
       reason: "consecutive-failures",
       consecutiveErrors: params.consecutiveErrors,
+      failureNotificationDetail: params.failureNotificationDetail,
     });
     return {
       text:
@@ -456,7 +457,7 @@ function maybeEmitFailureAlert(
     return "unavailable";
   }
   const incident = failureIncident({ ...params, route: alertConfig });
-  if (terminalRecurring) {
+  if (terminal) {
     // The streak's earlier notice shares this incident signature; the disable is still news.
     startFailureAlertCycle(params.job, incident, state.deps.nowMs());
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
@@ -475,7 +476,7 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      autoDisabled: terminalRecurring,
+      autoDisabled: terminal,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,

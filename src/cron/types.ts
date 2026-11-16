@@ -200,6 +200,7 @@ export type CronRunErrorClassification =
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {

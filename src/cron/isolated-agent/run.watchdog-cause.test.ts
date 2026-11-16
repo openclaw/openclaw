@@ -24,9 +24,26 @@ function stopOwnOperation(
 describe("runCronIsolatedAgentTurn watchdog cause", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it("keeps explicit Stop permanent when the harness returns generic aborted metadata", async () => {
+    harness.runWithModelFallbackMock.mockImplementationOnce(async () => {
+      const operation = getCurrentSessionControllerOwner();
+      expect(operation).toBeDefined();
+      operation!.abortByUser();
+      return {
+        result: { result: { payloads: [], meta: { aborted: true, stopReason: "aborted" } } },
+        provider: "openai",
+        model: "test-model",
+        attempts: [],
+      };
+    });
+    const result = await runCron(makeIsolatedAgentParamsFixture());
+    expect(result).toMatchObject({ status: "error", errorClassification: { kind: "aborted" } });
+  });
+
   it("persists the controller's recovery classification instead of the generic stall text", async () => {
     stopOwnOperation((operation) => {
       operation.recoveryClassification = "blocked_tool_call";
+      operation.abortForStall();
     });
 
     const result = await runCron(makeIsolatedAgentParamsFixture());
@@ -34,6 +51,7 @@ describe("runCronIsolatedAgentTurn watchdog cause", () => {
     expect(result).toMatchObject({
       status: "error",
       error: "blocked_tool_call",
+      errorClassification: { kind: "reason", reason: "timeout" },
       failureNotificationDetail: { kind: "agent-stall", classification: "blocked_tool_call" },
     });
   });
