@@ -1,3 +1,4 @@
+import { publishTranscriptUpdate } from "../../../config/sessions/session-accessor.sqlite-events.js";
 import type {
   CapturedSessionEntryCurrentRead,
   SessionEntryCurrentFacts,
@@ -27,21 +28,23 @@ export async function recordRequesterReplacementNotice(params: {
     batchRunIds: params.batchRunIds,
     rearmGeneration: params.rearmGeneration,
   });
+  const target = {
+    agentId: params.requester.agentId,
+    storePath: params.requester.storePath,
+    sessionKey: params.requester.canonicalKey,
+    sessionId: params.identity.sessionId,
+    expectedLifecycleRevision: params.identity.lifecycleRevision,
+  };
   try {
     await recordGatewaySessionRunFailure({
-      target: {
-        agentId: params.requester.agentId,
-        storePath: params.requester.storePath,
-        sessionKey: params.requester.canonicalKey,
-        sessionId: params.identity.sessionId,
-        expectedLifecycleRevision: params.identity.lifecycleRevision,
-      },
+      target,
       runId,
       assertCommitAllowed: params.assertCommitAllowed,
       error: "private completion requester session was replaced",
       notice:
         "Subagent results from the previous session were not delivered because a new session was started. Open Tasks to inspect the completed subagents and recover their results.",
     });
+    await publishTranscriptUpdate(target, { lifecycleRevision: params.identity.lifecycleRevision });
     return true;
   } catch (error) {
     // Throwing would let the lifecycle caller retire the batch as a failed wake.

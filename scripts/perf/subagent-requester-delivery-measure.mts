@@ -67,6 +67,8 @@ const { maybeWakeRequesterAfterAllChildrenSettled } = replacement
   ? await import("../../src/agents/subagents/announce/subagent-announce.requester-settle-wake.ts")
   : { maybeWakeRequesterAfterAllChildrenSettled: undefined };
 const { loadTranscriptEvents } = await import("../../src/config/sessions/session-accessor.ts");
+const { onInternalSessionTranscriptUpdate } =
+  await import("../../src/sessions/transcript-events.ts");
 if (replacement) {
   const { captureRuntimeConfigAsyncReader } = await import("../../src/config/io.ts");
   await captureRuntimeConfigAsyncReader()();
@@ -166,6 +168,14 @@ for (const [index, batch] of batches.entries()) {
       subagentRuns.set(subagent.runId, compactSubagentRunForMemory(subagent));
     }
   };
+  let transcriptUpdates = 0;
+  const stopUpdates = replacement
+    ? onInternalSessionTranscriptUpdate((update) => {
+        if (update.target?.sessionId === scopes[index]!.sessionId) {
+          transcriptUpdates++;
+        }
+      })
+    : undefined;
   if (replacement && allocation === "allocation") {
     await startSampling();
   }
@@ -190,7 +200,9 @@ for (const [index, batch] of batches.entries()) {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       sampledBytes += profile.samples.reduce((sum, sample) => sum + sample.size, 0);
     }
+    stopUpdates?.();
     assert.equal(commits, 1);
+    assert.equal(transcriptUpdates, arm === "candidate" ? 1 : 0);
     const events = await loadTranscriptEvents(scopes[index]!);
     const notices = events.filter((event) => JSON.stringify(event).includes("previous session"));
     assert.equal(notices.length, arm === "candidate" ? 1 : 0);
@@ -203,6 +215,7 @@ for (const [index, batch] of batches.entries()) {
       cpuMs: (used.user + used.system) / 1000,
       commits,
       transcriptNotices: notices.length,
+      transcriptUpdates,
     });
     continue;
   }

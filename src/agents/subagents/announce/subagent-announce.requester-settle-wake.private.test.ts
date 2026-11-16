@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
+import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
 import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
@@ -67,6 +68,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     ${"reset lifecycle"}     | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "sess-main", lifecycleRevision: "rev-2" }}
   `("preserves the admitted reply policy: $name", async (scenario: Scenario) => {
     const { single, yielded, current, marked = true } = scenario;
+    const onUpdate = vi.fn();
+    onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
     if (current) {
       setSessionStore({ [REQUESTER]: current });
     }
@@ -85,6 +88,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
             expectedLifecycleRevision: current.lifecycleRevision,
           }),
           notice: expect.stringContaining("previous session"),
+        }),
+      );
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: expect.objectContaining({ sessionKey: REQUESTER, sessionId: current.sessionId }),
+          ...(current.lifecycleRevision ? { lifecycleRevision: current.lifecycleRevision } : {}),
         }),
       );
       expect(completeBatchSpy).toHaveBeenCalledWith(
@@ -132,15 +141,19 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
 
   it("keeps the held results owed when the replacement notice cannot be persisted", async () => {
     const children = settledPrivateChildren({ yielded: true });
+    const onUpdate = vi.fn();
+    onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
     setSessionStore({ [REQUESTER]: { sessionId: "new-parent" } });
     vi.mocked(recordGatewaySessionRunFailure).mockImplementationOnce(async () => {
       throw new Error("notice unavailable");
     });
     expect(await wake()).toBe(false);
     expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
     expect(children.every((child) => child.requesterSettleWake !== undefined)).toBe(true);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(await wake()).toBe(false);
     expect(completeBatchSpy).toHaveBeenCalledOnce();
+    expect(onUpdate).toHaveBeenCalledOnce();
   });
 });
