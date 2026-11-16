@@ -10,6 +10,8 @@ export function resolveCronRouteData(search: string): {
   runId: string | null;
   /** `?new` opens the create panel, as the sidebar's New automation does. */
   create?: true;
+  /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
+  activity?: true;
   session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
@@ -20,6 +22,7 @@ export function resolveCronRouteData(search: string): {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
     ...(!jobId && params.has("new") ? { create: true as const } : {}),
+    ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
     ...(!jobId && sessionKey && agentId
       ? { session: { sessionKey, sessionAgentId: agentId } }
       : {}),

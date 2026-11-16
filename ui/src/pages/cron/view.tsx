@@ -1,10 +1,13 @@
 import { lazy, Loading, Errored, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { ErrorBanner, NoticeBanner } from "./view-controls.tsx";
 import { ListView } from "./view-list.tsx";
+import { RunsSection } from "./view-runs.tsx";
 import type { CronProps } from "./view-types.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/text.css";
@@ -80,6 +83,8 @@ export function CronView(props: CronProps) {
     <>
       {mode() === "overview" && !props.sidebarListsJobs ? (
         <ListView {...props} focus={focus} onRemove={remove} />
+      ) : mode() === "overview" && props.listTab === "activity" ? (
+        <ActivityView {...props} />
       ) : mode() === "overview" ? (
         // The sidebar lists every automation; the page waits for one to open, or says why the
         // list could not be read.
@@ -126,5 +131,22 @@ export function CronView(props: CronProps) {
         </Errored>
       )}
     </>
+  );
+}
+
+/** Every automation's runs, opened from the sidebar's Activity. */
+function ActivityView(props: CronProps) {
+  return (
+    <section class="cron-page" data-panel-mode="activity">
+      <SettingsPage wide>
+        <ErrorBanner error={props.error} />
+        <NoticeBanner notice={props.notice} />
+        <SettingsSection title={t("cron.list.activity")}>
+          <div class="cron-activity">
+            <RunsSection {...props} />
+          </div>
+        </SettingsSection>
+      </SettingsPage>
+    </section>
   );
 }

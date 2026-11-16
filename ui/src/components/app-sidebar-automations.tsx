@@ -40,8 +40,11 @@ function automationByline(job: CronCompactJob): string {
   return [next, cadence].filter(Boolean).join(" · ");
 }
 
-/** The Automations section: New automation, then active and (collapsed) paused automations. */
-export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.Element {
+/** The Automations section: New automation, Activity, then active and (collapsed) paused
+    automations. */
+export function SidebarAutomations(props: {
+  host: Pick<AppSidebarRenderHost, "basePath" | "activeRouteId" | "onNavigate">;
+}): JSX.Element {
   const app = useApplication();
   const gateway = projectGateway(app.gateway);
   const [revision, setRevision] = createSignal(0);
@@ -118,11 +121,11 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
-  // The automation the page has open, as the page records it for returning to Automations.
-  const openedJob = () =>
-    new URLSearchParams(sectionLocation(app.gateway, "automations")?.options.search ?? "").get(
-      "job",
-    );
+  // What the page has open, as the page records it for returning to Automations.
+  const opened = () =>
+    new URLSearchParams(sectionLocation(app.gateway, "automations")?.options.search ?? "");
+  const openedJob = () => opened().get("job");
+  const activityCurrent = () => props.host.activeRouteId === "cron" && opened().has("activity");
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {
     const href = () => `${cronPath()}?job=${encodeURIComponent(row.job.id)}`;
@@ -161,6 +164,21 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
           <Icon name="plus" />
         </span>
         <span class="nav-item__text">{t("cron.list.newTask")}</span>
+      </a>
+      <a
+        class={["nav-item", { "nav-item--active": activityCurrent() }]}
+        href={`${cronPath()}?activity`}
+        aria-current={activityCurrent() ? "page" : undefined}
+        onClick={(event) =>
+          handleNavigationClick(event, () =>
+            props.host.onNavigate?.("cron", { search: "?activity" }),
+          )
+        }
+      >
+        <span class="nav-item__icon" aria-hidden="true">
+          <Icon name="activity" />
+        </span>
+        <span class="nav-item__text">{t("cron.list.activity")}</span>
       </a>
       <Show when={activeJobs().length > 0}>
         <SidebarListGroup

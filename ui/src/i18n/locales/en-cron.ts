@@ -489,7 +489,7 @@ const enCron = {
       autoDisabledRunFailures: "Auto-disabled · {count} run failures",
       autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",
-      activityTab: "Activity history",
+      activity: "Activity",
     },
   },
 } satisfies TranslationMap;

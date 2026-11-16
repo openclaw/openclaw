@@ -202,7 +202,7 @@ function ListTabs(props: CronProps) {
           })),
           {
             value: "activity",
-            label: t("cron.list.activityTab"),
+            label: t("cron.list.activity"),
             testId: "cron-list-tab-activity",
           },
         ],

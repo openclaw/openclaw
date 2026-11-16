@@ -168,15 +168,25 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
         "automations",
         route.jobId
           ? { route: "cron", options: { search: `?job=${encodeURIComponent(route.jobId)}` } }
-          : null,
+          : route.activity
+            ? { route: "cron", options: { search: "?activity" } }
+            : null,
       );
       page.setRouteSearch(search);
       // `?new` is the sidebar's New automation entry.
       if (route.create) {
         page.actions.onOpenCreate();
-      } else if (!search && (page.cron().cronEditingJob || page.cron().cronCreateOpen)) {
-        // The section's own root, as choosing Automations again opens it, closes the panel.
+      } else if (
+        (!search || route.activity) &&
+        (page.cron().cronEditingJob || page.cron().cronCreateOpen)
+      ) {
+        // The section's own root, as choosing Automations again opens it, and its Activity close
+        // the panel.
         page.actions.onClosePanel();
+      }
+      // `?activity` is the sidebar's Activity entry: every automation's runs.
+      if (route.activity) {
+        page.actions.onListTabChange("activity");
       }
     },
   );
