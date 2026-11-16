@@ -55,6 +55,35 @@ export function navigationSectionForPage(
   );
 }
 
+type OpenLocation = Pick<Location, "href" | "pathname" | "search">;
+
+/** Whether an item's page is the one open: the same path, with every query value it names. */
+function pageOpen(entry: NavigationRegistration, location: OpenLocation): boolean {
+  const target = new URL(entry.host.navigation.pageHref(entry.value.page), location.href);
+  const search = new URLSearchParams(location.search);
+  return (
+    target.pathname === location.pathname &&
+    [...target.searchParams].every(([key, value]) => search.get(key) === value)
+  );
+}
+
+/**
+ * Whether a navigation item reads as where you are. Standing for its whole section, as on the
+ * rail and in the pages menu where its children are not listed, a child's open page counts too.
+ */
+export function navigationItemCurrent(
+  registrations: readonly NavigationRegistration[],
+  entry: NavigationRegistration,
+  location: OpenLocation,
+  section: boolean,
+): boolean {
+  return (
+    pageOpen(entry, location) ||
+    (section &&
+      registrations.some((child) => sameParent(child, entry) && pageOpen(child, location)))
+  );
+}
+
 /** A child shown in its parent's section; one whose parent is not registered stands alone. */
 export function isNavigationSectionChild(
   registrations: readonly NavigationRegistration[],
