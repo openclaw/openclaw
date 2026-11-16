@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
-import { captureUiProof } from "./chat-flow.test-support.ts";
 import { openFromForeground, scenario } from "./command-palette.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
@@ -55,6 +54,7 @@ suite.define(() => {
           await palette.getByRole("tab", { name: "Compose", exact: true }).click();
           const model = palette.locator('[data-chat-model-select="true"]');
           await expect.poll(() => model.textContent()).toContain("GPT-4.1");
+          await gateway.deferNext("users.prefs.set");
           await model.click();
           await (await revealChatModelOption(palette, "openai/gpt-4.1-mini")).click();
           await expect.poll(() => model.textContent()).toContain("GPT-4.1 mini");
@@ -62,12 +62,6 @@ suite.define(() => {
           await input.waitFor({ state: "hidden" });
           await page.keyboard.press("ControlOrMeta+K");
           await input.waitFor({ state: "visible" });
-          const expectedModel = policy === "last-used" ? "GPT-4.1 mini" : "GPT-4.1";
-          try {
-            await expect.poll(async () => (await model.textContent())?.trim()).toBe(expectedModel);
-          } finally {
-            await captureUiProof(suite, page, "model-memory", policy + "-reopened.png");
-          }
           const write = await gateway.waitForRequest("users.prefs.set");
           expect(write.params).toMatchObject({
             entries: {
@@ -78,6 +72,9 @@ suite.define(() => {
             },
           });
           expect(write.params).not.toHaveProperty(["entries", "new-session.palette.v1"]);
+          await gateway.resolveDeferred("users.prefs.set");
+          const expectedModel = policy === "last-used" ? "GPT-4.1 mini" : "GPT-4.1";
+          await expect.poll(async () => (await model.textContent())?.trim()).toBe(expectedModel);
           await page.reload();
           await page.locator(".agent-chat__composer-combobox textarea:visible").waitFor();
           await page.keyboard.press("ControlOrMeta+K");
