@@ -1,10 +1,10 @@
 import type { BoundedConversation } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import type { buildBeforeCompactionHookMetrics } from "../../agents/embedded-agent-runner/compaction-hook-metrics.js";
+import type { BeforeCompactionHookMetrics } from "../../agents/embedded-agent-runner/compaction-hook-metrics.types.js";
 import type {
   PreparedCompactionPlan,
   PreparedCompactionPlanOptions,
 } from "../../agents/embedded-agent-runner/prepared-compaction-plan.types.js";
-import type { PreparedCompactionReplayOptions } from "../../agents/embedded-agent-runner/prepared-compaction-replay.js";
+import type { PreparedCompactionReplayOptions } from "../../agents/embedded-agent-runner/replay-history.types.js";
 import type { SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import type { CacheTtlProjectionPrefix } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -45,7 +45,7 @@ export type SessionPreparedCompactionBody =
   | {
       status: "skipped";
       reason: string;
-      beforeHookMetrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
+      beforeHookMetrics: BeforeCompactionHookMetrics;
     }
   | {
       status: "prepared";
@@ -57,7 +57,7 @@ export type SessionPreparedCompactionBody =
       boundaryCount: number;
       persistedSuffixStartSeq: number;
       transcriptMutationAt: number | null;
-      beforeHookMetrics: ReturnType<typeof buildBeforeCompactionHookMetrics>;
+      beforeHookMetrics: BeforeCompactionHookMetrics;
       hasRealConversation: boolean;
     };
 

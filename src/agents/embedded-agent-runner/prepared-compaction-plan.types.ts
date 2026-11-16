@@ -4,7 +4,7 @@ import type {
   compactWithoutSummary,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { PreparedCompactionSafeguardFacts } from "../agent-hooks/compaction-safeguard-prepared.types.js";
-import type { AgentCompactionPreparationOptions } from "../sessions/compaction/preparation.js";
+import type { AgentCompactionPreparationOptions } from "../sessions/compaction/preparation.types.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 
 export type PreparedCompactionPlanOptions = {

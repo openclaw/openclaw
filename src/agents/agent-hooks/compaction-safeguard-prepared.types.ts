@@ -1,5 +1,3 @@
-import type { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
-import type { summarizeCompactionHistory } from "../compaction.js";
 import type {
   CompactionSafeguardHistory,
   prepareCompactionSafeguardSections,
@@ -21,14 +19,4 @@ export type PreparedCompactionSafeguardFacts = {
   >;
   reconciliationCount: number;
   turnPrefixCount: number;
-};
-
-/** Host-only effects attached after read admission; never part of the worker reply. */
-export type PreparedCompactionSafeguardExecution = {
-  facts: PreparedCompactionSafeguardFacts;
-  summarize: (
-    source: "history" | "turnPrefix",
-    params: Omit<Parameters<typeof summarizeCompactionHistory>[0], "messages">,
-  ) => Promise<string>;
-  recover: (error: unknown) => ReturnType<typeof recoverCompactionSafeguardFailure>;
 };

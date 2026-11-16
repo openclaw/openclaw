@@ -7,9 +7,9 @@ import {
   normalizeAssistantReplayContent,
   sanitizeGenericReplayHistory,
   sanitizeReplayHistoryAfterProviderHooks,
-  type GenericReplayHistoryParams,
   type ReplayHistorySanitizers,
 } from "./replay-history-sanitization.js";
+import type { GenericReplayHistoryParams } from "./replay-history.types.js";
 import {
   dropReasoningFromHistory,
   dropThinkingBlocks,

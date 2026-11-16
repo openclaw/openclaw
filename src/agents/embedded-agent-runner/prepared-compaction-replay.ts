@@ -2,7 +2,6 @@ import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
-import type { Model } from "../../llm/types.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";
 import { annotateInterSessionUserMessages } from "../replay-provenance.js";
@@ -15,8 +14,8 @@ import { limitHistoryTurns } from "./history.js";
 import {
   sanitizeGenericReplayHistory,
   sanitizeReplayHistoryAfterProviderHooks,
-  type GenericReplayHistoryParams,
 } from "./replay-history-sanitization.js";
+import type { PreparedCompactionReplayOptions } from "./replay-history.types.js";
 import { isSameModelSnapshot, readModelSnapshotStateFromEntries } from "./replay-model-snapshot.js";
 import {
   dropReasoningFromHistory,
@@ -24,19 +23,6 @@ import {
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
 } from "./thinking-replay.js";
-
-/** Host-resolved route facts, not provider callbacks or mutable registry handles. */
-export type PreparedCompactionReplayOptions = Omit<
-  GenericReplayHistoryParams,
-  "messages" | "latestModelSwitchTimestamp" | "preserveLatestAssistantThinking" | "allowedToolNames"
-> & {
-  allowedToolNames: string[];
-  model: Model;
-  sessionId: string;
-  replayEnabled: boolean;
-  historyLimit?: number;
-  observedTokenCount?: number;
-};
 
 /**
  * Only the no-provider-hook route calls this operation. A snapshot append or a

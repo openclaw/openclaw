@@ -5,36 +5,22 @@ import {
 import type {
   CompactionPreparation,
   CompactionResult,
-  CompactionSettings,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import { SAFETY_MARGIN, estimateCompactionHistoryTokens } from "../context-token-pressure.js";
 import { preflightManualSessionCompaction } from "../manual-compaction-preflight.js";
 import type { SessionEntry } from "../session-manager-types.js";
+import type {
+  AgentCompactionPreparationOptions,
+  CompactionRequestBudget,
+} from "./preparation.types.js";
 import {
   assertCompactionRequestCanFit,
   createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
   resolveCompactionRetentionBudget,
-  type CompactionRequestBudget,
-  type CompactionRequestConstraints,
 } from "./request-budget.js";
-
-// "deterministic" makes no model call: the host commits compactWithoutSummary after a failed summary.
-export type CompactionSummaryOutputPolicy = "none" | "retry-invalid-once" | "deterministic";
-
-export type AgentCompactionPreparationOptions = CompactionRequestConstraints & {
-  itemId: string;
-  settings: CompactionSettings;
-  /** SDK work mode, not the foreground runtime's trigger: budgeted work can be manual. */
-  mode: "manual" | "auto";
-  summaryOutputPolicy: CompactionSummaryOutputPolicy;
-  requestState?: "unresolved";
-  contextWindow?: number;
-  systemPrompt?: string;
-  tools?: readonly { name: string; description: string; parameters: unknown }[];
-};
 
 type ProjectCompactionReplacement = (
   result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
