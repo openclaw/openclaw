@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
@@ -773,13 +774,10 @@ suite.define(() => {
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator("[data-rail-more]").click();
-      await page.locator('.sidebar-pages-menu a[href$="/dashboards"]').click();
+      // Leave through a page without a sidebar so the Sessions view and its inventory remain.
+      await evaluateControlUiContext(page, (app) => app.navigate("usage"));
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator(".sidebar-pages-menu").waitFor({ state: "hidden" });
-      await page.locator("[data-rail-more]").click();
-      await page.locator('.sidebar-pages-menu a[href$="/systems"]').click();
-      await page.locator('[data-navigation-view="sessions"]').click();
+      await evaluateControlUiContext(page, (app) => app.navigate("systems"));
       await inventory.waitFor();
       await expect
         .poll(() => page.locator(".systems-heading h2").textContent())
