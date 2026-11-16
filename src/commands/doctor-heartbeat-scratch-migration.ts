@@ -396,9 +396,15 @@ async function archiveSource(params: {
 }): Promise<void> {
   const archivePath = archivePathForSource(params.agentId, params.source.sha256, params.env);
   await fs.mkdir(path.dirname(archivePath), { recursive: true, mode: 0o700 });
+  const createdPaths: string[] = [];
   try {
-    await fs.writeFile(archivePath, params.source.content, { flag: "wx", mode: 0o600 });
+    await using output = await fs.open(archivePath, "wx", 0o600);
+    createdPaths.push(archivePath);
+    await fs.writeFile(output, params.source.content, "utf8");
   } catch (error) {
+    // A failed content write must not strand its exclusive file: the next run
+    // would read the partial bytes back as a permanent archive collision.
+    await Promise.allSettled(createdPaths.map((file) => fs.unlink(file)));
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       throw error;
     }
