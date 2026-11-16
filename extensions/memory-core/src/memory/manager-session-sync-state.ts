@@ -4,7 +4,7 @@ import type {
   SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  isCronRunSessionKey,
+  isCronSessionKey,
   isDreamingNarrativeSessionStoreKey,
 } from "openclaw/plugin-sdk/session-key-runtime";
 import { isActiveMemoryRecallSession } from "../active-memory-recall-session.js";
@@ -34,7 +34,7 @@ export function isMemorySessionIndexable(
     entry.sessionKind === "heartbeat" ||
     (archivedSessionKey !== undefined &&
       (isDreamingNarrativeSessionStoreKey(archivedSessionKey) ||
-        isCronRunSessionKey(archivedSessionKey) ||
+        isCronSessionKey(archivedSessionKey) ||
         archivedSessionKey.endsWith(":heartbeat"))) ||
     (entry.lineOriginClasses !== undefined &&
       entry.lineOriginClasses.length > 0 &&
