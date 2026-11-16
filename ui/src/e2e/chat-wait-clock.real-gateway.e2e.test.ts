@@ -133,6 +133,16 @@ async function clocks(parent: Locator) {
     })),
   );
 }
+async function resumedContinuation(parent: Locator) {
+  const rule = parent.locator(".chat-handoff-resume__rule").filter({ hasText: "Agent finished" });
+  await expect.poll(() => rule.count()).toBe(1);
+  await rule.waitFor();
+  const label = ((await rule.textContent()) ?? "").replace(/\s+/gu, " ").trim();
+  expect(label).toMatch(/^Resumed · \d+[ms](?: \d+s)? later · Agent finished$/u);
+  // An interrupted yield is not a new confirmed handoff with a child list.
+  expect(await parent.locator(".chat-handoff-sessions").count()).toBe(0);
+  return label;
+}
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
   // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
@@ -227,6 +237,9 @@ suite.define(() => {
           await waiting.getByText("Wait for subagents", { exact: true }).waitFor();
           expect(await waiting.count()).toBe(1);
           expect(await clocks(parent)).toEqual([]);
+          expect(
+            await parent.getByRole("paragraph").filter({ hasText: fixture.acknowledgment }).count(),
+          ).toBe(1);
           expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
           assertChildContinues(initial.parent, initial.child);
@@ -263,6 +276,8 @@ suite.define(() => {
           expect(updated.child.startedAt).toBe(initial.child.startedAt);
           const updatedClocks = await clocks(parent);
           expect(updatedClocks).toEqual([]);
+          // The user update starts its own request, not a resume of the original handoff.
+          expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
           proof.updated = {
             parent: lifecycle(updated.parent),
             child: lifecycle(updated.child),
@@ -292,6 +307,9 @@ suite.define(() => {
           expect(history.sessionInfo!.endedAt).toBe(updated.parent.endedAt);
           const reloadedClocks = await clocks(parent);
           expect(reloadedClocks).toEqual([]);
+          expect(await parent.locator(".chat-handoff-resume").count()).toBe(0);
+          expect(JSON.stringify(history.messages)).toContain(fixture.acknowledgment);
+          expect(JSON.stringify(history.messages)).toContain("already_pending");
           proof.reloaded = {
             parent: lifecycle(reloaded.parent),
             child: lifecycle(reloaded.child),
@@ -301,6 +319,7 @@ suite.define(() => {
           await capture(page, parent, "after-reload", [updateReply]);
 
           proof.stage = "actual child completion and parent resume";
+          const completionReleasedAt = Date.now();
           provider.releaseChild();
           await expect
             .poll(async () => (await rows()).parent.endedAt ?? 0)
@@ -317,12 +336,30 @@ suite.define(() => {
           expect(completed.parent.endedAt).toBeGreaterThanOrEqual(completed.parent.startedAt!);
           expect(completed.child.endedAt).toBeGreaterThanOrEqual(initial.child.startedAt!);
           expect(await clocks(parent)).toEqual([]);
+          const completedResume = await resumedContinuation(parent);
+          const duration = /Resumed · (.*?) later/u.exec(completedResume)![1]!;
+          const displayedMs = [...duration.matchAll(/(\d+)([ms])/gu)].reduce(
+            (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
+            0,
+          );
+          expect(displayedMs).toBeGreaterThanOrEqual(
+            Math.max(1_000, completionReleasedAt - updated.parent.endedAt!) - 2_000,
+          );
+          expect(displayedMs).toBeLessThanOrEqual(Date.now() - updated.parent.endedAt! + 1_000);
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await expect.poll(() => resumedReply.count()).toBe(1);
+          await resumedReply.waitFor();
+          const persistedResume = await resumedContinuation(parent);
+          expect(persistedResume).toBe(completedResume);
+          await waiting.waitFor({ state: "hidden" });
           expect(provider.parentRequests()).toBe(5);
           await provider.check();
           proof.completed = {
             parent: lifecycle(completed.parent),
             child: lifecycle(completed.child),
             parentRequests: provider.parentRequests(),
+            resumed: persistedResume,
           };
           proof.complete = true;
           proof.stage = "complete";
