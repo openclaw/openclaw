@@ -42,7 +42,6 @@ import type {
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryResponsePage = {
-  skillsUsed?: import("../../chat/conversation-skills.js").ConversationSkillLoad[];
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
@@ -72,7 +71,6 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
-  skillsUsed?: import("../../chat/conversation-skills.js").ConversationSkillLoad[];
   encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
     messages: Uint8Array<ArrayBuffer>;
     activity?: Uint8Array<ArrayBuffer>;

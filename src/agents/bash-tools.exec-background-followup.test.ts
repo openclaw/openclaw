@@ -10,7 +10,6 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  readLatestSessionTranscriptReport,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -675,36 +674,21 @@ test("wakes the same conversation after its session id rotates while the command
   expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
 });
 
-test("withholds a completion from a reset conversation with a visible note", async ({ signal }) => {
+test("wakes a reset conversation by its key", async ({ signal }) => {
   const sessionKey = "agent:main:dashboard:reset-waiter";
   await seedOrigin(sessionKey);
   const release = path.join(state.workspaceDir, "release-reset-waiter");
-  const started = runningSession(
+  runningSession(
     (await backgroundExec(sessionKey, { agentId: "main" })("reset-waiter", waitForRelease(release)))
       .details,
   );
-  // A reset keeps the transcript id and starts a new lifecycle.
+  // A reset keeps the transcript id and starts a new lifecycle; the wake follows the key.
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, { lifecycleRevision: "reset" });
   const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
   const calls = wakes.mock.calls.length;
   await fs.writeFile(release, "release");
   await withinTest(waitForExecScope(sessionKey), signal);
-  await vi.waitFor(async () => {
-    const note = await readLatestSessionTranscriptReport(
-      { agentId: "main", sessionKey, sessionId: sessionKey.replaceAll(":", "-") },
-      ["run-failed-before-reply"],
-    );
-    expect(note).toMatchObject({
-      ok: true,
-      value: {
-        content: expect.stringContaining(
-          `Background command result withheld (${started.sessionId}, code 0): the conversation was reset`,
-        ),
-      },
-    });
-  });
-  expect(wakes.mock.calls.length).toBe(calls);
-  expect(model).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(wakes.mock.calls.length).toBe(calls + 1));
 });
 
 test("does not promise a hidden subagent without sessions_yield an exit wake", async ({

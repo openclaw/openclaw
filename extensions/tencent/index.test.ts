@@ -25,7 +25,7 @@ async function getProvider(id = "tencent-tokenhub") {
 }
 
 function hyReasoningModel(
-  id: "hy3" | "hy3-preview" | "hy4-preview" = "hy3",
+  id: "hy3" | "hy3-preview" | "hy4-preview" | "hy4-flash" = "hy3",
   provider: "tencent-tokenhub" | "tencent-tokenplan" = "tencent-tokenhub",
 ): OpenAICompletionsModel {
   const catalog = (
@@ -74,8 +74,13 @@ function capturePayload(
 
 describe("tencent provider plugin", () => {
   it.each([
-    ["tokenhub", "TokenHub", buildTokenHubProvider, ["hy4-preview", "hy4", "hy3", "hy3-preview"]],
-    ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy4", "hy3"]],
+    [
+      "tokenhub",
+      "TokenHub",
+      buildTokenHubProvider,
+      ["hy4-preview", "hy4", "hy4-flash", "hy3", "hy3-preview"],
+    ],
+    ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy4", "hy4-flash", "hy3"]],
   ] as const)(
     "%s auth preserves merge rows and configures its provider in replace mode",
     async (endpoint, label, build, modelIds) => {
@@ -191,6 +196,12 @@ describe("tencent provider plugin", () => {
         ["hy4-preview", "medium", "high"],
         ["hy4-preview", "high", "high"],
         ["hy4-preview", "xhigh", "high"],
+        // hy4-flash ships the same none/high ladder, so it collapses identically.
+        ["hy4-flash", "off", "none"],
+        ["hy4-flash", "none", "none"],
+        ["hy4-flash", "minimal", "high"],
+        ["hy4-flash", "medium", "high"],
+        ["hy4-flash", "xhigh", "high"],
         ["hy3-preview", "low", "low"],
       ] as const) {
         const model = hyReasoningModel(id, providerId);

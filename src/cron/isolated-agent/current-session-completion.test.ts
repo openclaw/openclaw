@@ -413,7 +413,7 @@ it.each(["session-root", "abort"] as const)(
     }),
 );
 
-it("does not prepare media when the source generation changes while waiting", () =>
+it("commits into the current transcript when the source is replaced while waiting", () =>
   withCompletionFixture(async (fixture) => {
     const entered = createDeferredCore();
     const finish = createDeferredCore();
@@ -437,10 +437,8 @@ it("does not prepare media when the source generation changes while waiting", ()
       expect(await fixture.records()).toEqual([]);
       finish.resolve();
       await mutation;
-      await expect(commit).resolves.toMatchObject({ ok: false });
-      expect(await fixture.records()).toEqual([]);
+      await expect(commit).resolves.toMatchObject({ ok: true });
       expect(await fixture.messages()).toEqual([]);
-      expect(fixture.updates()).toBe(0);
     } finally {
       finish.resolve();
       await Promise.all([mutation, commit]);

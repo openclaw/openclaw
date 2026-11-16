@@ -95,12 +95,10 @@ export type ToolStreamHost = {
   sessionKey: string;
   /** The pane admits optional output only after its synchronous renderer is ready. */
   inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
-  settings?: { chatInlineCommands?: boolean; gatewayUrl?: string | null };
+  settings?: { chatInlineCommands?: boolean };
   assistantAgentId?: string | null;
   agentsList?: UiSessionDefaultsHost["agentsList"];
   hello?: UiSessionDefaultsHost["hello"];
-  currentSessionId?: string | null;
-  chatDisplayedLeafEntryId?: string | null;
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];

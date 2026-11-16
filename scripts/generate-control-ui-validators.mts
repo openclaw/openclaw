@@ -16,7 +16,6 @@ import {
   AgentActivityDelegationSchema,
   ChatHistoryParamsSchema,
   ChatPendingInputsPageSchema,
-  ChatSkillLoadsSchema,
 } from "../packages/gateway-protocol/src/schema/logs-chat.js";
 import { ProgressCardSchema } from "../packages/gateway-protocol/src/schema/progress-card.js";
 import { SessionParticipantIdentitySchema } from "../packages/gateway-protocol/src/schema/session-participant.js";
@@ -162,7 +161,6 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     Type.Object(
       {
         stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
-        skillsUsed: Type.Optional(ChatSkillLoadsSchema),
         pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
         sessionInfo: Type.Optional(SessionRowSchema),
         commands: Type.Optional(CommandsListResultSchema.properties.commands),

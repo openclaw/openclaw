@@ -437,10 +437,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
-  })),
   {
     testFile: "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
     watchGlobs: [
@@ -462,13 +458,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   })),
   {
-    testFile: "src/agents/agent-harness-completion-delivery.test.ts",
-    watchGlobs: [
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  {
     testFile: "src/agents/auth-profiles/store-owner-publication.test.ts",
     watchGlobs: [
       "src/agents/auth-profiles/store-scope-cwd.test-support.ts",
@@ -479,7 +468,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
