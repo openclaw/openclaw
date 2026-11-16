@@ -24,6 +24,7 @@ import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
+import { transportHostFixtureFiles } from "./non-isolated-runner.transport-host-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const sequencerSource = `import { BaseSequencer } from "vitest/node";
@@ -533,6 +534,7 @@ it(${JSON.stringify(title)}, () => {
     ...mcpManagerFixtureFiles(repoRoot),
     ...controllerStorageFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
+    ...transportHostFixtureFiles(repoRoot, fixtureRoot),
     ...documentFocusFixtureFiles(),
     ...domResourceFixtureFiles,
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
@@ -622,8 +624,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 82,
-    numPassedTests: 81,
+    numTotalTests: 84,
+    numPassedTests: 83,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,

@@ -73,6 +73,13 @@ type TestRunnerInternals = {
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const RETIRED_TEST_API_EXECUTIONS = Symbol.for("openclaw.retiredTestApiExecutions");
+const AI_TRANSPORT_HOST = Symbol.for("openclaw.ai.transportHost");
+const AI_BASE_TRANSPORT_HOST = Symbol.for("openclaw.ai.baseTransportHostInstalled");
+const aiTransportHostFile = path.resolve(import.meta.dirname, "../packages/ai/src/host.ts");
+const aiBaseTransportHostFile = path.resolve(
+  import.meta.dirname,
+  "../src/llm/ai-transport-host.ts",
+);
 const EMBEDDED_RUNS_TEST_API = Symbol.for("openclaw.embeddedRunsTestApi");
 const SESSION_CONTROLLER_TEST_API = Symbol.for("openclaw.sessionControllerTestApi");
 const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
@@ -158,8 +165,13 @@ function resetEvaluatedModules(
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
     const sqliteKeys = sqliteTestSingletonPublications.get(node.file) ?? [];
+    const transportHost = node.file === aiTransportHostFile;
+    const baseTransportHost = node.file === aiBaseTransportHostFile;
     const execution = retirableModuleExecution(node, modules, executions);
-    if ((key || (sqliteKeys.length > 0 && !retainedSqlite)) && execution) {
+    if (
+      (key || ((sqliteKeys.length > 0 || transportHost || baseTransportHost) && !retainedSqlite)) &&
+      execution
+    ) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
@@ -167,6 +179,19 @@ function resetEvaluatedModules(
         Reflect.deleteProperty(globalThis, key);
       }
       if (!retainedSqlite) {
+        if (transportHost) {
+          const state = readGlobalSingleton(AI_TRANSPORT_HOST) as
+            | { active: unknown; inert: unknown; pendingRegistrations: unknown[] }
+            | undefined;
+          if (state) {
+            // Native providers retain this owner; retire file policy without splitting its identity.
+            state.active = state.inert;
+            state.pendingRegistrations.length = 0;
+          }
+        }
+        if (baseTransportHost) {
+          Reflect.deleteProperty(globalThis, AI_BASE_TRANSPORT_HOST);
+        }
         for (const sqliteKey of sqliteKeys) {
           retireSqliteTestSingleton(sqliteKey, testFiles);
         }
