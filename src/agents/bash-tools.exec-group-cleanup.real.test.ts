@@ -172,7 +172,7 @@ function runningIn(scopeKey: string) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "adopts what 20 completed commands leave running up to the cap, stops the rest, and leaves no relay or anchor",
+  "adopts what 20 completed commands leave running, past the cap, and leaves no relay or anchor",
   async () => {
     const cwd = tempDirs.make("exec-group-cleanup-");
     const scopeKey = "agent:main:exec-group-cleanup";
@@ -192,7 +192,6 @@ child.once("spawn", () => {
     );
     const helpers: number[] = [];
     const adopted: number[] = [];
-    const stopped: number[] = [];
     await withEnvAsync(testEnv(cwd, "exec-group-cleanup-test"), async () => {
       const exec = hostExec(cwd, scopeKey);
       await expect(exec.execute("invalid", { command: "printf bad\0command" })).rejects.toThrow(
@@ -217,27 +216,15 @@ child.once("spawn", () => {
           [survivor, ...group].every((pid) => Number.isSafeInteger(pid) && (pid ?? 0) > 1),
         ).toBe(true);
         started.push(survivor!);
-        // Every survivor is reported with its pid and what happened to it.
-        if (call < MAX_SERVICES_PER_SESSION) {
-          expect(output).toMatch(
-            new RegExp(`pid ${survivor} .*keeps running as background session`),
-          );
-          adopted.push(survivor!);
-        } else {
-          expect(output).toMatch(
-            new RegExp(
-              `Stopped 1 process .*pid ${survivor} .*${MAX_SERVICES_PER_SESSION} allowed services`,
-            ),
-          );
-          stopped.push(survivor!);
-        }
+        // Every survivor is reported and tracked; capacity never stops one.
+        expect(output).toMatch(new RegExp(`pid ${survivor} .*keeps running as background session`));
+        adopted.push(survivor!);
         // The direct native owner has a shared caller, not an owned relay above it.
         const hosts = new Set([process.pid, getSpawnBroker()?.pid]);
         helpers.push(...group.filter((pid) => !hosts.has(pid)));
       }
       // OpenClaw's own relay and anchor processes always exit (#150750).
       expect(await waitFor(() => helpers.every((pid) => !isPidAlive(pid)))).toBe(true);
-      expect(stopped.filter(isPidAlive)).toEqual([]);
       expect(adopted.filter((pid) => !isPidAlive(pid))).toEqual([]);
       // Adopted survivors are ordinary background sessions of this session.
       expect(
@@ -458,7 +445,7 @@ s.listen(0, "127.0.0.1", () => {
 );
 
 it.skipIf(process.platform === "win32")(
-  "accounts for every survivor of one command: adopts up to the cap, stops the rest, refuses a new service",
+  "tracks every survivor of one command past the cap and refuses a new declared service",
   async () => {
     const cwd = tempDirs.make("exec-cap-");
     const scopeKey = "agent:main:exec-cap";
@@ -509,7 +496,7 @@ it.skipIf(process.platform === "win32")(
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
-      expect(tracked).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(tracked.toSorted(byNumber)).toEqual(pids.toSorted(byNumber));
       expect(reap).toBeTypeOf("function");
       // Twelve real owner callbacks represent one minute at the five-second interval.
       // Pause only this timer's automatic delivery; the OS and process identities stay real.
@@ -549,11 +536,7 @@ it.skipIf(process.platform === "win32")(
         nativeIdentityCalls:
           process.platform === "linux" || process.platform === "android" ? nativeIdentityCalls : 0,
       }).toEqual({ syncCalls: 0, nativeIdentityCalls: 0 });
-      expect(output).toContain(`Stopped 4 processes`);
-      // No survivor escapes: each one is either tracked or confirmed gone, and named.
-      expect(
-        await waitFor(() => pids.every((pid) => tracked.includes(pid) || !isPidAlive(pid))),
-      ).toBe(true);
+      expect(output).not.toMatch(/Stopped/);
       for (const pid of pids) {
         expect(output).toContain(`pid ${pid}`);
       }
@@ -564,8 +547,10 @@ it.skipIf(process.platform === "win32")(
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
       const extraPid = firstPid(aggregated(extra.details));
-      expect(aggregated(extra.details)).toMatch(new RegExp(`Stopped 1 process .*pid ${extraPid}`));
-      expect(isPidAlive(extraPid)).toBe(false);
+      expect(aggregated(extra.details)).toMatch(
+        new RegExp(`pid ${extraPid} .*keeps running as background session`),
+      );
+      expect(isPidAlive(extraPid)).toBe(true);
       expect(tracked.filter((pid) => !isPidAlive(pid))).toEqual([]);
       // Ordinary foreground work still runs.
       const result = await exec.execute("foreground", { command: "echo ok" });
