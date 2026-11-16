@@ -101,12 +101,6 @@ function sizeSidebar(sidebar: Parameters<typeof settleRoster>[0], height: number
   scroller.style.cssText = "height:600px;flex:none;overflow:auto";
   return scroller;
 }
-async function revealPages(sidebar: Parameters<typeof settleRoster>[0]) {
-  for (let page = 0; page < 2; page++) {
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-pagination__button")!.click();
-    await settleRoster(sidebar);
-  }
-}
 function runState(
   extra: Partial<GatewaySessionRow> | ((index: number) => Partial<GatewaySessionRow>),
   count = 301,
@@ -180,7 +174,6 @@ it.each([32, 44])(
       .style.setProperty("--sidebar-session-row-floor", `${rowFloor}px`);
     harness.publishList(rows);
     await settleRoster(sidebar);
-    await revealPages(sidebar);
     const row = (index: number) =>
       sidebar.querySelector<HTMLElement>(`[data-session-key="agent:main:run-${index}"]`);
     await waitForSolid(() => {

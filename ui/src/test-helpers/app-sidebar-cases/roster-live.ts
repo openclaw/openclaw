@@ -12,6 +12,7 @@ it("AppSidebar updates held off-window rows without rendering", async () => {
       key: `agent:main:work-${index}`,
       isMain: false,
       label: `Work ${index}`,
+      category: "Work",
     }),
   );
   const { sidebar, sessions } = await R.mountRoster(R.roster, [R.session("main", 0), ...rows]);
@@ -32,7 +33,7 @@ it("AppSidebar updates held off-window rows without rendering", async () => {
   sessions.sessions.setPullRequestSummary(last.key, { numbers: [42], state: "open" });
   await R.settleRoster(sidebar);
   expect(prepare).not.toHaveBeenCalled();
-  sidebar.setVisibleSessionLimit("ungrouped", rows.length);
+  sidebar.setVisibleSessionLimit("category:Work", rows.length);
   await R.settleRoster(sidebar);
   expect(lastElement()?.textContent).toContain("Quiet latest title");
 });
