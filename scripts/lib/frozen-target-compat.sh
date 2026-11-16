@@ -102,6 +102,22 @@ openclaw_resolve_frozen_upgrade_skill_library_contract() {
   esac
 }
 
+openclaw_resolve_frozen_update_channel_switch_contract() {
+  local source_root="${1:?missing selected source root}" legacy current normalized
+  export OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=MAIN
+  [ -n "${OPENCLAW_SELECTED_SHA:-}" ] || return 0
+  openclaw_frozen_target_source validate "$source_root" || return 2
+  legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/cli/update-cli/update-command-target.ts 'updateInstallKind === "package" && explicitTag === "main"')" || return 2
+  current="$(openclaw_frozen_target_source_flag contains "$source_root" src/cli/update-cli/update-command-target.ts 'updateInstallKind === "package" && isMainPackageTarget(explicitTag)')" || return 2
+  normalized="$(openclaw_frozen_target_source_flag contains "$source_root" src/infra/update-global.ts $'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}')" || return 2
+  # Exercise the shipped refusal contract, never omit it or learn it from failure.
+  case "$legacy:$current:$normalized" in
+    1:0:0) export OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=main ;;
+    0:1:1) ;;
+    *) echo "unsupported selected update main-target contract" >&2; return 2 ;;
+  esac
+}
+
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_tool_search_recipe
   local has_membership_warning has_absent_membership

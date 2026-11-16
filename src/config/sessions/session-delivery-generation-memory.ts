@@ -12,10 +12,10 @@ import type {
 } from "./session-delivery-generation.types.js";
 
 /**
- * A stored reference names its conversation by key, plus its incarnation when it carries a
- * lifecycle revision, so it follows message edits and branch switches to the current
- * transcript. Live-writer fences (`exactTranscript`) also pin the transcript id. A null
- * session id leases the row's absence.
+ * A stored reference names its conversation by key alone, so it follows edits, resets and
+ * compaction to the current transcript. Live-writer fences pin the transcript
+ * (`exactTranscript`) or the incarnation (`exactLifecycle`). A null session id leases the
+ * row's absence.
  */
 export function matchesSessionGeneration(
   input: SessionGenerationFacts,
@@ -28,7 +28,7 @@ export function matchesSessionGeneration(
     return false;
   }
   return (
-    (!input.exactTranscript && input.lifecycleRevision === null) ||
+    !(input.exactTranscript || input.exactLifecycle) ||
     (entry.lifecycleRevision ?? null) === input.lifecycleRevision
   );
 }
@@ -108,7 +108,14 @@ export async function prepareMemorySessionGeneration(
     },
     readSessionSettings() {
       const entry = readCurrent();
-      return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+        }
+      );
     },
     prepareRead: () => undefined,
     release() {

@@ -142,7 +142,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // seconds balance files; complete shard spans still own elapsed admission.
   ["src/gateway/server-methods/agent.test.ts", 82],
   ["src/gateway/server-methods/chat.directive-tags.test.ts", 38],
-  ["src/gateway/server-methods/sessions-rewind.storage.test.ts", 33],
   ["src/gateway/server-methods/sessions-rewind.test.ts", 32],
   ["src/gateway/server-methods/session-catalog-privacy.test.ts", 24],
   ["src/gateway/server-methods/chat.reset-visible-yield.test.ts", 24],
