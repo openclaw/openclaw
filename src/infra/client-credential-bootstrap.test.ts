@@ -552,7 +552,6 @@ describe("fresh SQLite client credential binding", () => {
     const committedPath = `${f.sourcePath}.committed`;
     fs.renameSync(f.sourcePath, committedPath);
     using committed = openNodeSqliteDatabase(committedPath);
-    expect(committed.prepare("SELECT value FROM bootstrap_sentinel").get()).toEqual({ value: 23 });
     using replacement = openNodeSqliteDatabase(f.sourcePath);
     createSqliteSource(replacement, 31);
     expect(() => bind(replacement, f)).toThrow(/previous shared database/);

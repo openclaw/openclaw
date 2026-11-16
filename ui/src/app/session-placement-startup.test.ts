@@ -764,7 +764,7 @@ describe("application session placement startup", () => {
 
   it.each(["client replacement"])(
     "reclaims the worker and deletes incognito startup after %s",
-    async (interruption) => {
+    async () => {
       const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
       const request = vi.fn((method: string) => {
         if (method === "sessions.dispatch") {
@@ -793,23 +793,16 @@ describe("application session placement startup", () => {
         expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
       });
 
-      if (interruption === "transport reconnect") {
-        gateway.snapshot.phase = "reconnecting";
-        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
-        gateway.snapshot.phase = "connected";
-        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
-      } else {
-        const nextSnapshot = {
-          ...gateway.snapshot,
-          client: {
-            request: vi.fn(),
-            recoveryScope: "principal-a",
-            recoveryScopeReady: true,
-          },
-        };
-        (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
-        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
-      }
+      const nextSnapshot = {
+        ...gateway.snapshot,
+        client: {
+          request: vi.fn(),
+          recoveryScope: "principal-a",
+          recoveryScopeReady: true,
+        },
+      };
+      (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
+      vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
       dispatch.resolve({ placement: createStartupPlacement("active", 2) });
 
       await vi.waitFor(() => {

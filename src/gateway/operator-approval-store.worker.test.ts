@@ -62,49 +62,107 @@ function approval(id: string): Parameters<typeof store.insertOperatorApproval>[0
 it("preserves serialized records, first-answer wins, consumption and history through the worker", async () => {
   const databaseOptions = options();
   const originalOptions = options();
-  const input = approval("golden");
+  // Compare the competing worker writes with the native kernel while asserting
+  // winner identity, one-time consumption, and clock rollback independently.
+  const input = { ...approval("golden"), createdAtMs: 5000 };
   const sameBytes = (actual: unknown, expected: unknown) =>
     expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
-  sameBytes(
-    await store.insertOperatorApproval({ approval: input, databaseOptions }),
+  const inserted = await Promise.all([
+    store.insertOperatorApproval({ approval: input, databaseOptions }),
+    store.insertOperatorApproval({ approval: input, databaseOptions }),
+  ]);
+  sameBytes(inserted, [
     native.insertOperatorApprovalInDatabase({ approval: input, databaseOptions: originalOptions }),
-  );
+    native.insertOperatorApprovalInDatabase({ approval: input, databaseOptions: originalOptions }),
+  ]);
+  expect(inserted.map((result) => result.outcome)).toEqual(["inserted", "existing"]);
+  expect(inserted).toMatchObject([
+    { record: { id: input.id, status: "pending" } },
+    { record: { id: input.id, status: "pending" } },
+  ]);
   sameBytes(
-    await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions }),
+    await store.listPendingOperatorApprovals({ nowMs: 5000, databaseOptions }),
     native.listPendingOperatorApprovalsInDatabase({
-      nowMs: 2000,
+      nowMs: 5000,
       databaseOptions: originalOptions,
     }),
   );
   const verdict = {
     id: input.id,
     decision: "allow-once" as const,
-    resolver: { kind: "device" as const, id: "reviewer" },
-    nowMs: 3000,
+    resolver: { kind: "device" as const, id: "winner-device" },
+    nowMs: 2000,
   };
-  sameBytes(
-    await store.resolveOperatorApproval({ ...verdict, databaseOptions }),
-    nativeTransitions.resolveOperatorApprovalInDatabase({
+  const retries = [
+    verdict,
+    { ...verdict, resolver: { kind: "channel" as const, id: "telegram:loser" }, nowMs: 2001 },
+    {
       ...verdict,
+      decision: "deny" as const,
+      resolver: { kind: "channel" as const, id: "telegram:loser" },
+      nowMs: 2002,
+    },
+  ];
+  const denial = {
+    id: input.id,
+    reason: "run-aborted" as const,
+    resolver: { kind: "system" as const, id: "late-denial" },
+    nowMs: 2003,
+  };
+  const resolved = await Promise.all([
+    ...retries.map((params) => store.resolveOperatorApproval({ ...params, databaseOptions })),
+    store.forceDenyOperatorApproval({ ...denial, databaseOptions }),
+  ]);
+  sameBytes(resolved, [
+    ...retries.map((params) =>
+      nativeTransitions.resolveOperatorApprovalInDatabase({
+        ...params,
+        databaseOptions: originalOptions,
+      }),
+    ),
+    nativeTransitions.forceDenyOperatorApprovalInDatabase({
+      ...denial,
       databaseOptions: originalOptions,
     }),
+  ]);
+  const winner = { decision: "allow-once", resolver: verdict.resolver };
+  expect(resolved).toMatchObject([
+    {
+      outcome: "resolved",
+      record: { ...winner, status: "allowed", resolvedAtMs: 5000, updatedAtMs: 5000 },
+    },
+    { outcome: "already-resolved", retry: "same", record: winner },
+    { outcome: "already-resolved", retry: "conflict", record: winner },
+    { outcome: "already-terminal", record: winner },
+  ]);
+  const consumers = [
+    { id: input.id, consumerId: "run-1:tool-call-1", redemptionWindowMs: 15_000, nowMs: 3000 },
+    { id: input.id, consumerId: "run-2:tool-call-2", redemptionWindowMs: 15_000, nowMs: 3001 },
+  ];
+  const consumed = await Promise.all(
+    consumers.map((params) =>
+      store.consumeOperatorApprovalAllowOnce({ ...params, databaseOptions }),
+    ),
   );
   sameBytes(
-    await store.resolveOperatorApproval({ ...verdict, decision: "deny", databaseOptions }),
-    nativeTransitions.resolveOperatorApprovalInDatabase({
-      ...verdict,
-      decision: "deny",
-      databaseOptions: originalOptions,
-    }),
+    consumed,
+    consumers.map((params) =>
+      nativeTransitions.consumeOperatorApprovalAllowOnceInDatabase({
+        ...params,
+        databaseOptions: originalOptions,
+      }),
+    ),
   );
-  const consume = { id: input.id, consumerId: "synthetic-consumer", nowMs: 4000 };
-  sameBytes(
-    await store.consumeOperatorApprovalAllowOnce({ ...consume, databaseOptions }),
-    nativeTransitions.consumeOperatorApprovalAllowOnceInDatabase({
-      ...consume,
-      databaseOptions: originalOptions,
-    }),
-  );
+  const consumedRecord = {
+    status: "allowed",
+    decision: "allow-once",
+    consumedAtMs: 5000,
+    consumedBy: consumers[0]!.consumerId,
+  };
+  expect(consumed).toMatchObject([
+    { outcome: "consumed", record: consumedRecord },
+    { outcome: "already-consumed", record: consumedRecord },
+  ]);
   sameBytes(
     await store.listTerminalOperatorApprovals({ nowMs: 5000, databaseOptions }),
     native.listTerminalOperatorApprovalsInDatabase(
@@ -299,9 +357,10 @@ it("runs startup recovery, lookup, expiry and history without host SQLite calls 
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("off-thread"), databaseOptions });
   await store.insertOperatorApproval({
-    approval: { ...approval("old-runtime"), runtimeEpoch: "old-epoch" },
+    approval: { ...approval("old-runtime"), runtimeEpoch: "old-epoch", createdAtMs: 5000 },
     databaseOptions,
   });
+  await closeOpenClawStateDatabaseAsync();
   requireNodeSqlite();
   const counters = observeMainThreadSql();
   try {
@@ -312,7 +371,28 @@ it("runs startup recovery, lookup, expiry and history without host SQLite calls 
         nowMs: 2000,
         databaseOptions,
       }),
-    ).toMatchObject({ affected: 1, pruned: 0 });
+    ).toMatchObject({
+      affected: 1,
+      pruned: 0,
+      records: [
+        {
+          id: "old-runtime",
+          status: "cancelled",
+          decision: "deny",
+          terminalReason: "gateway-restart",
+          resolvedAtMs: 5000,
+          updatedAtMs: 5000,
+        },
+      ],
+    });
+    expect(
+      await store.consumeOperatorApprovalAllowOnce({
+        id: "old-runtime",
+        consumerId: "restarted-consumer",
+        nowMs: 2000,
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "not-allow-once" });
     expect(
       await store.getOperatorApprovalDetailed({ id: "old-runtime", nowMs: 2000, databaseOptions }),
     ).toMatchObject({

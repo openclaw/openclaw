@@ -70,7 +70,7 @@ function mockGitHubFetch() {
 function mockRepositoryVisibility(visibility: Record<string, string>) {
   const fetchImpl = vi.fn<typeof fetch>(async (input) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const value = visibility[new URL(url).pathname.replace(/^\/repos\//u, "")];
+    const value = visibility[new URL(url).pathname.replace(/^\/(?:api\/v3\/)?repos\//u, "")];
     return new Response(JSON.stringify(value ? { visibility: value } : { message: "Not Found" }), {
       status: value ? 200 : 404,
       headers: { "content-type": "application/json" },
@@ -498,123 +498,139 @@ test("projects.searchRemote redacts unexpected error diagnostics", async () => {
   expect(JSON.stringify(result)).not.toContain("synthetic-secret");
 });
 
-test("projects.list exposes safe repository identity at read scope and checkout details only at write scope", async () => {
-  return withProjectState(async (state) => {
-    const repo = await initializeRepository(state.root);
-    await registerProjectRegistry({ path: repo, name: "Registered" });
-    const privateRepo = await initializeRepository(
-      state.root,
-      "org-private",
-      "https://github.com/openclaw/openclaworg.git",
-    );
-    await registerProjectRegistry({ path: privateRepo, name: "Org private" });
-    mockRepositoryVisibility({ "openclaw/openclaw": "public", "openclaw/openclaworg": "private" });
-    const cfg = projectConfig("/workspace/alpha");
+test.each(["github.com", "ghe.example.test"])(
+  "projects.list exposes safe repository identity at read scope and checkout details only at write scope (%s)",
+  (host) =>
+    withProjectState(async (state) => {
+      const repo = await initializeRepository(
+        state.root,
+        "registered",
+        host === "github.com"
+          ? "https://github.com/openclaw/openclaw.git"
+          : "git@ghe.example.test:OpenClaw/OpenClaw.git",
+      );
+      await registerProjectRegistry({ path: repo, name: "Registered" });
+      const privateRepo = await initializeRepository(
+        state.root,
+        "org-private",
+        `https://${host}/openclaw/openclaworg.git`,
+      );
+      await registerProjectRegistry({ path: privateRepo, name: "Org private" });
+      mockRepositoryVisibility({
+        "openclaw/openclaw": "public",
+        "openclaw/openclaworg": "private",
+      });
+      const cfg = { ...projectConfig("/workspace/alpha"), gateway: { github: { host } } };
 
-    const readResult = await listProjects(cfg, { scopes: ["operator.sessions.read"] });
-    if (!readResult) {
-      throw new Error("projects.list did not respond");
-    }
-    const readProjects = (readResult.payload as { projects: Record<string, unknown>[] }).projects;
-    expect(readProjects).toEqual([
-      { id: "workspace:main", displayName: "alpha", source: "workspace", agentId: "main" },
-      {
-        id: "registered",
-        displayName: "Registered",
-        source: "registered",
-        repositoryIdentity: "openclaw/openclaw",
-      },
-    ]);
-    expect(readResult.payload).not.toHaveProperty("observedProjects");
-    expect(readResult.payload).not.toHaveProperty("githubHost");
-    expect(listRegistryRecords).not.toHaveBeenCalled();
-    expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
+      const readResult = await listProjects(cfg, { scopes: ["operator.sessions.read"] });
+      if (!readResult) {
+        throw new Error("projects.list did not respond");
+      }
+      const readProjects = (readResult.payload as { projects: Record<string, unknown>[] }).projects;
+      expect(readProjects).toEqual([
+        { id: "workspace:main", displayName: "alpha", source: "workspace", agentId: "main" },
+        {
+          id: "registered",
+          displayName: "Registered",
+          source: "registered",
+          repositoryIdentity: "openclaw/openclaw",
+        },
+      ]);
+      expect(readResult.payload).not.toHaveProperty("observedProjects");
+      expect(readResult.payload).not.toHaveProperty("githubHost");
+      expect(listRegistryRecords).not.toHaveBeenCalled();
+      expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
 
-    const readOptIn = await listProjects(cfg, { observed: true, scopes: ["operator.read"] });
-    expect(readOptIn?.payload).toMatchObject({ projects: readProjects });
-    expect(readOptIn?.payload).not.toHaveProperty("observedProjects");
-    expect(listRegistryRecords).not.toHaveBeenCalled();
+      const readOptIn = await listProjects(cfg, { observed: true, scopes: ["operator.read"] });
+      expect(readOptIn?.payload).toMatchObject({ projects: readProjects });
+      expect(readOptIn?.payload).not.toHaveProperty("observedProjects");
+      expect(listRegistryRecords).not.toHaveBeenCalled();
 
-    for (const scope of ["operator.write", "operator.admin"]) {
-      const callsBeforeDefaultList = listRegistryRecords.mock.calls.length;
-      const writeResult = await listProjects(cfg, { scopes: [scope] });
-      expect(writeResult).toMatchObject({
+      for (const scope of ["operator.write", "operator.admin"]) {
+        const callsBeforeDefaultList = listRegistryRecords.mock.calls.length;
+        const writeResult = await listProjects(cfg, { scopes: [scope] });
+        expect(writeResult).toMatchObject({
+          ok: true,
+          payload: {
+            projects: [
+              { id: "workspace:main", repoRoot: "/workspace/alpha" },
+              {
+                id: "org-private",
+                repoRoot: privateRepo,
+                originUrl: `https://${host}/openclaw/openclaworg.git`,
+                repositoryIdentity: "openclaw/openclaworg",
+              },
+              {
+                id: "registered",
+                repoRoot: repo,
+                originUrl:
+                  host === "github.com"
+                    ? "https://github.com/openclaw/openclaw.git"
+                    : "ghe.example.test:OpenClaw/OpenClaw.git",
+                repositoryIdentity: "openclaw/openclaw",
+              },
+            ],
+          },
+        });
+        expect(writeResult?.payload).not.toHaveProperty("observedProjects");
+        expect(listRegistryRecords).toHaveBeenCalledTimes(callsBeforeDefaultList);
+
+        const observedResult = await listProjects(cfg, { observed: true, scopes: [scope] });
+        expect(observedResult).toMatchObject({
+          ok: true,
+          payload: { observedProjects: [] },
+        });
+      }
+      expect(listRegistryRecords).toHaveBeenCalledTimes(2);
+    }),
+);
+
+test.each(["github.com", "ghe.example.test"])(
+  "project responses redact credentials and URL suffixes from registered origins (%s)",
+  (host) =>
+    withProjectState(async (state) => {
+      const repo = await initializeRepository(state.root);
+      const cfg = { gateway: { github: { host } } };
+      await execFileAsync("git", [
+        "-C",
+        repo,
+        "remote",
+        "set-url",
+        "origin",
+        ["https://user", ":placeholder", `@${host}/acme/private.git?visible=value#branch`].join(""),
+      ]);
+
+      const registered = await invoke("projects.register", { path: repo, name: "Private" }, cfg, [
+        "operator.admin",
+      ]);
+      expect(registered).toMatchObject({
+        ok: true,
+        payload: { originUrl: `https://${host}/acme/private.git` },
+      });
+
+      // A credential-bearing origin has no verifiable public identity, so read-scope
+      // discovery hides it instead of looking it up.
+      const fetchImpl = mockRepositoryVisibility({ "acme/private": "public" });
+      const read = await listProjects(cfg, { scopes: ["operator.sessions.read"] });
+      expect(read).toMatchObject({ ok: true, payload: { projects: [{ id: "workspace:main" }] } });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(JSON.stringify(read)).not.toContain("placeholder");
+      const listed = await listProjects(cfg);
+      expect(listed).toMatchObject({
         ok: true,
         payload: {
-          projects: [
-            { id: "workspace:main", repoRoot: "/workspace/alpha" },
-            {
-              id: "org-private",
-              repoRoot: privateRepo,
-              originUrl: "https://github.com/openclaw/openclaworg.git",
-              repositoryIdentity: "openclaw/openclaworg",
-            },
-            {
-              id: "registered",
+          projects: expect.arrayContaining([
+            expect.objectContaining({ id: "workspace:main" }),
+            expect.objectContaining({
+              id: "private",
               repoRoot: repo,
-              originUrl: "https://github.com/openclaw/openclaw.git",
-              repositoryIdentity: "openclaw/openclaw",
-            },
-          ],
+              originUrl: `https://${host}/acme/private.git`,
+            }),
+          ]),
         },
       });
-      expect(writeResult?.payload).not.toHaveProperty("observedProjects");
-      expect(listRegistryRecords).toHaveBeenCalledTimes(callsBeforeDefaultList);
-
-      const observedResult = await listProjects(cfg, { observed: true, scopes: [scope] });
-      expect(observedResult).toMatchObject({
-        ok: true,
-        payload: { observedProjects: [] },
-      });
-    }
-    expect(listRegistryRecords).toHaveBeenCalledTimes(2);
-  });
-});
-
-test("project responses redact credentials and URL suffixes from registered origins", async () => {
-  return withProjectState(async (state) => {
-    const repo = await initializeRepository(state.root);
-    await execFileAsync("git", [
-      "-C",
-      repo,
-      "remote",
-      "set-url",
-      "origin",
-      ["https://user", ":placeholder", "@github.com/acme/private.git?visible=value#branch"].join(
-        "",
-      ),
-    ]);
-
-    const registered = await invoke("projects.register", { path: repo, name: "Private" }, {}, [
-      "operator.admin",
-    ]);
-    expect(registered).toMatchObject({
-      ok: true,
-      payload: { originUrl: "https://github.com/acme/private.git" },
-    });
-
-    // A credential-bearing origin has no verifiable public identity, so read-scope
-    // discovery hides it instead of looking it up.
-    const fetchImpl = mockRepositoryVisibility({ "acme/private": "public" });
-    const read = await listProjects({}, { scopes: ["operator.sessions.read"] });
-    expect(read).toMatchObject({ ok: true, payload: { projects: [{ id: "workspace:main" }] } });
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(JSON.stringify(read)).not.toContain("placeholder");
-    const listed = await listProjects();
-    expect(listed).toMatchObject({
-      ok: true,
-      payload: {
-        projects: expect.arrayContaining([
-          expect.objectContaining({ id: "workspace:main" }),
-          expect.objectContaining({
-            id: "private",
-            originUrl: "https://github.com/acme/private.git",
-          }),
-        ]),
-      },
-    });
-  });
-});
+    }),
+);
 
 test("registered projects.list serves current session metadata without broad reads or display refresh", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-worker-" });

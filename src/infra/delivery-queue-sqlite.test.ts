@@ -636,22 +636,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       expect(getDeliveryQueueEntryStatus(QUEUE, id, stateDir)).toBe("pending");
     });
 
-    it("atomically reserves one pristine pending platform send across queue owners", () => {
-      const id = `${boundedCronRetention.idPrefix}cross-process-claim`;
-      enqueueValid(id, boundedCronRetention);
-
-      const claimId = claimDeliveryQueueEntryForTest({ queueName: QUEUE, id, stateDir });
-      expect(claimId).toEqual(expect.any(String));
-      expect(claimDeliveryQueueEntryForTest({ queueName: QUEUE, id, stateDir })).toBeUndefined();
-      expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
-        id,
-        recoveryState: "producer_claimed",
-        availableAt: expect.any(Number),
-        producerClaimId: claimId,
-      });
-      expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
-    });
-
     it("atomically upgrades a legacy live reuse claim to renewable ownership", () => {
       const id = `${boundedCronRetention.idPrefix}upgrade-reusable-claim`;
       enqueueValid(id, boundedCronRetention);

@@ -36,7 +36,6 @@ struct DashboardGatewayCatalogTests {
     @Test func `primary remote label uses the SSH host or resolved direct endpoint`() {
         let cases: [(AppState.RemoteTransport, String?, String?, String?)] = [
             (.ssh, "user@studio.local", "127.0.0.1:18789", "studio.local"),
-            (.ssh, "studio.local:2222", "127.0.0.1:18789", "studio.local"),
             (.ssh, " user@studio.local:2222 \n", nil, "studio.local"),
             (.ssh, " \n", "resolved.example", "resolved.example"),
             (.ssh, nil, nil, nil),

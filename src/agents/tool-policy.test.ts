@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -62,10 +63,25 @@ describe("tool-policy", () => {
     const policy = pickSandboxToolPolicy({ allow, alsoAllow: ["lobster"] });
     expect(collectExplicitAllowlist([policy])).toEqual(expected);
     expect(hasRestrictiveAllowPolicy(policy)).toBe(false);
+    expect(policy).toEqual({ allow: ["*", "lobster"], deny: undefined });
+    if (allow === undefined) {
+      const resolved = resolveEffectiveToolPolicy({
+        config: { tools: { profile: "coding", alsoAllow: ["lobster"] } },
+        agentId: "main",
+      });
+      expect(resolved.globalPolicy).toEqual(policy);
+      expect(resolved.profileAlsoAllow).toEqual(["lobster"]);
+    }
   });
 
   it("still treats explicit bounded allowlists as restrictive", () => {
     expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: ["read"] }))).toBe(true);
+    expect(pickSandboxToolPolicy({})).toBeUndefined();
+    expect(pickSandboxToolPolicy({ deny: ["exec"] })).toEqual({ allow: undefined, deny: ["exec"] });
+    expect(pickSandboxToolPolicy({ allow: ["read"], alsoAllow: ["write"] })).toEqual({
+      allow: ["read", "write"],
+      deny: undefined,
+    });
   });
   it("applies allow and deny to literal constructor", () => {
     const name = "constructor";

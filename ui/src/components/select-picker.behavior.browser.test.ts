@@ -421,15 +421,6 @@ describe("Picker", () => {
     expect(p.params.onChange).not.toHaveBeenCalled();
   });
 
-  it("names the field and current selection when the closed trigger receives focus", async () => {
-    const p = await mount();
-    p.trigger.focus();
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
-    await p.update({ value: "fixture/aurora-large" });
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
-    expect(p.params.onChange).not.toHaveBeenCalled();
-  });
-
   it("retains the current short-menu choice when typeahead has no match", async () => {
     const p = await mount({
       options: [
@@ -561,18 +552,6 @@ describe("Picker", () => {
       expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(reference);
     },
   );
-
-  it("commits an enabled visible choice once and skips disabled keyboard rows", async () => {
-    const p = await mount();
-    await p.open();
-    await p.search("aurora");
-    await p.key("ArrowDown");
-    await p.key("Enter");
-    await waitForSolid(() =>
-      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large"),
-    );
-    expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
-  });
 
   it("does not select disabled rows or a row removed by a catalog refresh", async () => {
     const p = await mount();

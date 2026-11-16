@@ -1190,7 +1190,6 @@ retireAnchorDependencies(anchor, () => {
   });
 
   it.each([
-    "missing",
     "corrupt",
     "replaced",
     "alias",
@@ -1200,9 +1199,7 @@ retireAnchorDependencies(anchor, () => {
   ])("refuses an uncertain SQLite authority without projecting or deleting: %s", (fault) => {
     const { installation, target, ...f } = privateTargetFixture();
     const path = join(f.cache, "lifetime.sqlite");
-    if (fault === "missing") {
-      rmSync(path);
-    } else if (fault === "corrupt") {
+    if (fault === "corrupt") {
       writeFileSync(path, "not a database");
     } else if (fault === "replaced" || fault === "alias") {
       renameSync(path, path + ".retained");

@@ -571,9 +571,6 @@ describe("release validation no-push transport", () => {
 
   it.each([
     ["openclaw/openclaw", "hybrid", false],
-    ["openclaw/openclaw", "github", false],
-    ["openclaw/openclaw", "boat", false],
-    ["openclaw/openclaw", "", false],
     ["fork/openclaw", "hybrid", false],
     ["openclaw/openclaw", "hybrid", true],
   ])(

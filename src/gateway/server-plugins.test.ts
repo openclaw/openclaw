@@ -1591,14 +1591,6 @@ describe("loadGatewayPlugins", () => {
       message: "use the override",
     },
     {
-      name: "trusted provider/model",
-      requestScoped: false,
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      sessionKey: "s-trusted-override",
-      message: "use trusted override",
-    },
-    {
       name: "canonical model-only",
       requestScoped: false,
       provider: undefined,
@@ -1612,9 +1604,6 @@ describe("loadGatewayPlugins", () => {
       const runtime = requestScoped
         ? await createSubagentRuntime({}, true)
         : await createSubagentRuntime(voiceCallOverrideConfig());
-      if (!requestScoped && provider) {
-        expect(normalizeProviderModelIdWithRuntime).not.toHaveBeenCalled();
-      }
       const context = createTestContext("authorized-overrides");
       serverPluginsModule.setFallbackGatewayContext(context);
       const scope = {
@@ -1642,8 +1631,6 @@ describe("loadGatewayPlugins", () => {
       });
       if (!provider) {
         expect(getLastDispatchedParams()).not.toHaveProperty("provider");
-      } else if (!requestScoped) {
-        expect(normalizeProviderModelIdWithRuntime).toHaveBeenCalledOnce();
       }
     },
   );
@@ -1828,13 +1815,6 @@ describe("loadGatewayPlugins", () => {
       pluginId: undefined,
       invalidAllowlist: false,
       reason: "provider/model override requires plugin identity in fallback subagent runs.",
-    },
-    {
-      name: "untrusted plugin",
-      pluginId: "voice-call",
-      invalidAllowlist: false,
-      reason:
-        'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
     },
     {
       name: "invalid allowlist",

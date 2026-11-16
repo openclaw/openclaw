@@ -1,9 +1,7 @@
-import { withTimeout } from "@openclaw/fs-safe/advanced";
-import type { Locator, Page, Request, Response } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -380,43 +378,6 @@ suite.define(() => {
     suite.withPage(
       { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
       async ({ page }) => {
-        const avatarRequests = {
-          avatarRequests: 0,
-          avatarResponses: 0,
-          avatarRequestFailures: 0,
-          avatarResponseStatus: 0,
-          avatarResponseImageMime: false,
-        };
-        const isAvatarRequest = (request: Request) =>
-          new URL(request.url()).pathname === "/api/users/profile-ada/avatar";
-        const onAvatarRequest = (request: Request) => {
-          if (isAvatarRequest(request)) {
-            avatarRequests.avatarRequests += 1;
-          }
-        };
-        const onAvatarResponse = (response: Response) => {
-          if (!isAvatarRequest(response.request())) {
-            return;
-          }
-          avatarRequests.avatarResponses += 1;
-          avatarRequests.avatarResponseStatus = response.status();
-          avatarRequests.avatarResponseImageMime =
-            response.headers()["content-type"]?.startsWith("image/") ?? false;
-        };
-        const onAvatarFailure = (request: Request) => {
-          if (isAvatarRequest(request)) {
-            avatarRequests.avatarRequestFailures += 1;
-          }
-        };
-        const stopAvatarDiagnostics = () => {
-          page.off("request", onAvatarRequest);
-          page.off("response", onAvatarResponse);
-          page.off("requestfailed", onAvatarFailure);
-        };
-        page.on("request", onAvatarRequest);
-        page.on("response", onAvatarResponse);
-        page.on("requestfailed", onAvatarFailure);
-        page.once("close", stopAvatarDiagnostics);
         await page.addInitScript(
           ({ gatewayUrl }) => {
             localStorage.setItem(
@@ -450,54 +411,10 @@ suite.define(() => {
         const paint = await readThemedPopupPaint(panel, "surface");
         expect(paint.actual).toEqual(paint.expected);
         const selfAvatar = assignee(panel, "Me").locator("openclaw-viewer-avatar img");
-        try {
-          await expectBrowser(selfAvatar).toHaveCount(1);
-          await expect
-            .poll(() => selfAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-            .toBeGreaterThan(0);
-        } catch (error) {
-          recordControlUiE2eFailureFacts(page, avatarRequests);
-          await withTimeout(
-            page.evaluate(() => {
-              const browserMenu = document.querySelector("openclaw-session-menu");
-              const browserTrigger = browserMenu?.querySelector(
-                '[role="menuitem"][aria-label="Assign to…"]',
-              );
-              const browserPanel =
-                browserTrigger?.parentElement?.querySelector(':scope > [role="menu"]');
-              const me = browserPanel?.querySelector(
-                '[data-value="assign-owner:human:profile-ada"]',
-              );
-              const avatar = me?.querySelector("openclaw-viewer-avatar");
-              const user = avatar?.user;
-              const face = avatar?.querySelector(".viewer-avatar");
-              const image = avatar?.querySelector("img");
-              return {
-                ownerMenuPresent: Boolean(browserMenu),
-                ownerTriggerExpanded: browserTrigger?.getAttribute("aria-expanded") === "true",
-                ownerPanelVisible:
-                  browserPanel?.checkVisibility({ visibilityProperty: true }) ?? false,
-                ownerMePresent: Boolean(me),
-                avatarHostPresent: Boolean(avatar),
-                avatarUserPresent: Boolean(user),
-                avatarUserMatchesFixture: user?.id === "profile-ada",
-                avatarUrlPresent: Boolean(user?.avatarUrl),
-                avatarUrlMatchesFixture: user?.avatarUrl === "/api/users/profile-ada/avatar?v=1",
-                avatarFailed: face?.getAttribute("data-avatar-state") === "failed",
-                avatarImagePresent: Boolean(image),
-                avatarImageComplete: image?.complete ?? false,
-                avatarImageDecoded: (image?.naturalWidth ?? 0) > 0,
-              };
-            }),
-            1_000,
-          )
-            .then((facts) => recordControlUiE2eFailureFacts(page, facts))
-            .catch(() => undefined);
-          throw error;
-        } finally {
-          stopAvatarDiagnostics();
-          page.off("close", stopAvatarDiagnostics);
-        }
+        await expectBrowser(selfAvatar).toHaveCount(1);
+        await expect
+          .poll(() => selfAvatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
+          .toBeGreaterThan(0);
         await expectAssignmentAvatarLayout(page);
         await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "15px");
         await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "15px");

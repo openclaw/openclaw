@@ -751,115 +751,89 @@ describe("createChatSendMessageInjectionStarter", () => {
     expect(params.turn.ctx).toEqual(originalContext);
   }
 
-  it.each([
-    {
-      caption: "see attached",
-      label: "captioned",
-      expectedText:
-        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\nsee attached\n\n<file name="note.txt" mime="text/plain">doc body</file>',
-    },
-    {
-      caption: "",
-      label: "blank-caption",
-      expectedText:
-        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n<file name="note.txt" mime="text/plain">doc body</file>',
-    },
-  ])("retains marker and document text for a $label steer", async ({ caption, expectedText }) => {
-    const documentText = '<file name="note.txt" mime="text/plain">doc body</file>';
-    const params = makeSteerStarterParams({
-      body: caption,
-      rawMessage: caption,
-      media: [
-        {
-          path: "media://inbound/note.txt",
-          contentType: "text/plain",
-          kind: "document",
-          fileName: "note.txt",
+  const note = { path: "media://inbound/note.txt", contentType: "text/plain" };
+  const photo: ChatImageContent = { type: "image", data: "inbound-photo", mimeType: "image/png" };
+  const pages = ["page-1", "page-2"].map((data) => ({
+    type: "image" as const,
+    data,
+    mimeType: "image/png",
+    attachmentIndex: 1,
+  }));
+  const pdfText = "[PDF content rendered to images]";
+  type SteerCase = {
+    name: string;
+    params: NonNullable<Parameters<typeof makeSteerStarterParams>[0]>;
+    text: string;
+    options?: Record<string, unknown>;
+  };
+  it.each<SteerCase>([
+    ...["see attached", ""].map((caption): SteerCase => ({
+      name: `retains marker and document text for a ${caption ? "captioned" : "blank-caption"} steer`,
+      params: {
+        body: caption,
+        rawMessage: caption,
+        media: [{ ...note, kind: "document", fileName: "note.txt" }],
+        documentContext: {
+          status: "rendered",
+          text: '<file name="note.txt" mime="text/plain">doc body</file>',
+          images: [],
         },
-      ],
-      documentContext: { status: "rendered", text: documentText, images: [] },
-    });
-    await expectSteer(params, expectedText);
-  });
-
-  it("keeps the attachment note when document rendering fails", async () => {
-    const params = makeSteerStarterParams({
-      body: "read the attachment",
-      media: [{ path: "media://inbound/note.txt", contentType: "text/plain" }],
-      documentContext: { status: "failed" },
-    });
-    await expectSteer(
-      params,
-      "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
-    );
-  });
-
-  it("keeps the base text untouched when no document context was rendered", async () => {
-    await createChatSendMessageInjectionStarter(makeSteerStarterParams({ body: "plain steer" }))();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      "plain steer",
-      expect.anything(),
-    );
-  });
-
-  it("merges extracted page images after the prepared inbound images", async () => {
-    const params = makeSteerStarterParams({
-      body: "see attached",
-      media: [
-        { path: "media://inbound/photo.png", contentType: "image/png" },
-        {
-          path: "media://inbound/scan.pdf",
-          contentType: "application/pdf",
-          kind: "document",
-        },
-      ],
-      replyOptionImages: [{ type: "image", data: "inbound-photo", mimeType: "image/png" }],
-      documentContext: {
-        status: "rendered",
-        text: "[PDF content rendered to images]",
-        images: [
-          { type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 1 },
-          { type: "image", data: "page-2", mimeType: "image/png", attachmentIndex: 1 },
-        ],
       },
-    });
-    await expectSteer(
-      params,
-      "[media attached: 2 files]\n" +
+      text:
+        '[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n' +
+        (caption ? caption + "\n\n" : "") +
+        '<file name="note.txt" mime="text/plain">doc body</file>',
+    })),
+    {
+      name: "keeps the attachment note when document rendering fails",
+      params: { body: "read the attachment", media: [note], documentContext: { status: "failed" } },
+      text: "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
+    },
+    {
+      name: "keeps the base text untouched when no document context was rendered",
+      params: { body: "plain steer" },
+      text: "plain steer",
+    },
+    {
+      name: "merges extracted page images after the prepared inbound images",
+      params: {
+        body: "see attached",
+        media: [
+          { path: "media://inbound/photo.png", contentType: "image/png" },
+          { path: "media://inbound/scan.pdf", contentType: "application/pdf", kind: "document" },
+        ],
+        replyOptionImages: [photo],
+        documentContext: { status: "rendered", text: pdfText, images: pages },
+      },
+      text:
+        "[media attached: 2 files]\n" +
         "[media attached 1/2: media://inbound/photo.png (image/png)]\n" +
         "[media attached 2/2: media://inbound/scan.pdf (application/pdf)]\n\n" +
-        "see attached\n\n[PDF content rendered to images]",
-      {
+        "see attached\n\n" +
+        pdfText,
+      options: {
         images: [
           { type: "image", data: "inbound-photo", mimeType: "image/png" },
           { type: "image", data: "page-1", mimeType: "image/png" },
           { type: "image", data: "page-2", mimeType: "image/png" },
         ],
       },
-    );
-  });
-
-  it("injects extracted page images when the steer carries no inbound images", async () => {
-    await createChatSendMessageInjectionStarter(
-      makeSteerStarterParams({
+    },
+    {
+      name: "injects extracted page images when the steer carries no inbound images",
+      params: {
         body: "scan attached",
         documentContext: {
           status: "rendered",
-          text: "[PDF content rendered to images]",
-          images: [{ type: "image", data: "page-1", mimeType: "image/png", attachmentIndex: 0 }],
+          text: pdfText,
+          images: [{ ...pages[0]!, attachmentIndex: 0 }],
         },
-      }),
-    )();
-
-    expect(beginReplyMessageInjectionTarget).toHaveBeenCalledWith(
-      expect.anything(),
-      "scan attached\n\n[PDF content rendered to images]",
-      expect.objectContaining({
-        images: [{ type: "image", data: "page-1", mimeType: "image/png" }],
-      }),
-    );
+      },
+      text: "scan attached\n\n" + pdfText,
+      options: { images: [{ type: "image", data: "page-1", mimeType: "image/png" }] },
+    },
+  ])("$name", async ({ params, text, options }) => {
+    await expectSteer(makeSteerStarterParams(params), text, options);
   });
 
   it("returns undefined for internal slash-command turns even with a target", async () => {

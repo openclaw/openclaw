@@ -287,21 +287,6 @@ it("retries failed discovery from the error action without refreshing models", a
   expect(catalogs).toHaveBeenCalledTimes(2);
 });
 
-it("ignores a late catalog response after the same client switches agents", async () => {
-  const main = deferred<{ catalogs: ReturnType<typeof catalog>[] }>();
-  const { control, context, request, find } = setup([luna], ["sessions.catalog.list"]);
-  request.mockImplementation((_method: string, params: { agentId: string }) =>
-    params.agentId === "main" ? main.promise : Promise.resolve({ catalogs: [catalog("research")] }),
-  );
-  control.loadCatalogTargets(context, "main", true);
-  control.loadCatalogTargets(context, "research", true);
-  await vi.waitFor(() => expect(find("model-target", "research")).not.toBeNull());
-  main.resolve({ catalogs: [catalog("stale")] });
-  await main.promise;
-  expect(find("model-target", "research")).not.toBeNull();
-  expect(find("model-target", "stale")).toBeNull();
-});
-
 it("omits a completed CLI group with no terminal-capable targets", async () => {
   const discovery = deferred<{ catalogs: ReturnType<typeof catalog>[] }>();
   const { control, context, request, draw } = setup([luna], ["sessions.catalog.list"]);

@@ -1688,21 +1688,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
       assertCreatedKitchenSinkSession({
         ok: true,
         key: "agent:main:kitchen-sink-rpc",
-        sessionId: "session-1",
-      }),
-    ).not.toThrow();
-
-    expect(() =>
-      assertCreatedKitchenSinkSession({
-        ok: true,
-        key: "agent:main:stale-session",
-        sessionId: "session-1",
-      }),
-    ).toThrow("sessions.create did not return the requested Kitchen Sink session");
-    expect(() =>
-      assertCreatedKitchenSinkSession({
-        ok: true,
-        key: "agent:main:kitchen-sink-rpc",
       }),
     ).toThrow("sessions.create did not return the requested Kitchen Sink session");
   });

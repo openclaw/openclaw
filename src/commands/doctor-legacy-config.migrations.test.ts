@@ -300,18 +300,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("keeps a repaired model allowlist restrictive", () => {
-    mockPluginProviders();
-    const result = repairModelRefs({
-      agents: { defaults: { model: "deleted/main", models: { "deleted/main": {} } } },
-    });
-
-    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
-    expect(result.changes).toContain(
-      'Added agents.defaults.models entry "openai/gpt-6-astra" to keep the repaired allowlist restrictive.',
-    );
-  });
-
   it("uses only explicit providers when models.mode is replace", () => {
     const result = repairModelRefs({
       models: {

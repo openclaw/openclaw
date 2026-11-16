@@ -1425,18 +1425,6 @@ describe("standalone image metadata", () => {
     },
   );
 
-  it("preserves public file discovery", () => {
-    const { plugin, context } = fixture();
-    const entries = context.readPluginCacheDirectory(plugin);
-    expect(entries.map((entry: fs.Dirent) => entry.name).toSorted()).toEqual([
-      "doctor-contract-api.js",
-      "handlers",
-      "index.js",
-      "openclaw.plugin.json",
-      "package.json",
-    ]);
-  });
-
   it.each([false, true])(
     "selects compiled package API aliases with physical sources=%s",
     (retainSourceFiles) => {

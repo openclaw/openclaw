@@ -334,15 +334,39 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     },
   );
 
-  it("keeps same-agent live orphan transcript hits", async () => {
-    combinedSessionStore = {};
-    const hit = searchHit("sessions/main/live-orphan.jsonl", "sessions", "x");
-    const filtered = await filter([hit], {
-      cfg: visibilityConfig("agent"),
-      requesterSessionKey: "agent:main:main",
-    });
-    expect(filtered).toEqual([hit]);
-  });
+  it.each([
+    ["same-agent orphan", "sessions/main/live-orphan.jsonl", undefined, "main", "agent", true],
+    ["global non-default agent", "sessions/w1.jsonl", "global", "secondary", "all", true],
+    ["out-of-scope shared store", "sessions/w1.jsonl", "agent:peer:only", "main", "all", false],
+    [
+      "owner-qualified collision",
+      "sessions/peer/main.jsonl",
+      "agent:main:main",
+      "main",
+      "all",
+      false,
+    ],
+  ] as const)(
+    "applies session ownership to %s",
+    async (_name, path, key, agentId, visibility, visible) => {
+      combinedSessionStore = key
+        ? { [key]: entry(key === "agent:main:main" ? "main" : "w1", 1) }
+        : {};
+      const hit = searchHit(path, "sessions", "x");
+      const filtered = await filter([hit], {
+        cfg: asOpenClawConfig({
+          ...(key === "global" && { session: { scope: "global" } }),
+          tools: {
+            sessions: { visibility },
+            agentToAgent: { enabled: true, allow: ["*"] },
+          },
+        }),
+        agentId,
+        requesterSessionKey: `agent:${agentId}:main`,
+      });
+      expect(filtered).toEqual(visible ? [hit] : []);
+    },
+  );
 
   it("does not treat a same-agent orphan filename as proven self-session lineage", async () => {
     combinedSessionStore = {};

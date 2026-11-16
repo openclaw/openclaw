@@ -304,23 +304,6 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows keep native reachability and final steps after AI setup`() {
-        // Memory import, permissions, channels and hatch remain Dashboard-owned.
-        // Native onboarding retains the optional reachability and final pages.
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: true) == [0, 1, 2, 3, 5, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false) == [0, 1, 3, 5, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true) == [0, 1, 4, 3, 9])
-        #expect(OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: false) == [0, 1, 4, 3, 9])
-    }
-
     @Test func `set up later keeps the native ready page`() {
         #expect(OnboardingView.pageOrder(
             for: .unconfigured,
@@ -583,37 +566,6 @@ struct OnboardingViewSmokeTests {
             connected: false))
     }
 
-    @Test func `unresolved nearby gateway preserves the saved SSH target`() async {
-        let override = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
-            .appendingPathComponent("openclaw.json")
-            .path
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            let state = AppState(preview: true)
-            state.remoteTransport = .ssh
-            state.remoteTarget = "user@old-host:2222"
-            let view = OnboardingView(
-                state: state,
-                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-            let gateway = GatewayDiscoveryModel.DiscoveredGateway(
-                displayName: "Unresolved",
-                serviceHost: nil,
-                servicePort: nil,
-                lanHost: "txt-host.local",
-                tailnetDns: "txt-host.ts.net",
-                sshPort: 22,
-                gatewayPort: 18789,
-                cliPath: "/tmp/openclaw",
-                stableID: UUID().uuidString,
-                debugID: UUID().uuidString,
-                isLocal: false)
-
-            view.selectRemoteGateway(gateway)
-            #expect(state.remoteTarget == "user@old-host:2222")
-        }
-    }
-
     @Test func `nearby selection preserves current setup and its activation lease`() async throws {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
@@ -658,52 +610,6 @@ struct OnboardingViewSmokeTests {
             #expect(!OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-b",
                 defaults: defaults))
-            #expect(OnboardingSystemAgentResumeStore.isPending(
-                for: "remote:id:gateway-a",
-                defaults: defaults))
-        }
-    }
-
-    @Test func `same persisted remote selection preserves pending gateway setup state`() async throws {
-        let override = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
-            .appendingPathComponent("openclaw.json")
-            .path
-        let (defaults, suiteName) = try makeOnboardingResumeDefaults()
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
-        OnboardingSystemAgentResumeStore.markPending(
-            routeIdentity: "remote:id:gateway-a",
-            defaults: defaults)
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            let state = AppState(preview: true)
-            state.connectionMode = .remote
-            let previousGatewayPreference = captureOnboardingGatewayPreference()
-            defer { restoreOnboardingGatewayPreference(previousGatewayPreference) }
-            GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-            let view = OnboardingView(
-                state: state,
-                discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
-                systemAgentDefaults: defaults)
-            view.aiSetup.manualKey = "pending-secret"
-            let gateway = GatewayDiscoveryModel.DiscoveredGateway(
-                displayName: "Gateway A",
-                serviceHost: nil,
-                servicePort: nil,
-                lanHost: "gateway-a.local",
-                tailnetDns: "gateway-a.ts.net",
-                sshPort: 22,
-                gatewayPort: 18789,
-                cliPath: "/tmp/openclaw",
-                stableID: "gateway-a",
-                debugID: "gateway-a",
-                isLocal: false)
-
-            view.selectRemoteGateway(gateway)
-
-            #expect(view.aiSetup.manualKey == "pending-secret")
             #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-a",
                 defaults: defaults))

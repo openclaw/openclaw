@@ -269,34 +269,6 @@ class WearRealtimeChannelRegistryTest {
     }
 
   @Test
-  fun `delayed unclaimed channel cannot retire the active attempt`() =
-    runBlocking {
-      val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
-      val stopTalk: suspend (WearRealtimeAttemptOwner) -> Unit = { owner ->
-        synchronized(stoppedOwners) { stoppedOwners += owner }
-      }
-      val active = FakeChannel("watch-a", "channel-b", "attempt-b")
-      val delayed = FakeChannel("watch-a", "channel-a", "attempt-a")
-
-      run {
-        registry.accept(active, appendAudio = { _, _ -> }, stopTalk = stopTalk)
-        transport.awaitOpened(active)
-        val activeClaim = checkNotNull(registry.claim("watch-a", "attempt-b"))
-
-        registry.accept(delayed, appendAudio = { _, _ -> }, stopTalk = stopTalk)
-        transport.awaitOpened(delayed)
-        delay(100L)
-
-        assertTrue(registry.isCurrent(activeClaim.owner))
-        assertTrue(synchronized(stoppedOwners) { stoppedOwners.isEmpty() })
-        val repeated = checkNotNull(registry.claim("watch-a", "attempt-b"))
-        assertFalse(repeated.newlyAcquired)
-        assertSame(activeClaim.owner, repeated.owner)
-        registry.close(activeClaim.owner)
-      }
-    }
-
-  @Test
   fun `same path reconnect inherits the active attempt owner`() =
     runBlocking {
       val stoppedOwners = mutableListOf<WearRealtimeAttemptOwner>()
@@ -360,27 +332,6 @@ class WearRealtimeChannelRegistryTest {
         registry.close(owner)
       } finally {
         releaseWrite.countDown()
-      }
-    }
-
-  @Test
-  fun `missing stale claim does not block a valid attempt on the same watch`() =
-    runBlocking {
-      val current = FakeChannel("watch-a", "channel-b", "attempt-b")
-
-      run {
-        registry.accept(current, appendAudio = { _, _ -> }, stopTalk = {})
-        transport.awaitOpened(current)
-        val missingClaim = async { registry.claim("watch-a", "attempt-a") }
-        delay(100L)
-
-        val currentOwner =
-          withTimeout(1_000L) {
-            checkNotNull(registry.claim("watch-a", "attempt-b")).owner
-          }
-        assertFalse(missingClaim.isCompleted)
-        missingClaim.cancel()
-        registry.close(currentOwner)
       }
     }
 

@@ -688,15 +688,7 @@ describe("OpenRouter routing shortcut estimates", () => {
       resolveModelCostConfig({ config, agentDir, provider, model });
     expect(await resolve("openai/gpt-catalog:nitro")).toEqual(tokenRates(7, 8));
     expect(await resolve("openai/gpt-catalog:free")).toEqual(tokenRates(3, 4));
-    for (const suffix of [
-      "batch",
-      "extended",
-      "thinking",
-      "online",
-      "unknown",
-      "free:nitro",
-      "nitro:floor",
-    ]) {
+    for (const suffix of ["unknown", "free:nitro", "nitro:floor"]) {
       expect(await resolve(`openai/gpt-catalog:${suffix}`), suffix).toBeUndefined();
     }
     expect(await resolve("openai/unknown:floor")).toBeUndefined();

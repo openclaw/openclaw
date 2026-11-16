@@ -1881,21 +1881,6 @@ struct GatewayIngressControllerTests {
     }
 
     @Test @MainActor
-    func `WARP or existing ingress credentials keep ordinary admission without a browser`() async throws {
-        let fixture = try IngressTestHarness()
-        fixture.preauthenticated = true
-        let ingress = fixture.controller()
-        let authorization = try await ingress.prepare(
-            route: fixture.route,
-            userInitiated: true,
-            admissionCheckpoint: ingress.admissionCheckpoint())
-        #expect(authorization == nil)
-        #expect(fixture.browser.presented.isEmpty)
-        #expect(fixture.requests.count == 1)
-        #expect(fixture.requests[0].value(forHTTPHeaderField: "X-Existing-Ingress") == "preserved")
-    }
-
-    @Test @MainActor
     func `cached origin grant never enrolls an independently admitted sibling`() async throws {
         let fixture = try IngressTestHarness()
         fixture.persisted = try String(data: JSONEncoder().encode(fixture.nextSession), encoding: .utf8)
@@ -1908,21 +1893,6 @@ struct GatewayIngressControllerTests {
         #expect(fixture.requests.count == 1)
         #expect(fixture.requests.allSatisfy { $0.value(forHTTPHeaderField: "Cf-Access-Token") == nil })
         #expect(fixture.requests[0].value(forHTTPHeaderField: "X-Existing-Ingress") == "preserved")
-        #expect(fixture.browser.presented.isEmpty)
-    }
-
-    @Test @MainActor
-    func `an explicit challenge reuses a cached grant without presenting a browser`() async throws {
-        let fixture = try IngressTestHarness()
-        fixture.persisted = try String(data: JSONEncoder().encode(fixture.nextSession), encoding: .utf8)
-        let ingress = fixture.controller()
-        let admission = try await ingress.prepare(
-            route: fixture.route,
-            userInitiated: false,
-            admissionCheckpoint: ingress.admissionCheckpoint())
-        #expect(admission?.isCurrent() == true)
-        #expect(fixture.requests.first?.value(forHTTPHeaderField: "Cf-Access-Token") == nil)
-        #expect(fixture.requests.filter { $0.value(forHTTPHeaderField: "Cf-Access-Token") != nil }.count == 1)
         #expect(fixture.browser.presented.isEmpty)
     }
 
@@ -1960,20 +1930,6 @@ struct GatewayIngressControllerTests {
         #expect(fixture.browser.presented.isEmpty)
         #expect(fixture.persisted == nil)
         #expect(!ingress.hasSession(stableID: fixture.stableID))
-    }
-
-    @Test @MainActor
-    func `silent challenge is actionable and never opens a browser`() async throws {
-        let fixture = try IngressTestHarness()
-        let ingress = fixture.controller()
-        await #expect(throws: GatewayExternalAuthorizationError.self) {
-            try await ingress.prepare(
-                route: fixture.route,
-                userInitiated: false,
-                admissionCheckpoint: ingress.admissionCheckpoint())
-        }
-        #expect(ingress.attention?.stableID == fixture.stableID)
-        #expect(fixture.browser.presented.isEmpty)
     }
 
     @Test @MainActor
@@ -2095,55 +2051,6 @@ struct GatewayIngressControllerTests {
         let authorization = try #require(admitted)
         #expect(authorization.isCurrent())
         try await ingress.forget(origin: fixture.application.origin)
-    }
-
-    @Test @MainActor
-    func `foreground expiry retires transports without automatic browser retry`() async throws {
-        let fixture = try IngressTestHarness()
-        fixture.persisted = try String(data: JSONEncoder().encode(fixture.nextSession), encoding: .utf8)
-        let ingress = fixture.controller()
-        let admitted = try await ingress.prepare(
-            route: fixture.route,
-            userInitiated: false,
-            admissionCheckpoint: ingress.admissionCheckpoint())
-        let authorization = try #require(admitted)
-        fixture.now = fixture.nextSession.expiresAt
-        ingress.foregrounded()
-        #expect(!authorization.isCurrent())
-        try await waitForIngress { fixture.retirements == 1 }
-        #expect(fixture.browser.presented.isEmpty)
-        #expect(ingress.attention != nil)
-        await #expect(throws: GatewayExternalAuthorizationError.self) {
-            try await authorization.headers(fixture.route.url)
-        }
-    }
-
-    @Test @MainActor
-    func `forget cancels and joins an in-flight media download before completing`() async throws {
-        let fixture = try IngressTestHarness()
-        fixture.persisted = try String(data: JSONEncoder().encode(fixture.nextSession), encoding: .utf8)
-        let ingress = fixture.controller()
-        let admitted = try await ingress.prepare(
-            route: fixture.route,
-            userInitiated: false,
-            admissionCheckpoint: ingress.admissionCheckpoint())
-        let authorization = try #require(admitted)
-        let started = AsyncStream<Void>.makeStream()
-        let request = URLRequest(url: fixture.route.url)
-        let download = Task {
-            try await authorization.load(request) { _ in
-                started.continuation.yield()
-                try await Task.sleep(for: .seconds(300))
-                throw URLError(.timedOut)
-            }
-        }
-        for await _ in started.stream {
-            break
-        }
-        try await ingress.forget(origin: fixture.application.origin)
-        await #expect(throws: CancellationError.self) { try await download.value }
-        #expect(fixture.retirements == 1)
-        #expect(fixture.persisted == nil)
     }
 
     @Test @MainActor

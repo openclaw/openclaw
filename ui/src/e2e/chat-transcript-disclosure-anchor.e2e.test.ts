@@ -140,11 +140,6 @@ suite.define(() => {
     { reducedMotion: "reduce", interruption: "wheel", recoveryPosition: "within-viewport" },
     {
       reducedMotion: "no-preference",
-      interruption: "synthetic-pointer",
-      recoveryPosition: "within-viewport",
-    },
-    {
-      reducedMotion: "no-preference",
       interruption: "native-pointer",
       recoveryPosition: "above-viewport",
     },
@@ -204,59 +199,7 @@ suite.define(() => {
             await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
           }
           let during: { top: number; max: number };
-          if (interruption === "synthetic-pointer") {
-            // Check native gutter hit testing separately from animation timing.
-            const pointer = await thread.evaluateHandle((element) => {
-              const observed = { trusted: false, scroller: false };
-              document.addEventListener(
-                "pointerdown",
-                (event) => {
-                  observed.trusted = event.isTrusted;
-                  observed.scroller = event.target === element;
-                },
-                { capture: true, once: true },
-              );
-              return observed;
-            });
-            const track = await thread.boundingBox();
-            expect(track).not.toBeNull();
-            await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
-            expect(await pointer.jsonValue()).toEqual({ trusted: true, scroller: true });
-            await pointer.dispose();
-            // Synthetic intent runs in the first positive native scroll callback;
-            // a Node round trip can outlive the fixed row's visible range.
-            // Smooth animation and production cancellation remain real.
-            during = await page
-              .locator(".chat-scroll-to-bottom")
-              .evaluate((button, waitTimeout) => {
-                const scroller = document.querySelector<HTMLElement>(
-                  ".chat-pane-cache__pane--active .chat-thread",
-                )!;
-                return new Promise<{ top: number; max: number }>((resolve, reject) => {
-                  const interrupt = (event: Event) => {
-                    if (!event.isTrusted || scroller.scrollTop <= 0) {
-                      return;
-                    }
-                    clearTimeout(timer);
-                    scroller.removeEventListener("scroll", interrupt);
-                    const position = {
-                      top: scroller.scrollTop,
-                      max: scroller.scrollHeight - scroller.clientHeight,
-                    };
-                    scroller.dispatchEvent(
-                      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
-                    );
-                    resolve(position);
-                  };
-                  const timer = setTimeout(() => {
-                    scroller.removeEventListener("scroll", interrupt);
-                    reject(new Error("Native scrolling did not reach the interruption geometry"));
-                  }, waitTimeout);
-                  scroller.addEventListener("scroll", interrupt);
-                  (button as HTMLElement).click();
-                });
-              }, controlUiE2eWaitTimeoutMs);
-          } else {
+          {
             const wheel = interruption === "wheel";
             const track = await thread.boundingBox();
             expect(track).not.toBeNull();

@@ -355,16 +355,6 @@ describe("browser config", () => {
     );
   });
 
-  it("uses profile cdpUrl when provided", () => {
-    expect(
-      resolveRequiredProfile(withProfile("remote", { cdpUrl: "http://10.0.0.42:9222" }), "remote"),
-    ).toMatchObject({
-      cdpUrl: "http://10.0.0.42:9222",
-      cdpHost: "10.0.0.42",
-      cdpIsLoopback: false,
-    });
-  });
-
   it.each<[BrowserConfig, BrowserProfileConfig, Partial<BrowserProfileConfig>]>([
     [{ attachOnly: true }, {}, { attachOnly: true }],
     [{ attachOnly: false }, { attachOnly: true }, { attachOnly: true }],

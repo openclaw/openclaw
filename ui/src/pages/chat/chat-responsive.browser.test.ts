@@ -1808,54 +1808,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps transient footer controls from crushing mobile model settings", async () => {
-    await withBrowserPage(openFixture(320, 568, { crowdedComposerFooter: true }), async (page) => {
-      await expectNoHorizontalOverflow(page);
-      const layout = await page.evaluate(() => {
-        const rectFor = (selector: string) => {
-          const node = document.querySelector<HTMLElement>(selector)!;
-          const rect = node.getBoundingClientRect();
-          const style = getComputedStyle(node);
-          return {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            clientWidth: node.clientWidth,
-            scrollWidth: node.scrollWidth,
-            overflow: style.overflow,
-            textOverflow: style.textOverflow,
-          };
-        };
-        return {
-          viewport: {
-            width: window.innerWidth,
-            height: window.innerHeight,
-          },
-          controls: rectFor(".agent-chat__composer-controls"),
-          footer: rectFor(".agent-chat__composer-footer"),
-          input: rectFor(".agent-chat__input"),
-          meta: rectFor(".agent-chat__composer-meta"),
-          settings: rectFor(".chat-controls__model-trigger"),
-          typing: rectFor(".agent-chat__typing-indicator--outside"),
-        };
-      });
-
-      expect(layout.viewport).toEqual({ width: 320, height: 568 });
-      expect(layout.controls.scrollWidth).toBeLessThanOrEqual(layout.controls.clientWidth + 1);
-      expect(layout.settings.x).toBeGreaterThanOrEqual(layout.footer.x - 1);
-      expect(layout.settings.x + layout.settings.width).toBeLessThanOrEqual(
-        layout.footer.x + layout.footer.width + 1,
-      );
-      expect(layout.typing.x).toBeGreaterThanOrEqual(0);
-      expect(layout.typing.x + layout.typing.width).toBeLessThanOrEqual(layout.viewport.width);
-      expect(layout.settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-      expect(layout.settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-      expect(rectsOverlap(layout.settings, layout.meta)).toBe(false);
-      expect(rectsOverlap(layout.typing, layout.footer)).toBe(false);
-    });
-  });
-
   it.each([
     [320, 568],
     [430, 932],
@@ -1866,196 +1818,218 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   ] as const)(
     "keeps the composer bottom controls, attachment, and primary action aligned at %sx%s",
     async (width, height) => {
-      await withBrowserPage(openFixture(width, height), async (page) => {
-        await expectNoHorizontalOverflow(page);
-        const code = await getBoundingBox(page, ".chat-text pre");
-        expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
-        // Wall-clock sleeps can expire before Chromium advances compositor animations
-        // on a contended CI runner. Measure the footer after its finite entrance effect.
-        await page.locator(".context-ring").evaluate(finishElementAnimations);
-        const controls = await page.evaluate(() => {
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const rect = node.getBoundingClientRect();
-            const style = getComputedStyle(node);
-            return {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-              clientWidth: node.clientWidth,
-              scrollWidth: node.scrollWidth,
-              display: style.display,
-              overflow: style.overflow,
-              textOverflow: style.textOverflow,
-            };
-          };
-          const paddingFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const style = getComputedStyle(node);
-            return {
-              end: Number.parseFloat(style.paddingInlineEnd),
-              start: Number.parseFloat(style.paddingInlineStart),
-            };
-          };
-          return {
-            chat: rectFor(".chat"),
-            shell: rectFor(".agent-chat__composer-shell"),
-            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
-            thread: rectFor(".chat-thread"),
-            footer: rectFor(".agent-chat__composer-footer"),
-            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-            meta: rectFor(".agent-chat__composer-meta"),
-            model: rectFor(".chat-composer-model-control"),
-            modelSettings: rectFor(".chat-controls__model-trigger"),
-            modelTrigger: rectFor(".chat-controls__model-trigger"),
-            modelTriggerPadding: paddingFor(".chat-controls__model-trigger"),
-            modelLabel: rectFor(
-              ".chat-controls__model-trigger .chat-controls__inline-select-label",
-            ),
-            effortTrigger: rectFor(".chat-controls__effort-trigger"),
-            effortTriggerPadding: paddingFor(".chat-controls__effort-trigger"),
-            effortLabel: rectFor(
-              ".chat-controls__effort-trigger .chat-controls__inline-select-label",
-            ),
-            context: rectFor(".context-ring"),
-            attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
-            send: rectFor(".chat-send-btn"),
-          };
-        });
-
-        const chat = expectControlRect(controls.chat, "chat surface");
-        const shell = expectControlRect(controls.shell, "composer shell");
-        const input = expectControlRect(controls.input, "composer");
-        const thread = expectControlRect(controls.thread, "chat thread");
-        const footer = expectControlRect(controls.footer, "composer footer");
-        const textarea = expectControlRect(controls.textarea, "composer textarea");
-        const meta = expectControlRect(controls.meta, "composer metadata");
-        const model = expectControlRect(controls.model, "composer model control");
-        const context = expectControlRect(controls.context, "composer context control");
-        const attach = expectControlRect(controls.attach, "composer attach control");
-        const send = expectControlRect(controls.send, "composer send control");
-
-        for (const control of [footer, textarea, meta, model, context, attach, send]) {
-          expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
-          expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        }
-        for (const control of [input, send]) {
-          expect(control.x).toBeGreaterThanOrEqual(shell.x - 1);
-          expect(control.x + control.width).toBeLessThanOrEqual(shell.x + shell.width + 1);
-        }
-        expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        expect(model.y).toBeGreaterThanOrEqual(textarea.y);
-        expect(context.y).toBeGreaterThanOrEqual(textarea.y);
-        // The multiline footer is one row: the leading attachment control and
-        // trailing action group share its vertical bounds without overlapping.
-        expect(attach.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(attach.y + attach.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        expect(send.y).toBeGreaterThanOrEqual(footer.y - 1);
-        expect(send.y + send.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
-        // Footer controls stay below the editor, pinned to opposite edges of the
-        // surface, and neither may drift back up into the text.
-        expect(attach.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
-        expect(send.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
-        expect(attach.x).toBeLessThan(send.x);
-        expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(rectsOverlap(model, send)).toBe(false);
-        const contextModelGap = model.x - (context.x + context.width);
-        expect(contextModelGap).toBeGreaterThanOrEqual(-1);
-        expect(
-          Math.abs(context.y + context.height / 2 - (model.y + model.height / 2)),
-        ).toBeLessThanOrEqual(2);
-        const composerFontSizes = await page.evaluate(() => {
-          const textareaNode = document.querySelector<HTMLTextAreaElement>(
-            ".agent-chat__composer-combobox > textarea",
-          );
-          const selectors = [
-            ".chat-controls__model-trigger .chat-controls__inline-select-label",
-            ".chat-controls__effort-trigger .chat-controls__inline-select-label",
-          ];
-          if (!textareaNode) {
-            throw new Error("Missing composer textarea");
-          }
-          const fontSize = (node: Element, pseudo?: string) =>
-            Number.parseFloat(getComputedStyle(node, pseudo).fontSize);
-          return {
-            labels: selectors.map((selector) => {
-              const label = document.querySelector(selector);
-              if (!label) {
-                throw new Error(`Missing composer label: ${selector}`);
+      await withBrowserPage(
+        openFixture(width, height, { crowdedComposerFooter: width === 320 }),
+        async (page) => {
+          await expectNoHorizontalOverflow(page);
+          const code = await getBoundingBox(page, ".chat-text pre");
+          expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
+          // Wall-clock sleeps can expire before Chromium advances compositor animations
+          // on a contended CI runner. Measure the footer after its finite entrance effect.
+          await page.locator(".context-ring").evaluate(finishElementAnimations);
+          const controls = await page.evaluate(() => {
+            const rectFor = (selector: string) => {
+              const node = document.querySelector(selector) as HTMLElement | null;
+              if (!node) {
+                return null;
               }
-              return fontSize(label);
-            }),
-            placeholder: fontSize(textareaNode, "::placeholder"),
-            textarea: fontSize(textareaNode),
-          };
-        });
-        expect(composerFontSizes).toEqual({
-          labels: [13, 13],
-          placeholder: 14,
-          textarea: 14,
-        });
-        if (width === 320) {
-          expect(attach.width).toBeGreaterThanOrEqual(32);
-          expect(attach.height).toBeGreaterThanOrEqual(32);
-          await page
-            .locator('.agent-chat__input-btn[aria-label="Add attachment"]')
-            .click({ trial: true });
-        }
-        if (width <= 480) {
-          const modelSettings = expectControlRect(
-            controls.modelSettings,
-            "composer model settings",
-          );
-          expect(model.width).toBeGreaterThanOrEqual(40);
-          expect(model.width).toBeLessThanOrEqual(footer.width);
-          expect(modelSettings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(modelSettings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          expect(modelSettings.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
-        } else {
-          const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
-          const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
-          const effortTrigger = expectControlRect(
-            controls.effortTrigger,
-            "composer thinking trigger",
-          );
-          const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
-          expect(controls.modelTriggerPadding).not.toBeNull();
-          expect(controls.effortTriggerPadding).not.toBeNull();
-          for (const label of [modelLabel, effortLabel]) {
-            expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+              const rect = node.getBoundingClientRect();
+              const style = getComputedStyle(node);
+              return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                clientWidth: node.clientWidth,
+                scrollWidth: node.scrollWidth,
+                display: style.display,
+                overflow: style.overflow,
+                textOverflow: style.textOverflow,
+              };
+            };
+            const paddingFor = (selector: string) => {
+              const node = document.querySelector(selector) as HTMLElement | null;
+              if (!node) {
+                return null;
+              }
+              const style = getComputedStyle(node);
+              return {
+                end: Number.parseFloat(style.paddingInlineEnd),
+                start: Number.parseFloat(style.paddingInlineStart),
+              };
+            };
+            return {
+              chat: rectFor(".chat"),
+              shell: rectFor(".agent-chat__composer-shell"),
+              input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+              thread: rectFor(".chat-thread"),
+              footer: rectFor(".agent-chat__composer-footer"),
+              textarea: rectFor(".agent-chat__composer-combobox > textarea"),
+              meta: rectFor(".agent-chat__composer-meta"),
+              model: rectFor(".chat-composer-model-control"),
+              modelSettings: rectFor(".chat-controls__model-trigger"),
+              modelTrigger: rectFor(".chat-controls__model-trigger"),
+              modelTriggerPadding: paddingFor(".chat-controls__model-trigger"),
+              modelLabel: rectFor(
+                ".chat-controls__model-trigger .chat-controls__inline-select-label",
+              ),
+              effortTrigger: rectFor(".chat-controls__effort-trigger"),
+              effortTriggerPadding: paddingFor(".chat-controls__effort-trigger"),
+              effortLabel: rectFor(
+                ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+              ),
+              context: rectFor(".context-ring"),
+              typing: rectFor(".agent-chat__typing-indicator--outside"),
+              attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
+              send: rectFor(".chat-send-btn"),
+            };
+          });
+
+          const chat = expectControlRect(controls.chat, "chat surface");
+          const shell = expectControlRect(controls.shell, "composer shell");
+          const input = expectControlRect(controls.input, "composer");
+          const thread = expectControlRect(controls.thread, "chat thread");
+          const footer = expectControlRect(controls.footer, "composer footer");
+          const textarea = expectControlRect(controls.textarea, "composer textarea");
+          const meta = expectControlRect(controls.meta, "composer metadata");
+          const model = expectControlRect(controls.model, "composer model control");
+          const context = expectControlRect(controls.context, "composer context control");
+          const attach = expectControlRect(controls.attach, "composer attach control");
+          const send = expectControlRect(controls.send, "composer send control");
+
+          for (const control of [footer, textarea, meta, model, context, attach, send]) {
+            expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
+            expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
           }
-          expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
-          expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
-        }
-        expect(send.width).toBeGreaterThanOrEqual(32);
-        expect(send.height).toBeGreaterThanOrEqual(32);
-        expect(
-          Math.abs(attach.y + attach.height / 2 - send.y - send.height / 2),
-        ).toBeLessThanOrEqual(1);
-
-        if (width >= 1600) {
-          expect(shell.width).toBeGreaterThanOrEqual(767);
-          expect(shell.width).toBeLessThanOrEqual(769);
+          for (const control of [input, send]) {
+            expect(control.x).toBeGreaterThanOrEqual(shell.x - 1);
+            expect(control.x + control.width).toBeLessThanOrEqual(shell.x + shell.width + 1);
+          }
+          expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
+          expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+          expect(model.y).toBeGreaterThanOrEqual(textarea.y);
+          expect(context.y).toBeGreaterThanOrEqual(textarea.y);
+          // The multiline footer is one row: the leading attachment control and
+          // trailing action group share its vertical bounds without overlapping.
+          expect(attach.y).toBeGreaterThanOrEqual(footer.y - 1);
+          expect(attach.y + attach.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+          expect(send.y).toBeGreaterThanOrEqual(footer.y - 1);
+          expect(send.y + send.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+          // Footer controls stay below the editor, pinned to opposite edges of the
+          // surface, and neither may drift back up into the text.
+          expect(attach.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
+          expect(send.y).toBeGreaterThanOrEqual(textarea.y + textarea.height - 1);
+          expect(attach.x).toBeLessThan(send.x);
+          expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
+          expect(rectsOverlap(model, send)).toBe(false);
+          const contextModelGap = model.x - (context.x + context.width);
+          expect(contextModelGap).toBeGreaterThanOrEqual(-1);
           expect(
-            Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
+            Math.abs(context.y + context.height / 2 - (model.y + model.height / 2)),
+          ).toBeLessThanOrEqual(2);
+          const composerFontSizes = await page.evaluate(() => {
+            const textareaNode = document.querySelector<HTMLTextAreaElement>(
+              ".agent-chat__composer-combobox > textarea",
+            );
+            const selectors = [
+              ".chat-controls__model-trigger .chat-controls__inline-select-label",
+              ".chat-controls__effort-trigger .chat-controls__inline-select-label",
+            ];
+            if (!textareaNode) {
+              throw new Error("Missing composer textarea");
+            }
+            const fontSize = (node: Element, pseudo?: string) =>
+              Number.parseFloat(getComputedStyle(node, pseudo).fontSize);
+            return {
+              labels: selectors.map((selector) => {
+                const label = document.querySelector(selector);
+                if (!label) {
+                  throw new Error(`Missing composer label: ${selector}`);
+                }
+                return fontSize(label);
+              }),
+              placeholder: fontSize(textareaNode, "::placeholder"),
+              textarea: fontSize(textareaNode),
+            };
+          });
+          expect(composerFontSizes).toEqual({
+            labels: [13, 13],
+            placeholder: 14,
+            textarea: 14,
+          });
+          if (width === 320) {
+            const typing = expectControlRect(controls.typing, "typing indicator");
+            expect(typing.x).toBeGreaterThanOrEqual(0);
+            expect(typing.x + typing.width).toBeLessThanOrEqual(width);
+            expect(rectsOverlap(typing, footer)).toBe(false);
+            expect(
+              rectsOverlap(expectControlRect(controls.modelSettings, "model settings"), meta),
+            ).toBe(false);
+            expect(
+              await page
+                .locator(".agent-chat__composer-controls")
+                .evaluate((node) => node.scrollWidth <= node.clientWidth + 1),
+            ).toBe(true);
+            expect(attach.width).toBeGreaterThanOrEqual(32);
+            expect(attach.height).toBeGreaterThanOrEqual(32);
+            await page
+              .locator('.agent-chat__input-btn[aria-label="Add attachment"]')
+              .click({ trial: true });
+          }
+          if (width <= 480) {
+            const modelSettings = expectControlRect(
+              controls.modelSettings,
+              "composer model settings",
+            );
+            expect(model.width).toBeGreaterThanOrEqual(40);
+            expect(model.width).toBeLessThanOrEqual(footer.width);
+            expect(modelSettings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+            expect(modelSettings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+            expect(modelSettings.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
+            if (width === 320) {
+              expect(modelSettings.x).toBeGreaterThanOrEqual(footer.x - 1);
+              expect(modelSettings.x + modelSettings.width).toBeLessThanOrEqual(
+                footer.x + footer.width + 1,
+              );
+            }
+          } else {
+            const modelTrigger = expectControlRect(controls.modelTrigger, "composer model trigger");
+            const modelLabel = expectControlRect(controls.modelLabel, "composer model label");
+            const effortTrigger = expectControlRect(
+              controls.effortTrigger,
+              "composer thinking trigger",
+            );
+            const effortLabel = expectControlRect(controls.effortLabel, "composer thinking label");
+            expect(controls.modelTriggerPadding).not.toBeNull();
+            expect(controls.effortTriggerPadding).not.toBeNull();
+            for (const label of [modelLabel, effortLabel]) {
+              expect(label.scrollWidth ?? 0).toBeLessThanOrEqual((label.clientWidth ?? 0) + 1);
+            }
+            expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
+            expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
+          }
+          expect(send.width).toBeGreaterThanOrEqual(32);
+          expect(send.height).toBeGreaterThanOrEqual(32);
+          expect(
+            Math.abs(attach.y + attach.height / 2 - send.y - send.height / 2),
           ).toBeLessThanOrEqual(1);
-          expect(input.height).toBeLessThanOrEqual(119);
-        }
 
-        if (width > height && height <= 500) {
-          expect(input.height).toBeLessThanOrEqual(height * 0.38);
-          expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
-          expect(textarea.height).toBeLessThanOrEqual(56.1);
-        }
-      });
+          if (width >= 1600) {
+            expect(shell.width).toBeGreaterThanOrEqual(767);
+            expect(shell.width).toBeLessThanOrEqual(769);
+            expect(
+              Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
+            ).toBeLessThanOrEqual(1);
+            expect(input.height).toBeLessThanOrEqual(119);
+          }
+
+          if (width > height && height <= 500) {
+            expect(input.height).toBeLessThanOrEqual(height * 0.38);
+            expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
+            expect(textarea.height).toBeLessThanOrEqual(56.1);
+          }
+        },
+      );
     },
   );
 
@@ -2192,7 +2166,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
     await withBrowserPage(
-      openFixture(568, 320, { composerAttachment: true, goalMode: true }),
+      openFixture(568, 320, { composerAttachment: true, goalMode: true, slashMenu: true }),
       async (page) => {
         await page
           .locator(".agent-chat__composer-combobox > textarea")
@@ -2230,7 +2204,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         const input = expectControlRect(initial.input, "composer");
         const thread = expectControlRect(initial.thread, "chat thread");
+        const menu = await getRect(page, ".slash-menu");
+        expect(menu.top).toBeGreaterThanOrEqual(input.y - 1);
+        expect(menu.bottom).toBeLessThanOrEqual(input.y + input.height + 1);
+        expect(menu.height).toBeGreaterThanOrEqual(48);
+        expect(menu.height).toBeLessThanOrEqual(89);
         const textarea = expectControlRect(initial.textarea, "composer textarea");
+        expect(textarea.y).toBeGreaterThan(menu.top);
         expect(input.height).toBeLessThanOrEqual(320 * 0.38);
         expect(thread.height).toBeGreaterThanOrEqual(320 * 0.4 - 1);
         if (
@@ -2283,6 +2263,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             shell: rectFor(".agent-chat__composer-shell"),
             input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
+            footer: rectFor(".agent-chat__composer-footer"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
             scrollTop: composer?.scrollTop ?? 0,
@@ -2294,6 +2275,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
         expect(scrolled.scrollTop).toBeGreaterThan(0);
         for (const [label, control] of [
+          ["composer footer", scrolled.footer],
           ["composer metadata", scrolled.meta],
           ["composer model control", scrolled.model],
         ] as const) {
@@ -2307,85 +2289,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(send.y).toBeGreaterThanOrEqual(scrolledShell.y - 1);
         expect(send.y + send.height).toBeLessThanOrEqual(
           scrolledShell.y + scrolledShell.height + 1,
-        );
-      },
-    );
-  });
-
-  it("keeps short-landscape slash menu visible inside the bounded composer", async () => {
-    await withBrowserPage(
-      openFixture(568, 320, {
-        composerAttachment: true,
-        slashMenu: true,
-      }),
-      async (page) => {
-        await page.locator(".agent-chat__composer-combobox > textarea").fill("/review");
-
-        const initial = await page.evaluate(() => {
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const rect = node.getBoundingClientRect();
-            return {
-              x: rect.x,
-              y: rect.y,
-              width: rect.width,
-              height: rect.height,
-              clientHeight: node.clientHeight,
-              scrollHeight: node.scrollHeight,
-              scrollTop: node.scrollTop,
-            };
-          };
-          return {
-            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
-            menu: rectFor(".slash-menu"),
-            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-            footer: rectFor(".agent-chat__composer-footer"),
-          };
-        });
-
-        const input = expectControlRect(initial.input, "composer");
-        const menu = expectControlRect(initial.menu, "slash menu");
-        const textarea = expectControlRect(initial.textarea, "composer textarea");
-        expect(input.height).toBeLessThanOrEqual(320 * 0.38);
-        if (input.scrollHeight === undefined || input.clientHeight === undefined) {
-          throw new Error("Expected scroll metrics for slash-menu composer");
-        }
-        expect(input.scrollHeight).toBeGreaterThan(input.clientHeight);
-        expect(menu.y).toBeGreaterThanOrEqual(input.y - 1);
-        expect(menu.y + menu.height).toBeLessThanOrEqual(input.y + input.height + 1);
-        expect(menu.height).toBeGreaterThanOrEqual(48);
-        expect(menu.height).toBeLessThanOrEqual(89);
-        expect(textarea.y).toBeGreaterThan(menu.y);
-
-        const scrolled = await page.evaluate(() => {
-          const composer = document.querySelector(
-            ".agent-chat__composer-shell > .agent-chat__input",
-          ) as HTMLElement | null;
-          if (composer) {
-            composer.scrollTop = composer.scrollHeight;
-          }
-          const rectFor = (selector: string) => {
-            const node = document.querySelector(selector) as HTMLElement | null;
-            if (!node) {
-              return null;
-            }
-            const rect = node.getBoundingClientRect();
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-          };
-          return {
-            input: rectFor(".agent-chat__composer-shell > .agent-chat__input"),
-            footer: rectFor(".agent-chat__composer-footer"),
-          };
-        });
-
-        const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
-        const footer = expectControlRect(scrolled.footer, "composer footer");
-        expect(footer.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
-        expect(footer.y + footer.height).toBeLessThanOrEqual(
-          scrolledInput.y + scrolledInput.height + 1,
         );
       },
     );

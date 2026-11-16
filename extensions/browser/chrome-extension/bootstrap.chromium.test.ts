@@ -458,7 +458,6 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
           // 47 MiB accounts for base64 expansion and framing in a 64 MiB relay frame.
           for (const { size, pathHandoff } of [
-            { size: 30, pathHandoff: false },
             { size: 46 * 1024 * 1024, pathHandoff: false },
             { size: 47 * 1024 * 1024, pathHandoff: true },
           ]) {

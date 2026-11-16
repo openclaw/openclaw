@@ -7,8 +7,11 @@ describe("parseJsonl", () => {
     ["", []],
     ["\n", ["blank"]],
     ["\r\n", ["blank"]],
+    ['{"a":1}', ["value"]],
   ])("parses %j as %j", (raw, kinds) => {
-    expect(parseJsonl(raw).lines.map((l) => l.kind)).toEqual(kinds);
+    const ast = parseJsonl(raw);
+    expect(ast.raw).toBe(raw);
+    expect(ast.lines.map((l) => l.kind)).toEqual(kinds);
   });
 
   it("parses each line as a JSON value", () => {

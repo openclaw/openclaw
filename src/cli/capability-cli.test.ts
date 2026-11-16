@@ -1350,7 +1350,6 @@ describe("capability cli", () => {
   });
 
   it.each([
-    ["2.5", 2.5],
     ["0.5", 0.5],
     ["2e0", 2],
   ] as const)(

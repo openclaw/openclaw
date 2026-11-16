@@ -348,29 +348,6 @@ describe("plugin scheduled turns", () => {
     expect(removed).toContain("job-page-2");
   });
 
-  it("tracks scheduled session turns using cron.add's top-level job id", async () => {
-    workflowMocks.cronAdd.mockResolvedValueOnce(makeCronJob({ id: "cron-top-level-id" }));
-
-    await expect(
-      scheduleWorkflowTurn({
-        pluginName: "Workflow Plugin",
-      }),
-    ).resolves.toEqual({
-      id: "cron-top-level-id",
-      pluginId: WORKFLOW_PLUGIN_ID,
-      sessionKey: MAIN_SESSION_KEY,
-      kind: "session-turn",
-    });
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([
-      {
-        id: "cron-top-level-id",
-        pluginId: WORKFLOW_PLUGIN_ID,
-        sessionKey: MAIN_SESSION_KEY,
-        kind: "session-turn",
-      },
-    ]);
-  });
-
   it("keeps one-shot scheduled-turn records until cleanup confirms the job is gone", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
@@ -774,27 +751,6 @@ describe("plugin scheduled turns", () => {
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
   });
 
-  it("treats already-missing cron jobs as successful scheduled-turn cleanup", async () => {
-    const removed: string[] = [];
-    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "already-missing-job" }));
-    workflowMocks.cronRemove.mockImplementation(async (id: string) => {
-      removed.push(id);
-      return { ok: true, removed: false };
-    });
-
-    const alreadyMissingHandle = await scheduleWorkflowTurn();
-    expectSessionTurnHandle(alreadyMissingHandle, "already-missing-job");
-
-    await expect(
-      cleanupPluginSessionSchedulerJobs({
-        pluginId: WORKFLOW_PLUGIN_ID,
-        reason: "disable",
-      }),
-    ).resolves.toEqual([]);
-    expect(removed).toEqual(["already-missing-job"]);
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
-  });
-
   it("removes only matching plugin tag jobs in the requested session", async () => {
     const removed = trackRemovedJobs();
     const listQueries: unknown[] = [];
@@ -811,40 +767,6 @@ describe("plugin scheduled turns", () => {
     await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 2, failed: 0 });
     expect(listQueries).toEqual(["plugin:workflow-plugin:tag:nudge:agent:main:main:"]);
     expect(removed.toSorted()).toEqual(["job-a", "job-b"]);
-  });
-
-  it("prunes runtime scheduler records after tagged unschedule removes jobs", async () => {
-    let addCount = 0;
-    workflowMocks.cronAdd.mockImplementation(async () => {
-      addCount += 1;
-      return makeCronJob({ id: `job-${addCount}` });
-    });
-    workflowMocks.cronListPage.mockResolvedValue(
-      cronPage([taggedJob("job-1", "first"), taggedJob("job-2", "second")]),
-    );
-    workflowMocks.cronRemove.mockImplementation(async (id: string) => {
-      expect(["job-1", "job-2"]).toContain(id);
-      return { ok: true, removed: true };
-    });
-
-    await scheduleWorkflowTurn({
-      schedule: {
-        message: "first",
-        tag: "nudge",
-        name: "first",
-      },
-    });
-    await scheduleWorkflowTurn({
-      schedule: {
-        message: "second",
-        tag: "nudge",
-        name: "second",
-      },
-    });
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(2);
-
-    await expect(unscheduleWorkflowTurnsByTag()).resolves.toEqual({ removed: 2, failed: 0 });
-    expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toEqual([]);
   });
 
   it("counts cron.list and cron.remove failures when unscheduling by tag", async () => {

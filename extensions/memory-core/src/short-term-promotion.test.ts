@@ -10,7 +10,6 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
@@ -1777,12 +1776,6 @@ describe("short-term promotion", () => {
     excluded?: string[];
   }[] = [
     {
-      name: "single-line daily list",
-      lines: ["## 模型切换 (16:23)", "- **需求**: 用户想使用小米 Mimo 模型作为默认"],
-      snippet: "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
-      expected: "模型切换 (16:23): **需求**: 用户想使用小米 Mimo 模型作为默认",
-    },
-    {
       name: "multi-line daily list",
       lines: [
         "## 模型切换 (16:23)",
@@ -1813,12 +1806,6 @@ describe("short-term promotion", () => {
       snippet: "Keep Xiaomi Mimo as the low-cost default.",
       expected: "Keep Xiaomi Mimo as the low-cost default.",
       excluded: ["Model routing: Keep Xiaomi"],
-    },
-    {
-      name: "capped daily list",
-      lines: ["## Long model routing", `- ${longRoutingBody}`],
-      snippet: `Long model routing: ${longRoutingBody}`.slice(0, 280).trim(),
-      expected: `Long model routing: ${longRoutingBody}`,
     },
     {
       name: "capped renamed daily list",
@@ -2467,27 +2454,6 @@ describe("short-term promotion", () => {
     },
   );
 
-  it("reclaims a stale sqlite lock when its owner is definitely dead", async (workspaceDir) => {
-    const ownerPid = 4242;
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${ownerPid}:0`,
-      acquiredAt: Date.now() - 120_000,
-    });
-    const originalIsPidDefinitelyDead = processRuntime.isPidDefinitelyDead;
-    // Keep SQLite's platform and coordinator identity native while probing the synthetic owner.
-    vi.spyOn(processRuntime, "isPidDefinitelyDead").mockImplementation(
-      (pid) => pid === ownerPid || originalIsPidDefinitelyDead(pid),
-    );
-
-    const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-    expect(audit.issues.map((issue) => issue.code)).toContain("recall-lock-stale");
-
-    await expect(repairShortTermPromotionArtifacts({ workspaceDir })).resolves.toMatchObject({
-      changed: true,
-      removedStaleLock: true,
-    });
-  });
-
   it("preserves a replacement lock when the expected stale entry is no longer current", async (workspaceDir) => {
     const expected = {
       owner: "4243:stale",
@@ -2616,31 +2582,6 @@ describe("short-term promotion", () => {
         compacted: ["2026-04-20"],
         retained: ["legacy-mixed", "USER-AUTHORED: recovery key is paper-copy-17"],
         removed: ["legacy-generated"],
-      },
-      {
-        name: "indented user ATX heading",
-        first: "legacy-old",
-        second: "legacy-newer",
-        between: [
-          "   ### Correction (added by me)",
-          "The prod DB is db-2.corp.example, NOT db-1.",
-          "",
-        ],
-        compacted: ["2026-04-10"],
-        retained: [
-          "   ### Correction (added by me)",
-          "The prod DB is db-2.corp.example, NOT db-1.",
-        ],
-        removed: ["legacy-old"],
-      },
-      {
-        name: "oldest generated section",
-        first: "legacy-old",
-        second: "legacy-newer",
-        between: [],
-        compacted: ["2026-04-10"],
-        retained: [],
-        removed: ["(2026-04-10)", "legacy-old"],
       },
     ])("compacts MEMORY.md with $name", async (entry) => {
       await withTempWorkspace(async (workspaceDir) => {

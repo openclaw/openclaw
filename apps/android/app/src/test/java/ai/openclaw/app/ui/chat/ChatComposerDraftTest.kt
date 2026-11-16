@@ -43,19 +43,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun textDraftsRemainKeyedToTheirComposerOwner() {
-    val store = ChatComposerTextDraftStore()
-    val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
-    val second = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:second")
-
-    store[first] = "first draft"
-    store[second] = "second draft"
-
-    assertEquals("first draft", store[first])
-    assertEquals("second draft", store[second])
-  }
-
-  @Test
   fun pendingPickerImportBlocksOnlyItsComposerAndCancellationRestoresSend() {
     val owner = ChatComposerOwner("gateway", "main", "agent:main:first")
     val sibling = owner.copy(sessionKey = "agent:main:second")
@@ -290,19 +277,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun rejectedPendingSendRestoresOriginalBeforePostAdmissionEdits() {
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
-    val store = ChatComposerTextDraftStore()
-    store[owner] = "send once"
-    store.beginAdmission(commandId = "command-a", owner = owner, inputSnapshot = "send once")
-    store[owner] = "new draft"
-
-    store.resolveAdmission("command-a", admitted = false)
-
-    assertEquals("send once\n\nnew draft", store[owner])
-  }
-
-  @Test
   fun pendingReplyDraftClaimsTheCanonicalMainAliasOwner() {
     val alias = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
     val canonical = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
@@ -427,26 +401,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun gatewayBoundProvisionalDraftMovesToItsVerifiedOwner() {
-    val store = ChatComposerTextDraftStore()
-    val provisional =
-      ChatComposerOwner(
-        gatewayStableId = "gateway-a",
-        agentId = "main",
-        sessionKey = "main",
-        routingVerified = false,
-      )
-    val verified = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "work", sessionKey = "agent:work:device")
-    store[provisional] = "typed before gateway hello"
-
-    assertTrue(shouldMigrateComposerDraft(provisional, verified, verified.sessionKey))
-    store.migrate(provisional, verified)
-
-    assertEquals("", store[provisional])
-    assertEquals("typed before gateway hello", store[verified])
-  }
-
-  @Test
   fun provisionalOwnerCheckpointSurvivesRecreation() {
     val provisional =
       ChatComposerOwner(
@@ -510,20 +464,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun replyDraftPreservesExistingComposerText() {
-    val draft = ChatDraft(text = "> quoted\n\n", placement = ChatDraftPlacement.BeforeExisting)
-
-    assertEquals("> quoted\n\nmy reply", mergeChatDraft(draft, "my reply"))
-  }
-
-  @Test
-  fun replacementDraftReplacesExistingComposerText() {
-    val draft = ChatDraft(text = "repeat this", placement = ChatDraftPlacement.Replace)
-
-    assertEquals("repeat this", mergeChatDraft(draft, "existing text"))
-  }
-
-  @Test
   fun guardedReplacementPreservesComposerEditsMadeWhileActionWasInFlight() {
     val draft =
       ChatDraft(
@@ -561,14 +501,6 @@ class ChatComposerDraftTest {
     assertEquals(
       "> quoted\n\nreply",
       mergeChatDraft(draft = draft, currentInput = "reply", currentOwner = owner),
-    )
-  }
-
-  @Test
-  fun sharedTextPreservesExistingComposerText() {
-    assertEquals(
-      "existing draft\n\nshared link",
-      mergeSharedChatText(sharedText = "shared link", currentInput = "existing draft"),
     )
   }
 

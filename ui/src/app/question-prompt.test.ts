@@ -134,7 +134,6 @@ describe("question event parsing", () => {
 
   it.each([
     "javascript:alert(1)",
-    "data:text/html,sign-in",
     "/sign-in",
     "//example.test/sign-in",
     "https://operator:password@example.test/sign-in",

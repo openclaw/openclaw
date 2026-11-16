@@ -1818,35 +1818,6 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 `,
     },
     {
-      title: "cleans the heartbeat command when the wrapper is terminated",
-      tempPrefix: "openclaw-docker-e2e-log-term-cleanup-",
-      scriptSource: (workDir: string) => repoShell(workDir)`
-export OPENCLAW_DOCKER_E2E_HEARTBEAT_TERM_GRACE_SECONDS=1
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-
-command_pid_file="$TMPDIR/command.pid"
-mkfifo "$TMPDIR/ready.pipe"
-(
-  run_logged_print_heartbeat plugins-run 30 bash -c 'trap "exit 0" TERM; printf "%s" "$$" > "$1"; printf "ready\\n" >&3; while true; do /bin/sleep 0.05; done' bash "$command_pid_file"
-) 3>"$TMPDIR/ready.pipe" &
-wrapper_pid="$!"
-if ! IFS= read -r ready <"$TMPDIR/ready.pipe"; then
-  kill -TERM "$wrapper_pid" 2>/dev/null || true
-  echo "heartbeat command pid was not recorded" >&2
-  exit 1
-fi
-command_pid="$(cat "$command_pid_file")"
-kill -TERM "$wrapper_pid"
-wait "$wrapper_pid" 2>/dev/null || true
-# cleanup_heartbeat_command joins the exact command before the wrapper returns.
-if kill -0 "$command_pid" 2>/dev/null; then
-  echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
-  exit 1
-fi
-`,
-    },
-    {
       title: "cleans harness containers when heartbeat-wrapped Docker runs are terminated",
       tempPrefix: "openclaw-docker-e2e-harness-term-cleanup-",
       scriptSource: (workDir: string) => repoShell(workDir)`
@@ -1866,6 +1837,7 @@ docker() {
 
   ${DOCKER_CIDFILE_PROBE}
   printf "container-term\\n" >"$cidfile"
+  printf "%s\\n" "$BASHPID" >"$TMPDIR/heartbeat-command.pid"
   printf "started\\n" >"$TMPDIR/docker-started"
   printf "docker running\\n"
   trap 'exit 143' TERM
@@ -1883,6 +1855,11 @@ IFS= read -r ready <"$TMPDIR/ready.pipe"
 test -s "$TMPDIR/docker-started"
 kill -TERM "$wrapper_pid" 2>/dev/null || true
 wait "$wrapper_pid" 2>/dev/null || true
+command_pid="$(cat "$TMPDIR/heartbeat-command.pid")"
+if kill -0 "$command_pid" 2>/dev/null; then
+  echo "heartbeat command still alive after wrapper termination: $command_pid" >&2
+  exit 1
+fi
 # The joined harness removes its container before the heartbeat wrapper returns.
 grep -qx "container-term" "$TMPDIR/docker-rm-seen"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
@@ -3986,51 +3963,6 @@ exit 0
       "[systemctl-shim] gateway restart limit reached",
     );
   });
-
-  it.skipIf(process.platform === "win32")(
-    "terminates supervised gateway descendants at the systemd stop timeout",
-    async ({ signal }) => {
-      const fixture = survivorProcessGroupFixture(`${fixtureReceiptClientSource(receipts.endpoint)}
-process.on("SIGTERM", () => {
-  setTimeout(() => {
-    fs.appendFileSync(process.env.STATE_FILE, "-graceful");
-    process.exit(0);
-  }, 50);
-});
-const descendant = spawn(process.execPath, [process.env.DESCENDANT_SCRIPT], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-descendant.once("message", () => {
-  fs.writeFileSync(process.env.STATE_FILE, "ready");
-  sendReceipt(process.env.STATE_FILE, "ready");
-});
-setInterval(() => {}, 1_000);
-`);
-      const { supervisor, statePath, exited } = fixture;
-      try {
-        await withinTest(
-          fixtureEventBeforeSettlement(
-            statePath,
-            "ready",
-            exited,
-            `supervisor readiness missing (exit=${supervisor.exitCode}, signal=${supervisor.signalCode})`,
-          ),
-          signal,
-        );
-        const descendantPid = fixture.pid();
-        expect(descendantPid).toBeGreaterThan(1);
-        expect(isPidAlive(descendantPid)).toBe(true);
-
-        supervisor.kill("SIGTERM");
-        expect(await withinTest(exited, signal)).toBe(0);
-        expect(readFileSync(statePath, "utf8")).toBe("ready-graceful");
-        // The supervisor exits only after drainProcessGroup observes the group absent.
-        expect(isPidAlive(descendantPid)).toBe(false);
-      } finally {
-        await fixture.stop();
-      }
-    },
-  );
 
   it.skipIf(process.platform === "win32")(
     "drains the previous gateway process group before restarting",

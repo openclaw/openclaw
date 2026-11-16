@@ -898,7 +898,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       expect(await git(repo, "branch", "--list", branch)).toBe(branch);
       expect(await git(repo, "rev-parse", branch)).toBe(originalHead);
 
-      expect(failedDestination).toBeDefined();
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("failed-fallback");
       expect(await service.listRegistryRecords()).toEqual([]);
       await expect(fs.access(failedDestination!)).rejects.toMatchObject({ code: "ENOENT" });

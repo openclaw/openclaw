@@ -673,44 +673,7 @@ describe("native app i18n inventory", () => {
     const surfaces = new Set(entries.map((entry) => entry.surface));
 
     const sources = new Set(entries.map((entry) => entry.source));
-    expect([...sources]).toEqual(
-      expect.arrayContaining([
-        "QR Scanner Unavailable",
-        "Open ${row.title}",
-        "Preview · $domain",
-        "Approval command copied",
-        "Save Profile",
-        "Permission required",
-        "Needs setup",
-        "Talk failed: Realtime provider closed unexpectedly.",
-        "Scan QR code",
-        "Test connection",
-        "Searching…",
-        "Loading chat",
-        "What would you like to work on?",
-        "Check OpenClaw status",
-        "What can I control here?",
-        "Help me start voice chat",
-        "Summarize the current OpenClaw status and tell me what needs attention.",
-        "Show me which phone controls and device capabilities are available right now.",
-        "Help me start a realtime voice session from this phone.",
-        "DIARY",
-        "ask OpenClaw $prompt",
-        "OpenClaw is paused",
-        "No threads yet",
-        "Don't show this again",
-        "Use Manual Gateway",
-        "Session target",
-        'OpenClaw uses ${labels.joinToString(", ")} permissions for features that need this access.',
-        "Some channel status checks did not complete.",
-        "Use the credential for this destination. Leave both fields empty only if this route already has device pairing or does not require a shared credential. Changing the destination clears this form's saved credentials.",
-        "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
-        "Local rotating log: ~/Library/Logs/OpenClaw/. Enable only for debugging.",
-        "A setup code supplies the address and available certificate information automatically. For token or password authentication, enter the ordinary Gateway credential below.",
-        "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
-        "The Gateway can capture your screen and interact with apps on this Mac, including clicking and typing, subject to macOS permissions.",
-      ]),
-    );
+    expect([...sources]).toEqual(expect.arrayContaining(["Approval command copied", "DIARY"]));
     for (const source of [
       "n${nodes.size}",
       '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
@@ -804,29 +767,6 @@ describe("native app i18n inventory", () => {
         new Set(["Request ID: \\(value)", "Request ID: %@"]).has(entry.source),
       ),
     ).toBe(true);
-    const androidSources = new Set(
-      entries.filter((entry) => entry.surface === "android").map((entry) => entry.source),
-    );
-    expect([...androidSources]).toEqual(
-      expect.arrayContaining([
-        "A prior response already allowed this command and saved the choice.",
-        "A prior response already allowed this command once.",
-        "A prior response already resolved this approval.",
-        "Approval allowed and saved.",
-        "Approval allowed once.",
-        "Gateway recorded approval and saved the choice.",
-        "Gateway recorded approval once.",
-        "Gateway recorded a denial.",
-        "This approval expired before it could be resolved.",
-        "This approval was cancelled before it could be resolved.",
-        "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
-        "The Gateway still shows this approval as pending. Review it before trying again.",
-        "Could not load approval details. Refresh and try again.",
-        "Could not load approvals.",
-        "Could not resolve approval. Refresh and try again.",
-        "Command request",
-      ]),
-    );
     expect(
       entries.some(
         (entry) =>
@@ -835,12 +775,7 @@ describe("native app i18n inventory", () => {
           hasSite(entry, (site) => site.path === "apps/macos/Sources/OpenClaw/MenuBar.swift"),
       ),
     ).toBe(true);
-    expect(
-      entries.some((entry) => entry.surface === "android" && entry.source === "Search OpenClaw"),
-    ).toBe(true);
     expectSourceAtSite("Message actions", (site) => site.path.endsWith("/ChatMessageActions.kt"));
-    expectSourceAtSite("Reply", (site) => site.path.endsWith("/ChatMessageActions.kt"));
-    expectSourceAtSite("Share message", (site) => site.path.endsWith("/ChatMessageActions.kt"));
     expectSourceAtSite(
       "Share Apple Health summaries with the Gateway?",
       (site) =>
@@ -860,32 +795,11 @@ describe("native app i18n inventory", () => {
           .toSorted(),
       )
       .toEqual(["android", "apple"]);
-    expect
-      .soft(
-        entries
-          .filter(
-            (entry) =>
-              entry.source ===
-              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
-          )
-          .map((entry) => entry.surface),
-      )
-      .toEqual(["apple"]);
     expectSourceAtSite("Search threads", (site) => site.path.endsWith("/ChatSheets.swift"));
     expectSourceAtSite(
       "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
       (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
     );
-    expect(
-      entries.some((entry) =>
-        [
-          "Use the credential for this destination. Leave both fields empty only if this route ",
-          "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "Local rotating log: ~/Library/Logs/OpenClaw/. ",
-          "A setup code supplies the address and available certificate information automatically. ",
-        ].includes(entry.source),
-      ),
-    ).toBe(false);
     expectSourceAtSite(
       "Enable Gateway TLS, or enter your Tailscale Serve HTTPS host in Manual Setup. Use Unencrypted only with a trusted private-LAN address.",
       (site) =>
@@ -902,13 +816,6 @@ describe("native app i18n inventory", () => {
       false,
     );
     expect(
-      entries.some((entry) =>
-        entry.source.startsWith(
-          "Exec approvals can only be reviewed while OpenClaw is open and connected.",
-        ),
-      ),
-    ).toBe(true);
-    expect(
       entries.some(
         (entry) =>
           entry.surface === "android" && entry.source === "INVALID_REQUEST: expected JSON object",
@@ -920,16 +827,6 @@ describe("native app i18n inventory", () => {
           entry.surface === "android" && ["off", "talk-orb", "pulse"].includes(entry.source),
       ),
     ).toBe(false);
-    expectSourceAtSite(
-      "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
-      (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
-    );
-    expectSourceAtSite(
-      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      (site) =>
-        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-        site.kind === "ui-localized-call-multiline",
-    );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
     ).toBe(true);

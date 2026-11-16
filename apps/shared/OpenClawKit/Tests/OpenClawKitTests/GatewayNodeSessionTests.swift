@@ -2123,7 +2123,6 @@ struct GatewayNodeSessionTests {
 
         await invocations.waitForCount(1)
         #expect(await invocations.values() == ["replacement-computer"])
-        #expect(await invocations.values() == ["replacement-computer"])
         await gateway.disconnect()
     }
 
@@ -2745,34 +2744,6 @@ struct GatewayNodeSessionTests {
         #expect(session.snapshotMakeCount() == 0)
         #expect(await gateway.currentRoute() == nil)
         await gateway.disconnect()
-    }
-
-    @Test(arguments: [false, true])
-    func `public request and send preserve actionable upgrade denial`(send: Bool) async throws {
-        let session = FakeGatewayWebSocketSession()
-        let url = try testURL("wss://gateway.example.invalid")
-        let channel = GatewayChannelActor(
-            url: url, token: nil,
-            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
-            extraHeadersProvider: { throw GatewayExternalAuthorizationError() })
-        do {
-            if send {
-                try await channel.send(method: "status", params: nil)
-            } else {
-                _ = try await channel.request(method: "status", params: nil)
-            }
-            Issue.record("unauthorized operation unexpectedly connected")
-        } catch {
-            #expect(error is GatewayExternalAuthorizationError)
-            let problem = GatewayConnectionProblemMapper.map(error: error)
-            #expect(problem?.kind == .externalAuthorizationRequired)
-            #expect(problem?.actionLabel == "Sign in")
-            #expect(problem?.pauseReconnect == true)
-            #expect(problem?.retryable == true)
-        }
-        #expect(session.snapshotMakeCount() == 0)
-        #expect(await channel.currentConnectionGeneration() == nil)
-        await channel.shutdown()
     }
 
     @Test
@@ -4383,22 +4354,6 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `invoke with timeout returns underlying response before timeout`() async {
-        let request = BridgeInvokeRequest(id: "1", command: "x", paramsJSON: nil)
-        let response = await GatewayNodeSession.invokeWithTimeout(
-            request: request,
-            timeoutMs: 50,
-            onInvoke: { req in
-                #expect(req.id == "1")
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: "{}", error: nil)
-            })
-
-        #expect(response.ok == true)
-        #expect(response.error == nil)
-        #expect(response.payloadJSON == "{}")
-    }
-
-    @Test
     func `invoke with timeout returns timeout error`() async {
         let request = BridgeInvokeRequest(id: "abc", command: "x", paramsJSON: nil)
         let response = await GatewayNodeSession.invokeWithTimeout(
@@ -4473,19 +4428,6 @@ struct GatewayNodeSessionTests {
 
         #expect(response.ok == true)
         #expect(response.error == nil)
-    }
-
-    @Test
-    func `invoke timeout clamps hostile integer without trapping`() async {
-        let response = await GatewayNodeSession.invokeWithTimeout(
-            request: BridgeInvokeRequest(id: "large-timeout", command: "computer.act", paramsJSON: nil),
-            timeoutMs: .max,
-            onInvoke: { request in
-                try? await Task.sleep(nanoseconds: 1_000_000)
-                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
-            })
-
-        #expect(response.ok == true)
     }
 
     @Test

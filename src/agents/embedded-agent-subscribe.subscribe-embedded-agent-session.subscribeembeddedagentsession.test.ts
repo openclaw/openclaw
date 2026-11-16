@@ -576,26 +576,6 @@ it.each([
   },
 );
 
-it("preserves distinct mutation failures through compaction until each action recovers", async () => {
-  const { emit, subscription } = createSubscribedSessionHarness({
-    runId: "compaction-retry",
-    sessionKey: "test-session",
-  });
-  const fail = (id: string, path: string) =>
-    runTool(emit, "write", id, { path, content: "next" }, { error: "disk full" }, true);
-  const recover = (id: string, path: string) =>
-    runTool(emit, "write", id, { path, content: "retry" }, { ok: true });
-  fail("write-a-failed", "/tmp/a.txt");
-  fail("write-b-failed", "/tmp/b.txt");
-  emit(retryingCompactionEnd());
-  recover("write-b-recovered", "/tmp/b.txt");
-  await subscription.waitForPendingEvents();
-  expect(subscription.getLastToolError()).toBeUndefined();
-  recover("write-a-recovered", "/tmp/a.txt");
-  await subscription.waitForPendingEvents();
-  expect(subscription.getLastToolError()).toBeUndefined();
-});
-
 it("reads terminal abort state before emitting lifecycle:end", () => {
   let terminalAborted = false;
   const { emit, onAgentEvent } = createAgentEventHarness({

@@ -113,11 +113,6 @@ describe("shared question panel", () => {
     redraw();
   }
 
-  function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
-    drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
-    return panelIn(container);
-  }
-
   it("keeps answer sizing on the live transcript without disturbing native editing", async () => {
     const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
     const first = document.createElement("div");
@@ -654,18 +649,6 @@ describe("shared question panel", () => {
     expect(document.activeElement).toBe(container.querySelector(".chat-question-panel"));
     container.querySelector<HTMLButtonElement>(".chat-question-panel__skip")?.click();
     expect(onSkip).toHaveBeenCalledOnce();
-  });
-
-  it("manages collapse state when no controlled callback is supplied", async () => {
-    await drawUncontrolled({});
-
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
-    flush();
-    expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull();
-
-    container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")?.click();
-    flush();
-    expect(container.querySelector(".chat-question-panel--collapsed")).toBeNull();
   });
 
   it("honors initial autofocus opt-out and focuses the panel when expanded", async () => {

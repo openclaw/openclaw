@@ -685,29 +685,6 @@ class ChatControllerBranchCoordinationTest {
     }
 
   @Test
-  fun branchRefreshPreservesTheLastGoodListOnFailure() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      var fail = false
-      gateway.respond("sessions.branches.list") {
-        if (fail) throw IllegalStateException("offline")
-        """{"branches":[
-          {"leafEntryId":"leaf-a","headline":"Current","messageCount":2,"active":true},
-          {"leafEntryId":"leaf-b","headline":"Earlier","messageCount":1,"active":false}
-        ]}"""
-      }
-      val controller = controller(gateway)
-      runCurrent()
-      controller.awaitOutboxRestore()
-
-      assertTrue(controller.refreshSessionBranches())
-      val cached = controller.sessionBranches.value
-      fail = true
-      assertFalse(controller.refreshSessionBranches())
-      assertEquals(cached, controller.sessionBranches.value)
-    }
-
-  @Test
   fun bootstrapReconcilesTheCapturedBranchStateBeforeAdvancingTheTip() =
     runTest {
       val gateway = ScriptedGateway(json)

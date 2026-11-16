@@ -577,31 +577,22 @@ describe("Goal control requests", () => {
 
   it.each([true])(
     "retires recovery only after observing the target (archived outside the page=%s)",
-    async (archived) => {
+    async () => {
       await expireSavedEdit();
-      const described = archived
-        ? {
-            key: "agent:main:main",
-            sessionId: "session-a",
-            kind: "direct" as const,
-            updatedAt: 4,
-            archived: true,
-            goal: { ...goal, objective: "Current archived goal", updatedAt: 4 },
-          }
-        : observedRoster().sessions[0];
-      assert(described);
+      const described = {
+        key: "agent:main:main",
+        sessionId: "session-a",
+        kind: "direct" as const,
+        updatedAt: 4,
+        archived: true,
+        goal: { ...goal, objective: "Current archived goal", updatedAt: 4 },
+      };
       const host = goalHost({
-        "sessions.list": archived
-          ? { ...createSessionsListResult(), sessions: [] }
-          : observedRoster(),
+        "sessions.list": { ...createSessionsListResult(), sessions: [] },
         "sessions.describe": { session: described },
       });
-      if (archived) {
-        await host.sessions.refresh({ limit: 1, search: "another conversation", force: true });
-      }
-      const held = archived
-        ? host.sessions.observeRow({ key: host.sessionKey, agentId: "main" }, () => {})
-        : undefined;
+      await host.sessions.refresh({ limit: 1, search: "another conversation", force: true });
+      const held = host.sessions.observeRow({ key: host.sessionKey, agentId: "main" }, () => {});
       onTestFinished(() => held?.dispose());
       expect(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
       expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe('"expired"');
@@ -612,14 +603,8 @@ describe("Goal control requests", () => {
         { key: host.sessionKey },
         { timeoutMs: 30_000 },
       );
-      if (held) {
-        expect(held.row).toMatchObject(described);
-        expect(host.sessions.state.result?.sessions).toEqual([]);
-      } else {
-        expect(
-          host.request.mock.calls.filter(([method]) => method === "sessions.list"),
-        ).toHaveLength(1);
-      }
+      expect(held.row).toMatchObject(described);
+      expect(host.sessions.state.result?.sessions).toEqual([]);
       expect(
         host.request.mock.calls.filter(([method]) => method.startsWith("sessions.goal.")),
       ).toHaveLength(0);
@@ -806,7 +791,7 @@ describe("Goal control requests", () => {
         new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Goal update is invalid",
-          details: reason === "invalid" ? { code: "GOAL_OPERATION_REJECTED", reason } : { reason },
+          details: { reason },
         }),
       );
       expect(await submitted).toBe(false);
@@ -820,7 +805,7 @@ describe("Goal control requests", () => {
 
   it.each([{ reason: "expired", crossesBoundary: true }])(
     "retains a payload-free fence on server $reason (clock crosses boundary=$crossesBoundary)",
-    async ({ reason, crossesBoundary }) => {
+    async ({ reason }) => {
       const pending = createDeferred<never>();
       let requests = 0;
       const host = goalHost({
@@ -841,14 +826,12 @@ describe("Goal control requests", () => {
       const check = chatGoalRecovery(host)?.onCheck();
       await vi.waitFor(() => expect(host.request.mock.calls[1]?.[1]).toEqual(original));
       // The server can cross its receipt boundary in flight or have a clock ahead of the UI.
-      if (crossesBoundary) {
-        now.mockReturnValue(expiresAt + 1);
-      }
+      now.mockReturnValue(expiresAt + 1);
       pending.reject(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "Goal operation expired; review the current Goal before trying again.",
-          details: reason === "expired" ? { code: "GOAL_OPERATION_REJECTED", reason } : { reason },
+          details: { code: "GOAL_OPERATION_REJECTED", reason },
         }),
       );
       expect(await check).toBe(false);

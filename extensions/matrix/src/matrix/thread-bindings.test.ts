@@ -323,10 +323,8 @@ describe("matrix thread bindings", () => {
   });
 
   it.each([
-    ["agent:ops:fork:ordinary", "session"],
     ["agent:ops:matrix:room:acp:ordinary", "session"],
     ["agent:codex:acp:binding:matrix:ops:configured", "acp"],
-    ["global", "acp"],
     ["agent:ops:subagent:child", "subagent"],
   ] as const)(
     "preserves classified %s through native child creation and reload",

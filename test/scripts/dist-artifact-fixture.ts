@@ -30,6 +30,7 @@ export function installDistArtifactScripts(
   for (const file of [
     "scripts/lib",
     "scripts/windows-cmd-helpers.mjs",
+    "src/infra/directory-walk.ts",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
     ...(compiler ? resolveNativeDeclarationFixtureSources() : []),

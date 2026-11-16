@@ -956,20 +956,27 @@ class InitialOnboardingLayoutTest {
   @Test
   fun capturedGatewayTrustKeepsPinSystemTrustAndDeclineActionsDistinct() {
     val accepted = mutableListOf<String?>()
+    val first =
+      gatewayTrustPrompt.copy(
+        endpoint = GatewayEndpoint.manual("gateway.example.test", 443, true, "/one"),
+        fingerprintSha256 = "ab".repeat(32),
+        systemTrustAvailable = true,
+      )
+    val current = mutableStateOf(first)
+    val acceptedPrompts = mutableListOf<NodeRuntime.GatewayTrustPrompt>()
     var systemTrustCount = 0
     var declineCount = 0
     composeRule.setContent {
+      val shown = current.value
       ClawDesignTheme {
         GatewayTrustDialog(
-          prompt =
-            gatewayTrustPrompt.copy(
-              fingerprintSha256 = "ab".repeat(32),
-              previousFingerprintSha256 = "cd".repeat(32),
-              systemTrustAvailable = true,
-            ),
+          prompt = shown,
           confirmLabel = stringResource(R.string.trust_and_continue),
           cancelLabel = stringResource(R.string.cancel),
-          onAccept = { accepted.add(it) },
+          onAccept = {
+            accepted.add(it)
+            acceptedPrompts.add(shown)
+          },
           onUseSystemTrust = { systemTrustCount++ },
           onDecline = { declineCount++ },
         )
@@ -977,13 +984,25 @@ class InitialOnboardingLayoutTest {
     }
 
     composeRule.onNode(hasSetTextAction()).assertDoesNotExist()
-    composeRule.onNodeWithText("Old SHA-256:", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("gateway.example.test:443/one").assertIsDisplayed()
+    composeRule.onNodeWithText("Old SHA-256:", substring = true).assertDoesNotExist()
     composeRule.onNodeWithText("Trust and continue").assertIsEnabled().performClick()
     composeRule.onNodeWithText("Use system trust").performClick()
     composeRule.onNodeWithText("Cancel").performClick()
     assertEquals(listOf<String?>(null), accepted)
     assertEquals(1, systemTrustCount)
     assertEquals(1, declineCount)
+    val replacement =
+      first.copy(
+        endpoint = GatewayEndpoint.manual("2001:db8::1", 8443, true, "/two"),
+        previousFingerprintSha256 = "cd".repeat(32),
+      )
+    composeRule.runOnIdle { current.value = replacement }
+    composeRule.onNodeWithText("[2001:db8::1]:8443/two").assertIsDisplayed()
+    composeRule.onNodeWithText("gateway.example.test:443/one").assertDoesNotExist()
+    composeRule.onNodeWithText("Old SHA-256:", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Trust and continue").performClick()
+    assertEquals(listOf(first, replacement), acceptedPrompts)
   }
 
   @Test
@@ -994,7 +1013,11 @@ class InitialOnboardingLayoutTest {
     composeRule.setContent {
       ClawDesignTheme {
         GatewayTrustDialog(
-          prompt = gatewayTrustPrompt.copy(systemTrustAvailable = true),
+          prompt =
+            gatewayTrustPrompt.copy(
+              endpoint = GatewayEndpoint.manual("manual.example.test", 9443, true, "/gateway"),
+              systemTrustAvailable = true,
+            ),
           confirmLabel = "Trust and continue",
           cancelLabel = "Cancel",
           onAccept = { accepted.add(it) },
@@ -1004,6 +1027,7 @@ class InitialOnboardingLayoutTest {
       }
     }
     val input = composeRule.onNode(hasSetTextAction())
+    composeRule.onNodeWithText("manual.example.test:9443/gateway").assertIsDisplayed()
     val trust = composeRule.onNodeWithText("Trust and continue")
     trust.performScrollTo().assertIsNotEnabled().performClick()
     input.performScrollTo().performTextReplacement("not-a-fingerprint")

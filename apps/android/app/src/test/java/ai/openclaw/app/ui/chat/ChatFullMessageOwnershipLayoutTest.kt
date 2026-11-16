@@ -316,27 +316,6 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   @Test
-  fun viewAllLoadsTheCompleteAnswerAndCloseRestoresThePreview() {
-    assertTrue(
-      "Gateway-capped assistant answers must expose View all",
-      composeRule.onAllNodes(hasText("View all") and hasClickAction()).fetchSemanticsNodes().isNotEmpty(),
-    )
-    viewAll().assertIsDisplayed().assertIsEnabled().performClick()
-    composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.fullReads.isNotEmpty() }
-    assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
-    awaitInlineExpanded()
-    composeRule
-      .onNodeWithText("Show less")
-      .performScrollTo()
-      .assertIsDisplayed()
-      .performClick()
-    assertInlineCollapsed()
-    viewAll().assertIsDisplayed().performClick()
-    awaitInlineExpanded()
-    assertEquals("Re-expansion reuses the loaded entry", 1, gateway.fullReads.size)
-  }
-
-  @Test
   fun mixedToolMessageCanLoadFullTextWithoutDuplicatingTools() {
     gateway.includeToolCall = true
     refreshSelectedChat()

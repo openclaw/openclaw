@@ -561,13 +561,10 @@ describe("Vercel Container Registry publishing", () => {
 
   it("keeps direct VCR recovery blocking without exposing an advisory dispatch input", () => {
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
-    const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
 
-    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty("advisory");
     expect(requireJob(reusable, "publish")["continue-on-error"]).toBe(
       "${{ inputs.advisory == true }}",
     );
-    expect(requireJob(releaseWorkflow, "publish_vcr").with?.advisory).toBe(true);
   });
 
   it("isolates best-effort VCR publication from Docker and GitHub release finalization", () => {

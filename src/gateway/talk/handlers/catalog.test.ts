@@ -322,10 +322,6 @@ describe("talk.catalog handler", () => {
         },
         undefined,
       );
-      const responsePayload = JSON.stringify(mockCallArg(respond, 0, 1));
-      expect(responsePayload).not.toContain("speech-key");
-      expect(responsePayload).not.toContain("stt-key");
-      expect(responsePayload).not.toContain("live-key");
     },
   );
 

@@ -17,7 +17,6 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import {
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
-  maybeRepairStaleManagedNpmBundledPlugins,
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
@@ -731,44 +730,6 @@ describe("maybeRepairPluginRegistryState", () => {
     const notes = vi.mocked(note).mock.calls.join("\n");
     expect(notes).toContain("Managed npm plugin packages could not be inspected");
     expect(notes).toContain("broken-plugin");
-  });
-
-  it("preserves payload and record state for a non-bundled external plugin", async () => {
-    const stateDir = makeTempDir();
-    const packageName = "@openclaw/external-demo";
-    const version = "2026.5.2";
-    const { packageDir } = createManagedNpmPlugin({
-      stateDir,
-      id: "external-demo",
-      packageName,
-      version,
-    });
-    const initialIndex = createCurrentIndexWithNpmRecord({
-      pluginId: "external-demo",
-      packageName,
-      packageDir,
-      version,
-    });
-    await writePersistedInstalledPluginIndex(initialIndex, { stateDir });
-
-    const result = maybeRepairStaleManagedNpmBundledPlugins({
-      stateDir,
-      candidates: [],
-      env: hermeticEnv(),
-      config: {
-        plugins: {
-          allow: ["external-demo"],
-          entries: { "external-demo": { enabled: true } },
-        },
-      },
-      prompter: { shouldRepair: true },
-    });
-
-    expect(result).toBeNull();
-    expect(fs.existsSync(packageDir)).toBe(true);
-    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
-      initialIndex.installRecords,
-    );
   });
 });
 

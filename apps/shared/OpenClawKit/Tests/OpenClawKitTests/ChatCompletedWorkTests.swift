@@ -42,6 +42,18 @@ struct ChatCompletedWorkTests {
         ])
         #expect(Self.collapse([user, progress, failed, unresolved]) == ChatTranscriptRow.build(
             from: [user, progress, failed, unresolved]))
+
+        let stretches = ["read", "exec"].map { id in
+            OpenClawChatMessage(role: "assistant", content: [
+                .init(type: "toolCall", id: id, name: "read"),
+                .init(type: "tool_result", text: "Recorded result", id: id),
+            ], timestamp: nil)
+        }
+        let narrated = Self.collapse(ChatTranscriptRow.mergeToolResults(in: [
+            progress, stretches[0], trailing, stretches[1], answer,
+        ]))
+        #expect(Self.visibleIDs(narrated) == [progress.id, trailing.id, answer.id])
+        #expect(Self.work(in: narrated).map { $0.messages.count } == [1, 1])
     }
 
     @Test func `unphased last reply and mixed final phase media remain visible`() throws {

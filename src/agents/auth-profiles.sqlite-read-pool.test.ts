@@ -140,7 +140,7 @@ it("reuses a reader with a captured owner projection after the writer closes", (
   using observed = observeReads();
   using open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
   for (let index = 0; index < 2; index += 1) {
-    expect(readRowsFromDatabase(dbPath, openReadonly, schema)).toMatchObject({
+    expect(readRowsFromDatabase(dbPath, openReadonly, schema, identity)).toMatchObject({
       store: { status: "readable", raw: store },
       state: { status: "missing", reason: "table" },
     });
@@ -152,6 +152,25 @@ it("reuses a reader with a captured owner projection after the writer closes", (
       /sqlite_(?:schema|master)|\bPRAGMA\s+(?:encoding|user_version|schema_version)\b/iu,
     ),
   ).toEqual([]);
+  if (process.platform !== "win32") {
+    const replacement = `${dbPath}.replacement`;
+    const updated = apiKeyStore("new-synthetic-key");
+    copyFileSync(dbPath, replacement);
+    {
+      using database = new DatabaseSync(replacement);
+      database.prepare("UPDATE auth_profile_store SET store_json = ?").run(JSON.stringify(updated));
+    }
+    renameSync(dbPath, `${dbPath}.old`);
+    renameSync(replacement, dbPath);
+    expect(
+      readRowsFromDatabase(
+        dbPath,
+        openReadonly,
+        undefined,
+        readDatabasePathIdentitySync(dbPath).key,
+      ),
+    ).toMatchObject({ store: { status: "readable", raw: updated } });
+  }
 });
 
 it("reuses admitted auth table facts across readers and refreshes them after owner writes", () => {

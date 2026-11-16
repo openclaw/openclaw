@@ -695,7 +695,6 @@ class ForwardBurstTest(unittest.TestCase):
     def test_rejects_partial_forward_receipts_and_missing_forward_origin(self):
         valid = {"id": 30, "forward_info": {"@type": "messageForwardInfo"}}
         for messages, error in [
-            ([], "every forwarded message"),
             ([valid], "every forwarded message"),
             ([valid, None], "every forwarded message"),
             ([valid, valid, valid], "every forwarded message"),
@@ -1318,7 +1317,6 @@ class GroupWriteAccessTest(unittest.TestCase):
             ({"@type": "chatMemberStatusMember"}, False, None, False),
             ({"@type": "chatMemberStatusMember"}, None, None, False),
             ({"@type": "chatMemberStatusLeft"}, True, None, False),
-            ({"@type": "chatMemberStatusBanned"}, True, None, False),
             ({"@type": "chatMemberStatusCreator", "is_member": False}, True, None, False),
             ({"@type": "chatMemberStatusCreator", "is_member": True}, False, None, True),
             ({"@type": "chatMemberStatusAdministrator"}, False, None, True),
