@@ -814,6 +814,7 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/compact.delegate.test.ts", 16.151],
   ["src/cli/plugins-cli.update.test.ts", 9.511],
   ["src/state/openclaw-agent-participants-migration.test.ts", 9.279],
+  ["src/agents/tools/transcripts-tool.selection.test.ts", 14.535],
   ["test/runtime-agent.codex-initialization.integration.test.ts", 45.303],
   ["src/tasks/task-executor.test.ts", 7.528],
   ["src/agents/agent-harness-native-custody.test.ts", 27.986],

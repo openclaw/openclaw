@@ -1960,6 +1960,7 @@
 ["src/agents/tools/image-generate-tool.test.ts","../../config/sessions/session-entry-read-runtime.js","2d00d8202a48c639aaec21d339f130acef2c292c7eb6812c9d787f8ac53bcf57",1]
 ["src/agents/tools/image-generate-tool.test.ts","../media-generation-activity.js","57185eb4749026f46b7641200f29e39e1aad88b4e10fdf998067ca482130aca4",1]
 ["src/agents/tools/image-generate-tool.test.ts","../subagents/announce/subagent-announce-delivery.js","747f5ef9bd575bb9c88d4b960415dafbe5698bf8eff0c135729d7477ff6ea5b3",1]
+["src/agents/tools/image-tool.custom-provider-auth.regression.test.ts","../../media-understanding/image-runtime.js","2d56984cc40ebc7afeedbbf050c70d0bd411eb06330f1c28194909709e02b8b7",1]
 ["src/agents/tools/image-tool.test.ts","../../media/channel-inbound-roots.js","5005ad352fed6ad2d6cac75bd20ecd4ff6079fe845431bf5447d4dc244b87cd6",1]
 ["src/agents/tools/image-tool.test.ts","../../plugins/public-surface-loader.js","95aa16d40f5760c1243caebe2c5775a6e750ce6928c56626a6a92d08c0695950",1]
 ["src/agents/tools/image-tool.test.ts","../auth-profiles/external-cli-sync.js","3ff3f53f94f5bb3e9acc2d7be77e6a2eabc7bb4a8280074253e8dd404aae6ad9",1]
