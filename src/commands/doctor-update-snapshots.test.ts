@@ -23,3 +23,19 @@ it("lists retained online PostgreSQL captures under the update-capture root", as
     expect(findings[0]?.message).not.toContain("doctor-unrelated");
   });
 });
+
+it("warns about an unreadable update-capture root without an npm install", async () => {
+  await withOpenClawTestState({ label: "update-snapshots-unreadable" }, async (state) => {
+    const root = resolveUpdateCaptureRoot(state.stateDir);
+    fs.mkdirSync(root, { recursive: true });
+    fs.chmodSync(root, 0o000);
+    try {
+      const findings = await collectUpdateSnapshotHealthFindings(state.env);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain("Inspection was incomplete");
+      expect(findings[0]?.message).toContain(root);
+    } finally {
+      fs.chmodSync(root, 0o700);
+    }
+  });
+});

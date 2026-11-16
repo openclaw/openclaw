@@ -121,15 +121,15 @@ export async function createUpdateCommandRollbackCapture(
       });
       assertCurrent();
       // Reservation writes share the state database; capture their settled generation.
-      const adopted = online;
-      online = undefined;
       const captured = await captureUpdateDatabases({
         transaction,
         execution,
         context,
         assertCurrent,
-        online: adopted,
+        online,
       });
+      // Adopted only once the run's backup owns it; a failed capture leaves it to discardOnline().
+      online = undefined;
       if (captured.backup) {
         captured.backup.pluginCohortRecovery = {
           runId: pair.cohort.runId,

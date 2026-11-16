@@ -62,12 +62,12 @@ export async function collectUpdateSnapshotHealthFindings(
     }
   }
   if (directories.length === 0) {
-    return partial && layout
+    return partial
       ? [
           {
             checkId: "core/doctor/update-snapshots",
             severity: "warning",
-            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list the npm global root ${layout.globalRoot}, including hidden entries, and check for .openclaw.package-backup-*.databases and .openclaw-package-backup-*.databases directories.`,
+            message: `Inspection was incomplete; retained pre-migration database snapshots may remain. Manually list ${roots.map(([root]) => root).join(" and ")}, including hidden entries, and check for .openclaw.package-backup-*.databases, .openclaw-package-backup-*.databases and online-*.databases directories.`,
           },
         ]
       : [];
