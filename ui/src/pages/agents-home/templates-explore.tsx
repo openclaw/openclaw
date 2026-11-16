@@ -29,9 +29,7 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
-import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
-import { TemplateArtwork } from "./template-artwork.tsx";
+import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -61,8 +59,26 @@ const templateCategories = [
   ["other", "templatesCatalog.categoryOther", "layers"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 8;
+// Enough placeholders and decoded artwork to cover a tall first screen.
+const SKELETON_SECTIONS = 4;
+const FIRST_SCREEN_SIZE = 24;
 type TemplateCategory = (typeof templateCategories)[number];
 type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
+type TemplateCatalog = {
+  entries: TemplateCatalogEntry[];
+  featured: TemplateCatalogEntry[];
+  sections: TemplateSection[];
+};
+
+function firstScreenArtwork(catalog: TemplateCatalog): string[] {
+  const entries = [
+    ...catalog.featured,
+    ...catalog.sections.flatMap((section) => section.entries),
+    ...catalog.entries,
+  ];
+  const urls = new Set(entries.flatMap((entry) => (entry.iconUrl ? [entry.iconUrl] : [])));
+  return [...urls].slice(0, FIRST_SCREEN_SIZE);
+}
 
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
@@ -121,35 +137,54 @@ function TemplateCard(
   );
 }
 
-function TemplateCatalogSkeleton() {
-  let grid!: HTMLDivElement;
-  const [count, setCount] = createSignal(4);
-  const measure = createLayoutMeasurement(
-    () => count(),
-    () => {
-      const card = grid.firstElementChild?.getBoundingClientRect();
-      if (!card?.height) {
-        return undefined;
-      }
-      const style = getComputedStyle(grid);
-      const columns = style.gridTemplateColumns.split(" ").length;
-      const gap = Number.parseFloat(style.rowGap) || 0;
-      const available = window.innerHeight - grid.getBoundingClientRect().top;
-      const rows = Math.max(1, Math.ceil((available + gap) / (card.height + gap)));
-      return () => setCount(columns * rows);
-    },
-    { targets: () => [grid], fonts: true },
-  );
-  onSettled(() => observeWindowResize(window, measure));
+/** Mirrors the loaded sections and cards so content arrives in place. */
+function TemplateCatalogSkeleton(props: { overview: boolean }) {
   return (
     <div
-      ref={(element) => (grid = element)}
-      class="plugin-catalog-grid"
+      class="agents-home__template-loading"
       role="status"
       aria-label={t("templatesCatalog.loading")}
     >
-      <Repeat count={count()}>
-        {() => <div class="agents-home__template-skeleton" aria-hidden="true" />}
+      <Repeat count={props.overview ? SKELETON_SECTIONS : 1}>
+        {() => (
+          <section
+            class={[
+              "plugin-catalog-section",
+              { "plugin-catalog-section--expandable": props.overview },
+            ]}
+            aria-hidden="true"
+          >
+            <header class="plugin-catalog-section__header">
+              <h2>{"\u00a0"}</h2>
+              {/* Overview shelves size their header from this button. */}
+              <Show when={props.overview}>
+                <button
+                  type="button"
+                  class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
+                  disabled
+                >
+                  {t("templatesCatalog.viewAll")}
+                </button>
+              </Show>
+            </header>
+            <div class="plugin-catalog-grid">
+              <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
+                {() => (
+                  <div class="agents-home__template-card agents-home__template-card--loading oc-card">
+                    <div class="agents-home__template-head">
+                      <span class="agents-home__template-art" />
+                      <div class="agents-home__template-identity">
+                        <h3>{"\u00a0"}</h3>
+                        <span>{"\u00a0"}</span>
+                      </div>
+                    </div>
+                    <p class="agents-home__template-summary" />
+                  </div>
+                )}
+              </Repeat>
+            </div>
+          </section>
+        )}
       </Repeat>
     </div>
   );
@@ -283,13 +318,12 @@ export function TemplatesExplore(
               <Show when={request()} keyed>
                 {(current) => {
                   const overview = !current.query.trim() && !current.category;
-                  const result = createMemo(async () => {
+                  const readCatalog = async (): Promise<TemplateCatalog> => {
                     if (current.ready) {
                       await current.ready;
                     }
                     if (!current.isCurrent()) {
-                      const sections: TemplateSection[] = [];
-                      return { entries: [], featured: [], sections };
+                      return { entries: [], featured: [], sections: [] };
                     }
                     if (overview) {
                       const catalog = await readTemplatesOverview(
@@ -346,6 +380,11 @@ export function TemplatesExplore(
                       featured,
                       sections: sections.filter((section) => section.entries.length > 0),
                     };
+                  };
+                  const result = createMemo(async () => {
+                    const catalog = await readCatalog();
+                    await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                    return catalog;
                   });
                   return (
                     <Errored
@@ -358,7 +397,7 @@ export function TemplatesExplore(
                         </InlineAlert>
                       )}
                     >
-                      <Loading fallback={<TemplateCatalogSkeleton />}>
+                      <Loading fallback={<TemplateCatalogSkeleton overview={overview} />}>
                         <Show
                           when={
                             gateway.connected &&

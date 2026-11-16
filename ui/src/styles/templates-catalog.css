@@ -538,22 +538,13 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   }
 }
 
-.agents-home__template-card,
-.agents-home__template-skeleton {
+.agents-home__template-card {
+  position: relative;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-}
-
-.agents-home__template-skeleton {
-  min-height: 168px;
-  background: var(--bg-accent);
-}
-
-.agents-home__template-card {
-  position: relative;
   /* Card width, not viewport width, decides the title row: multi-column grids
      make cards narrow on laptop-sized screens. */
   container-type: inline-size;
@@ -634,6 +625,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .agents-home__template-identity {
   grid-area: identity;
   min-width: 0;
+  /* Reserve two title lines plus the handle, and both summary lines below:
+     every card is the same height, so loading placeholders match the loaded
+     grid exactly and content arrives in place. */
+  min-height: calc(2 * 1.3 * 15px + 1.5 * 12px);
 }
 
 .agents-home__template-identity h3 {
@@ -652,6 +647,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -664,6 +660,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   position: relative;
   z-index: 2;
   display: -webkit-box;
+  min-height: 2.8em;
   margin: 0;
   overflow: hidden;
   color: var(--muted);
@@ -672,6 +669,46 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   pointer-events: none;
+}
+
+/* Same grid and gap as the loaded results body, so sections keep their place. */
+.agents-home__template-loading {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.agents-home__template-loading h2,
+.agents-home__template-card--loading h3,
+.agents-home__template-card--loading .agents-home__template-identity span,
+.agents-home__template-card--loading .agents-home__template-summary {
+  background: linear-gradient(var(--bg-accent), var(--bg-accent)) no-repeat;
+}
+
+.agents-home__template-loading .plugin-catalog-section__view-all {
+  visibility: hidden;
+}
+
+.agents-home__template-loading h2 {
+  width: 120px;
+  background-position: 0 50%;
+  background-size: 100% 16px;
+}
+
+.agents-home__template-card--loading h3 {
+  background-position: 0 50%;
+  background-size: 70% 14px;
+}
+
+.agents-home__template-card--loading .agents-home__template-identity span {
+  background-position: 0 50%;
+  background-size: 40% 10px;
+}
+
+.agents-home__template-card--loading .agents-home__template-summary {
+  background:
+    linear-gradient(var(--bg-accent), var(--bg-accent)) 0 4px / 100% 10px no-repeat,
+    linear-gradient(var(--bg-accent), var(--bg-accent)) 0 22px / 60% 10px no-repeat;
 }
 
 .agents-home__template-empty {
