@@ -198,6 +198,10 @@ it("applies a staged mixed workspace delta without per-entry worker verification
     diagnostics.unsubscribe(record);
   }
   expect(applied.conflictPaths).toEqual(["conflict.txt"]);
+  const begin = vi.fn();
+  const replayed = await apply(base, current, { begin });
+  expect(replayed.conflictPaths).toEqual(["conflict.txt"]);
+  expect(begin).not.toHaveBeenCalled();
   await expectWorkspaceFiles(local, {
     ...currentFiles,
     "conflict.txt": "local conflict\n",

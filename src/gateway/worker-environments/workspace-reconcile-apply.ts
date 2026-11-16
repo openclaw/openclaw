@@ -193,11 +193,11 @@ export async function applyStagedWorkerWorkspace(params: {
         verifyLocalStable,
       };
     };
-    if (changed.size === 0) {
+    if (preflight.applyPaths.size === 0) {
       await params.freezeTarget?.();
       return acceptance.kind === "exact-target"
         ? await acceptExactTarget(acceptance.verify)
-        : await acceptReconciled(acceptance, preflight);
+        : await acceptReconciled(acceptance, changed.size === 0 ? preflight : undefined);
     }
     const baseEntries = [...baseNodes.values()].filter(
       (entry): entry is WorkerWorkspaceManifestEntry =>
