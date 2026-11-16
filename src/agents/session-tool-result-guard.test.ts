@@ -157,7 +157,7 @@ describe("installSessionToolResultGuard", () => {
         timedOut: false,
       },
       warningText: "w".repeat(80_000),
-      aggregateOutputDropped: true,
+      session: { totalOutputChars: 160_000, output: { length: 80_000 } },
     });
     expect(output.details).toMatchObject({ aggregated: "x".repeat(80_000) });
     const content = output.content[0];

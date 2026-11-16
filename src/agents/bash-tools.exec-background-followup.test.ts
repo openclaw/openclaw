@@ -609,25 +609,42 @@ test("tells a woken conversation to end its wait and names its other running com
   }
 });
 
-test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+test("wakes a dashboard conversation on silent success, with exit, duration, a bounded tail and the output file", async ({
   signal,
 }) => {
   const sessionKey = "agent:main:dashboard:silent-waiter";
   await seedOrigin(sessionKey);
   const exec = backgroundExec(sessionKey, { agentId: "main" });
   const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
-  for (const [script, expected] of [
-    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
-    [
-      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
-      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
-    ],
-  ] as const) {
+  const wake = async (script: string) => {
     await exec("silent-waiter", script);
     await withinTest(waitForExecScope(sessionKey), signal);
     await completion(signal);
-    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
-  }
+    return String(wakes.mock.calls.at(-1)?.[0]);
+  };
+  expect(await wake("void 0")).toMatch(
+    /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/,
+  );
+  const short = await wake('process.stdout.write("x".repeat(3000) + "TAIL_END")');
+  const [, shortPath] = expectDefined(
+    /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars:\nx{1992}TAIL_END\nFull output: (\S+) \(3008 bytes\)$/.exec(
+      short,
+    ),
+    "wake with output file",
+  );
+  expect(await fs.readFile(expectDefined(shortPath, "path"), "utf8")).toBe(
+    `${"x".repeat(3000)}TAIL_END`,
+  );
+  // The in-memory window keeps 200k chars; the file keeps every byte in order.
+  const long = await wake('process.stdout.write("FIRST\\n" + "y".repeat(500000) + "LAST")');
+  const [, longPath] = expectDefined(
+    /\nFull output: (\S+) \(500010 bytes\)$/.exec(long),
+    "long wake with output file",
+  );
+  expect(long).not.toContain("process log");
+  expect(await fs.readFile(expectDefined(longPath, "path"), "utf8")).toBe(
+    `FIRST\n${"y".repeat(500000)}LAST`,
+  );
 });
 
 test("wakes the same conversation after its session id rotates while the command runs", async ({

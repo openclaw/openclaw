@@ -4,6 +4,8 @@
  */
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
+import type { ProcessSession } from "./bash-process-registry.js";
+import { formatFullOutputFooter } from "./sessions/tools/tool-contracts.js";
 
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
@@ -118,6 +120,31 @@ export const EXEC_TIMEOUT_RETRY_GUIDANCE =
 // Irreversible loss leads model-visible output so later head-preserving caps retain it.
 export const EXEC_RETENTION_CAP_NOTE =
   "[earlier output was discarded at the retention cap and cannot be recovered]\n\n";
+
+/** Hard limit for one exec output file. Later output is discarded and the file says so. */
+export const EXEC_OUTPUT_FILE_MAX_BYTES = 64 * 1024 * 1024;
+
+/** The one rendering of a kept exec output file, for wakes, results and process logs. */
+export function renderExecOutputFile(file: NonNullable<ProcessSession["outputFile"]>): string {
+  const limit = file.limitReached
+    ? `; output after the ${EXEC_OUTPUT_FILE_MAX_BYTES}-byte file limit was discarded`
+    : "";
+  return `${formatFullOutputFooter(file.path)} (${file.bytes} bytes${limit})`;
+}
+
+export type ExecDroppedOutputFacts = Pick<ProcessSession, "totalOutputChars" | "outputFile"> & {
+  output: { length: number };
+};
+
+/** Leads model-visible output when the in-memory window lost earlier output. */
+export function renderExecDroppedOutputNote(session: ExecDroppedOutputFacts): string {
+  if (session.totalOutputChars <= session.output.length) {
+    return "";
+  }
+  return session.outputFile
+    ? `[earlier output omitted here; ${renderExecOutputFile(session.outputFile)}]\n\n`
+    : EXEC_RETENTION_CAP_NOTE;
+}
 
 /** Render command output with a stable placeholder for empty output. */
 export function renderExecOutputText(value: string | undefined): string {
