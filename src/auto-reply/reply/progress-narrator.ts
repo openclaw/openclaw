@@ -225,7 +225,18 @@ export function attachProgressNarratorToReplyOptions(params: {
       clearRetryTimer();
       return;
     }
-    if (isProgressDraftVisible?.() === false) {
+    let visible: boolean | undefined;
+    try {
+      visible = isProgressDraftVisible?.();
+    } catch (err) {
+      // Retry timers outlive the channel's plugin invocation scope; a closed
+      // scope throws here, and an escape from this timer crashes the Gateway.
+      disabled = true;
+      clearRetryTimer();
+      logVerbose(`progress-narrator: visibility check failed: ${String(err)}`);
+      return;
+    }
+    if (visible === false) {
       if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
         visibilityRetryCount += 1;
         scheduleRetry(VISIBILITY_RETRY_MS, immediate);
