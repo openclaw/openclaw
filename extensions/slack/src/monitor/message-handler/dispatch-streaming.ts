@@ -62,6 +62,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     nativeProgressStreamStartPromise: null as Promise<SlackStreamSession | null> | null,
     nativeProgressStreamThreadTs: undefined as string | undefined,
     streamFailed: false,
+    pendingTextIsProgress: false,
     usedReplyThreadTs: undefined as string | undefined,
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
@@ -364,9 +365,15 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
       return { visibleReplySent: false };
     }
+    const session = state.streamSession;
+    const discardProgress = params.kind === "final" && state.pendingTextIsProgress;
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
       return { visibleReplySent: false };
+    }
+    // A confirmed final supersedes optional progress, never unacknowledged answer text.
+    if (discardProgress && session?.pendingText && !session.stopped) {
+      markSlackStreamFallbackDelivered(session);
     }
     state.observedReplyDelivery = true;
     const deliveredThreadTs = resolveSlackReplyThreadTs({
@@ -465,6 +472,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     let messageId: string | undefined;
     let fallbackDelivery: LivePreviewDeliveryResult | undefined;
+    state.pendingTextIsProgress = false;
     try {
       // Each logical reply owns an acknowledged send. Empty chunks flush short
       // SDK buffers before core settles the reply, including queued fallbacks.

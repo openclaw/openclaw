@@ -53,7 +53,7 @@ type SlackTraceState = {
   tsCounter: number;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
-  rejectAppendStreamCode?: string;
+  rejectStreamCode?: string;
 };
 
 const traceRuntimeError = vi.fn();
@@ -130,7 +130,7 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
-  traceState.rejectAppendStreamCode = undefined;
+  traceState.rejectStreamCode = undefined;
 });
 
 const CHANNEL_ID = "C0TRACE";
@@ -263,9 +263,9 @@ function createRecordingSlackClient(): Record<string, unknown> {
   const acknowledge =
     (method: string, includeChannel = false) =>
     async (args: Record<string, unknown>) => {
-      if (method === "chat.appendStream" && traceState.rejectAppendStreamCode) {
-        const error = traceState.rejectAppendStreamCode;
-        traceState.rejectAppendStreamCode = undefined;
+      // An expired stream keeps rejecting appends and stop requests.
+      const error = method === "chat.update" ? undefined : traceState.rejectStreamCode;
+      if (error) {
         record(method, args, args.ts, { ok: false, error });
         throw Object.assign(new Error(`An API error occurred: ${error}`), {
           data: { ok: false, error },
@@ -849,7 +849,7 @@ describe("slack delivery trace goldens", () => {
           step.text === "Checking the second file." &&
           method === "append"
         ) {
-          traceState.rejectAppendStreamCode = code;
+          traceState.rejectStreamCode = code;
         }
       },
     });
@@ -867,9 +867,7 @@ describe("slack delivery trace goldens", () => {
     expect(edits).toContainEqual(
       expect.objectContaining({ text: expect.stringContaining("Checking the last file.") }),
     );
-    expect(
-      posts.filter((payload) => (payload as { text?: string }).text === "All files checked."),
-    ).toHaveLength(1);
+    expect(posts.at(-1)).toMatchObject({ text: "All files checked." });
     expect(
       collectSlackWireTexts(events).filter((text) => text.includes("All files checked.")),
     ).toHaveLength(1);
