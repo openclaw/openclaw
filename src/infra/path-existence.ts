@@ -32,7 +32,7 @@ export function realpathExistingAncestorSync(candidate: string): string | undefi
 }
 
 /** Async counterpart for runtime identity capture, including unreadable intermediate paths. */
-export async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
+async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
   const suffix: string[] = [];
   let current = candidate;
   while (true) {
