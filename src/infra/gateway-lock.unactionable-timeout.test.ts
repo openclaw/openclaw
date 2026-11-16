@@ -53,6 +53,24 @@ async function makeCase() {
   return { env, lockDir, ...resolveGatewayLockPaths(env, lockDir) };
 }
 
+function attemptLock(
+  { env, lockDir }: Pick<Awaited<ReturnType<typeof makeCase>>, "env" | "lockDir">,
+  inspectOwner = true,
+) {
+  const clock = createDeadlineClock();
+  return acquireGatewayLock({
+    allowInTests: true,
+    env,
+    lockDir,
+    role: "sqlite-maintenance",
+    timeoutMs: 250,
+    pollIntervalMs: 25,
+    now: clock.now,
+    sleep: clock.sleep,
+    ...(inspectOwner ? unverifiableOwner : {}),
+  });
+}
+
 describe("Gateway lock timeout diagnostics", () => {
   beforeAll(async () => {
     await fixtureRootTracker.setup();
@@ -73,87 +91,37 @@ describe("Gateway lock timeout diagnostics", () => {
     });
     expect(await pathExists(stateLockPath)).toBe(false);
 
-    const clock = createDeadlineClock();
     try {
       // withLegacyMigrationStateLock budgets: 250 ms to win, poll every 25 ms.
-      const attempt = acquireGatewayLock({
-        allowInTests: true,
-        env,
-        lockDir,
-        role: "sqlite-maintenance",
-        timeoutMs: 250,
-        pollIntervalMs: 25,
-        now: clock.now,
-        sleep: clock.sleep,
-        ...unverifiableOwner,
-      });
+      const attempt = attemptLock({ env, lockDir });
       await expect(attempt).rejects.toThrow(ownerLockPath);
     } finally {
       holder.release();
     }
   });
 
-  it("names the state lock file when its recorded owner cannot be verified", async () => {
-    const { env, lockDir, stateLockPath, configPath, stateDir } = await makeCase();
-    await fs.mkdir(lockDir, { recursive: true });
-    // A Gateway that exited without releasing leaves this payload behind. Its PID
-    // is live, but the reader cannot confirm it, so the lock is never reclaimed.
-    // The process owner sidecar stays free on purpose: acquireGatewayLock takes
-    // it first, so a held owner would mask this call site.
-    await fs.writeFile(
-      stateLockPath,
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath,
-        stateDir,
-      }),
-      "utf8",
-    );
-
-    const clock = createDeadlineClock();
-    const attempt = acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      role: "sqlite-maintenance",
-      timeoutMs: 250,
-      pollIntervalMs: 25,
-      now: clock.now,
-      sleep: clock.sleep,
-      ...unverifiableOwner,
-    });
-    await expect(attempt).rejects.toThrow(stateLockPath);
-  });
-
-  it("names the config lock file when its recorded owner cannot be verified", async () => {
-    const { env, lockDir, configLockPath, configPath, stateDir } = await makeCase();
-    await fs.mkdir(lockDir, { recursive: true });
-    await fs.writeFile(
-      configLockPath,
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: new Date().toISOString(),
-        configPath,
-        stateDir,
-      }),
-      "utf8",
-    );
-
-    const clock = createDeadlineClock();
-    const attempt = acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      role: "sqlite-maintenance",
-      timeoutMs: 250,
-      pollIntervalMs: 25,
-      now: clock.now,
-      sleep: clock.sleep,
-      ...unverifiableOwner,
-    });
-    await expect(attempt).rejects.toThrow(configLockPath);
-  });
+  it.each(["stateLockPath", "configLockPath"] as const)(
+    "names %s when its recorded owner cannot be verified",
+    async (lockKey) => {
+      const fixture = await makeCase();
+      const { env, lockDir, configPath, stateDir } = fixture;
+      const lockPath = fixture[lockKey];
+      await fs.mkdir(lockDir, { recursive: true });
+      // Keep the primary sidecar free so it cannot mask either historical lock.
+      // A live but unverifiable recorded owner must remain unreclaimed.
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath,
+          stateDir,
+        }),
+        "utf8",
+      );
+      await expect(attemptLock({ env, lockDir })).rejects.toThrow(lockPath);
+    },
+  );
 
   it("names the process owner sidecar when the failure never reached contention", async () => {
     // A failure that is not a GatewayStateOwnerContentionError never gets a lock
@@ -168,17 +136,7 @@ describe("Gateway lock timeout diagnostics", () => {
     await fs.mkdir(path.dirname(path.dirname(ownerLockPath)), { recursive: true });
     await fs.writeFile(path.dirname(ownerLockPath), "not a directory", "utf8");
 
-    const clock = createDeadlineClock();
-    const attempt = acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      role: "sqlite-maintenance",
-      timeoutMs: 250,
-      pollIntervalMs: 25,
-      now: clock.now,
-      sleep: clock.sleep,
-    });
+    const attempt = attemptLock({ env, lockDir }, false);
     await expect(attempt).rejects.toThrow(ownerLockPath);
   });
 
@@ -200,17 +158,7 @@ describe("Gateway lock timeout diagnostics", () => {
       "utf8",
     );
 
-    const clock = createDeadlineClock();
-    const attempt = acquireGatewayLock({
-      allowInTests: true,
-      env,
-      lockDir,
-      role: "sqlite-maintenance",
-      timeoutMs: 250,
-      pollIntervalMs: 25,
-      now: clock.now,
-      sleep: clock.sleep,
-    });
+    const attempt = attemptLock({ env, lockDir }, false);
     await expect(attempt).rejects.toThrow(stateLockPath);
   });
 });

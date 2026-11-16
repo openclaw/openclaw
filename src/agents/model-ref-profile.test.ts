@@ -36,25 +36,13 @@ describe("splitTrailingAuthProfile", () => {
       "lmstudio/qwen3.6-27b@iq3_xxs@work",
       { model: "lmstudio/qwen3.6-27b@iq3_xxs", profile: "work" },
     ],
+    ...[
+      "lmstudio/qwen3.6-27b@iq3_xxs",
+      "lmstudio/qwen3.6-27b@iq4_xs",
+      "lmstudio-mb-pro/gemma-4-31b@4bit",
+      "lmstudio-mb-pro/gemma-4-31b@8bit",
+    ].map((model) => [model, { model }] as const),
   ] as const)("parses %s without losing model suffixes", (raw, expected) => {
     expect(splitTrailingAuthProfile(raw)).toEqual(expected);
-  });
-
-  it("keeps @iq* importance-quantization suffixes in model ids", () => {
-    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq3_xxs")).toEqual({
-      model: "lmstudio/qwen3.6-27b@iq3_xxs",
-    });
-    expect(splitTrailingAuthProfile("lmstudio/qwen3.6-27b@iq4_xs")).toEqual({
-      model: "lmstudio/qwen3.6-27b@iq4_xs",
-    });
-  });
-
-  it("keeps @4bit/@8bit quant suffixes in model ids", () => {
-    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@4bit")).toEqual({
-      model: "lmstudio-mb-pro/gemma-4-31b@4bit",
-    });
-    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@8bit")).toEqual({
-      model: "lmstudio-mb-pro/gemma-4-31b@8bit",
-    });
   });
 });

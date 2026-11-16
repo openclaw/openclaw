@@ -837,128 +837,75 @@ describe("dreaming view", () => {
     ]);
   });
 
-  it("sorts waiting entries by strongest support without swapping datasets", () => {
+  it.each([
+    {
+      name: "sorts waiting entries by strongest support without swapping datasets",
+      entries: [
+        {
+          ...baseEntry,
+          key: "memory:recent-low-signal",
+          snippet: "Recent but low signal",
+          lastRecalledAt: "2026-04-06T12:00:00.000Z",
+        },
+        {
+          ...baseEntry,
+          key: "memory:older-high-signal",
+          path: "memory/2026-04-01.md",
+          snippet: "Older but strongly supported",
+          recallCount: 5,
+          dailyCount: 4,
+          totalSignalCount: 9,
+          lightHits: 2,
+          remHits: 1,
+          phaseHitCount: 3,
+          lastRecalledAt: "2026-04-01T12:00:00.000Z",
+        },
+      ],
+      recent: ["memory:recent-low-signal", "memory:older-high-signal"],
+      signals: ["memory:older-high-signal", "memory:recent-low-signal"],
+    },
+    {
+      name: "treats malformed waiting-entry timestamps as oldest in both sort modes",
+      entries: [
+        {
+          ...baseEntry,
+          key: "memory:valid-recent",
+          path: "memory/2026-04-06.md",
+          snippet: "Valid recent timestamp",
+          totalSignalCount: 3,
+          lightHits: 1,
+          phaseHitCount: 1,
+          lastRecalledAt: "2026-04-06T12:00:00.000Z",
+        },
+        {
+          ...baseEntry,
+          key: "memory:malformed-time",
+          snippet: "Malformed timestamp",
+          totalSignalCount: 3,
+          lightHits: 1,
+          phaseHitCount: 1,
+          lastRecalledAt: "not-a-timestamp",
+        },
+      ],
+      recent: ["memory:valid-recent", "memory:malformed-time"],
+      signals: ["memory:valid-recent", "memory:malformed-time"],
+    },
+  ])("$name", ({ entries: shortTermEntries, recent, signals }) => {
     openReviewPanel("waiting");
-    const shortTermEntries = [
-      {
-        key: "memory:recent-low-signal",
-        path: "memory/2026-04-05.md",
-        startLine: 1,
-        endLine: 1,
-        snippet: "Recent but low signal",
-        recallCount: 1,
-        dailyCount: 0,
-        groundedCount: 0,
-        totalSignalCount: 1,
-        lightHits: 0,
-        remHits: 0,
-        phaseHitCount: 0,
-        lastRecalledAt: "2026-04-06T12:00:00.000Z",
-      },
-      {
-        key: "memory:older-high-signal",
-        path: "memory/2026-04-01.md",
-        startLine: 1,
-        endLine: 1,
-        snippet: "Older but strongly supported",
-        recallCount: 5,
-        dailyCount: 4,
-        groundedCount: 0,
-        totalSignalCount: 9,
-        lightHits: 2,
-        remHits: 1,
-        phaseHitCount: 3,
-        lastRecalledAt: "2026-04-01T12:00:00.000Z",
-      },
-    ];
-
-    setDreamAdvancedWaitingSort("recent");
-    let container = renderInto(
-      buildProps(undefined, {
-        shortTermEntries,
-        promotedEntries: [],
-      }),
-    );
-    const recentOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
-      node.getAttribute("data-entry-key"),
-    );
-    expect(recentOrder).toEqual(["memory:recent-low-signal", "memory:older-high-signal"]);
-
-    setDreamAdvancedWaitingSort("signals");
-    container = renderInto(
-      buildProps(undefined, {
-        shortTermEntries,
-        promotedEntries: [],
-      }),
-    );
-    const signalOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
-      node.getAttribute("data-entry-key"),
-    );
-    expect(signalOrder).toEqual(["memory:older-high-signal", "memory:recent-low-signal"]);
+    const order = (sort: DreamingViewState["advancedWaitingSort"]) => {
+      setDreamAdvancedWaitingSort(sort);
+      const container = renderInto(
+        buildProps(undefined, { shortTermEntries, promotedEntries: [] }),
+      );
+      return [...container.querySelectorAll("[data-entry-key]")].map((node) =>
+        node.getAttribute("data-entry-key"),
+      );
+    };
+    const recentOrder = order("recent");
+    expect(recentOrder).toEqual(recent);
+    const signalOrder = order("signals");
+    expect(signalOrder).toEqual(signals);
     expect(new Set(signalOrder)).toEqual(new Set(recentOrder));
-
-    setDreamAdvancedWaitingSort("recent");
-  });
-
-  it("treats malformed waiting-entry timestamps as oldest in both sort modes", () => {
-    openReviewPanel("waiting");
-    const shortTermEntries = [
-      {
-        key: "memory:valid-recent",
-        path: "memory/2026-04-06.md",
-        startLine: 1,
-        endLine: 1,
-        snippet: "Valid recent timestamp",
-        recallCount: 1,
-        dailyCount: 0,
-        groundedCount: 0,
-        totalSignalCount: 3,
-        lightHits: 1,
-        remHits: 0,
-        phaseHitCount: 1,
-        lastRecalledAt: "2026-04-06T12:00:00.000Z",
-      },
-      {
-        key: "memory:malformed-time",
-        path: "memory/2026-04-05.md",
-        startLine: 1,
-        endLine: 1,
-        snippet: "Malformed timestamp",
-        recallCount: 1,
-        dailyCount: 0,
-        groundedCount: 0,
-        totalSignalCount: 3,
-        lightHits: 1,
-        remHits: 0,
-        phaseHitCount: 1,
-        lastRecalledAt: "not-a-timestamp",
-      },
-    ];
-
-    setDreamAdvancedWaitingSort("recent");
-    let container = renderInto(
-      buildProps(undefined, {
-        shortTermEntries,
-        promotedEntries: [],
-      }),
-    );
-    const recentOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
-      node.getAttribute("data-entry-key"),
-    );
-    expect(recentOrder).toEqual(["memory:valid-recent", "memory:malformed-time"]);
-
-    setDreamAdvancedWaitingSort("signals");
-    container = renderInto(
-      buildProps(undefined, {
-        shortTermEntries,
-        promotedEntries: [],
-      }),
-    );
-    const signalOrder = [...container.querySelectorAll("[data-entry-key]")].map((node) =>
-      node.getAttribute("data-entry-key"),
-    );
-    expect(signalOrder).toEqual(["memory:valid-recent", "memory:malformed-time"]);
-
     setDreamAdvancedWaitingSort("recent");
   });
 });
