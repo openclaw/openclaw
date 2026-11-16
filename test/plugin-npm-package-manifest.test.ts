@@ -1147,6 +1147,11 @@ it.each([
     );
     writeJsonFile(join(packageDir, "package.json"), sourceManifest);
   }
+  if (bundling === "isolated") {
+    // pnpm's content-addressed hardlink store deduplicates identical declarations.
+    writeFileText(join(installedDir, "index.d.ts"), "declare const value: 2; export = value;\n");
+    fs.linkSync(join(installedDir, "index.d.ts"), join(installedDir, "index.d.mts"));
+  }
   const optOut = bundling.startsWith("opt-out-");
   const consumerDir = join(repoDir, "consumer");
   mkdirSync(consumerDir);
@@ -1276,6 +1281,16 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     );
     expect(packResult.files.some(({ path }) => path.endsWith(".tgz"))).toBe(false);
     expect(readText(installedDir, "index.js")).toBe(installedSource);
+    if (bundling === "isolated") {
+      for (const file of ["index.d.ts", "index.d.mts"]) {
+        expect(readText(join(consumerPackage, "node_modules/local-runtime-dep"), file)).toBe(
+          "declare const value: 2; export = value;\n",
+        );
+      }
+      expect(fs.statSync(join(installedDir, "index.d.ts")).ino).toBe(
+        fs.statSync(join(installedDir, "index.d.mts")).ino,
+      );
+    }
     expect(readText(packageDir, "package.json")).toBe(originalManifest);
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
   });
@@ -1380,6 +1395,25 @@ it("installs bundled dependencies whose shared node npm reloads under another ov
       "node_modules/parent/node_modules/core/node_modules/types/package.json",
     );
   });
+});
+
+it("preserves npm JSON and verbose diagnostics when packing a patched dependency fails", () => {
+  const { repoDir, packageDir, sourceManifest } = writePatchedRuntimeFixture();
+  writeJsonFile(join(packageDir, "package.json"), {
+    ...sourceManifest,
+    devEngines: { packageManager: { name: "pnpm", onFail: "error" } },
+  });
+  const result = spawnSync(
+    process.execPath,
+    manifestArgs(packageDir, [process.execPath, "-e", "process.exit(0)"]),
+    { cwd: repoDir, encoding: "utf8", env: process.env },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    "packing patched runtime dependency failed: local-runtime-dep@1.0.0",
+  );
+  expect(result.stderr).toContain('"code": "EBADDEVENGINES"');
+  expect(result.stderr).toContain("verbose stack");
 });
 
 it.each([

@@ -9,7 +9,8 @@
  * Workers drain between samples to model infrequent fresh-session creation.
  * Source-loader startup precedes timing; worker startup is included. Owner logs
  * report inclusive preparation phases; Git and worker timings are also inclusive.
- * CPU/allocation cover the main JS thread, excluding workers and Git children.
+ * Main CPU/allocation exclude workers; process CPU includes workers, not Git children.
+ * OPENCLAW_BENCH_BASELINE_DIR selects a sparse frozen owner overlay in every worker.
  * Acceptance: same checkout commit/files, one fewer cold object census, lower
  * owner CPU/allocation, no material creation regression with matched controls.
  * Small samples describe latency, never establish p99. This is not Gateway load.
@@ -54,6 +55,9 @@ const { values } = parseArgs({
 });
 assert(values.repo && values.output, "--repo and --output are required");
 const output = path.resolve(values.output);
+if (process.env.OPENCLAW_BENCH_BASELINE_DIR) {
+  await import("./worker-retained-heap-preload.js");
+}
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
 await fs.mkdir(output);
@@ -201,8 +205,8 @@ const projectSelection = values["project-routing"]
         source: "cloned",
         name: "Synthetic clone",
       });
-      const project = await withProjectCheckoutLifecycle(repo, { env: process.env }, (lease) =>
-        registerPreparedProjectRegistry(prepared, lease, context),
+      const project = await withProjectCheckoutLifecycle(repo, { context }, (lease) =>
+        registerPreparedProjectRegistry(prepared, [lease], context),
       );
       const owner = await import("../../src/gateway/server-methods/session-create-project.js");
       // The baseline exposes only a root; the candidate also owns placement intent.
@@ -261,6 +265,7 @@ try {
     const sourceOnly = projectSelection ? false : !values["alternate-policy"] || index % 2 === 1;
     const loadBefore = loadavg();
     const cpu = process.threadCpuUsage();
+    const processCpu = process.cpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
     assert(Number.isFinite(allocated), "Runtime must expose exact V8 allocation counters");
     const start = performance.now();
@@ -285,6 +290,7 @@ try {
           });
     const elapsedMs = performance.now() - start;
     const used = process.threadCpuUsage(cpu);
+    const processUsed = process.cpuUsage(processCpu);
     const row = {
       index,
       sourceOnly,
@@ -293,6 +299,7 @@ try {
       elapsedMs,
       promptReadyMs,
       mainThreadCpuMs: (used.user + used.system) / 1000,
+      processCpuMs: (processUsed.user + processUsed.system) / 1000,
       mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
       gitTimings: structuredClone(gitTimings),
       workerTimings: structuredClone(workerTimings),

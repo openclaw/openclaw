@@ -1,9 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  REPETITIVE_OUTPUT_ERROR_MESSAGE,
-  REPEATED_TOOL_ERROR_CODE,
-  REPEATED_TOOL_ERROR_MESSAGE,
-} from "../../../packages/agent-core/src/errors.js";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
@@ -52,36 +49,37 @@ import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
 } from "../sandbox/runtime-status.js";
-import { readRepeatedToolErrorSummary } from "../tool-error-summary.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
+const TOOL_REPEAT_LIMIT_FALLBACK =
+  "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
-  "This model was not found. Choose another model in the Control UI.";
+  "This model was not found. Choose another model in the OpenClaw app.";
 const RUNTIME_FAILURE_COPY: Partial<
   Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
 > = {
   auth_refresh:
-    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   refresh_contention: OAUTH_REFRESH_CONTENTION_USER_TEXT,
   refresh_timeout:
-    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
+    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
   callback_timeout:
     "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
   callback_validation:
     "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
-    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
+    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
   auth_html:
-    "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
   upstream_html:
-    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   proxy:
-    "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
 };
@@ -117,6 +115,8 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
+    rateLimitResetAt:
+      signal.retryAfterMs === undefined ? undefined : Date.now() + signal.retryAfterMs,
   };
 }
 export function formatAssistantErrorText(
@@ -180,7 +180,13 @@ export function formatAssistantErrorText(
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      ? renderRateLimitOrOverloadedCopy({
+          ...classifiedFacts,
+          reason: failoverReason,
+          raw,
+          locale: opts?.cfg?.ui?.prefs?.locale,
+          timeZone: opts?.cfg?.agents?.defaults?.userTimezone,
+        })
       : undefined;
   if (transientCopy) {
     return transientCopy;
@@ -223,7 +229,7 @@ export function formatAssistantErrorText(
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
-      "If this keeps happening, reset the session or delete the corrupted session transcript."
+      "If this keeps happening, reset the session or delete the corrupted chat history."
     );
   }
 
@@ -320,8 +326,14 @@ export function formatUserFacingAssistantErrorText(
   if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
   }
-  if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
-    return readRepeatedToolErrorSummary(msg.errorMessage) ?? REPEATED_TOOL_ERROR_MESSAGE;
+  if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
+    // Show only the agent-core template; never arbitrary text carried under this code.
+    return msg.errorMessage &&
+      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+        msg.errorMessage,
+      )
+      ? msg.errorMessage
+      : TOOL_REPEAT_LIMIT_FALLBACK;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {

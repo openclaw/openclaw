@@ -114,7 +114,7 @@ describe.skipIf(process.platform === "win32")(
 
     it("does not auto-allow safe builtin tokens in direct argv evaluation", async () => {
       using _ = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp" });
+      const analysis = await analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp" });
       const result = await evaluateExecAllowlist({
         analysis,
         allowlist: [],

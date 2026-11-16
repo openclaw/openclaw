@@ -2,10 +2,13 @@
 // The People sections of the Access page. Each takes plain data and callbacks, so the
 // page owns all Gateway access and the sections can be restyled independently.
 import type { MemberRole } from "@openclaw/openclaw-id-protocol";
-import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
-import type { CreatedInvite } from "./invites.js";
-import type { PeopleError, PeopleOperationError } from "./people-error.js";
+import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { createSignal, For, latest, Show } from "solid-js";
+import { roleText } from "./i18n.js";
+import { RoleClassificationChangedError } from "./invites.js";
+import { MemberDevices } from "./member-devices.js";
+import { Avatar } from "./people-avatar.js";
+import type { PeopleOperationError } from "./people-error.js";
 import {
   countDevices,
   formatDay,
@@ -13,249 +16,15 @@ import {
   memberName,
   memberPresence,
   memberRunning,
-  personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
-import type { Invite, Member } from "./types.js";
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/** A single sanitized diagnostic disclosure, placed at the failed operation. */
-export function OperationError(props: { error?: PeopleError | null; page?: boolean }) {
-  return (
-    <Show when={props.error} keyed>
-      {(failure) => (
-        <div class={["ocid-access__error", { "callout danger": props.page }]} role="alert">
-          <p>{failure.message}</p>
-          <Show when={failure.diagnostic}>
-            {(diagnostic) => (
-              <details class="ocid-access__details">
-                <summary>Technical details</summary>
-                <code>{diagnostic()}</code>
-              </details>
-            )}
-          </Show>
-        </div>
-      )}
-    </Show>
-  );
-}
-
-function Avatar(props: { name?: string }) {
-  return (
-    <span
-      class={["ocid-access__avatar", { "ocid-access__avatar--unknown": !props.name }]}
-      aria-hidden="true"
-    >
-      <Show
-        when={props.name}
-        fallback={
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-          >
-            <circle cx="12" cy="7" r="4" />
-            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-          </svg>
-        }
-      >
-        {personInitials(props.name ?? "")}
-      </Show>
-    </span>
-  );
-}
+import { OperationError } from "./people-operation-error.js";
+import { administratorWarning, definedRoles } from "./people-roles.js";
+import { RolePicker } from "./role-picker.js";
+import type { Invite, Member, MemberDevice, OwnerDevice, Role } from "./types.js";
 
 export type RemovedMemberNotice = { index: number; message: string };
 
-type RolePickerProps = Parameters<ControlUiHost["components"]["mountSelectPicker"]>[1];
-const ROLE_OPTIONS: RolePickerProps["options"] = [
-  {
-    value: "operator",
-    label: "Operator",
-    description: "Chat, run tools, and use connected services",
-  },
-  { value: "viewer", label: "Viewer", description: "Read conversations only" },
-];
-
-// The host picker owns listbox navigation, dismissal, and focus restoration.
-function RolePicker(props: {
-  components: ControlUiHost["components"];
-  role: MemberRole;
-  disabled: boolean;
-  onSelect: (role: MemberRole) => void;
-}) {
-  let container!: HTMLDivElement;
-  let handle: ControlUiComponentHandle<RolePickerProps> | undefined;
-  createEffect(
-    () => ({
-      options: ROLE_OPTIONS,
-      value: props.role,
-      accessibleLabel: "Role",
-      searchable: false,
-      disabled: props.disabled,
-      onSelect: (value: string) => props.onSelect(value === "viewer" ? "viewer" : "operator"),
-    }),
-    (value) => {
-      if (handle) {
-        handle.update(value);
-      } else {
-        handle = props.components.mountSelectPicker(container, value);
-      }
-    },
-  );
-  onSettled(() => () => handle?.dispose());
-  return <div class="ocid-access__role-picker" ref={(element) => (container = element)} />;
-}
-
-/** Invite one person with a role ceiling (operator at most); shows the link once. */
-export function InviteForm(props: {
-  motion: PeopleMotion;
-  components: ControlUiHost["components"];
-  disabled: boolean;
-  busy?: boolean;
-  locale: string;
-  error?: PeopleError | null;
-  onCreate: (email: string, role: MemberRole) => Promise<CreatedInvite | undefined>;
-}) {
-  const [email, setEmail] = createSignal("");
-  const [role, setRole] = createSignal<MemberRole>("operator");
-  const [created, setCreated] = createSignal<(CreatedInvite & { role: MemberRole }) | null>(null);
-  const [copied, setCopied] = createSignal(false);
-  let emailInput!: HTMLInputElement;
-  let inviteAgain!: HTMLButtonElement;
-  const submit = async () => {
-    const invitedRole = role();
-    const made = await props.onCreate(email().trim().toLowerCase(), invitedRole);
-    if (made) {
-      props.motion.update(() => {
-        setCreated({ ...made, role: invitedRole });
-        setCopied(false);
-        setEmail("");
-      });
-      onSettled(() => inviteAgain.focus());
-    }
-  };
-  // Clipboard access can be refused (permissions, insecure context); the link stays selectable.
-  const copy = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  };
-  return (
-    <section class="ocid-access__section" aria-labelledby="ocid-access-invite">
-      <h3 id="ocid-access-invite">Invite someone</h3>
-      <p class="ocid-access__hint">
-        Choose their access, then send them the link. You approve their request here. The link
-        expires in 7 days.
-      </p>
-      <div class="ocid-access__invite-card" ref={props.motion.group({ watchContent: true })}>
-        <Show
-          when={created()}
-          keyed
-          fallback={
-            <form
-              class="ocid-access__form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!props.disabled && EMAIL.test(email().trim())) {
-                  void submit();
-                }
-              }}
-            >
-              <input
-                ref={(element) => (emailInput = element)}
-                class="settings-input"
-                type="email"
-                aria-label="Email address to invite"
-                placeholder="name@example.com"
-                autocomplete="off"
-                spellcheck="false"
-                value={email()}
-                disabled={props.disabled}
-                onInput={(event) => setEmail(event.currentTarget.value)}
-              />
-              <RolePicker
-                components={props.components}
-                role={role()}
-                disabled={props.disabled}
-                onSelect={setRole}
-              />
-              <button
-                type="submit"
-                class="btn primary"
-                disabled={props.disabled || !EMAIL.test(email().trim())}
-                aria-busy={props.busy ? "true" : undefined}
-              >
-                <span class="btn__label">Create invite link</span>
-                <Show when={props.busy}>
-                  <span class="btn__spinner" aria-hidden="true" />
-                </Show>
-              </button>
-            </form>
-          }
-        >
-          {(made) => (
-            <div class="ocid-access__created">
-              <Avatar name={made.email} />
-              <div class="ocid-access__person" role="status">
-                <div class="ocid-access__title">{made.email}</div>
-                <p class="ocid-access__hint">
-                  {roleName(made.role)} invite · expires {formatDay(made.expiresAt, props.locale)}
-                </p>
-              </div>
-              <button
-                ref={(element) => (inviteAgain = element)}
-                type="button"
-                class="ocid-access__invite-again"
-                onClick={() => {
-                  props.motion.update(() => {
-                    setCreated(null);
-                    setRole("operator");
-                  });
-                  onSettled(() => emailInput.focus());
-                }}
-              >
-                Invite someone
-              </button>
-              <div class="ocid-access__link">
-                <div class="ocid-access__link-copy">
-                  <code class="ocid-access__url" title={made.url}>
-                    {made.url}
-                  </code>
-                  <button
-                    type="button"
-                    class="btn primary btn--sm"
-                    aria-label={latest(copied) ? "Copied" : "Copy link"}
-                    onClick={() => void copy(made.url)}
-                  >
-                    <span role="status">{latest(copied) ? "Copied" : "Copy link"}</span>
-                  </button>
-                </div>
-                <p class="ocid-access__hint">
-                  Send this link privately. Anyone with it can request access, but only you can
-                  approve them.
-                </p>
-              </div>
-            </div>
-          )}
-        </Show>
-        <OperationError error={props.error} />
-      </div>
-      <p class="ocid-access__hint" id="ocid-access-role-hint">
-        Invites cannot grant owner access. Connected services keep their own permissions.
-      </p>
-    </section>
-  );
-}
-
-/** Pending requests: who is asking, from which device, with which invite. */
 export function PendingRequests(props: {
   motion: PeopleMotion;
   invites: Invite[];
@@ -333,6 +102,13 @@ export function PendingRequests(props: {
                       {pending().reported.locationHint ?? "location unknown"} · decide by{" "}
                       {formatDay(pending().decideBy, props.locale)}
                     </div>
+                    <Show when={invite().existingProfile}>
+                      {(profile) => (
+                        <p class="ocid-access__hint">
+                          Will join as {profile().displayName || profile().id}
+                        </p>
+                      )}
+                    </Show>
                   </div>
                   <Show when={!props.readOnly}>
                     <div class="ocid-access__actions">
@@ -407,6 +183,12 @@ export function PendingRequests(props: {
 function MemberRow(props: {
   motion: PeopleMotion;
   member: Member;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
+  components: ControlUiHost["components"];
+  roles: Role[];
+  locale: string;
+  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   disabled: boolean;
   nowMs: number;
   sessionTitle: (sessionKey: string) => string | undefined;
@@ -415,6 +197,30 @@ function MemberRow(props: {
   readOnly?: boolean;
 }) {
   const [confirming, setConfirming] = createSignal(false);
+  const [editing, setEditing] = createSignal(false);
+  const [selected, setSelected] = createSignal<MemberRole>();
+  const [saved, setSaved] = createSignal(false);
+  const roles = () => definedRoles(props.roles);
+  const selectedRole = () =>
+    roles().find((role) => role.name === selected()) ??
+    roles().find((role) => role.name === props.member.role) ??
+    roles()[0];
+  const save = async () => {
+    const role = selectedRole();
+    if (!role || role.name === props.member.role || props.disabled) {
+      return;
+    }
+    try {
+      if (await props.onChangeRole(props.member, role.name, role.admin)) {
+        setEditing(false);
+        setSaved(true);
+      }
+    } catch (error) {
+      if (!(error instanceof RoleClassificationChangedError)) {
+        throw error;
+      }
+    }
+  };
   const devices = () => props.member.devices ?? [];
   const running = () => memberRunning(devices(), props.sessionTitle);
   const details = () =>
@@ -444,7 +250,19 @@ function MemberRow(props: {
         </div>
       </div>
       <div class="ocid-access__actions ocid-access__member-actions">
-        <Show when={!props.readOnly && !latest(confirming)}>
+        <Show when={!props.readOnly && !latest(confirming) && !editing()}>
+          <button
+            type="button"
+            class="btn btn--sm"
+            disabled={props.disabled || roles().length === 0}
+            onClick={() => {
+              setSelected(undefined);
+              setEditing(true);
+              setSaved(false);
+            }}
+          >
+            {roleText(props.locale, "changeRole")}
+          </button>
           <button
             type="button"
             class="btn btn--sm ocid-access__remove"
@@ -454,8 +272,55 @@ function MemberRow(props: {
             Remove
           </button>
         </Show>
-        <span class="chip">{props.member.role}</span>
+        <span class="chip">{roleName(props.member.role)}</span>
       </div>
+      <Show when={props.member.roleDefined === false}>
+        <p class="ocid-access__role-notice" role="status">
+          <strong>{roleText(props.locale, "blocked")}: </strong>
+          {roleText(props.locale, "undefinedRole", { role: props.member.role })}
+        </p>
+      </Show>
+      <Show when={editing() && !props.readOnly}>
+        <div class="ocid-access__confirmation">
+          <RolePicker
+            components={props.components}
+            roles={props.roles}
+            locale={props.locale}
+            role={selectedRole()?.name ?? ""}
+            disabled={props.disabled || roles().length === 0}
+            onSelect={setSelected}
+          />
+          <Show when={selectedRole()?.admin}>
+            <p role="note">{administratorWarning(selectedRole()?.name, props.locale)}</p>
+          </Show>
+          <div class="ocid-access__actions">
+            <button
+              type="button"
+              class="btn btn--sm"
+              disabled={props.disabled}
+              onClick={() => setEditing(false)}
+            >
+              {roleText(props.locale, "cancel")}
+            </button>
+            <button
+              type="button"
+              class="btn primary btn--sm"
+              disabled={
+                props.disabled || !selectedRole() || selectedRole()?.name === props.member.role
+              }
+              aria-busy={props.disabled ? "true" : undefined}
+              onClick={() => void save()}
+            >
+              {roleText(props.locale, selectedRole()?.admin ? "saveAdminRole" : "saveRole")}
+            </button>
+          </div>
+        </div>
+      </Show>
+      <Show when={saved()}>
+        <p class="ocid-access__role-notice" role="status">
+          {roleText(props.locale, "roleChanged")}
+        </p>
+      </Show>
       <Show when={latest(confirming) && !props.readOnly}>
         <div class="ocid-access__confirmation">
           <div role="note">
@@ -484,6 +349,15 @@ function MemberRow(props: {
           </div>
         </div>
       </Show>
+      <MemberDevices
+        member={props.member}
+        ownerDevices={props.ownerDevices}
+        motion={props.motion}
+        disabled={props.disabled}
+        readOnly={props.readOnly}
+        nowMs={props.nowMs}
+        onRemove={props.onRemoveDevice}
+      />
       <div class="ocid-access__row-error">
         <OperationError
           error={props.error?.target === `member:${props.member.accountId}` ? props.error : null}
@@ -497,8 +371,12 @@ function MemberRow(props: {
 export function Members(props: {
   motion: PeopleMotion;
   members: Member[];
+  components: ControlUiHost["components"];
+  roles: Role[];
+  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   invites: Invite[];
-  ownerDevices: number;
+  ownerDevices: OwnerDevice[];
+  onRemoveDevice: (member: Member, device: MemberDevice) => void;
   notice?: RemovedMemberNotice | null;
   disabled: boolean;
   locale: string;
@@ -513,7 +391,8 @@ export function Members(props: {
     <section class="ocid-access__section" aria-labelledby="ocid-access-members">
       <h3 id="ocid-access-members">Members</h3>
       <p class="ocid-access__hint">
-        Who can open this claw. Only you can change this, from one of your own devices.
+        Who can open this claw. Members can approve their own additional devices. Only you can
+        invite or remove people.
       </p>
       <OperationError
         error={
@@ -523,14 +402,26 @@ export function Members(props: {
             : null
         }
       />
+      <For
+        each={props.invites.filter(
+          (invite) => invite.status === "approved" && invite.existingProfile?.fallbackReason,
+        )}
+        keyed={(invite) => invite.inviteId}
+      >
+        {(invite) => (
+          <p class="ocid-access__notice" role="status">
+            {invite().label}: {invite().existingProfile?.fallbackReason}
+          </p>
+        )}
+      </For>
       <ul class="ocid-access__list" ref={props.motion.group()}>
         <li class="ocid-access__row ocid-access__row--owner">
           <Avatar name="You" />
           <div class="ocid-access__person">
             <div class="ocid-access__title">You</div>
-            <div class="ocid-access__hint">{countDevices(props.ownerDevices)}</div>
+            <div class="ocid-access__hint">{countDevices(props.ownerDevices.length)}</div>
           </div>
-          <span class="chip">owner</span>
+          <span class="chip">Owner</span>
         </li>
         <For each={open()} keyed={(invite) => invite.inviteId}>
           {(invite) => (
@@ -542,7 +433,7 @@ export function Members(props: {
                   Not accepted yet · expires {formatDay(invite().expiresAt, props.locale)}
                 </div>
               </div>
-              <span class="chip">{invite().role}</span>
+              <span class="chip">{roleName(invite().role)}</span>
             </li>
           )}
         </For>
@@ -557,6 +448,12 @@ export function Members(props: {
               <MemberRow
                 motion={props.motion}
                 member={member()}
+                ownerDevices={props.ownerDevices}
+                onRemoveDevice={props.onRemoveDevice}
+                components={props.components}
+                roles={props.roles}
+                locale={props.locale}
+                onChangeRole={props.onChangeRole}
                 error={props.error}
                 readOnly={props.readOnly}
                 disabled={props.disabled}

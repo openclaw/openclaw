@@ -1108,6 +1108,15 @@ retirement after it records success. A failed update that never reached repair o
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
 
+External supervisors using `update migrate` and `update finish` attempt the same
+cleanup when they finish an accepted update, after retiring their rollback journal.
+The recorded migration start time keeps that update's own migration originals
+protected until a later accepted update supersedes them. This includes verified
+originals produced by standalone Doctor or startup migration. `update finish`
+returns the cleanup summary in `diagnostics` and any cleanup warning without
+changing the accepted update's outcome. Receipts without a migration start time
+cannot establish this ordering and do not trigger automatic cleanup.
+
 Once the update's Gateway health verification is recorded (service running, version
 match, readiness, settled channels, and no plugin errors), that update retires its
 own original-state capture and the Doctor migration originals it produced. Without that
@@ -1265,6 +1274,11 @@ Releases it swaps without `update migrate` are not recorded. Changed backups rem
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.
+`openclaw backup create` includes them by default; `--exclude-migration-backups`
+omits them from that archive without removing them. The same flag also omits
+Doctor's PostgreSQL backup directories (`.pre-startup-migration-<id>.postgres.bak`)
+and restart-recovery originals (`.pre-startup-migration-restart-recovery-<id>.bak`);
+see [`openclaw backup`](/cli/backup).
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.

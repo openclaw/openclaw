@@ -469,6 +469,7 @@ export function createWorkerProviderOwnerLifecycle(
   const destroy = async (
     environmentId: string,
     destroyOptions: {
+      authorize?: () => void;
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
       forceAbandon?: () => Promise<void>;
@@ -484,20 +485,36 @@ export function createWorkerProviderOwnerLifecycle(
       const abandonment = destroyOptions.abandonment;
       abandonment?.authorize?.();
       let record = store.get(environmentId);
+      // Accepted cleanup keeps its custody. Forced discard is a separate decision
+      // that needs current authority until its own intent is recorded.
+      const assertRequestCurrent = (current: WorkerEnvironmentRecord | undefined) => {
+        if (
+          !current ||
+          current.destroyRequestedAtMs === null ||
+          (destroyOptions.forceAbandon && !hasForcedWorkerEnvironmentAbandonment(current))
+        ) {
+          destroyOptions.authorize?.();
+        }
+      };
+      assertRequestCurrent(record);
       if (!record) {
-        await destroyOptions.forceAbandon?.();
+        // Only internal maintenance can clean dangling placements without an environment
+        // in which to accept a requester's forced-discard decision.
+        if (!destroyOptions.authorize) {
+          await destroyOptions.forceAbandon?.();
+        }
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
       }
-      if (
+      const terminal =
         ["destroyed", "failed", "orphaned"].includes(record.state) &&
         (!abandonment ||
           record.state === "destroyed" ||
-          (record.state === "failed" && !record.leaseId))
-      ) {
-        await destroyOptions.forceAbandon?.();
+          (record.state === "failed" && !record.leaseId));
+      if (terminal && !destroyOptions.forceAbandon) {
         return record;
       }
       if (
+        !terminal &&
         abandonment &&
         (record.providerId !== DEVICE_WORKER_PROVIDER_ID ||
           record.ownerEpoch !== abandonment.ownerEpoch ||
@@ -511,7 +528,7 @@ export function createWorkerProviderOwnerLifecycle(
           "Abandoned device worker owner changed before retirement",
         );
       }
-      if (destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
+      if (!terminal && destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
         throw serviceError(
           "invalid_state",
           "Attached cloud workers must be stopped through sessions.reclaim",
@@ -519,7 +536,11 @@ export function createWorkerProviderOwnerLifecycle(
       }
       // Environment reconciliation owns retries of accepted cleanup. A background
       // placement projection must not replay its failed provider call or claim success.
-      if (destroyOptions.retryRequested === false && record.destroyRequestedAtMs !== null) {
+      if (
+        !terminal &&
+        destroyOptions.retryRequested === false &&
+        record.destroyRequestedAtMs !== null
+      ) {
         throw serviceError(
           "invalid_state",
           `Worker environment cleanup is still pending: ${record.lastError ?? record.state}`,
@@ -529,7 +550,12 @@ export function createWorkerProviderOwnerLifecycle(
       const assertDestroyOwner = () => {
         abandonment?.authorize?.();
         const current = requireCurrentOwner(destroyOwner);
-        if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
+        assertRequestCurrent(current);
+        if (
+          !terminal &&
+          destroyOptions.requireUnattached &&
+          current.attachedSessionIds.length > 0
+        ) {
           throw serviceError(
             "invalid_state",
             "Attached cloud workers must be stopped through sessions.reclaim",
@@ -555,6 +581,9 @@ export function createWorkerProviderOwnerLifecycle(
       }
       // Persist the operator's discard decision before placement draining can survive a crash.
       await destroyOptions.forceAbandon?.();
+      if (terminal) {
+        return record;
+      }
       try {
         const destroyed = await finishDestroy(
           record,

@@ -335,6 +335,29 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
   });
 
+  it.each(["identity change", "shutdown"])(
+    "does not request a device code after %s during CLI preflight",
+    async (change) => {
+      const preflight = deferred();
+      mocks.assertCli.mockReturnValueOnce(preflight.promise);
+      const lifecycle = createLifecycle();
+      const starting = startAuthorization(lifecycle, "system");
+      const refused = expect(starting).rejects.toThrow();
+      try {
+        if (change === "shutdown") {
+          await lifecycle.stop();
+        } else {
+          setSelectedIdentity("system", "main", identity(OTHER_PROFILE));
+        }
+      } finally {
+        preflight.resolve();
+      }
+      await refused;
+      expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+      expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    },
+  );
+
   registerGitHubOAuthRetirementTests({
     createLifecycle: () => {
       currentConfig = configForScope("agent");

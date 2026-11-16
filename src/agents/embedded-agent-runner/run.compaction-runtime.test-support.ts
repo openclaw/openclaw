@@ -287,7 +287,6 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       vi.spyOn(sessionPromptState, "continueFromCurrentTranscript"),
       vi.spyOn(sessionPromptState, "markOwnedTranscriptRetry"),
     ];
-    const armPostCompactionGuard = vi.fn();
     const updates = vi.fn();
     unsubscribe = onInternalSessionTranscriptUpdate((event) => {
       if (event.sessionKey === target.sessionKey) {
@@ -337,7 +336,6 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
           target: sessionPromptState.sessionTarget,
         }),
         prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
-        armPostCompactionGuard,
       };
       if (kind === "timeout") {
         return recoverEmbeddedRunTimeout({
@@ -358,6 +356,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         attemptCompactionCount: 0,
         prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
         markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+        retryTransientCompactionFailure: async () => false,
       });
     };
     const snapshot = async () => {
@@ -419,7 +418,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       }
     };
     const expectNoContinuation = () => {
-      for (const retry of [...retries, armPostCompactionGuard]) {
+      for (const retry of retries) {
         expect(retry).not.toHaveBeenCalled();
       }
       expect(

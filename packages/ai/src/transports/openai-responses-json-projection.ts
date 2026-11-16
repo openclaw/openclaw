@@ -1,4 +1,5 @@
 import { isProxy } from "node:util/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
 
 // Pure JSON projections depend only on the immutable source, not the request's route or session.
@@ -86,4 +87,41 @@ export function projectJsonObject(value: object): unknown {
   const projected = projectJsonValue(value, "", new Map());
   // A root toJSON returning undefined was not valid JSON either.
   return projected === undefined ? JSON.parse("undefined") : projected;
+}
+
+// Projection already owns JSON semantics and rejects cycles. Comparing its data
+// needs no generic comparator's key arrays, descriptors or cycle bookkeeping.
+export function projectedJsonEqual(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (Array.isArray(left)) {
+    if (!Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index++) {
+      if (!projectedJsonEqual(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isRecord(left) || !isRecord(right)) {
+    return false;
+  }
+  let keys = 0;
+  for (const key in left) {
+    if (Object.hasOwn(left, key)) {
+      if (!Object.hasOwn(right, key) || !projectedJsonEqual(left[key], right[key])) {
+        return false;
+      }
+      keys++;
+    }
+  }
+  for (const key in right) {
+    if (Object.hasOwn(right, key)) {
+      keys--;
+    }
+  }
+  return keys === 0;
 }

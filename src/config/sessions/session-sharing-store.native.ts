@@ -19,12 +19,10 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
+import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
-import type {
-  SessionMemberAdd,
-  SessionSharingExpectedEntry,
-} from "./session-sharing-store.types.js";
-export type { SessionSharingExpectedEntry } from "./session-sharing-store.types.js";
+import type { SessionMemberAdd } from "./session-sharing-store.types.js";
+export type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 
 // Membership is bound to a live session entry, never a transcript placeholder.
 // Authorization is rechecked before these transactions, but a reset/recreate

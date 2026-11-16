@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enTemplates = {
   templatesCatalog: {
     explore: "Templates",
-    exploreDescription: "Purpose-built agents for your team.",
+    exploreDescription: "Find an agent for your next task.",
     title: "Templates",
     featured: "Featured",
     results: "Results",
@@ -66,7 +66,7 @@ const enTemplates = {
     },
     skillsSection: "Skills",
     automations: "Automations",
-    automationPaused: "Paused",
+    automationDisabled: "Disabled",
     automationEnabled: "Enabled",
     integrations: "Plugins",
     backToTemplate: "Back to template",
@@ -75,9 +75,6 @@ const enTemplates = {
     content: "Content",
     instructionAdded: "Added to the workspace",
     trustReview: "ClawHub flagged this package for review. Read the warning before adding.",
-    reviewTitle: "Review before adding",
-    reviewDescription: "This template needs permission to add the following plugins or skills.",
-    version: "Version {version}",
     dependencyClawHub: "ClawHub · Version {version}",
     dependencyBundled: "Bundled with template",
     contentsLoading: "Loading template contents…",

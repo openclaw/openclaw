@@ -6,6 +6,7 @@ import OpenClawIroh
 /// In-process W owner. The caller must await shutdown when retiring its enrolled route.
 /// Discovery, pins and membership remain the enrollment/tunnel owners' responsibility.
 public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendable {
+    public static let isPackaged = true
     private let native: OpenClawIroh.Endpoint
     private let relayState = OpenClawIDNodeNativeRelayState()
     private let relayWatcher: Task<Void, Never>
@@ -217,30 +218,27 @@ private struct OpenClawIDNodeNativeStream: OpenClawIDNodeStream {
     }
 }
 #else
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// The default app build does not package the experimental native transport.
 public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendable {
+    public static let isPackaged = false
     private init() {}
 
     public static func bind(identity: OpenClawIDNodeIdentity, relayURL: URL) async throws -> Self {
         throw OpenClawIDNodeNativePackagingError.notPackaged
     }
 
-    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func connect(serverKey: String, relayURL: URL, alpn: Data) async throws -> any OpenClawIDNodeConnection {
         throw OpenClawIDNodeNativePackagingError.notPackaged
     }
 
-    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
         []
     }
 
-    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func shutdown() async {}
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
+// periphery:ignore - Used only by the opt-in native iroh build (OPENCLAW_IROH_NATIVE), which the Periphery scans do not compile.
 public enum OpenClawIDNodeNativePackagingError: Error, LocalizedError {
     case notPackaged
 

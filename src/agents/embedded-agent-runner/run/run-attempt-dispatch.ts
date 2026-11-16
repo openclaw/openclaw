@@ -397,6 +397,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     operation: "attempt",
     sessionId,
     sessionKey: resolvedSessionKey,
+    toolUsageRankingSeed:
+      runInput.sessionAdmission?.entry.sessionId === sessionId
+        ? runInput.sessionAdmission.entry.toolUsageRankingSeed
+        : undefined,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
@@ -410,6 +414,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
+    sessionUserProfileId: params.sessionUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,
@@ -473,6 +478,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     // the accepted candidate boundary to that owner.
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     skipPreparedUserTurnMessage,
+    replayCurrentTranscript: sessionPromptState.activePrompt.replayCurrentTranscript,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
     explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
@@ -674,8 +680,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       placement?.assertCurrent();
       return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
     });
-  } catch (err) {
-    throw input.getPostCompactionAbortError() ?? err;
   } finally {
     attemptControls.close();
     try {
@@ -694,10 +698,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     }
   }
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }

@@ -348,6 +348,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       itemEnded,
       transcript,
       invocation.live?.["__openclawToolStreamDiffStat"],
+      invocation.live?.["__openclawToolStreamLiveOutput"],
       invocation.live?.["__openclawToolStreamReceivedAt"],
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
@@ -428,6 +429,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
               __openclawToolStreamLive: true,
               __openclawToolStreamResultReceived: resultReceived,
               __openclawToolStreamItemEnded: itemEnded,
+              __openclawToolStreamLiveOutput: completed
+                ? undefined
+                : invocation.live["__openclawToolStreamLiveOutput"],
               __openclawToolStreamDiffStat: completed
                 ? undefined
                 : invocation.live["__openclawToolStreamDiffStat"],
@@ -604,4 +608,44 @@ export function coalesceToolActivityMessages(
   }
   appendTurn(turn);
   return result;
+}
+
+/**
+ * A run that ends or hands off swaps its live tool rows for their stored
+ * copies, which arrive under other message keys. Disclosure ids stay scoped to
+ * their message, so what the reader had opened is carried across by tool call,
+ * and only where one disclosure names that call on each side.
+ */
+export function carryMovedDisclosures(
+  state: { expanded: Map<string, boolean>; explicit: ReadonlySet<string> },
+  previous: ReadonlyMap<string, string> | undefined,
+  current: ReadonlyMap<string, string>,
+  // The expansion owner records versions and explicit choices through its writer.
+  writeExpansion: (
+    values: Map<string, boolean>,
+    key: string,
+    open: boolean,
+    explicit: boolean,
+  ) => void,
+): void {
+  if (!previous) {
+    return;
+  }
+  const { expanded, explicit } = state;
+  const single = (calls: ReadonlyMap<string, string>) => {
+    const ids = new Map<string, string | null>();
+    for (const [id, call] of calls) {
+      ids.set(call, ids.has(call) ? null : id);
+    }
+    return ids;
+  };
+  const targets = single(current);
+  for (const [call, source] of single(previous)) {
+    const target = targets.get(call);
+    const open = source ? expanded.get(source) : undefined;
+    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
+      continue;
+    }
+    writeExpansion(expanded, target, open, explicit.has(source));
+  }
 }

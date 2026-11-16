@@ -83,9 +83,8 @@ describe("cli json stdout contract", () => {
 
       expect(result.status, result.stderr).toBe(1);
       expectCliError(result.stdout, message);
-      const workshop = testCase.args.includes("workshop");
-      expect(result.stderr.includes(message)).toBe(workshop);
-      expect(result.stderr.includes("[openclaw] The CLI command failed.")).toBe(!workshop);
+      expect(result.stderr).toContain(message);
+      expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
       expect(result.stderr.length).toBeLessThan(2_048);
     });
   });

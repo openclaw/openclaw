@@ -157,7 +157,7 @@ describe("installSessionToolResultGuard", () => {
         timedOut: false,
       },
       warningText: "w".repeat(80_000),
-      aggregateOutputDropped: true,
+      session: { totalOutputChars: 160_000, output: { length: 80_000 } },
     });
     expect(output.details).toMatchObject({ aggregated: "x".repeat(80_000) });
     const content = output.content[0];
@@ -170,6 +170,35 @@ describe("installSessionToolResultGuard", () => {
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
+  });
+
+  it("marks an exec output file cut at its limit as partial", () => {
+    const outputFile = {
+      path: "/tmp/openclaw-exec-1.log",
+      bytes: 64,
+      limitReached: true,
+      write() {},
+      close: async () => true,
+      remove: async () => {},
+    };
+    const output = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "x",
+        timedOut: false,
+      },
+      session: { totalOutputChars: 128, output: { length: 1 }, outputFile },
+    });
+    expect(output.details).toMatchObject({
+      fullOutputPath: outputFile.path,
+      spillTruncated: true,
+    });
+    expect(output.content[0]).toMatchObject({
+      text: expect.stringContaining("file limit was discarded"),
+    });
   });
 
   it("preserves ordering with multiple tool calls and partial results", () => {
@@ -226,7 +255,7 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("clears disabled-synthesis pending state across replacement and dropped calls", () => {
-    const { sm, guard } = setup({ allowSyntheticToolResults: false, allowedToolNames: ["read"] });
+    const { sm, guard } = setup({ allowSyntheticToolResults: false });
     sm.appendMessage(call());
     sm.appendMessage(call("call_2"));
     expect(guard.getPendingIds()).toEqual(["call_2"]);
@@ -234,7 +263,6 @@ describe("installSessionToolResultGuard", () => {
       asAppendMessage({
         role: "assistant",
         content: [
-          { type: "toolCall", id: "unknown", name: "write", arguments: {} },
           { type: "toolCall", id: "missing-input", name: "read" },
           { type: "toolCall", id: "bad-name", name: "invalid name", arguments: {} },
         ],

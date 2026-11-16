@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -655,8 +656,9 @@ it.each([
   ["empty timeout", undefined, undefined],
   [
     "UTF-16 tail boundary",
-    `${"a".repeat(101)}🎉${"b".repeat(179)}${"c".repeat(220)}`,
-    "b".repeat(179),
+    // The retained tail (this fixture's 1,000-char cap) starts inside the emoji's surrogate pair.
+    `${"a".repeat(101)}🎉${"b".repeat(999)}`,
+    "b".repeat(999),
   ],
 ] as const)("preserves timeout notification policy for %s", async (_name, stdout, head) => {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
@@ -700,8 +702,10 @@ it.each([
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);
     expect(message).not.toContain("�");
-    expect(message).toContain("…");
+    // The 1,000-char retention cap dropped the start; the output file still has it.
     expect(message).toContain(head);
+    const [, file] = /\nFull output: (\S+) \(1104 bytes\)\n/.exec(message) ?? [];
+    expect(await fs.readFile(file!, "utf8")).toBe(stdout);
   }
 });
 

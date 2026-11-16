@@ -191,6 +191,17 @@ async function runImageGeneration(
             `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
           );
         }
+        if (params.size && sanitized.size && /^\d+x\d+$/.test(sanitized.size)) {
+          const { getImageMetadata } = await import("../media/media-services.js");
+          for (const image of result.images) {
+            // Keep a completed image even when its dimensions cannot be inspected.
+            const dimensions = await getImageMetadata(image.buffer).catch(() => null);
+            if (dimensions && `${dimensions.width}x${dimensions.height}` !== sanitized.size) {
+              ignoredOverrides.push({ key: "size", value: params.size });
+              break;
+            }
+          }
+        }
         return {
           images: result.images,
           provider: candidate.provider,

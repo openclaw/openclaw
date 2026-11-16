@@ -94,6 +94,7 @@ describe("Telegram formatting", () => {
     ],
     ["Use the <b> tag to make text **bold**.", "Use the &lt;b&gt; tag to make text <b>bold</b>."],
     ["<i>one <i>two</i>", "&lt;i&gt;one <i>two</i>"],
+    ["<y <b>z</b>", "&lt;y <b>z</b>"],
     ['<a href="https://example.com">docs', '&lt;a href="https://example.com"&gt;docs'],
     ['<pre><code class="language-js">x', '&lt;pre&gt;&lt;code class="language-js"&gt;x'],
     ["[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)", "<code>Nova_Core.md</code>"],
@@ -305,7 +306,6 @@ describe("Telegram formatting", () => {
 describe("file references", () => {
   it("keeps native HTML text, tags and file refs intact", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
-    expect(htmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
     expect(htmlText("<code>i<n</code>")).toBe("<code>i&lt;n</code>");
     expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });

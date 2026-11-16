@@ -9,6 +9,7 @@ import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -16,7 +17,7 @@ import type { SidebarContent } from "../chat/components/chat-sidebar-content-typ
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import * as catalog from "./catalog-target.ts";
-import type { NewSessionComposerOptions } from "./composer.tsx";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -143,6 +144,8 @@ export class NewSessionPageOwner {
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
   readonly dictation: DirectDictationControl;
+  // Shown in the composer, apart from page-level start errors; the next dictation clears it.
+  dictationError: string | null = null;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -214,11 +217,21 @@ export class NewSessionPageOwner {
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
-      onError: (message) => this.submission.setError(message),
+      onError: (message) => {
+        this.dictationError = message;
+        this.changed();
+      },
       onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
-    this.dictation.subscribe(this.changed);
+    // A new start clears the previous error. A failed start reports its error and
+    // stops in the same turn, so no change is published after it while connecting.
+    this.dictation.subscribe(() => {
+      if (this.dictation.dictation?.connecting) {
+        this.dictationError = null;
+      }
+      this.changed();
+    });
   }
 
   focusComposer(): void {
@@ -235,7 +248,7 @@ export class NewSessionPageOwner {
         (document.activeElement === previousFocus || document.activeElement === document.body) &&
         !document.openClawModalLayers?.size
       ) {
-        this.submission.composerTextarea.getTextarea()?.focus({ preventScroll: true });
+        focusComposerInput(this.submission.composerTextarea.getTextarea(), { preventScroll: true });
       }
     });
   }
@@ -427,6 +440,7 @@ export class NewSessionPageOwner {
         return dictation.active;
       },
       dictationPreview: dictation.previewDraft(),
+      dictationError: this.dictationError,
 
       context,
       isCatalogTarget,

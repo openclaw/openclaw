@@ -35,12 +35,9 @@ vi.mock("../../../talk/client-voice-session-lifecycle.js", async (importOriginal
     withClientVoiceSessionSettlement: vi.fn(actual.withClientVoiceSessionSettlement),
   };
 });
-// mock-isolation: The mocked voice store has no physical database to borrow.
-vi.mock("../../../talk/client-voice-session-write.js", () => ({
-  captureClientVoiceSessionWriter: voiceSessionMocks.captureClientVoiceSessionWriter,
-}));
 // mock-isolation: The queue-only fixture has no physical voice database to capture.
 vi.mock("../../../talk/client-voice-session-source.js", () => ({
+  captureClientVoiceSessionWriter: voiceSessionMocks.captureClientVoiceSessionWriter,
   captureClientVoiceSessionSource: voiceSessionMocks.captureClientVoiceSessionSource,
 }));
 // mock-isolation: Exercise retry decisions without wall-clock backoff.
@@ -119,7 +116,7 @@ beforeEach(() => {
   appendTranscript.mockReset();
   closeRecord.mockReset().mockResolvedValue(undefined);
   createVoice.mockReset().mockResolvedValue("voice");
-  const source = { assertCurrent: () => {} };
+  const source = { assertCurrent: () => {}, prepareCurrent: async () => {} };
   captureSource.mockReset().mockReturnValue(source);
   captureWriter.mockReset().mockImplementation(() => ({ source, release: async () => {} }));
 });
@@ -141,7 +138,7 @@ it.each([
     laterCalls === 3 ? vi.fn().mockRejectedValue(laterError) : vi.fn().mockResolvedValue(undefined);
   const release = vi.fn(async () => {});
   captureWriter.mockReturnValue({
-    source: { assertCurrent() {} },
+    source: { assertCurrent() {}, prepareCurrent: async () => {} },
     release,
   });
   session.unspokenAnswers = new Map([["first", first]]);

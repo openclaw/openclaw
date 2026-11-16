@@ -9,7 +9,6 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   RECEIPT_RECOVERY_SCHEMA,
-  RECEIPT_RECOVERY_WORKFLOW,
   receiptRecoveryChildInputs,
   receiptRecoverySourceRequest,
 } from "../../scripts/full-release-receipt-recovery.mjs";
@@ -19,6 +18,7 @@ import {
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
+import { RECEIPT_RECOVERY_WORKFLOW } from "../../scripts/lib/release-evidence-identity.mjs";
 import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
@@ -104,10 +104,12 @@ export function addRecoveryGraph({
   };
   const list = (runId) => {
     const all = [...artifacts.values()].filter((entry) => entry.workflow_run.id === Number(runId));
-    json("actions/runs/" + runId + "/artifacts?per_page=100&page=1", {
-      total_count: all.length,
-      artifacts: all,
-    });
+    for (let offset = 0; offset < all.length; offset += 100) {
+      json("actions/runs/" + runId + "/artifacts?per_page=100&page=" + (offset / 100 + 1), {
+        total_count: all.length,
+        artifacts: all.slice(offset, offset + 100),
+      });
+    }
     for (const entry of all) {
       json(
         "actions/runs/" +

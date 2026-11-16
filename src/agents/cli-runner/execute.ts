@@ -148,10 +148,14 @@ export async function executePreparedCliRun(
     !params.forkCliSessionOnResume
       ? context.resumeContext
       : undefined;
+  const turnContext = [context.contextEngineSystemPromptAddition, resumeContext]
+    .filter(Boolean)
+    .join("\n\n");
   const basePrompt = usePluginOwnedExecution
     ? attemptPrompt
-    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+    : composeCliPromptContext(attemptPrompt, { prependContext: turnContext });
   const privatePrependContext = [
+    usePluginOwnedExecution ? context.contextEngineSystemPromptAddition : undefined,
     context.promptContext?.prependContext,
     usePluginOwnedExecution ? resumeContext : undefined,
   ]

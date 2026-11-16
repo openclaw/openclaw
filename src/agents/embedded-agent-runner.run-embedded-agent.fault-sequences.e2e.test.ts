@@ -303,7 +303,9 @@ async function runScenario(params: {
             authProfileIdSource: "auto",
             allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
             isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-            timeoutMs: 250,
+            // Fault ordering must not race the host CPU. Auth deadline enforcement
+            // has fake-clock coverage in run/auth-controller.test.ts; 0 is unlimited.
+            timeoutMs: 0,
             runId: params.runId,
             enqueue: async (task) => await task(),
           }),
@@ -413,7 +415,8 @@ async function expectPreparationInvalidationToDropRoutingWork(
           prompt: "hello",
           provider: "openai",
           model: "mock-1",
-          timeoutMs: 250,
+          // The preparation barrier, not elapsed time, drives admission invalidation.
+          timeoutMs: 0,
           runId,
           enqueue: async (task) => await task(),
         });
@@ -575,7 +578,9 @@ it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
         if (exhausted) {
           const error = expectError(outcome);
           expect(error).toMatchObject({ reason: "rate_limit" });
-          expect(error.message).toMatch(/try again/i);
+          expect(error.message).toContain("openai/mock-1 is rate-limited.");
+          expect(error.message).toContain("retry in 3 hours");
+          expect(error.message).toContain("model picker");
         } else {
           expect(expectResult(outcome).result.payloads?.[0]?.text).toBe("backup recovered");
         }
@@ -605,7 +610,10 @@ it.each([
       { openai: 2 },
       [],
       ({ outcome, observations, usageStats, startedAt }) => {
-        expect(attemptRoutes(observations)).toEqual([
+        expect(
+          attemptRoutes(observations),
+          outcome.kind === "error" ? outcome.error.message : JSON.stringify(outcome),
+        ).toEqual([
           ["openai", "mock-1", "openai:p1"],
           ["openai", "mock-1", "openai:p2"],
         ]);

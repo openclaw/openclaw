@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   emitAgentEvent,
   emitAgentEvents,
@@ -114,6 +115,7 @@ export function createAgentEventTestHarness(params?: AgentEventTestHarnessOption
     agent: () => agentBroadcastCalls(broadcast),
     targetedChat: () => chatBroadcastCalls(broadcastToConnIds),
     targetedAgent: () => agentBroadcastCalls(broadcastToConnIds),
+    inFlight: (runId: string) => projectInFlightRunSnapshot({ chatRunState, runId }),
     deltas: () => chatDeltaTexts(broadcast),
     targetedDeltas: () => chatDeltaTexts(broadcastToConnIds),
     nodeChat: () => sessionChatCalls(nodeSendToSession),

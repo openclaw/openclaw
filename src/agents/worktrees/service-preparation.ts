@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import { resolveStateDir } from "../../config/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { ProjectCheckoutBusyError } from "../../projects/project-checkout.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
@@ -53,6 +53,7 @@ import {
   withWorktreeRunEnd,
 } from "./run-end-lifecycle.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
+import { resolveManagedWorktreeRoot } from "./storage-root.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeCreationOutcome,
@@ -101,7 +102,7 @@ export async function prepareWorktreeDestination(params: {
   suggestedName: string;
 }) {
   const { env, repository } = params;
-  const configuredRoot = params.configuredRoot ?? path.join(resolveStateDir(env), "worktrees");
+  const configuredRoot = resolveManagedWorktreeRoot(env, params.configuredRoot);
   await fs.mkdir(configuredRoot, { recursive: true });
   // Git canonicalizes checkout paths; creation and lock/adoption comparisons must agree.
   const root = path.join(await fs.realpath(configuredRoot), repository.fingerprint);
@@ -383,10 +384,10 @@ export async function withWorktreeSource<T>(
     withSource,
     params.waitBudget,
     (source) => {
-      const commitGuard = () => {
-        params.commitGuard?.();
-        source.assertCurrent();
-      };
+      const commitGuard = composeSessionSourceAssertion(
+        [params.commitGuard, source.assertCurrent].filter((assertion) => assertion !== undefined),
+        (assertSources) => assertSources(),
+      );
       commitGuard();
       const signal =
         params.signal && source.signal
@@ -398,6 +399,12 @@ export async function withWorktreeSource<T>(
       };
       const workerAuthority = {
         ...params.workerAuthority,
+        workspaceEvidence: [
+          ...(params.workerAuthority?.workspaceEvidence ?? []),
+          ...(source.workerAuthority?.workspaceEvidence ?? []),
+        ],
+        stateOwnerPath:
+          source.workerAuthority?.stateOwnerPath ?? params.workerAuthority?.stateOwnerPath,
         assertCurrent: () => {
           signal?.throwIfAborted();
           (params.workerAuthority ? params.workerAuthority.assertCurrent : params.commitGuard)?.();

@@ -147,7 +147,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly rowRefs: TranscriptRowRefs;
   private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcilePosition);
   private readonly captureInteractionResize = (event: Event) => {
-    const anchor = resolveChatTranscriptInteractionAnchor(event);
+    const anchor = resolveChatTranscriptInteractionAnchor(event, this.readerAnchor.readerElement);
     if (!anchor) {
       return;
     }
@@ -220,7 +220,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
     this.virtualizer = new Virtualizer({
       onChange: (view, sync) => {
-        this.readerAnchor.flush();
+        const flowMoved = this.readerAnchor.flush();
         // Settled motion redraws locally; initial placement and held history need the caller.
         const redraw = view.isScrolling && this.isPositionSettled && !this.prependAnchor.hasPrepend;
         // Read while measured layout is clean; a native clamp needs its rows now.
@@ -228,7 +228,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
         // Native resize delivery can read a fast scroll before its scroll event.
         // Keep its position, but replace observed rows outside the delivery cycle.
-        const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
+        // A row landing before the flow already moved scrollTop; its flow must move this frame.
+        const defer =
+          redraw && !(moved || flowMoved || this.canAutoFollow() || offsetState.hasPendingAnchor);
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
           offsetState.measuringOffset || (defer && !sync),
@@ -271,6 +273,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
               this.presentation.flushChange();
+              this.readerAnchor.captureReaderContent();
               callbacks.onNativeScroll?.(event);
             },
           },

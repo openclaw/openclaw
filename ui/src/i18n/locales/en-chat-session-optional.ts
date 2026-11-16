@@ -270,6 +270,7 @@ const catalog = {
       readHighlighted: "Open highlighted source",
       readPlain: "Open plain source",
       fileTree: "Changed files tree",
+      fileTreeTooltip: "File tree",
       searchFiles: "Search changed files",
       noMatchingFiles: "No files match this view.",
       cycleMode: "Diff mode: {mode}. Switch to next mode",
@@ -307,6 +308,7 @@ const catalog = {
       branchName: "Branch name",
       uncommittedStay: "Uncommitted changes stay in the session checkout.",
       viewOptions: "Change view options",
+      viewOptionsTooltip: "View options",
       collapseCode: "Collapse code",
       collapseFunctions: "Collapse functions and classes",
       expandCode: "Expand code",
@@ -402,9 +404,9 @@ const catalog = {
     workspaceFiles: {
       attachments: "Attachments",
       attachmentsLoading: "Loading attachments…",
-      attachmentsUnknown: "Transcript attachment coverage is not yet known.",
+      attachmentsUnknown: "Chat attachment coverage is not yet known.",
       attachmentsPartial:
-        "Showing attachments available in the loaded transcript. Earlier or omitted content may contain more.",
+        "Showing attachments available in the loaded chat. Earlier or omitted content may contain more.",
       mobile: {
         searchFolder: "Search in {folder}",
         empty: "No files match this filter.",

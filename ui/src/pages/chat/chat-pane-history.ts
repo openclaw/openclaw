@@ -354,14 +354,13 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward = this.historyInput.isUpward(event);
+    const root = this.transcript.scrollElement;
+    const upward = this.historyInput.isUpward(event, root);
     if (
       !root ||
       !this.presented ||
       !this.visuallyPresented ||
       !this.transcript.isPositionSettled ||
-      this.transcript.isProgrammaticScroll ||
       !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.history.loadingOlder ||
@@ -370,6 +369,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     ) {
       return;
     }
+    this.transcript.cancelScroll();
     this.historyAutoLoadBlocked = false;
     this.historyObserverArmed = true;
     this.syncHistoryObserver();

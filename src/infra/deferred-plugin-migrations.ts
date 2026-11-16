@@ -45,7 +45,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
-  getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
@@ -76,9 +76,9 @@ const migrationReceipt: SqliteDatabaseAdmissionKey<object> = {
   read: (value) => (isRecord(value) ? value : undefined),
 };
 
-/** Only committed migration writes retire readiness; ordinary state writes do not. */
-export function readDeferredPluginMigrationReceipt(databasePath: string): object {
-  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, migrationReceipt, () => ({})) ?? {};
+/** Committed migration writes invalidate readiness; ordinary state writes do not. */
+export function readDeferredPluginMigrationReceipt(databasePath: string): object | undefined {
+  return peekSqliteDatabaseAdmissionForPath(databasePath, migrationReceipt);
 }
 
 type ConfigMigrationCompletion = {

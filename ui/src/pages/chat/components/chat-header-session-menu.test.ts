@@ -348,6 +348,7 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
     true,
     true,
     false,
+    false,
   ]);
   if (onboarding) {
     expect(viewItems.every((entry) => entry.disabled)).toBe(true);
@@ -359,7 +360,13 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
       "Stored in this browser only.",
     );
   }
-  for (const value of ["reasoning", "tool-calls", "commentary", "speech-bubbles"]) {
+  for (const value of [
+    "reasoning",
+    "tool-calls",
+    "commentary",
+    "inline-commands",
+    "speech-bubbles",
+  ]) {
     await select(menu, `view:${value}`);
   }
   expect(onSettingsChange.mock.calls.map(([patch]) => patch)).toEqual(
@@ -369,6 +376,7 @@ it.each([false, true])("gates view preferences during onboarding=%s", async (onb
           { chatShowThinking: false },
           { chatShowToolCalls: false },
           { chatPersistCommentary: false },
+          { chatInlineCommands: true },
           { chatBubbleSessionKeys: ["agent:main:test"], chatBubbleDisabledSessionKeys: undefined },
         ],
   );

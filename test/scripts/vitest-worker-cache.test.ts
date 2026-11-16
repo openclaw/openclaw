@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   hashVitestWorkerArtifact,
@@ -15,11 +16,47 @@ import {
   retainVitestWorkerArtifacts,
 } from "../../scripts/lib/vitest-worker-cache.mts";
 import type { VitestWorkerPreset } from "../../scripts/lib/vitest-worker-descriptor.mts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { runRetentionNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeWorkerFixtureManifest } from "./fixtures/vitest-worker-compiler.mjs";
 import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+
+it("releases prepared snapshots while miss and restored cache handles remain usable", async ({
+  signal,
+  onTestFinished,
+}) => {
+  const lifetime = createFixtureLifetime();
+  onTestFinished(() => lifetime.cleanup());
+  await lifetime.run(async () => {
+    let joined = true;
+    const { directory } = await lifetime.acquire(async () => ({
+      directory: lifetime.createTempDir("vitest-worker-cache-retention-"),
+      async cleanup() {
+        if (!joined) {
+          throw new Error("Cache retention fixture remains unjoined");
+        }
+      },
+    }));
+    joined = false;
+    const result = await lifetime.track(
+      runRetentionNodeScript(
+        {
+          currentModuleUrl: import.meta.url,
+          sourceWorkerName: "vitest-worker-cache-retention.test-support",
+          distWorkerPath: "test/scripts/vitest-worker-cache-retention.test-support.js",
+        },
+        { cwd: directory, signal },
+      ),
+    );
+    joined = !hasUnjoinedWork(result.error);
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ retained: [], captures: 2, restored: true });
+  });
+}, 30_000);
 
 function fixture(slot = "run-cache-0", root = roots.make("vitest-worker-cache-")) {
   const directory = path.join(root, ".artifacts/vitest-workers", slot);

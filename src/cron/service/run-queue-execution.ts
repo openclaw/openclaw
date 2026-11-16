@@ -17,7 +17,7 @@ import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
-import { wakeCronRunQueues } from "./run-queue-wake.js";
+import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
@@ -27,6 +27,7 @@ import {
   type CronServiceState,
 } from "./state.js";
 import { ensureLoaded } from "./store.js";
+import type { ConditionFiredRunSlot, ConditionFiredWait } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -48,32 +49,74 @@ export type CronLaunchContext = {
   receiptSettlement?: Promise<void>;
 };
 
-/** Best effort: if this write fails, the fired run counts as a check until it ends. */
-async function settleConditionCheck(
+/**
+ * A fired condition stops counting as a check and takes a run slot for its payload. A timed
+ * check holds no slot, so it waits, holding neither, for the queue drain to hand it one in due
+ * order, and asks again each time the queue moves. A failed request is retried the same way.
+ */
+async function takeRunSlot(
   state: CronServiceState,
-  entry: CronQueuedRun,
-  context: OpenClawStateWorkerContext,
-): Promise<void> {
-  try {
-    const { job } = await runOpenClawStateWorkerOperation(context, (scope) =>
+  run: CronQueuedRun,
+  pending: CronLaunchContext,
+  wait: ConditionFiredWait,
+): Promise<ConditionFiredRunSlot> {
+  const { context } = pending;
+  const signal = wait.signal ?? new AbortController().signal;
+  // A stop ends the wait. A reload handover does not: like runs already executing here, the
+  // payload goes on, and the replacement's drain hands it the slot.
+  const ended = () =>
+    signal.aborted || (state.lifecycleGeneration !== pending.generation && !state.handedOver);
+  const settle = async () => {
+    const { job, runSlot, stale } = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({
         type: "cron.settleConditionCheck",
         input: {
           storeKey: state.deps.storeKey,
-          jobId: entry.job.id,
-          receiptId: entry.runReceipt.receiptId,
+          jobId: run.job.id,
+          receiptId: run.runReceipt.receiptId,
         },
       }),
     );
     if (job) {
       applyCronRuntimeRowsToState(state, [job]);
-      wakeCronRunQueues(state);
+      // Its check is free for the next waiting condition, and a waiting payload needs a drain
+      // that reads its wait: one already running may have read the queue before it.
+      void state.op.then(() => wakeCronRunQueues(state));
     }
-  } catch (error) {
-    state.deps.log.warn(
-      { jobId: entry.job.id, err: String(error) },
-      "cron: fired condition still counted as a check",
-    );
+    return stale ? "stale" : runSlot;
+  };
+  let next: ReturnType<typeof awaitCronRunQueueTurn> | undefined;
+  let waited = false;
+  try {
+    while (!ended()) {
+      // Registered before asking, so a slot handed out in between still wakes this run.
+      next = awaitCronRunQueueTurn(state, signal);
+      const answer = await settle().catch((error: unknown) => {
+        state.deps.log.warn(
+          { jobId: run.job.id, err: String(error) },
+          "cron: run slot request failed; still waiting",
+        );
+        return false as const;
+      });
+      if (answer === true) {
+        return waited ? "taken-after-wait" : "taken";
+      }
+      if (answer === "stale") {
+        // Before any wait a stale receipt goes ahead: the checks that follow the trigger stop it.
+        return waited ? "stopped" : "taken";
+      }
+      if (!waited) {
+        waited = true;
+        wait.onWait?.(true);
+      }
+      await next.turn;
+    }
+    return "stopped";
+  } finally {
+    next?.cancel();
+    if (waited) {
+      wait.onWait?.(false);
+    }
   }
 }
 
@@ -211,7 +254,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
-      onConditionFired: () => settleConditionCheck(state, entry, pending.context),
+      onConditionFired: (wait) => takeRunSlot(state, entry, pending, wait),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(

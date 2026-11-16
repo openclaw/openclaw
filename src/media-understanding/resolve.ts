@@ -16,6 +16,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { toAgentRequestSessionKey } from "../routing/session-key.js";
 import { runtimeMediaModelSecretOwnerId } from "../secrets/runtime-media-secret-owner.js";
 import { DEFAULT_MEDIA_CONCURRENCY, MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
@@ -164,6 +165,7 @@ export function resolveScopeDecision(params: {
     const matchChannel = normalizeOptionalLowercaseString(match.channel);
     const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
+    const matchRawPrefix = normalizeOptionalLowercaseString(match.rawKeyPrefix);
 
     if (matchChannel && matchChannel !== channel) {
       continue;
@@ -171,7 +173,14 @@ export function resolveScopeDecision(params: {
     if (matchChatType && matchChatType !== chatType) {
       continue;
     }
-    if (matchPrefix && !sessionKey.startsWith(matchPrefix)) {
+    if (matchRawPrefix && !sessionKey.startsWith(matchRawPrefix)) {
+      continue;
+    }
+    if (
+      matchPrefix &&
+      !sessionKey.startsWith(matchPrefix) &&
+      !toAgentRequestSessionKey(sessionKey)?.startsWith(matchPrefix)
+    ) {
       continue;
     }
     return rule.action;
