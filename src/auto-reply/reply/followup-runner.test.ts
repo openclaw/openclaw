@@ -506,7 +506,7 @@ describe("createFollowupRunner", () => {
     );
   });
 
-  it("consumes revoked operator input instead of retrying a pre-execution refusal", async () => {
+  it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {
     const failure = new Error("original operator role changed");
     turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
@@ -515,6 +515,7 @@ describe("createFollowupRunner", () => {
         throw failure;
       },
     });
+    const deliver = attachSource(turn);
     state.admit.mockRejectedValueOnce(failure);
 
     await expect(
@@ -522,6 +523,17 @@ describe("createFollowupRunner", () => {
     ).resolves.toBeUndefined();
 
     expect(state.execute).not.toHaveBeenCalled();
+    // No turn was admitted; the source still receives the refusal with its notice.
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        completion: {
+          kind: "failed",
+          error: failure.message,
+          notice: `withheld: ${failure.message}`,
+        },
+        payloads: [],
+      }),
+    );
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
   });
@@ -544,7 +556,13 @@ describe("createFollowupRunner", () => {
 
     expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ completion: { kind: "failed", error: failure.message } }),
+      expect.objectContaining({
+        completion: {
+          kind: "failed",
+          error: failure.message,
+          notice: `withheld: ${failure.message}`,
+        },
+      }),
     );
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
   });

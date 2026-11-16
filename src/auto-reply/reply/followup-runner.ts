@@ -129,6 +129,8 @@ export function createFollowupRunner(
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let executionEntered = false;
+    // A revoked input settles visibly through its source, also before turn admission.
+    let withheld = false;
     const hasSurvivingSources = () => {
       const claim = queued.controllerClaim ?? queued.controllerInput?.claim;
       return Boolean(
@@ -427,7 +429,12 @@ export function createFollowupRunner(
       } else if (authorityLost || disposition.kind === "consumed") {
         // Revoked input is terminal and visible; retrying it would hold the queue indefinitely.
         disposition = { kind: "consumed" };
-        completion = { kind: "failed", error: formatErrorMessage(error) };
+        withheld = authorityLost;
+        completion = {
+          kind: "failed",
+          error: formatErrorMessage(error),
+          ...(authorityLost ? { notice: `withheld: ${formatErrorMessage(error)}` } : {}),
+        };
         defaultRuntime.error?.(
           `followup queue: input withheld; refusing replay: ${formatErrorMessage(error)}`,
         );
@@ -450,14 +457,14 @@ export function createFollowupRunner(
       const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
       if (
         disposition.kind === "consumed" &&
-        admittedTurn &&
+        (admittedTurn || withheld) &&
         sourceDisposition?.kind === "deliver"
       ) {
         try {
           await sourceDisposition.deliver({
             kind: "queued-followup",
-            runId: admittedTurn.runId,
-            originatingChannel: admittedTurn.queued.originatingChannel,
+            runId: admittedTurn?.runId ?? queued.sourceTurnId ?? queued.messageId ?? "",
+            originatingChannel: (admittedTurn?.queued ?? queued).originatingChannel,
             payloads: terminalPayloads,
             completion,
           });
