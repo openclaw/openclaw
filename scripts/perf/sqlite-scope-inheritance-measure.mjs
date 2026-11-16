@@ -132,7 +132,9 @@ try {
       record.location,
       Array.from({ length: scopeCount }, (_, scope) => `session-${scope}`),
     );
-    for (const revision of record.writeScopes.values()) backingStores.add(revision.state.buffer);
+    for (const revision of record.writeScopes.values()) {
+      backingStores.add(revision.state.buffer);
+    }
   }
   const workerFile = path.join(scratch, "worker.mjs");
   writeFileSync(
