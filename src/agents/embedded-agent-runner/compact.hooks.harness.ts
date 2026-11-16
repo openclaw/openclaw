@@ -35,10 +35,7 @@ import {
   mockCompactHooksSkills,
   mockCompactHooksTools,
 } from "./compact.hooks.tools.test-support.js";
-import {
-  createCompactionSessionManagerMock,
-  configureCompactionSessionMode,
-} from "./compact.session-manager.test-support.js";
+import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
@@ -502,7 +499,17 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
   vi.resetModules();
-  configureCompactionSessionMode(options.durableSession === true);
+  if (options.durableSession) {
+    vi.doUnmock("./server-endpoint-compaction.js");
+    vi.doUnmock("../sessions/model-registry-runtime.js");
+    vi.doUnmock("../sessions/resource-loader.js");
+    vi.doUnmock("../sessions/index.js");
+    vi.doUnmock("../sessions/sdk.js");
+    vi.doUnmock("../session-tool-result-guard-wrapper.js");
+    vi.doUnmock("../agent-settings.js");
+    vi.doUnmock("../agent-project-settings.js");
+  }
+
   if (!options.durableSession) {
     vi.doMock("./server-endpoint-compaction.js", () => ({
       attemptServerEndpointCompaction: attemptServerEndpointCompactionMock,

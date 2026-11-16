@@ -26,11 +26,6 @@ export type SessionManagerBoundedContext = SessionManagerBoundedView &
     "persistedSuffixStartSeq" | "boundaryCount" | "transcriptMutationAt"
   > & { limits: SessionManagerBoundedContextLimits };
 
-/** @internal A compaction-only retained-tail view under its captured transcript version. */
-export const sessionManagerFromCompactionSource: unique symbol = Symbol.for(
-  "openclaw.session-manager.from-compaction-source",
-);
-
 /** Public read-only methods; the facade supplies their exact signatures. */
 export type SessionManagerReadMethod =
   | "getCwd"

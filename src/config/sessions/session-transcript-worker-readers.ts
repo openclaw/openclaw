@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
-import { withSessionCompactionSource } from "./session-compaction-source.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
@@ -301,9 +300,6 @@ const readers: Readers & ThisType<ReaderContext> = {
   ),
   async run(prepare, inputBytes) {
     return this.runRequest(prepare, inputBytes, (value) => value);
-  },
-  withCompactionSource(input, consume, signal, timeoutMs) {
-    return withSessionCompactionSource(this.runRequest, input, consume, signal, timeoutMs);
   },
   async readTranscript(input, signal) {
     const events: TranscriptEvent[] = [];

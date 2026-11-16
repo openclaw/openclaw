@@ -2797,9 +2797,6 @@ src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts
 src/gateway/worker-environments/local-workspace-gc.ts
 packages/agent-core/src/harness/compaction/compaction-cut-point.ts
-packages/agent-core/src/harness/compaction/file-operations.ts
-packages/agent-core/src/harness/compaction/summary-truncation.ts
 packages/agent-core/src/harness/compaction/utils.ts
-src/config/sessions/session-compaction-source.ts
 src/agents/sessions/context-token-pressure.ts
 src/config/sessions/session-context-seed.ts

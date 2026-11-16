@@ -736,7 +736,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/cli-runner/session-history.reset-gap.test.ts",
   "src/agents/cli-runner/session-history.async.test.ts",
   "src/auto-reply/reply/memory-flush-session.test.ts",
-  "src/agents/sessions/session-compaction-source.test.ts",
   "src/agents/sessions/session-manager-hydration.test.ts",
   "src/agents/sessions/session-manager-hydration-stream.test.ts",
   "src/agents/sessions/session-manager-incognito.test.ts",

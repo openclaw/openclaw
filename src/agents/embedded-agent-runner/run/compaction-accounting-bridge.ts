@@ -40,7 +40,6 @@ export type PreparedCompactionSession = {
   sessionTarget: SessionTranscriptRuntimeTarget;
   entry: InternalSessionEntry;
   sessionManager: SessionManager;
-  metadataOnly?: boolean;
   primaryConversation?: ConversationRecord;
 };
 

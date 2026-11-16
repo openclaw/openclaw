@@ -18,7 +18,6 @@ import type { ProviderConfigInput } from "../sessions/model-registry.js";
 import {
   applyExtraParamsToAgentMock,
   buildConfiguredAgentSystemPromptMock,
-  buildAgentRuntimePlanMock,
   hookRunner,
   limitHistoryTurnsMock,
   loadCompactHooksHarness,
@@ -763,58 +762,6 @@ describe("direct compactor through the context-engine delegate", () => {
     },
   );
 
-  it("does not retain the summarized branch while waiting for the model", async () => {
-    const fixture = await createFixture("summary", false, { liveOutputChars: 500_000 });
-    // Match the fixture's summary transport before the runtime preflight too.
-    const buildRuntimePlan = buildAgentRuntimePlanMock.getMockImplementation()!;
-    buildAgentRuntimePlanMock.mockImplementation((params) => {
-      const plan = buildRuntimePlan(params);
-      plan.transport.resolveExtraParams = () => ({ responsesCompactEndpoint: false });
-      return plan;
-    });
-    const writer = await sessions.SessionManager.openAsync(fixture.target);
-    await writer.appendMessageAsync({
-      role: "user",
-      content: "Keep this small tail",
-      timestamp: 10,
-    });
-    const { createAssistantMessageEventStream } = await import("openclaw/plugin-sdk/llm");
-    const response = createAssistantMessageEventStream();
-    const started = createDeferred();
-    let retainedBytes = 0;
-    // Vitest spies do not expose the original method through getMockImplementation.
-    // eslint-disable-next-line @typescript-eslint/unbound-method
-    const getBranch = sessions.SessionManager.prototype.getBranch;
-    const branchSpy = vi.spyOn(sessions.SessionManager.prototype, "getBranch");
-    branchSpy.mockImplementation(function (this: typeof sessions.SessionManager.prototype) {
-      const branch = getBranch.call(this);
-      retainedBytes = JSON.stringify(branch).length;
-      return branch;
-    });
-    fixture.stream.mockImplementationOnce(() => {
-      started.resolve();
-      return response;
-    });
-    const pending = delegate(fixture.delegateParams);
-    try {
-      await awaitGateBeforeSettlement(
-        started.promise,
-        pending.then((result) => {
-          throw new Error("Compaction settled before summary: " + JSON.stringify(result));
-        }),
-        "Compaction finished before the summary request",
-      );
-      // The real AgentSession has prepared the cut, but the provider is still waiting.
-      // Only the exact kept tail and bounded facts belong on the Gateway now.
-      expect(retainedBytes).toBeLessThan(10_000);
-    } finally {
-      response.push({ type: "done", reason: "stop", message: createAssistant(model, summary) });
-      response.end();
-      await pending;
-      branchSpy.mockRestore();
-    }
-  });
-
   it.each(["manual", "budget"] as const)(
     "compacts complete current context through %s without hydrating obsolete history",
     async (trigger) => {
@@ -852,11 +799,14 @@ describe("direct compactor through the context-engine delegate", () => {
             storePath: fixture.target.storePath,
           });
           preparedSession = prepared.preparedSession;
-          // Gateway preflight must not hydrate the large summary/current window.
-          expect(preparedSession?.metadataOnly).toBe(true);
-          expect(JSON.stringify(preparedSession?.sessionManager.getBranch()).length).toBeLessThan(
-            1024 * 1024,
+          expect(preparedSession?.sessionManager.getBranch()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "compaction", summary: previousSummary }),
+            ]),
           );
+          expect(
+            preparedSession?.sessionManager.getBranch().filter((event) => event.type === "message"),
+          ).toHaveLength(7);
         }
         const result = await compactQueued(
           { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
@@ -866,9 +816,9 @@ describe("direct compactor through the context-engine delegate", () => {
       } finally {
         observed.restore();
       }
-      // Native compaction still acquires its complete current window after metadata preflight.
-      expect(observed.hydrations.at(-1)).toMatchObject({ kind: "streamed-bounded", events: 9 });
-      expect(observed.hydrations.at(-1)?.totalEvents).toBeGreaterThan(80);
+      // Header, retained request, full summary, and all six current message entries.
+      expect(observed.hydrations[0]).toMatchObject({ kind: "streamed-bounded", events: 9 });
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
       const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
       expect(requests.some((request) => request.includes(marker))).toBe(true);
       expect(requests.join("\n")).not.toContain("Archived request");

@@ -14,6 +14,7 @@ import {
   type DiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
@@ -22,6 +23,7 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
+import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
   isSilentOverflowProneModel,
@@ -41,17 +43,10 @@ import {
 import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
-import { setPreparedCompaction } from "../sessions/prepared-compaction.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import {
-  createCompactionSettings,
-  usesBoundedCompactionSource,
-  withBoundedCompactionSession,
-  type BoundedCompactionSession,
-} from "./bounded-compaction-session.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
@@ -79,10 +74,7 @@ import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
-export async function executePreparedCompactionSession(
-  runtime: PreparedCompactionRuntime,
-  bounded?: BoundedCompactionSession,
-) {
+export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
   const {
     params,
     diagId,
@@ -140,22 +132,10 @@ export async function executePreparedCompactionSession(
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-    const settingsManager = bounded?.settingsManager ?? createCompactionSettings(runtime);
-    if (!bounded && !memoryTranscript && usesBoundedCompactionSource(runtime)) {
-      return await withBoundedCompactionSession(
-        runtime,
-        sessionTarget,
-        assertActive,
-        settingsManager,
-        accountingRecorder,
-        executePreparedCompactionSession,
-      );
-    }
     // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
-      bounded?.manager ??
       memoryTranscript?.sessionManager ??
-      (preparedSession?.metadataOnly ? undefined : preparedSession?.sessionManager) ??
+      preparedSession?.sessionManager ??
       (await SessionManager.openAsync(
         sessionTarget,
         undefined,
@@ -180,9 +160,6 @@ export async function executePreparedCompactionSession(
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
-    if (bounded?.source) {
-      setPreparedCompaction(sessionManager, bounded.source);
-    }
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
           const normalized = normalizeUsage(usage);
@@ -194,6 +171,19 @@ export async function executePreparedCompactionSession(
     if (recordUsage) {
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
+    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      cwd: effectiveCwd,
+      agentDir,
+      cfg: params.config,
+      pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      }),
+      contextTokenBudget,
+    });
     // Sets compaction/pruning runtime state and returns extension factories
     // that must be passed to the resource loader for the safeguard to be active.
     const extensionFactories = buildEmbeddedExtensionFactories({
@@ -405,7 +395,6 @@ export async function executePreparedCompactionSession(
           : getGlobalHookRunner();
         const observedTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
-          prepared: bounded?.source,
           originalMessages,
           currentMessages: session.messages,
           observedTokenCount,
@@ -449,11 +438,8 @@ export async function executePreparedCompactionSession(
           beforeHookMetrics;
 
         if (
-          !(
-            bounded?.source?.hasRealConversation ??
-            session.messages.some((message, index, allMessages) =>
-              isRealConversationMessage(message, allMessages, index),
-            )
+          !session.messages.some((message, index, allMessages) =>
+            isRealConversationMessage(message, allMessages, index),
           )
         ) {
           log.info(
@@ -490,29 +476,28 @@ export async function executePreparedCompactionSession(
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult =
-          bounded || params.seedCompaction
-            ? undefined
-            : await attemptServerEndpointCompaction({
-                trigger,
-                streamFn: session.agent.streamFn,
-                model: effectiveModel,
-                context: { systemPrompt: systemPromptText, messages: session.messages },
-                sessionManager,
-                extraParams: effectiveExtraParams,
-                requestBudget: accountingRecorder?.requestBudget,
-                customInstructions: params.customInstructions,
-                onUsage: recordUsage,
-                onCompactionCommitted: recordServerCompaction,
-                assertActive,
-                requestOptions: {
-                  apiKey: transportApiKey,
-                  sessionId: params.sessionId,
-                  authProfileId: runtimePlan.auth.forwardedAuthProfileId,
-                  timeoutMs: compactionTimeoutMs,
-                  signal: params.abortSignal,
-                },
-              });
+        const serverResult = params.seedCompaction
+          ? undefined
+          : await attemptServerEndpointCompaction({
+              trigger,
+              streamFn: session.agent.streamFn,
+              model: effectiveModel,
+              context: { systemPrompt: systemPromptText, messages: session.messages },
+              sessionManager,
+              extraParams: effectiveExtraParams,
+              requestBudget: accountingRecorder?.requestBudget,
+              customInstructions: params.customInstructions,
+              onUsage: recordUsage,
+              onCompactionCommitted: recordServerCompaction,
+              assertActive,
+              requestOptions: {
+                apiKey: transportApiKey,
+                sessionId: params.sessionId,
+                authProfileId: runtimePlan.auth.forwardedAuthProfileId,
+                timeoutMs: compactionTimeoutMs,
+                signal: params.abortSignal,
+              },
+            });
         const activeSession = session;
         // The resolved session budget can be smaller than the summarizer's model
         // window. Carry it into manual fitting when allowing larger replay artifacts.
@@ -737,8 +722,5 @@ export async function executePreparedCompactionSession(
     return fail(failure.reason, failure.error);
   } finally {
     setSessionModelUsageSink(compactionSessionManager, null);
-    if (bounded) {
-      setPreparedCompaction(compactionSessionManager, null);
-    }
   }
 }

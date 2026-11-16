@@ -80,8 +80,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/exec-host.native.test-support.ts!",
   // The authority retention test launches this isolated V8 heap proof by path.
   "src/agents/harness/tool-authority.runtime.retention.test-support.ts!",
-  // The compaction retention test launches this isolated V8 heap proof by path.
-  "src/config/sessions/session-compaction-entry-source.retention.test-support.ts!",
   // Generated handoff preload and resolver shims import this helper by URL.
   "test/helpers/managed-handoff-isolation.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
