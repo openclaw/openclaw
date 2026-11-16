@@ -1,3 +1,4 @@
+import type { RealtimeVoiceAgentConsultToolPolicy } from "openclaw/plugin-sdk/realtime-voice";
 import { z } from "zod";
 import type { CallBrief } from "./call-brief-schema.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
@@ -125,6 +126,8 @@ export type WebhookContext = {
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
   abortSignal?: AbortSignal;
+  /** Consult tool policy in effect for this call when the consult starts. */
+  toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
 };
 
 export type ProviderWebhookParseResult = {

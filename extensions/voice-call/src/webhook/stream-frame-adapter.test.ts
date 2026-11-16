@@ -35,6 +35,21 @@ describe("StreamFrameAdapter", () => {
       payloadBase64: "AAA=",
     });
   });
+  it("parses Twilio keypad digits and leaves other providers' dtmf frames ignored", () => {
+    const parse = parseWith("twilio");
+    for (const digit of ["0", "9", "*", "#", "A"]) {
+      expect(parse({ event: "dtmf", dtmf: { track: "inbound", digit } })).toEqual({
+        kind: "dtmf",
+        digit,
+      });
+    }
+    expect(parse({ event: "dtmf", dtmf: { digit: "12" } })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "dtmf", dtmf: { digit: 1 } })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "dtmf" })).toEqual({ kind: "ignored" });
+    expect(parseWith("telnyx")({ event: "dtmf", dtmf: { digit: "1" } })).toEqual({
+      kind: "ignored",
+    });
+  });
   it("parses Telnyx media, mark, and stop with no streamSid", () => {
     const parse = parseWith("telnyx");
 

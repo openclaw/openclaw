@@ -14,6 +14,7 @@ import {
 } from "./runtime.fast-context.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { CallRecord } from "./types.js";
+import { DtmfElevationGate } from "./webhook/realtime-dtmf-elevation.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 
@@ -477,6 +478,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     expect(realtimeArgs()[0].tools).toContainEqual(customTool);
+    expect(realtimeArgs()[7]).toBeUndefined();
 
     await expect(
       handler({ question: "What should I say?" }, "call-1", {
@@ -523,6 +525,43 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
+  });
+
+  it("runs keypad-elevated consults with the elevated tool policy", async () => {
+    const config = createRealtimeConfig(
+      {
+        elevation: {
+          enabled: true,
+          pin: "2468",
+          prefix: "*",
+          elevatedToolPolicy: "owner",
+          maxAttempts: 3,
+          lockoutMs: 60_000,
+        },
+      },
+      { inboundPolicy: "allowlist", allowFrom: ["+15550001234"] },
+    );
+    const runEmbeddedAgent = answeringAgent("Done.");
+    setConsultCall();
+
+    const handler = await startConsult(config, createConsultRuntime(runEmbeddedAgent));
+    expect(realtimeArgs()[7]).toBeInstanceOf(DtmfElevationGate);
+
+    await handler({ question: "Check my calendar." }, "call-1", { toolPolicy: "safe-read-only" });
+    await handler({ question: "Check my calendar." }, "call-1", { toolPolicy: "owner" });
+    const [unelevated, elevated] = runEmbeddedAgent.mock.calls.map(([params]) => params);
+    expect(unelevated?.toolsAllow).toEqual([
+      "read",
+      "web_search",
+      "web_fetch",
+      "x_search",
+      "memory_search",
+      "memory_get",
+      "voice_call",
+    ]);
+    // Owner policy leaves the normal agent tool policy in charge.
+    expect(elevated).toBeDefined();
+    expect(elevated?.toolsAllow).toBeUndefined();
   });
 
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
