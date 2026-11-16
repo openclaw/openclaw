@@ -96,10 +96,7 @@ export function startGatewayConfigReloader(
   let currentSourceConfig = initialSourceConfig;
   let currentRawHash = opts.initialSnapshotRawHash;
   let lastObservedRawHash = opts.initialSnapshotRawHash;
-  let currentFingerprintedAuthoredConfig = fingerprintConfigSnapshotAuthoredConfig(
-    opts.initialAuthoredConfig,
-    { env: process.env, homedir },
-  );
+  let currentFingerprintedAuthoredConfig: unknown;
   let currentRuntimeEnvSourceConfig = initialSourceConfig;
   let currentReapplyRuntimeOverlays = (config: OpenClawConfig) => config;
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
@@ -189,10 +186,7 @@ export function startGatewayConfigReloader(
     null;
 
   const updateAcceptedSnapshot = async (rawHash: string, authoredConfig: unknown) => {
-    const fingerprinted = fingerprintConfigSnapshotAuthoredConfig(authoredConfig, {
-      env: process.env,
-      homedir,
-    });
+    const fingerprinted = await fingerprintConfigSnapshotAuthoredConfig(authoredConfig);
     const updatedSlot = await upsertConfigSnapshotAuditRecordAsync(
       {
         configPath: opts.watchPath,
@@ -872,7 +866,7 @@ export function startGatewayConfigReloader(
       const externalChangedPaths = diffConfigPaths(currentSourceConfig, snapshot.sourceConfig);
       const fingerprintedAuthoredChangedPaths = diffConfigPaths(
         currentFingerprintedAuthoredConfig,
-        fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, { env: process.env, homedir }),
+        await fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed),
       );
       const journalChangedPaths = [
         ...new Set([...externalChangedPaths, ...fingerprintedAuthoredChangedPaths]),
@@ -1257,6 +1251,9 @@ export function startGatewayConfigReloader(
   // Preparation publishes the startup baseline and joins initial reconciliation;
   // readiness additionally drains the reloads that reconciliation queued.
   const prepared = (async () => {
+    currentFingerprintedAuthoredConfig = await fingerprintConfigSnapshotAuthoredConfig(
+      opts.initialAuthoredConfig,
+    );
     const initialCandidate = opts.prepareConfigCandidate
       ? await opts.prepareConfigCandidate({
           runtimeConfig: opts.initialConfig,
@@ -1305,10 +1302,7 @@ export function startGatewayConfigReloader(
         const startupChangedPaths = opts.initialSnapshotValid
           ? diffConfigPaths(
               priorSnapshot.fingerprintedAuthoredConfig,
-              fingerprintConfigSnapshotAuthoredConfig(opts.initialAuthoredConfig, {
-                env: process.env,
-                homedir,
-              }),
+              currentFingerprintedAuthoredConfig,
             )
           : [];
         await appendExternalAudit({

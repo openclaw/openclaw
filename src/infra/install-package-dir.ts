@@ -371,7 +371,7 @@ export async function installPackageDir<
           assertRollbackOwned(assertCurrent);
           assertDirectoryIdentity(directory, identity);
           assertDirectoryIdentity(canonicalTargetDir, installedIdentity);
-          fsSync.renameSync(canonicalTargetDir, path.join(directory, "package"));
+          await fs.rename(canonicalTargetDir, path.join(directory, "package"));
           quarantine = { directory, identity };
         } catch (error) {
           await fs.rmdir(directory).catch(() => undefined);
@@ -445,9 +445,8 @@ export async function installPackageDir<
         }
         const original = originalIdentity;
         // Copy-fallback displacement can stop at a held file after deleting siblings.
-        // Synchronous filters recheck recovery authority before each missing entry is
-        // restored, without yielding between the check and write or touching held files.
-        fsSync.cpSync(restoring.path, canonicalTargetDir, {
+        // Filters admit each missing entry before asynchronous restoration and leave held files alone.
+        await fs.cp(restoring.path, canonicalTargetDir, {
           recursive: true,
           verbatimSymlinks: true,
           force: false,

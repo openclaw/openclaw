@@ -4,10 +4,12 @@ import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { collectLegacyCronStoreHealthFindings } from "../commands/doctor/cron/index.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronQuarantinedJobs } from "./store.js";
 import { withCronStore } from "./store.worker.test-support.js";
+import { loadCronJobsStoreWithConfigJobsReadOnlyByKey } from "./store/read-only.js";
 import type { CronStoreFile } from "./types.js";
 
 it.each([false, true])(
@@ -102,3 +104,11 @@ it("preserves native diagnostic errors without repairing an incompatible cron ta
     expect(await state.bytes()).toEqual(before);
   });
 });
+
+it("leaves absent cron state absent without synchronous filesystem probes", () =>
+  withCronStore("cron-readonly-absent", async (state) => {
+    using observation = observeMainThreadFs();
+    const loaded = await loadCronJobsStoreWithConfigJobsReadOnlyByKey("absent", state.env);
+    expect(loaded.store.jobs).toEqual([]);
+    expect(observation.calls()).toEqual({});
+  }));

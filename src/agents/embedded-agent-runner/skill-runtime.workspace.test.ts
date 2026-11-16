@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -312,6 +313,16 @@ it.each([
     expect(await readText(target, range)).toContain(
       fileName === "SKILL.md" ? "Host instructions" : "Host instructions support",
     );
+    await fs.rm(logical, { recursive: true });
+    {
+      using exists = vi.spyOn(syncFs, "existsSync");
+      expect(await readText(path.join(skill.baseDir, fileName))).toContain(
+        fileName === "SKILL.md" ? "Host instructions" : "Host instructions support",
+      );
+      expect(
+        exists.mock.calls.filter(([file]) => file === path.join(skill.baseDir, fileName)),
+      ).toEqual([]);
+    }
     expect(await readText(gatewaySkill.filePath)).toContain("Gateway Library instructions");
     expect(await readText("local.txt")).toContain("Local project file");
     if (workspaceOnly) {

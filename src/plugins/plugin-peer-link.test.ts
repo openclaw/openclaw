@@ -4,6 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -15,6 +16,19 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+it("rebinds an installed peer without synchronous filesystem operations", async () => {
+  const { packageDir, linkPath, root } = peerFixture("stale-link");
+  using observation = observeMainThreadFs();
+  expect(
+    await linkOpenClawPeerDependencies({ ...peerInstall(packageDir), hostRoot: root }),
+  ).toEqual({
+    repaired: 1,
+    skipped: 0,
+  });
+  expect(observation.calls()).toEqual({});
+  expect(await fsPromises.realpath(linkPath)).toBe(await fsPromises.realpath(root));
+});
 
 function writeJson(filePath: string, data: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(data), "utf8");
@@ -243,9 +257,9 @@ describe("plugin peer links", () => {
       );
       const { guard, failure } = oneShotAuthority();
       if (existingKind === "symlink") {
-        const unlink = fs.unlinkSync.bind(fs);
-        vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
-          unlink(target);
+        const unlink = fsPromises.unlink.bind(fsPromises);
+        vi.spyOn(fsPromises, "unlink").mockImplementation(async (target) => {
+          await unlink(target);
           guard.current = false;
         });
         syncBuiltinESMExports();
@@ -273,7 +287,7 @@ describe("plugin peer links", () => {
   it("preserves filesystem failure reporting while caller authority remains current", async () => {
     const { packageDir, linkPath } = peerFixture("missing-link");
     const failure = new Error("peer link write denied");
-    vi.spyOn(fs, "symlinkSync").mockImplementationOnce(() => {
+    vi.spyOn(fsPromises, "symlink").mockImplementationOnce(async () => {
       throw failure;
     });
     syncBuiltinESMExports();

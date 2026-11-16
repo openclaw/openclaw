@@ -25,6 +25,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { realpathViaExistingPrefixSync } from "../infra/path-containment.js";
+import { canAccess } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -269,7 +270,7 @@ async function markRetiredManagedNpmInstallRecords(params: {
       return;
     }
     const markerPath = resolveRetainedManagedNpmInstallMarkerPath(packageDir);
-    const markerAlreadyExisted = fs.existsSync(markerPath);
+    const markerAlreadyExisted = await canAccess(markerPath);
     const marked = await markRetainedManagedNpmInstall({
       packageDir,
       pluginId,

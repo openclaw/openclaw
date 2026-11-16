@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { canAccess } from "../../infra/path-existence.js";
 import type { ModelRequestHeaders } from "../../llm/types.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { buildEffectiveManifestProviderConfig } from "../../plugins/provider-catalog.js";
@@ -74,7 +74,7 @@ export async function readModelRegistryPluginCatalogs(
   if (
     options.config?.models?.mode === "replace" ||
     options.modelsJsonContents === null ||
-    (options.modelsJsonContents === undefined && !existsSync(modelsJsonPath))
+    (options.modelsJsonContents === undefined && !(await canAccess(modelsJsonPath)))
   ) {
     return { catalogs: [] };
   }

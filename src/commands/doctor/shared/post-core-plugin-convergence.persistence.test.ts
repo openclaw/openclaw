@@ -99,9 +99,9 @@ it.for(["managed", "registered"] as const)(
         rowAtRevocation = readRow({ env: state.env });
         controller.abort(refusal);
       };
-      const unlink = fs.unlinkSync.bind(fs);
-      const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
-        unlink(file);
+      const unlink = fs.promises.unlink.bind(fs.promises);
+      const unlinkSpy = vi.spyOn(fs.promises, "unlink").mockImplementation(async (file) => {
+        await unlink(file);
         if (layout === "managed" && file === linkPath) {
           revoke();
         }
@@ -114,7 +114,7 @@ it.for(["managed", "registered"] as const)(
         }
         return result;
       });
-      const symlinkSpy = vi.spyOn(fs, "symlinkSync");
+      const symlinkSpy = vi.spyOn(fs.promises, "symlink");
       syncBuiltinESMExports();
       const params = {
         ...peer.params,
@@ -339,8 +339,8 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
       observe("mkdir", args[0]);
       return mkdir(...args);
     });
-    const unlink = fs.unlinkSync.bind(fs);
-    vi.spyOn(fs, "unlinkSync").mockImplementation((...args) => {
+    const unlink = fs.promises.unlink.bind(fs.promises);
+    vi.spyOn(fs.promises, "unlink").mockImplementation((...args) => {
       observe("unlink", args[0]);
       return unlink(...args);
     });
@@ -349,8 +349,8 @@ it.for(["missing-modules", "stale-link", "package-copy"] as const)(
       observe("rm", args[0]);
       return rm(...args);
     });
-    const symlink = fs.symlinkSync.bind(fs);
-    vi.spyOn(fs, "symlinkSync").mockImplementation((...args) => {
+    const symlink = fs.promises.symlink.bind(fs.promises);
+    vi.spyOn(fs.promises, "symlink").mockImplementation((...args) => {
       observe("symlink", args[1]);
       return symlink(...args);
     });
