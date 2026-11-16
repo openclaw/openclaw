@@ -5,7 +5,12 @@ type ToolDefinitionSource = Pick<AnyAgentTool, "name" | "description" | "paramet
   Partial<
     Pick<
       AnyAgentTool,
-      "label" | "hideFromChannelProgress" | "resultContentSource" | "executionMode" | "async"
+      | "label"
+      | "hideFromChannelProgress"
+      | "resultContentSource"
+      | "executionMode"
+      | "async"
+      | "repeatable"
     >
   >;
 
@@ -20,5 +25,6 @@ export function projectAgentToolDefinition(tool: ToolDefinitionSource) {
     parameters: tool.parameters,
     executionMode: tool.executionMode,
     ...(tool.async === false ? { async: false as const } : {}),
+    ...(tool.repeatable ? { repeatable: tool.repeatable } : {}),
   };
 }

@@ -16,6 +16,17 @@ Sub-agents report back through completion delivery:
 - Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
 - Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
 
+While a completion waits for its requester, its delivery record carries
+`requesterDelivery.state: "waiting"`, the continuation `runId` once assigned, and
+`blockingRunId` when another requester turn holds the mailbox. Pending handoffs
+have no terminal non-delivery disposition. Once the transcript owner commits the
+input, it immediately records `state: "consumed"` and the consuming run in the
+registry, before the requester source settles. Registry readers use that stored
+fact directly.
+Consumption is distinct from sending a reply to the user. A later cancellation
+does not turn a consumed private result into failed delivery; restart recovery
+and the existing completion retention window remain unchanged.
+
 A requester completion turn may finish with `NO_REPLY` or no visible text. That
 settles the child's completion without a retry, an extra model turn, or a blocked
 delivery notice. The child result remains available in its session and the
@@ -73,6 +84,13 @@ restricted. See [message tool access](/tools#configure-access-and-approvals).
 After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
+
+Private results remain bound to the session that requested them. If a new session
+or reset replaces it before the batch can deliver, OpenClaw records the reason and
+shows a notice in the replacement session when it rejects the batch. The notice
+points to the previous session's completed tasks; it does not include child
+findings or resume the old request in the new session. A failed notice write keeps
+the batch pending for retry.
 
 Completion and settle run IDs stay within the 256-character execution-identity
 admission limit, including nested completions. IDs that fit remain unchanged;
@@ -192,6 +210,17 @@ have settled, the in-memory registry keeps a short task preview and lifecycle
 metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and
 yielded work keep their payloads until those obligations settle.
+
+Restart recovery includes finished results whose requester has already settled,
+even when that requester has no interrupted-run marker. Retired process authority
+alone does not mean the requester or its store was replaced. Retryable delivery
+is not eligible for completed-run retention cleanup.
+
+Registry removal records a `child_delivery_removed` session-state event in the
+same transaction. It identifies the run, its delivered, suspended, or discarded
+outcome, and the removal reason without copying result text. These receipts use
+the existing session-state history retention (30 days, at most 50,000 events);
+removing the short-lived registry row does not erase the delivery evidence.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first

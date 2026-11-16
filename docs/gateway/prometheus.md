@@ -329,12 +329,17 @@ Components partition V8-serialized facts using marginal removal sizes:
 references and all remaining admission facts. `receipt_entry` removes the postimage
 entry and the complete entry-metadata receipts (including their small envelopes).
 `receipt_events` then removes appended events and transcript authority receipts.
-`receipt_other` includes everything left, including the append value and model
-prompt projection. Shared objects belong to the last component still referencing
-them. The components sum exactly to each sampled fact payload's V8 size; port,
-decision-cell and transport framing bytes are excluded. This is byte attribution,
-not a measurement of structured-clone allocation. Unsupported graphs increment
-`result="unmeasured"` samples instead of contributing bytes.
+`receipt_value` then removes the phase result and transcript append result, including
+reloads, initial entries and model prompt projections; `receipt_other` includes
+everything left. Shared objects belong to the last component still referencing
+them. Native cloning can change V8 array encoding sizes, so each receipt remainder
+is capped at the previous remainder. Attribution is approximate, but receipt
+components sum exactly to the worker-recorded `payloadBytes` (zero total-byte
+error). Port, decision-cell and transport framing bytes are excluded. This is byte
+attribution, not structured-clone allocation. If serialization fails, the known
+receipt total goes to `receipt_other` and its component samples increment
+`result="unmeasured"`. Unsupported admission facts without a known size still
+contribute no bytes.
 
 For ordinary appends with one committed receipt, divide each component's sampled
 bytes by receipt samples to estimate bytes per append (including all admission
@@ -345,7 +350,7 @@ sum by (component) (
   rate(openclaw_worker_authority_component_sampled_bytes_total{request_class="session.actor.appendTranscriptEvent"}[15m])
 )
 /
-scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other",result="measured"}[15m])))
+scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other"}[15m])))
 ```
 
 Check sample counts and unmeasured samples before interpreting a short window.

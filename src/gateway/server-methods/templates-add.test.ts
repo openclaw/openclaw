@@ -94,15 +94,16 @@ async function callAdd(
     hasCurrentClientAuthority?: () => boolean;
     cron?: unknown;
     applyPluginLifecycleChange?: unknown;
+    applyParams?: Record<string, unknown>;
   } = {},
 ) {
-  const { hasCurrentClientAuthority, ...runtime } = options;
+  const { hasCurrentClientAuthority, applyParams = params, ...runtime } = options;
   const method = `templates.add.${operation}`;
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(templatesAddHandlers[method], method);
   await handler({
     req: { type: "req", id: "add", method },
-    params: operation === "plan" ? { source } : params,
+    params: operation === "plan" ? { source } : applyParams,
     respond,
     context: { getRuntimeConfig, ...runtime } as never,
     client:
@@ -210,6 +211,56 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   expect(readPolicySync).not.toHaveBeenCalled();
   expect(request).toEqual([[true, ready]]);
 });
+
+it("routes to chat-based creation only on its explicit mode", async () => {
+  applyAdd.mockResolvedValue(complete);
+  const chat = { mode: "chat", source, agentId };
+  await callAdd("apply");
+  await callAdd("apply", () => enabled, { applyParams: chat });
+  // The reviewed request keeps its installer hand-off: opening at agent-ready, install events.
+  const [reviewed, created] = applyAdd.mock.calls.map(([input]) => input);
+  expect(reviewed).toMatchObject({
+    planIntegrity: params.planIntegrity,
+    acknowledgeCapabilities: [],
+    onAgentReady: expect.any(Function),
+    onSetupEvent: expect.any(Function),
+  });
+  expect(Object.keys(reviewed)).not.toContain("mode");
+  expect(Object.keys(reviewed)).not.toContain("onAgentCreated");
+  // Chat-based creation opens once, after creation, and publishes no installer events.
+  expect(created).toMatchObject({ ...chat, onAgentCreated: expect.any(Function) });
+  for (const reviewedOnly of ["planIntegrity", "onAgentReady", "onSetupEvent"]) {
+    expect(Object.keys(created)).not.toContain(reviewedOnly);
+  }
+  const mixed = await callAdd("apply", () => enabled, {
+    applyParams: { ...chat, planIntegrity: params.planIntegrity },
+  });
+  expect(mixed[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+  expect(applyAdd).toHaveBeenCalledTimes(2);
+});
+
+it.each(["plan", "apply"] as const)(
+  "templates.add.%s reads MCP servers as the config file declares them",
+  async (operation) => {
+    const declared = { command: "node", env: { TOKEN: "${FIXTURE_MCP_TOKEN}" } };
+    listMcp.mockResolvedValue({
+      ok: true,
+      mcpServers: { docs: { command: "node", env: { TOKEN: "synthetic-token" } } },
+      authoredConfig: { mcp: { servers: { docs: declared } } },
+    });
+    let servers: unknown;
+    planAdd.mockImplementation(async (input) => {
+      servers = await input.sourceMcpServers();
+      return plan;
+    });
+    applyAdd.mockImplementation(async (input) => {
+      servers = await (await input.getPlanningContext()).sourceMcpServers();
+      return ready;
+    });
+    await callAdd(operation);
+    expect(servers).toEqual({ docs: declared });
+  },
+);
 
 it.each(["applied", "applied-restart-required", "restart-pending"] as const)(
   "reports the reload owner's %s receipt without admitting an unpublished agent",

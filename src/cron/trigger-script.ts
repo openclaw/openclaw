@@ -44,7 +44,6 @@ import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
 } from "../agents/scheduled-tool-policy.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -316,7 +315,6 @@ async function prepareTriggerRuntime(
         cwd: effectiveWorkspace,
         workspaceDir: effectiveWorkspace,
         sessionKey,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId }),
       };
       const acquireMcpTools: PreparedTriggerRuntime["acquireMcpTools"] = async (
         admitted,

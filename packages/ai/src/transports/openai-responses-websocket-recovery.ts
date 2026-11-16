@@ -64,7 +64,7 @@ export function createRecoverableResponsesWebSocketStream<
       let outputObserved = false;
       try {
         for await (const event of trackedWebSocketStream) {
-          const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+          const { failure, hasResponseOutput } = readResponsesRecoveryEvent(event);
           outputObserved ||= hasResponseOutput;
           if (isResponsesItemConflict(failure) && !outputObserved && output.content.length === 0) {
             throw new OpenAIResponsesWebSocketSafeRetryError(
@@ -84,7 +84,6 @@ export function createRecoverableResponsesWebSocketStream<
               failure,
             );
           }
-          outputObserved ||= !isPrelude;
           if (acceptance === "pending") {
             acceptance = "observing";
             await notifyProviderStreamOpened({

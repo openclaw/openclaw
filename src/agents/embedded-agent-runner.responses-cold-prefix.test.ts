@@ -3,7 +3,7 @@ import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { stableStringify } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
   snapshotProviderPrefix,
@@ -19,6 +19,7 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { cacheRunnerConfig, omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
+import { prepareInternalSessionEffectsSession } from "./internal-session-effects.js";
 import { writeTempPlugin } from "./test-helpers/temp-plugin-extension-fixtures.js";
 
 function responseMessage(id: string, text: string) {
@@ -26,10 +27,19 @@ function responseMessage(id: string, text: string) {
   return { type: "message", id, role: "assistant", status: "completed", content };
 }
 
-it.each(["healthy", "recovered", "failed-repair"] as const)(
+it.each([
+  "healthy",
+  "legacy",
+  "recovered",
+  "snapshot-recovered",
+  "failed-repair",
+  "deferred",
+  "deferred-internal",
+] as const)(
   "preserves Responses replay across a cold runner reopen (%s)",
   async (mode) => {
-    const conflictingReplay = mode !== "healthy";
+    const conflictingReplay = mode !== "healthy" && mode !== "legacy";
+    const deferred = mode.startsWith("deferred");
     await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
       const sessionId = "responses-cold-prefix";
       const sessionKey = "agent:main:" + sessionId;
@@ -77,6 +87,7 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
       };
       await upsertSessionEntryCore(sessionTarget, { sessionId, updatedAt: 1 });
       const host = getAiTransportHost();
+      const logInfo = vi.fn();
       const requests: Array<Record<string, unknown>> = [];
       const prefixes: ReturnType<typeof snapshotProviderPrefix>[] = [];
       const history = new Map<string, unknown[]>();
@@ -84,6 +95,7 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
       let conflicts = 0;
       configureAiTransportHost({
         ...host,
+        logInfo,
         buildModelFetch: () => async (input, init) => {
           const payload = (await new Request(input, init).json()) as Record<string, unknown>;
           assert(Array.isArray(payload.input));
@@ -99,10 +111,40 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
             ((mode === "failed-repair" && requests.length === 5) ||
               payload.input.some((value) => {
                 const item = value as Record<string, unknown>;
-                return item.id === "fc_response_1" && item.arguments !== "{ }";
+                return item.id === "fc_response_1";
               }))
           ) {
             conflicts++;
+            if (deferred || mode === "snapshot-recovered") {
+              const item = responseMessage("msg_partial", "Already started.");
+              const events = [
+                ...(deferred
+                  ? [
+                      { type: "response.output_item.added", item, output_index: 0 },
+                      {
+                        type: "response.output_text.delta",
+                        item_id: item.id,
+                        output_index: 0,
+                        content_index: 0,
+                        delta: "Already started.",
+                      },
+                    ]
+                  : []),
+                {
+                  type: "response.failed",
+                  response: {
+                    id: "resp_failed",
+                    status: "failed",
+                    output: [item],
+                    error: { code: "item_conflict", message: "Stored item content differs." },
+                  },
+                },
+              ];
+              return new Response(
+                events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""),
+                { headers: { "content-type": "text/event-stream" } },
+              );
+            }
             return Response.json(
               { error: { code: "item_conflict", message: "Stored item content differs." } },
               { status: 400 },
@@ -135,7 +177,7 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
                   id: "fc_" + id,
                   call_id: "call_" + id,
                   name: "cache_probe",
-                  arguments: conflictingReplay && requests.length === 1 ? "{ }" : "{}",
+                  arguments: requests.length === 1 && mode !== "legacy" ? "{ }" : "{}",
                 }
               : responseMessage("msg_" + id, "synthetic answer"),
           ];
@@ -181,8 +223,18 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
             "main",
             "cold-prefix-proof",
           );
+          const target =
+            mode === "deferred-internal" && turn === 3
+              ? await prepareInternalSessionEffectsSession({
+                  agentId: "main",
+                  runId,
+                  source: sessionTarget,
+                  storePath: sessionTarget.storePath,
+                  cwd: state.workspaceDir,
+                })
+              : sessionTarget;
           const recorder = createUserTurnTranscriptRecorder({
-            target: { ...sessionTarget, sessionEntry: undefined },
+            target: { ...target, sessionEntry: undefined },
             input: {
               text: "visible turn " + turn,
               timestamp: turn,
@@ -194,9 +246,9 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
               userTurnTranscriptRecorder: recorder,
               preparedRunAdmission: admission,
               agentId: "main",
-              sessionId,
-              sessionKey,
-              sessionTarget,
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              sessionTarget: target,
               agentDir: state.agentDir(),
               workspaceDir: state.workspaceDir,
               config,
@@ -213,13 +265,17 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
             });
             if (mode === "failed-repair" && turn === 2) {
               await expect(run).rejects.toMatchObject({ code: "item_conflict" });
+            } else if (deferred && turn === 2) {
+              expect((await run).meta.error).toBeDefined();
             } else {
               expect((await run).meta.error).toBeUndefined();
             }
             expect(requests).toHaveLength(
-              mode === "failed-repair"
-                ? [3, 5, 8][turn - 1]!
-                : turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0),
+              deferred
+                ? [3, 4, 7][turn - 1]!
+                : mode === "failed-repair"
+                  ? [3, 5, 8][turn - 1]!
+                  : turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0),
             );
           } finally {
             admission.close();
@@ -227,7 +283,28 @@ it.each(["healthy", "recovered", "failed-repair"] as const)(
         }
         expect(requests[1]?.previous_response_id).toBe("response_1");
         expect(requests[3]?.previous_response_id).toBeUndefined();
+        if (!conflictingReplay) {
+          expect(requests[3]?.input).toContainEqual(
+            expect.objectContaining({
+              type: "function_call",
+              id: "fc_response_1",
+              arguments: mode === "legacy" ? "{}" : "{ }",
+            }),
+          );
+        }
         expect(conflicts).toBe(mode === "failed-repair" ? 2 : conflictingReplay ? 1 : 0);
+        if (deferred) {
+          expect(logInfo).toHaveBeenCalledWith(
+            "openai-transport",
+            expect.stringMatching(/item_conflict_recovery .* outcome=deferred/),
+            undefined,
+          );
+          expect(logInfo).toHaveBeenCalledWith(
+            "openai-transport",
+            expect.stringMatching(/item_conflict_recovery .* outcome=recovered/),
+            undefined,
+          );
+        }
         // The repair changes only the poisoned prefix once. Later cold turns retain it.
         for (let index = conflictingReplay ? 4 : 1; index < prefixes.length; index++) {
           assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {

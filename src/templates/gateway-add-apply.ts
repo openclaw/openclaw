@@ -24,24 +24,30 @@ import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
+import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
 } from "./gateway-add-continuation.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
   selectTemplateAgentWorkspace,
   type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
-import { projectTemplateAddOutcomes, type TemplateAddOutcomes } from "./gateway-add-result.js";
+import {
+  projectTemplateAddOutcomes,
+  type GatewayTemplateAddApplyResult,
+} from "./gateway-add-result.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
 import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
 import type { TemplateAddPlan } from "./types.js";
 
 export class TemplateGatewayPlanChangedError extends Error {
@@ -58,23 +64,18 @@ export class TemplateGatewayPlanBlockedError extends Error {
   }
 }
 
-export type GatewayTemplateAddApplyResult = {
-  agentId: string;
-  workspace?: string;
-  /** Operation receipts, not inferred from the proposed plan. Absent on early failure. */
-  outcomes?: TemplateAddOutcomes;
-  status: "complete" | "partial";
-  agentRetained?: true;
-  initializationPending?: true;
-  sessionKey?: string;
-  readiness: { ready: boolean; requirements: Array<{ kind: string; owner: string }> };
-  error?: { code: string; message: string };
-};
-
 export async function applyTemplateAddForGateway(
   input: ClawHubFetchOptions & {
     source: ClawHubCoordinate;
     agentId?: string;
+    /**
+     * Chat-based Add: no reviewed plan. `agentId` is the preferred id and the
+     * agent's own conversation continues setup; see `createTemplateAgentFromChat`.
+     */
+    mode?: "chat";
+    resume?: true;
+    onAgentCreated?: ChatTemplateAddInput["onAgentCreated"];
+    onDependenciesSettled?: ChatTemplateAddInput["onDependenciesSettled"];
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeCapabilities?: readonly TemplatePluginAcknowledgement[];
@@ -136,6 +137,12 @@ export async function applyTemplateAddForGateway(
     };
   };
   try {
+    if (input.mode === "chat" && input.agentId) {
+      const resumed = await continueTemplateSetup(input, input.agentId, stateContext);
+      if (resumed) {
+        return resumed;
+      }
+    }
     // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
     // Local durable identity and an empty guarded chat precede all remote source reads.
     if (input.agentId && input.prepareAgentChat && input.waitForAgentRuntime) {
@@ -146,10 +153,14 @@ export async function applyTemplateAddForGateway(
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
+        const admissionAgentId =
+          input.mode === "chat"
+            ? await selectChatTemplateAgentId(admissionContext, input)
+            : normalizeAgentId(input.agentId);
         await withOpenClawStateLeaseAsync(
           {
             scope: "core:agent-deletion",
-            key: normalizeAgentId(input.agentId),
+            key: admissionAgentId,
             leaseMs: 60_000,
             waitMs: 5_000,
             heartbeat: "worker",
@@ -172,7 +183,7 @@ export async function applyTemplateAddForGateway(
             assertCurrent();
 
             assertTemplatesLabsEnabled(config);
-            const agentId = normalizeAgentId(input.agentId!);
+            const agentId = admissionAgentId;
             const workspace = await selectTemplateAgentWorkspace(config, agentId);
 
             const existingConfig = config.agents?.entries?.[agentId];
@@ -238,6 +249,7 @@ export async function applyTemplateAddForGateway(
                       chat,
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
+                      createdByRequest: true,
                     };
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
@@ -267,6 +279,13 @@ export async function applyTemplateAddForGateway(
       } finally {
         await admissionContext;
       }
+    }
+
+    if (input.mode === "chat") {
+      // That path settles or removes its own admission; the handling below is plan-based.
+      const admission = admitted;
+      admitted = undefined;
+      return await createTemplateAgentFromChat(input, admission, readySessionKey, stateContext);
     }
 
     const resolved = await withResolvedClawHubSource({

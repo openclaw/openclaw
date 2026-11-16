@@ -17,6 +17,7 @@ import {
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
+  SlackStreamMessageTooLongError,
   SlackStreamNotDeliveredError,
   startSlackStream,
   stopSlackStream,
@@ -61,6 +62,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     nativeProgressStreamStartPromise: null as Promise<SlackStreamSession | null> | null,
     nativeProgressStreamThreadTs: undefined as string | undefined,
     streamFailed: false,
+    pendingTextIsProgress: false,
     usedReplyThreadTs: undefined as string | undefined,
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
@@ -206,7 +208,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return undefined;
     }
     let fallbackError = err;
-    if (!session.stopped) {
+    // A stop would flush the rejected text again and fail the same way.
+    if (!session.stopped && !(err instanceof SlackStreamMessageTooLongError)) {
       try {
         const stopResult = await stopStream(session);
         if (session.stoppedBySlack) {
@@ -276,10 +279,22 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           await stopStream(session, chunks);
           state.observedReplyDelivery ||= session.delivered;
         } catch (error) {
-          if (!(error instanceof SlackStreamNotDeliveredError)) {
+          if (error instanceof SlackStreamMessageTooLongError && chunks?.length) {
+            // The closeout pushed the message past Slack's size. Stop without
+            // it so the message still leaves streaming state.
+            runtime.error?.(
+              danger(
+                "slack-stream: Slack rejected the closeout with msg_too_long; stopping without it",
+              ),
+            );
+            markSlackStreamFallbackDelivered(session);
+            await stopStream(session);
+            state.observedReplyDelivery ||= session.delivered;
+          } else if (error instanceof SlackStreamNotDeliveredError) {
+            await deliverPendingStreamFallback(session, error);
+          } else {
             throw error;
           }
-          await deliverPendingStreamFallback(session, error);
         }
       } catch (error) {
         state.streamFailed = true;
@@ -350,9 +365,15 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
       return { visibleReplySent: false };
     }
+    const session = state.streamSession;
+    const discardProgress = params.kind === "final" && state.pendingTextIsProgress;
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
       return { visibleReplySent: false };
+    }
+    // A confirmed final supersedes optional progress, never unacknowledged answer text.
+    if (discardProgress && session?.pendingText && !session.stopped) {
+      markSlackStreamFallbackDelivered(session);
     }
     state.observedReplyDelivery = true;
     const deliveredThreadTs = resolveSlackReplyThreadTs({
@@ -451,6 +472,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     let messageId: string | undefined;
     let fallbackDelivery: LivePreviewDeliveryResult | undefined;
+    state.pendingTextIsProgress = false;
     try {
       // Each logical reply owns an acknowledged send. Empty chunks flush short
       // SDK buffers before core settles the reply, including queued fallbacks.

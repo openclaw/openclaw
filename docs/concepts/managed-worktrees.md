@@ -254,7 +254,10 @@ renames. Initialization retains the identities and timestamp eligibility observe
 while hashing its private checkout, so the first reuse can use those same facts.
 Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
-open does not rewrite their inventories.
+open does not rewrite their inventories. Local checkpoint acceptance reuses the
+prepared tree and checks the affected target paths for conflicts. It does not
+build another target manifest that the checkpoint would discard; rollback
+journals and pending-conflict recovery retain their existing ownership.
 
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
@@ -571,6 +574,10 @@ objects or locks still prevent fetching. No configuration or state migration is
 required.
 
 The Git worker reuses a bounded set of successful commit-size estimates while it remains active. Default-base object hydration is shared by immutable commit while the worker remains active; explicit refs without shared preparation recheck object availability. Free disk space is checked on every allocation. Git replacement refs disable reuse of the affected size estimates, and worker shutdown discards them.
+
+Missing-object hydration uses isolated Git metadata and does not wait behind shared
+repository ref writes, including recovery-ref publication during removal. Actual
+shared ref changes still use the repository's ordered writer queue.
 
 Creation, restore, orphan cleanup, and snapshot expiry share an allocation owner across repositories and processes using the same state directory. Registered worktree removal holds custody of its own checkout, so an unrelated creation can proceed while background removal runs. Every allocation reserves its estimated pending writes on each volume. If another operation’s reservations leave insufficient space, creation waits for that operation to settle before retrying. Reserved bytes remain accounted for until native work settles, including after cancellation or lease loss. Managed sources stay protected while a creation copies them. Slot admission and orphan cleanup share allocation custody. Template preparation serializes per template while independent checkouts materialize concurrently. A dedicated heartbeat thread renews operation leases, and contention waits are bounded to 30 minutes, allowing a dependency install's 15-minute budget plus checkout and cleanup. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 

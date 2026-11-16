@@ -4,7 +4,7 @@ import type {
   TemplatesAddPlanParams,
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { AsyncContext } from "../shared/async-context.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 
 /** Host-only capability; never serialized into model arguments or an MCP server. */
 export type SystemAgentTemplateGateway = {

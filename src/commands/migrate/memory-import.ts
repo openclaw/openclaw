@@ -125,6 +125,7 @@ export async function applyProviderMemoryImport(params: {
       itemIds: params.itemIds,
       overwrite: params.overwrite,
       preflightPlan: params.preflightPlan,
+      preferHomeBackupOutput: true,
       allowPartialResult: true,
     },
   });

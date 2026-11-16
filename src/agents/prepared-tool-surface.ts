@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isAgentToolRepeatGuardEnabled } from "./agent-scope.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
@@ -54,6 +55,10 @@ export function prepareCoreToolPolicy(
     imageSanitization: resolveImageSanitizationLimits(options.config),
     modelContextWindowTokens: options.modelContextWindowTokens,
     modelHasVision: options.modelHasVision,
+    // Worker turns run the repeat guard themselves and follow tools.loopDetection.enabled.
+    ...(isAgentToolRepeatGuardEnabled(options.config, options.agentId)
+      ? {}
+      : { toolRepeatGuard: false as const }),
     ...(options.trigger === "memory" && options.memoryFlushWritePath
       ? { memoryFlushWritePath: options.memoryFlushWritePath }
       : {}),

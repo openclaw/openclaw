@@ -1,4 +1,4 @@
-# This change adds 1991 net test/helper lines against 4b0d586; 400 are unallocated.
+# This change adds 2084 net test/helper lines against 5ed49aa; 400 are unallocated.
 # The remaining lines protect the private default compaction producer/consumer cut:
 # full-fidelity native hydration and source-version rejection, bounded floor/render
 # byte parity, exact projected-row provenance, public API shape, and live owner/auth
@@ -8,4 +8,8 @@
 # timeout, assertion exception, or baseline/threshold change.
 # Includes 32 lines moved into the prepared-runtime fixture registration owner;
 # the inherited over-cap harness has no growth, with all lazy mock behavior retained.
-1591
+# Includes one 93-line real-worker admission regression in the existing hydration suite:
+# plan and render must reject an oversized cohort before decoding a corrupted payload,
+# then the unchanged host stream must return the complete restored context. This
+# protects predecessor #194536 without a new cold shard, test-only seam or heap change.
+1684

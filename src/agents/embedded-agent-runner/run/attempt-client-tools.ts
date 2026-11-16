@@ -13,7 +13,6 @@ import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
-import { resolveToolLoopDetectionConfig } from "../../tool-loop-detection-config.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
@@ -69,10 +68,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
     }
     return slot;
   };
-  const clientToolLoopDetection = resolveToolLoopDetectionConfig({
-    cfg: params.attempt.config,
-    agentId: params.sessionAgentId,
-  });
   const sourceClientToolDefs = params.clientTools
     ? toClientToolDefinitions(
         params.clientTools,
@@ -98,7 +93,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
           config: params.toolSearchRuntimeConfig,
           sessionId: params.attempt.sessionId,
           runId: params.attempt.runId,
-          loopDetection: clientToolLoopDetection,
           onToolOutcome: params.attempt.onToolOutcome,
           allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,
         },

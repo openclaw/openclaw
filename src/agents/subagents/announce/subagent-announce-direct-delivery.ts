@@ -45,6 +45,7 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
+  isAnnounceSavedStateConflict,
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
@@ -73,7 +74,6 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
     path: "none",
     reason: "completion_handoff_pending",
     terminal: true,
-    disposition: "intentional_non_delivery",
   };
 }
 
@@ -553,7 +553,11 @@ async function sendSubagentAnnounceDirectlyBound(
       directFailure = {
         delivered: false,
         path: "direct",
-        ...(retryTranscriptConflict ? { reason: "requester_transcript_conflict" as const } : {}),
+        ...(retryTranscriptConflict
+          ? { reason: "requester_transcript_conflict" as const }
+          : isAnnounceSavedStateConflict(err)
+            ? { reason: "requester_state_conflict" as const }
+            : {}),
         error: summarizeDeliveryError(err),
         disposition:
           !retryTranscriptConflict && isPermanentAnnounceDeliveryError(err)

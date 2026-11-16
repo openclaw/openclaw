@@ -29,12 +29,20 @@ import { decodeSseFrames } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
-const PRELUDE_TYPES = new Set(["response.created", "response.in_progress", "response.queued"]);
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (
     ((typeof value === "object" && value !== null) || typeof value === "function") &&
     Symbol.asyncIterator in value
+  );
+}
+
+function isEmittedResponsesItem(item: unknown, failedSnapshot = false): boolean {
+  return (
+    isRecord(item) &&
+    item.type !== "compaction" &&
+    // Failed snapshots are not emitted; tool items can still own effects.
+    !(failedSnapshot && (item.type === "message" || item.type === "reasoning"))
   );
 }
 
@@ -48,8 +56,14 @@ export function readResponsesRecoveryEvent(event: unknown) {
         : record?.type === "error"
           ? (record.error ?? record)
           : undefined,
-    hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
-    isPrelude: record !== undefined && PRELUDE_TYPES.has(String(record.type)),
+    hasResponseOutput:
+      (Array.isArray(response?.output) &&
+        response.output.some((item) =>
+          isEmittedResponsesItem(item, record?.type === "response.failed"),
+        )) ||
+      isEmittedResponsesItem(record?.item) ||
+      (typeof record?.type === "string" &&
+        (record.type.endsWith(".delta") || record.type.includes("_call"))),
   };
 }
 
@@ -86,7 +100,11 @@ export function createResponsesItemConflictRecovery(
 ) {
   let anchor: string | undefined;
   let attempted = false;
+  let applied = false;
   return {
+    applied: () => {
+      applied = true;
+    },
     async retry(
       buildRequest: (mode: OpenAIResponsesReplayMode) => Promise<OpenAIResponsesRequestParams>,
     ) {
@@ -113,12 +131,13 @@ export function createResponsesItemConflictRecovery(
       }
     },
     finish() {
-      if (anchor) {
-        const outcome = !attempted
-          ? "deferred"
-          : output.stopReason === "error" || output.stopReason === "aborted"
-            ? "failed"
-            : "recovered";
+      if (anchor || applied) {
+        const outcome =
+          anchor && !attempted
+            ? "deferred"
+            : output.stopReason === "error" || output.stopReason === "aborted"
+              ? "failed"
+              : "recovered";
         log.info(
           `[responses] item_conflict_recovery sessionHash=${redactIdentifier(options?.sessionId)} outcome=${outcome}`,
         );
@@ -562,7 +581,7 @@ export async function createResponsesStreamWithRecovery(params: {
           try {
             for await (const event of params.wrapStream?.({ ...current, stream: providerStream }) ??
               providerStream) {
-              const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+              const { failure, hasResponseOutput } = readResponsesRecoveryEvent(event);
               outputObserved ||= hasResponseOutput;
               if (
                 isRecord(failure) &&
@@ -580,7 +599,6 @@ export async function createResponsesStreamWithRecovery(params: {
                   param: failure.param,
                 });
               }
-              outputObserved ||= !isPrelude;
               yield event;
             }
             return;

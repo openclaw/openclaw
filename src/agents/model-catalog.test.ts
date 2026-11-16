@@ -8,7 +8,10 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { buildOpenAICompatibleLiveProviderCatalog } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import {
+  buildOpenAICompatibleLiveProviderCatalog,
+  clearLiveCatalogCacheForTests,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -137,9 +140,28 @@ const customRoute = {
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
+  // Live rows are cached by provider, endpoint and credential; cases must not share a listing.
+  clearLiveCatalogCacheForTests();
 });
 
-it.each([undefined, { input: ["text"], output: ["audio"] }])(
+it("publishes a listed row without capability metadata as unknown, not excluded", async () => {
+  const baseUrl = "https://synthetic.invalid/v1";
+  const discovered = await buildOpenAICompatibleLiveProviderCatalog({
+    providerId: "synthetic",
+    providerConfig: { baseUrl, api: "openai-completions", models: [] },
+    discoveryMode: "strict",
+    fetchGuard: async () => ({
+      response: Response.json({ data: [{ id: "voice-v2" }] }),
+      finalUrl: `${baseUrl}/models`,
+      release: async () => {},
+    }),
+  });
+  expect(discovered && "provider" in discovered && discovered.provider.models).toEqual([
+    expect.not.objectContaining({ inference: expect.anything() }),
+  ]);
+});
+
+it.each([{ input: ["text"], output: ["audio"] }])(
   "keeps an excluded pin with metadata %j and rejects it before execution",
   async (modalities) => {
     const baseUrl = "https://synthetic.invalid/v1";
