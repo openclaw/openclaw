@@ -5,15 +5,19 @@ openclaw-systems-page {
   min-height: 0;
   height: 100%;
 }
-/* Systems renders in the full-bleed chat content column and supplies its own page inset:
-   the device head, the health strip and the desktop card share one gutter. */
+/* Systems renders in the full-bleed chat content column and reads in the standard wide
+   page column (.settings-page--wide: 1120px, --space-4 inline padding), centred. The
+   device head, the health strip and the desktop card share its edges. */
 .systems-workspace {
-  --systems-inset: 24px;
+  --systems-inset: var(--space-4);
   --systems-card-height: 100px;
 
   display: flex;
   flex-direction: column;
   flex: 1;
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
