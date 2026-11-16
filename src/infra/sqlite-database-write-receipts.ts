@@ -187,11 +187,11 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       scopeStates = new SharedArrayBuffer(16 * 3 * Int32Array.BYTES_PER_ELEMENT);
       scopeStateOffset = 0;
     }
-    const state = new Int32Array(scopeStates, scopeStateOffset, 3);
-    scopeStateOffset += state.byteLength;
+    const scopeState = new Int32Array(scopeStates, scopeStateOffset, 3);
+    scopeStateOffset += scopeState.byteLength;
     return {
       identity: randomUUID(),
-      state,
+      state: scopeState,
     };
   }
 
