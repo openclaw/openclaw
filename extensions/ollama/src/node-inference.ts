@@ -311,6 +311,23 @@ export function createOllamaNodeHostCommands(options?: {
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {
+  // This tool's selector has always been a case-insensitive literal id or display
+  // name, which also covers names made only of symbols. The shared resolver keys
+  // names through `normalizeNodeKey`, so it compares ids case-sensitively and
+  // normalizes a symbol-only name to an empty key. Keep the literal shapes this
+  // tool already accepted, then let the resolver add canonical equivalence.
+  const literal = query.trim().toLowerCase();
+  const literalMatches = nodes.filter(
+    (node) => node.nodeId.toLowerCase() === literal || node.displayName?.toLowerCase() === literal,
+  );
+  if (literalMatches.length > 1) {
+    throw new Error(`node ${JSON.stringify(query)} is ambiguous; use its nodeId`);
+  }
+  const literalMatch = literalMatches[0];
+  if (literalMatch) {
+    return literalMatch;
+  }
+
   // Display names arrive from the node's own host, so a macOS host stores them
   // decomposed while a typed or agent-supplied selector may be composed. The
   // shared resolver owns that equivalence plus the ambiguity diagnostics.

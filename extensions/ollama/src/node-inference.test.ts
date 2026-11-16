@@ -369,6 +369,32 @@ describe("node-local Ollama node selection", () => {
     },
   );
 
+  it("keeps a case-varied node id selectable", async () => {
+    const invoke = vi.fn(async () => ({ payload: { models: [] } }));
+    const api = nodeApi([nodeRow("abcdef123456", undefined, "Desk")], invoke);
+
+    await createOllamaNodeInferenceTool(api).execute(
+      "upper-id",
+      { action: "discover", node: "ABCDEF123456" },
+      undefined,
+    );
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "abcdef123456" }));
+  });
+
+  it("keeps a symbol-only display name selectable", async () => {
+    const invoke = vi.fn(async () => ({ payload: { models: [] } }));
+    const api = nodeApi([nodeRow("paired-node", undefined, "🍎")], invoke);
+
+    await createOllamaNodeInferenceTool(api).execute(
+      "symbol-name",
+      { action: "discover", node: "🍎" },
+      undefined,
+    );
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "paired-node" }));
+  });
+
   it("keeps the unsupported-node diagnostic for an unknown selector", async () => {
     const api = nodeApi([nodeRow("paired-node", undefined, "Desk")], vi.fn());
 
