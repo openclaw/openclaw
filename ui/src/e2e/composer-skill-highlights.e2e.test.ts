@@ -46,6 +46,16 @@ suite.define(() =>
         );
         const native = surface.locator("textarea");
         const active = () => surface.locator("textarea:visible, [data-composer-editor]");
+        const richEditorRequests: string[] = [];
+        page.on("request", (request) => {
+          if (request.url().includes("/composer-editor-mentions.tsx")) {
+            richEditorRequests.push(request.url());
+          }
+        });
+        await active().fill("Literal $HOME and $unknown");
+        await page.waitForLoadState("networkidle");
+        expect(richEditorRequests).toEqual([]);
+        expect(await native.isVisible()).toBe(true);
         await active().fill("Find the right skill with $claw");
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });

@@ -648,6 +648,8 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
       catalog: 200,
     },
     { name: "activate-skill", mode: "native", bytes: 256, action: "activate-skill", catalog: 200 },
+    { name: "first-skill", mode: "native", bytes: 256, action: "first-skill", catalog: 200 },
+    { name: "literal-dollar", mode: "native", bytes: 256, action: "literal-dollar", catalog: 200 },
     { name: "cycles", mode: "mixed", bytes: 256, action: "cycles", catalog: 200 },
   ] as const;
   return (["chat", "new"] as const).flatMap((surface) =>
@@ -827,6 +829,11 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
               const text = " typing-1234";
               await input(page).pressSequentially(text);
               expected += text;
+            } else if (workload.action === "literal-dollar") {
+              const text = "Literal $HOME and $unknown ";
+              await input(page).pressSequentially(text);
+              expected += text;
+              await page.waitForLoadState("networkidle");
             } else if (workload.action === "paste") {
               const text = "Synthetic pasted line.\n".repeat(13000).slice(0, 262144);
               await input(page).evaluate((element, value) => {
@@ -847,15 +854,27 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
               expected += text;
             } else if (
               workload.action === "activate-person" ||
-              workload.action === "activate-skill"
+              workload.action === "activate-skill" ||
+              workload.action === "first-skill"
             ) {
+              // Unlike selection-only activation, include the first dollar,
+              // catalog readiness, parser and editor imports in this window.
+              if (workload.action === "first-skill") {
+                await input(page).pressSequentially("$skill_0199");
+                await page
+                  .getByRole("listbox", { name: "Skill references" })
+                  .getByRole("option")
+                  .first()
+                  .waitFor();
+                expected += "$skill_0199";
+              }
               const person = workload.action === "activate-person";
               await page
                 .getByRole("listbox", { name: person ? "Mention a person" : "Skill references" })
                 .getByRole("option")
                 .first()
                 .click();
-              expected = start.draft.replace(
+              expected = expected.replace(
                 person ? /@Casey$/u : /\$skill_0199$/u,
                 person ? "@Casey 00 " : "$skill_0199 ",
               );
@@ -904,6 +923,7 @@ function createComposerReferenceQualificationScenarios(): readonly EngineScenari
             }
             if (
               workload.action !== "activate-skill" &&
+              workload.action !== "first-skill" &&
               workload.action !== "paste" &&
               skills !== start.skills
             ) {
