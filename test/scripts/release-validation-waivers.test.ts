@@ -331,7 +331,7 @@ it("admits only the authorized 2026.11.5 Kova failure without skipping qualifica
   };
   expect(terminalPolicyPass(kova, "2026.11.5")).toBe(true);
   expect(kova.conclusion).toBe("failure");
-  expect(kova.jobs[0].conclusion).toBe("failure");
+  expect(kova.jobs).toMatchObject([{ conclusion: "failure" }]);
   expect(releaseQualificationExemptions("2026.11.5", "stable")).toEqual([]);
   expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
   expect(terminalPolicyPass({ ...kova, key: "normalCi" }, "2026.11.5")).toBe(false);
