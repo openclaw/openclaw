@@ -69,8 +69,8 @@ import {
 
 export type SessionStoreTargetPreparationRequest =
   | { storePath: string; captureIdentity?: false }
-  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
-  | ({ inventory: true } & CapturedSessionStoreTargetInventory)
+  | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv; captureIdentity?: false }
+  | ({ inventory: true; captureIdentity?: false } & CapturedSessionStoreTargetInventory)
   | {
       observePaths: {
         inventory?: CapturedSessionStoreTargetInventory;
@@ -180,7 +180,7 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
     physicalPath,
     scope,
     identity:
-      scope || ("storePath" in request && request.captureIdentity === false)
+      scope || ("captureIdentity" in request && request.captureIdentity === false)
         ? identity
         : readDatabasePathIdentitySync(pathname),
   }));

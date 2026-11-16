@@ -171,6 +171,12 @@ it.each([
       expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.completion?.resultText).toBe(
         "captured child answer",
       );
+      expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery?.status).toBe(
+        "pending",
+      );
+      expect(warning).not.toHaveBeenCalled();
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+      return;
     } else if (route === "direct-legacy-yielded-batch") {
       await suspendReplacedStoreNotifications({ runs: subagentRuns, resumedRuns: new Set() });
     } else if (route !== "batch" && route !== "batch-retry" && !route.endsWith("yielded-batch")) {

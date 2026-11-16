@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import * as prompt from "./prompt.js";
 import { runTemplatesAddCommand } from "./templates-cli.runtime.js";
@@ -302,6 +302,23 @@ describe("Template Add CLI state ownership", () => {
       expect(await snapshotTree(root)).toEqual(before);
     },
   );
+
+  it("names the rerun that continues a kept agent whose setup did not finish", async () => {
+    result = {
+      agentId: "demo",
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false, requirements: [] },
+      error: { code: "template_initialization_failed", message: "Download failed." },
+    };
+    await fixture.startOwner();
+    await runTemplatesAddCommand("@acme/demo", {});
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Rerun with --agent-id demo"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it.each(["none", "capabilities-only", "risk-only", "both", "declined-sibling"])(
     "requires separate exact plugin and skill trust consent: %s",

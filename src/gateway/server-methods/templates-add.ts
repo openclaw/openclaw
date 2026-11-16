@@ -32,17 +32,18 @@ import {
 } from "../../templates/cron.js";
 import {
   applyTemplateAddForGateway,
-  type GatewayTemplateAddApplyResult,
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
 import { planTemplateAddForGateway } from "../../templates/gateway-add-plan.js";
+import type { GatewayTemplateAddApplyResult } from "../../templates/gateway-add-result.js";
 import { TemplateGatewayConsentError } from "../../templates/gateway-plugin-consent.js";
 import { TemplateSkillConsentError } from "../../templates/gateway-skill-consent.js";
 import {
   assertTemplatesLabsEnabled,
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
+import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
@@ -54,6 +55,11 @@ import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/templates-add");
 
+/** A Template that declares the reserved workspace-root CLAW.md; Add removed the new agent. */
+function isTemplateManifestConflict(error: unknown): error is TemplateAddMutationError {
+  return error instanceof TemplateAddMutationError && error.code === "workspace_conflict";
+}
+
 /** One error-disclosure boundary for UI RPCs and the setup helper. */
 export function reportTemplateAddFailure(error: unknown, operation: "plan" | "apply"): string {
   log.error(
@@ -62,6 +68,9 @@ export function reportTemplateAddFailure(error: unknown, operation: "plan" | "ap
       " failed: " +
       (error instanceof Error ? error.message : String(error)),
   );
+  if (operation === "apply" && isTemplateManifestConflict(error)) {
+    return `${error.message} Nothing was kept. Ask the publisher to move the conflicting workspace file and publish a corrected release before adding it again.`;
+  }
   if (
     error instanceof TemplatesLabsDisabledError ||
     error instanceof ClawHubSourceError ||
@@ -109,8 +118,10 @@ export async function planTemplateAddForRequest(
 export async function applyTemplateAddForRequest(
   options: GatewayRequestHandlerOptions & { params: TemplatesAddApplyParams },
 ): Promise<GatewayTemplateAddApplyResult> {
-  const { params, context, client, signal, sessionMutationCommitGuard, hasCurrentClientAuthority } =
+  const { context, client, signal, sessionMutationCommitGuard, hasCurrentClientAuthority } =
     options;
+  // The handler option type also carries an open record; name the union so `mode` narrows.
+  const params: TemplatesAddApplyParams = options.params;
   const configPath = resolveConfigPath();
   const configEnv = process.env;
   const assertCurrent = () => {
@@ -170,17 +181,64 @@ export async function applyTemplateAddForRequest(
       );
     }
   };
+  const publishProgress = (
+    stage: "agent-admitted" | "agent-ready",
+    agent: { agentId: string; sessionKey: string },
+  ) => {
+    if (options.client?.connId) {
+      context.broadcastToConnIds(
+        "templates.add.progress",
+        { requestId: options.req.id, stage, ...agent },
+        new Set([options.client.connId]),
+      );
+    }
+  };
   const result = await applyTemplateAddForGateway({
     source: params.source,
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    planIntegrity: params.planIntegrity,
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-    ...(params.acknowledgeCapabilities
-      ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
-      : {}),
-    ...(params.acknowledgeSkillWarnings
-      ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
-      : {}),
+    ...("mode" in params
+      ? {
+          mode: params.mode,
+          ...(params.resume ? { resume: true as const } : {}),
+          // Creation has finished: the first turn starts now, with its outcome, and
+          // nothing was installed here that needs an installer card in the chat.
+          onAgentCreated: async (agent, report) => {
+            assertCurrent();
+            await startAgentOnboardingConversation(
+              options,
+              agent.agentId,
+              agent.sessionKey,
+              "template",
+              buildTemplateOpeningMessage(report, agent),
+            );
+            publishProgress("agent-ready", agent);
+          },
+        }
+      : {
+          planIntegrity: params.planIntegrity,
+          ...(params.acknowledgeCapabilities
+            ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
+            : {}),
+          ...(params.acknowledgeSkillWarnings
+            ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
+            : {}),
+          onAgentReady: async (agent) => {
+            assertCurrent();
+            publishProgress("agent-ready", agent);
+            await startAgentOnboardingConversation(
+              options,
+              agent.agentId,
+              agent.sessionKey,
+              "template",
+            );
+          },
+          onSetupEvent: async (event) => {
+            assertCurrent();
+            await publishTemplateInstallEvent(options.context, event, assertCurrent);
+            assertCurrent();
+          },
+        }),
     getPlanningContext: async () => {
       assertCurrent();
       const config = await readCurrentConfigForPolicyCheckAsync({
@@ -224,20 +282,9 @@ export async function applyTemplateAddForRequest(
       }
       return outcome;
     },
-    onAgentAdmitted: async ({ agentId, sessionKey }) => {
+    onAgentAdmitted: async (agent) => {
       assertCurrent();
-      if (options.client?.connId) {
-        context.broadcastToConnIds(
-          "templates.add.progress",
-          {
-            requestId: options.req.id,
-            stage: "agent-admitted",
-            agentId,
-            sessionKey,
-          },
-          new Set([options.client.connId]),
-        );
-      }
+      publishProgress("agent-admitted", agent);
     },
     waitForAgentRuntime: async (retainedAgent) => {
       if (retainedAgent) {
@@ -253,27 +300,6 @@ export async function applyTemplateAddForRequest(
         );
       }
       return outcome;
-    },
-    onAgentReady: async ({ agentId, sessionKey }) => {
-      assertCurrent();
-      if (options.client?.connId) {
-        context.broadcastToConnIds(
-          "templates.add.progress",
-          {
-            requestId: options.req.id,
-            stage: "agent-ready",
-            agentId,
-            sessionKey,
-          },
-          new Set([options.client.connId]),
-        );
-      }
-      await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
-    },
-    onSetupEvent: async (event) => {
-      assertCurrent();
-      await publishTemplateInstallEvent(options.context, event, assertCurrent);
-      assertCurrent();
     },
     prepareAgentChat: async (agentId, config, pending) => {
       assertCurrent();
@@ -393,6 +419,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
               error instanceof TemplateGatewayPlanBlockedError ||
               error instanceof TemplateGatewayConsentError ||
               error instanceof TemplateSkillConsentError ||
+              isTemplateManifestConflict(error) ||
               (error instanceof ClawHubSourceError &&
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
