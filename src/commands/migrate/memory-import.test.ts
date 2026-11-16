@@ -10,15 +10,19 @@ const mocks = vi.hoisted(() => ({
   providers: [] as MigrationProviderPlugin[],
   runMigrationApply: vi.fn(),
 }));
-// mock-isolation: Offer shaping is under test; owner selection, plugin loading and the
-// apply writer are covered by the wizard owner test and the migrate apply tests.
-vi.mock("../../plugins/migration-provider-runtime.js", () => ({
+// Offer shaping is under test; owner selection, plugin loading and the apply writer
+// are covered by the wizard owner test and the migrate apply tests.
+vi.mock("../../plugins/migration-provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/migration-provider-runtime.js")>()),
   withPluginMigrationProviders: async (
     _params: unknown,
     run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
   ) => await run(mocks.providers),
 }));
-vi.mock("./apply.js", () => ({ runMigrationApply: mocks.runMigrationApply }));
+vi.mock("./apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./apply.js")>()),
+  runMigrationApply: mocks.runMigrationApply,
+}));
 
 const tempRoots: string[] = [];
 

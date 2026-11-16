@@ -6,8 +6,9 @@ import type { WizardPrompter } from "./prompts.js";
 import { runSetupMemoryImportStep } from "./setup.memory-import.js";
 
 const mocks = vi.hoisted(() => ({ offers: [] as MemoryMigrationOffer[] }));
-// mock-isolation: The offer owner separately proves local/Gateway planning and apply.
-vi.mock("../commands/migrate/memory-import.js", () => ({
+// The offer owner separately proves local/Gateway planning and apply.
+vi.mock("../commands/migrate/memory-import.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/migrate/memory-import.js")>()),
   withMemoryMigrationOffers: async (
     _params: unknown,
     run: (offers: MemoryMigrationOffer[]) => Promise<unknown>,
