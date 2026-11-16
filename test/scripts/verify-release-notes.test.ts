@@ -2465,6 +2465,23 @@ console.log(JSON.stringify({ data }));
     }
   });
 
+  it("collects canonical main history exceeding the old 16 MiB command buffer", () => {
+    const { cwd, base } = seedRepository("openclaw-release-large-main-", "main");
+    const message = join(cwd, ".git", "large-message");
+    writeFileSync(
+      message,
+      "docs: long canonical history\n\n" + "history detail\n".repeat(1_200_000),
+    );
+    git(cwd, ["commit", "--allow-empty", "-q", "-F", message]);
+    const mainRef = git(cwd, ["rev-parse", "HEAD"]);
+    splitChangelog({ rootDir: cwd });
+    const manifest = join(cwd, "manifest.json");
+    const result = runVerifier(cwd, { base, target: base, mainRef, manifest });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).errors).toEqual([]);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).source.directCommits).toBe(0);
+  });
+
   it.each(["missing", "mixed", "wrong-path", "non-null"])(
     "preserves optional missing-user semantics at the CLI boundary: %s",
     (mode) => {

@@ -1,2 +1,2 @@
-# Read-only pinned release source CLI regressions: missing and docs-mirrored working trees, once-resolved source provenance, invalid refs/versions, historical-write rejection, and artifact/alias collision protection. Also covers optional missing-user omission, retained verified credit, and mixed/wrong-path/non-null GraphQL refusal (PR #199961 automated review). Existing historical recovery cases remain intact.
-217
+# Read-only pinned release source CLI regressions: missing and docs-mirrored working trees, once-resolved source provenance, invalid refs/versions, historical-write rejection, and artifact/alias collision protection. Also covers optional missing-user omission, retained verified credit, and mixed/wrong-path/non-null GraphQL refusal (PR #199961 automated review). Includes a real Git canonical-history CLI regression above the former 16 MiB buffer. Existing historical recovery cases remain intact.
+234

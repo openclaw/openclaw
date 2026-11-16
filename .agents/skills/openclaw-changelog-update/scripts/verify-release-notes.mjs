@@ -241,7 +241,8 @@ function run(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1", ...options.env },
-    maxBuffer: 16 * 1024 * 1024,
+    // Canonical main history exceeded 16 MiB during final-tag accounting (PR #199961).
+    maxBuffer: 64 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
