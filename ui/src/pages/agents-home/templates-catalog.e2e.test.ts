@@ -246,6 +246,24 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await capture(page, "recommended-prompts-" + viewport.name, detail);
       const prompts = detail.locator(".plugin-recommended-prompts__prompt");
       expect(await prompts.count()).toBe(3);
+      const brandPath = await detail
+        .locator(".plugin-catalog-detail__icon svg path")
+        .first()
+        .getAttribute("d");
+      expect
+        .soft(
+          await prompts
+            .first()
+            .locator(".plugin-prompt-mention__icon svg path")
+            .first()
+            .getAttribute("d"),
+        )
+        .toBe(brandPath);
+      const promptBox = await detail.locator(".plugin-recommended-prompts").boundingBox();
+      const headingBox = await detail
+        .getByRole("heading", { name: "Workspace files" })
+        .boundingBox();
+      expect.soft(headingBox!.y - promptBox!.y - promptBox!.height).toBeGreaterThanOrEqual(24);
       expect(
         await detail
           .locator(".plugin-recommended-prompts__text > span:last-child")

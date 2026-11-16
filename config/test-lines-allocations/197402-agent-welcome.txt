@@ -1,6 +1,7 @@
-# PR #197402: 39 lines above the 400-line allowance for config/Template
+# PR #197402: 81 lines above the 400-line allowance for config/Template
 # preservation, bootstrap-first setup Retry, welcome/Add browser boundaries,
 # exact JSON failure-envelope/one-diagnostic assertions, real-host native IPC under
 # Windows service emulation, explicit cold model-panel import readiness, and
-# selected-task versus plain-Add setup-header regression assertions.
-39
+# selected-task versus plain-Add setup-header assertions, Template artwork
+# fallback preservation, and real-browser prompt-to-workspace section spacing.
+81

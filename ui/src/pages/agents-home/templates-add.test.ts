@@ -280,6 +280,7 @@ describe("Template Add", () => {
       });
       const prompt = () => find(".plugin-recommended-prompts button");
       await waitForSolid(() => expect(prompt()).toHaveProperty("disabled", false));
+      expect(prompt()!.querySelectorAll(".plugin-prompt-mention__icon svg circle")).toHaveLength(2);
       prompt()!.click();
       await waitForSolid(() => expect(find(".templates-trust-warning")).not.toBeNull());
       const selected = { ...chatAdd, initialPrompt: "Set up a repository" };

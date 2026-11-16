@@ -6,7 +6,7 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { IconButton } from "../../components/solid/icon-button.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
@@ -77,6 +77,7 @@ type ArtTileProps = {
   loading?: boolean;
   class?: string;
   whiteBackground?: boolean;
+  fallbackIcon?: IconName;
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
@@ -158,7 +159,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
           }
           aria-hidden="true"
         >
-          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
+          {monogram() ? <span>{monogram()}</span> : <Icon name={props.fallbackIcon ?? "plug"} />}
         </span>
       )}
     </>

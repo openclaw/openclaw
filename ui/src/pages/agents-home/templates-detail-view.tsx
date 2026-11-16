@@ -241,6 +241,18 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                     )}
                   </For>
                 }
+                recommendations={
+                  <PluginRecommendedPrompts
+                    id={selected().packageName}
+                    name={detail()?.agentName ?? selected().displayName}
+                    iconUrl={detail()?.iconUrl}
+                    prompts={detail()?.recommendedPrompts}
+                    fallbackIcon="blobster"
+                    disabled={!canAdd()}
+                    busy={view().applying}
+                    onSelect={(prompt) => void view().onSelectPrompt(prompt)}
+                  />
+                }
                 panel={
                   <>
                     <For each={[view().detailRequest]}>
@@ -274,15 +286,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                             }
                           >
                             <Show when={view().readDetail()}>
-                              <PluginRecommendedPrompts
-                                id={selected().packageName}
-                                name={detail()?.agentName ?? selected().displayName}
-                                iconUrl={detail()?.iconUrl}
-                                prompts={detail()?.recommendedPrompts}
-                                disabled={!canAdd()}
-                                busy={view().applying}
-                                onSelect={(prompt) => void view().onSelectPrompt(prompt)}
-                              />
                               <TemplateContents view={view()} />
                             </Show>
                           </Loading>

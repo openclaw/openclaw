@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
@@ -12,6 +12,7 @@ export function PluginPromptMention(props: {
   id: string;
   name: string;
   iconUrl?: string;
+  fallbackIcon?: IconName;
   registerIcon?: (readId: () => string) => () => void;
   onIconError?: () => void;
   reference?: boolean;
@@ -26,6 +27,7 @@ export function PluginPromptMention(props: {
           slug={props.id}
           name=""
           iconUrl={props.iconUrl}
+          fallbackIcon={props.fallbackIcon}
           registerIcon={props.registerIcon}
           onIconError={props.onIconError}
           class="plugin-prompt-mention__icon"
@@ -41,6 +43,7 @@ export function PluginRecommendedPrompts(props: {
   name: string;
   prompts?: readonly string[];
   iconUrl?: string;
+  fallbackIcon?: IconName;
   registerIcon?: (readId: () => string) => () => void;
   onIconError?: () => void;
   busy?: boolean;
@@ -74,6 +77,7 @@ export function PluginRecommendedPrompts(props: {
                     id={props.id}
                     name={props.name}
                     iconUrl={props.iconUrl}
+                    fallbackIcon={props.fallbackIcon}
                     registerIcon={props.registerIcon}
                     onIconError={props.onIconError}
                   />{" "}

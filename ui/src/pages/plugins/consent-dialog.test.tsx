@@ -281,6 +281,29 @@ describe("renderPluginConsentDialog", () => {
   });
 });
 
+it.each([undefined, "blobster"] as const)(
+  "preserves artwork before using the %s icon fallback",
+  (fallbackIcon) => {
+    const view = mountSolid(() => (
+      <PluginArtTile slug="project" name="" iconUrl="blob:artwork" fallbackIcon={fallbackIcon} />
+    ));
+    flush();
+    const image = view.container.querySelector("img")!;
+    expect(image.getAttribute("src")).toBe("blob:artwork");
+    image.dispatchEvent(new Event("load"));
+    flush();
+    expect(image.hidden).toBe(false);
+    image.dispatchEvent(new Event("error"));
+    flush();
+    expect(view.container.querySelector("img")).toBeNull();
+    expect(view.container.querySelectorAll("svg circle")).toHaveLength(
+      fallbackIcon === "blobster" ? 2 : 0,
+    );
+    expect(view.container.querySelector("svg path")?.getAttribute("d")).toBeTruthy();
+    view.unmount();
+  },
+);
+
 it("tries the author image after a broken package image, then retains initials until the source changes", () => {
   const [url, setUrl] = createSignal("blob:package");
   const unregister = vi.fn();

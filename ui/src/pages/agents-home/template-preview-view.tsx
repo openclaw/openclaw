@@ -184,6 +184,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           name={props.view.detail?.agentName ?? identity()?.displayName ?? ""}
                           iconUrl={identity()?.iconUrl}
                           prompts={props.view.detail?.recommendedPrompts}
+                          fallbackIcon="blobster"
                           disabled={!props.view.canAdd || Boolean(props.view.consentWarning)}
                           busy={props.view.applying}
                           onSelect={(prompt) => void props.view.onSelectPrompt(prompt)}
