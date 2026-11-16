@@ -387,14 +387,14 @@ function convertResponsesMessagesWithStyle(
   const replayCallId = (id: string) =>
     recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
-  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
+  const nativeOpenAI = supportsNativeOpenAIResponsesEndpoint(model);
   const convertMessage = (
     msg: Context["messages"][number],
     messageIndex: number,
   ): ResponseInput => {
     const replayItemIds = shouldReplayResponsesItemIds && !recoveryAnchor;
     const converted: ResponseInput = [];
-    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
+    if (nativeOpenAI && isRuntimeContextMessage(msg)) {
       converted.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -406,7 +406,7 @@ function convertResponsesMessagesWithStyle(
     } else if (msg.role === "user") {
       const role =
         msg.operatorMessage &&
-        inHistorySystemUpdates &&
+        nativeOpenAI &&
         (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
           ? resolveResponsesInstructionRole(model)
           : "user";
@@ -470,10 +470,11 @@ function convertResponsesMessagesWithStyle(
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
-            // Ciphertext is self-contained. Its ID may name no stored record (store:false or
-            // compacted turns), and a second stored replay then fails with item_conflict.
-            // Provider message and call IDs require the reasoning ID, so they follow it.
-            if (replayableReasoningItem.encrypted_content) {
+            // OpenAI's store records replayed ciphertext under its ID. An ID from a store:false
+            // or compacted turn names no stored record, so the second stored replay fails with
+            // item_conflict. Ciphertext is self-contained; dependent message and call IDs follow.
+            // Foundry instead validates ciphertext against its original ID.
+            if (replayableReasoningItem.encrypted_content && (nativeOpenAI || !replayItemIds)) {
               delete replayableReasoningItem.id;
             } else if (
               // Summaries alone cannot verify stateless reasoning and poison the next cached continuation.
@@ -636,7 +637,7 @@ function convertResponsesMessagesWithStyle(
     conversionStyle,
     replayContext,
     shouldReplayResponsesItemIds,
-    inHistorySystemUpdates,
+    nativeOpenAI,
     resolveResponsesInstructionRole(model),
     model.input.includes("image"),
     options?.retainUserProvenance === true,

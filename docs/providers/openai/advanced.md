@@ -323,8 +323,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     replaying a request after output or tool work has started. Azure and custom
     endpoint storage policies are unchanged.
 
-    Replayed reasoning that carries encrypted content is sent without its item ID,
-    and the message and tool-call IDs that depend on it are omitted too. A turn
+    On the native OpenAI endpoint, replayed reasoning that carries encrypted
+    content is sent without its item ID, and the message and tool-call IDs that
+    depend on it are omitted too. A turn
     sent with `store: false` (for example, one that carries a compaction
     checkpoint) returns item IDs that name no stored record. A later stored
     request records that reasoning under its ID, and the next stored request fails

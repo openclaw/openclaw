@@ -312,7 +312,6 @@ describe("convertResponsesMessages", () => {
       };
       const golden = `[${[
         '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
-        // Ciphertext replays without IDs that may name no stored record.
         '{"type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
         '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","phase":"commentary"}',
         String.raw`{"type":"function_call","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
@@ -474,10 +473,9 @@ describe("convertResponsesMessages", () => {
       const model = { ...nativeOpenAIModel, api };
       const summary =
         api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
-      const content =
-        api === "openai-chatgpt-responses"
-          ? [{ type: "reasoning_text", text: "safe content" }]
-          : undefined;
+      const content = summary.length
+        ? [{ type: "reasoning_text", text: "safe content" }]
+        : undefined;
       const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
       const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
         ...reasoningReplayIdentity,
@@ -518,6 +516,7 @@ describe("convertResponsesMessages", () => {
           expect(item).toEqual(
             preservesCiphertext
               ? {
+                  ...(replayIds && api !== "openai-responses" ? { id: "rs_route_fenced" } : {}),
                   type: "reasoning",
                   summary,
                   ...(content ? { content } : {}),
