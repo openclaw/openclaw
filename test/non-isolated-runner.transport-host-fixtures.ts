@@ -19,7 +19,8 @@ const response = text => new Response(
 const context = { messages: [{ role: "user", content: "Synthetic host lifetime", timestamp: 0 }] };
 `;
   return {
-    "transport-host-native.cjs": 'module.exports = require("openclaw/plugin-sdk/llm");\n',
+    "transport-host-native.cjs":
+      'module.exports = { ...require("openclaw/plugin-sdk/llm"), ...require("openclaw/plugin-sdk/simple-completion-runtime") };\n',
     "09-host-a-producer.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
 import { createPluginModuleLoader } from ${source("src/plugins/loader-module-runtime.ts")};
@@ -30,7 +31,10 @@ const sdk = load(${JSON.stringify(path.join(fixtureRoot, "transport-host-native.
 vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected real fetch"));
 configureAiTransportHost({ ...getDefaultAiTransportHost(), buildModelFetch: () => async () => response("producer") });
 // The public call initializes the retained native graph before the file-boundary assertions.
-const produced = await sdk.complete(model, context, { apiKey: "synthetic-key" });
+const produced = await sdk.completeWithPreparedSimpleCompletionModel({
+  model, context, auth: { apiKey: "synthetic-key", source: "test", mode: "api-key" },
+  cfg: { plugins: { enabled: false } },
+});
 it("retains file transport policy through producer teardown", () => {
   expect(produced.content).toEqual([
     { type: "text", text: "producer" },
@@ -44,10 +48,30 @@ afterAll(() => {
 `,
     "09-host-b-native.test.ts": `
 import { expect, it, vi } from "vitest";
+import { text as readText } from "node:stream/consumers";
+import { attachModelProviderRequestTransport } from ${source("src/agents/provider-request-config.ts")};
+import { completionChunk, startCompletionServer } from ${source("src/agents/simple-completion.test-support.ts")};
 import { withGuardedFetchBeforeRequest } from ${source("src/infra/net/fetch-request-authority.ts")};
 import { sealSecretSentinel } from ${source("src/secrets/sentinel.ts")};
 it("restores retired policy for a retained native SDK without source host imports", async () => {
   const { sdk, model, context, getDefaultAiTransportHost } = globalThis.__retainedTransportSdk;
+  const requests = [];
+  await using server = await startCompletionServer((request, response) => {
+    void readText(request).then(raw => {
+      requests.push(JSON.parse(raw));
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(completionChunk("prepared-native"));
+    });
+  });
+  const prepared = await sdk.completeWithPreparedSimpleCompletionModel({
+    model: attachModelProviderRequestTransport({ ...model, baseUrl: server.baseUrl }, { allowPrivateNetwork: true }),
+    context,
+    auth: { apiKey: "synthetic-key", source: "test", mode: "api-key" },
+    cfg: { plugins: { enabled: false }, agents: { defaults: { params: { chat_template_kwargs: { enable_thinking: false } } } } },
+  });
+  expect(prepared.content).toEqual([{ type: "text", text: "prepared-native" }]);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({ chat_template_kwargs: { enable_thinking: false } });
   const unexpectedFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected real fetch"));
   const beforeRequest = vi.fn(() => { throw new Error("Synthetic egress owner retired"); });
   const result = await withGuardedFetchBeforeRequest(

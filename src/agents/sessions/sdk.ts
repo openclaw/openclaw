@@ -166,7 +166,8 @@ function createSessionStreamFn(
       throw new Error(auth.error);
     }
     // Isolated session streams bypass the process-default stream facade.
-    await import("../ai-transport-runtime-host.js");
+    const { configureAiTransportRuntimeHost } = await import("../ai-transport-runtime-host.js");
+    configureAiTransportRuntimeHost();
     optionsLocal?.signal?.throwIfAborted();
     const providerRetrySettings = settingsManager.getProviderRetrySettings();
     const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
