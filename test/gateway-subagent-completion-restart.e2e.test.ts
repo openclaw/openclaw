@@ -35,6 +35,7 @@ it
     "announcing",
     "announcing-crash",
     "private-announcing",
+    "private-announcing-crash",
     "busy-requester",
     "retrying-requester",
     "unmarked-requester",
@@ -43,7 +44,7 @@ it
   { timeout: 180_000 },
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
-    const privateContinuation = kind === "private-announcing";
+    const privateContinuation = kind.startsWith("private-announcing");
     const busyRequester = kind === "busy-requester";
     const retryingRequester = kind === "retrying-requester";
     const rootKey = "agent:main:dashboard:restart-hub";
@@ -280,10 +281,24 @@ it
             event.message.provenance.sourceTool === "subagent_announce"
           );
         }
-        // Direct results are persisted in their runtime carrier, yielded batches in the input.
-        const message = privateContinuation
-          ? event.type === "custom_message" && event
-          : event.type === "message" && isRecord(event.message) && event.message.role === "user"
+        if (privateContinuation) {
+          // Pending-result summaries repeat the text; only the completion event is delivery.
+          return (
+            event.type === "custom_message" &&
+            isRecord(event.details) &&
+            Array.isArray(event.details.fragments) &&
+            event.details.fragments.some(
+              (fragment) =>
+                isRecord(fragment) &&
+                fragment.kind === "conversation-data" &&
+                typeof fragment.text === "string" &&
+                fragment.text.startsWith("[Internal task completion event]\n") &&
+                fragment.text.includes("CAPTURED_CUSTODY_RESULT"),
+            )
+          );
+        }
+        const message =
+          event.type === "message" && isRecord(event.message) && event.message.role === "user"
             ? event.message
             : undefined;
         return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
@@ -431,7 +446,7 @@ it
         if (kind === "nested") {
           expect(readRun(childRunId)).toMatchObject({ pauseReason: "sessions_yield" });
         }
-        if (kind === "announcing-crash" || retryingRequester) {
+        if (kind.endsWith("-crash") || retryingRequester) {
           await instance.crashGateway();
         } else {
           await instance.stopGateway();
