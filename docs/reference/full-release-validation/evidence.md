@@ -15,6 +15,12 @@ confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
 
+Local manifest verification requires `unzip` on `PATH`. The reader checks this
+prerequisite before acquiring manifest artifacts and retains the underlying
+error when listing or reading an archive fails. A missing executable is a local
+setup failure, not invalid qualification evidence; install it and repeat the
+same pinned verification without changing the candidate or rerunning validation.
+
 Decide blocker or flake for every failed test. Every selected failure blocks
 validation unless it matches the checked-in release-tooling policy below.
 Publication always requires a successful Full Release Validation run.

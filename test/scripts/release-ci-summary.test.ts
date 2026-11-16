@@ -1577,6 +1577,51 @@ describe("release CI summary child correlation", () => {
   });
 
   it.skipIf(!hasUnzip)(
+    "reports missing local unzip without blaming a valid manifest artifact",
+    () => {
+      const root = tempDirs.make("release-manifest-prerequisite-");
+      const archivePath = join(root, "manifest.zip");
+      const manifest = { version: 2 };
+      const archive = makeStoredZip({ [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest) });
+      writeFileSync(archivePath, archive);
+      expect(readManifestArtifactArchive(archivePath, artifactDigest(archive))).toEqual(manifest);
+      vi.stubEnv("PATH", root);
+      try {
+        expect(() => readManifestArtifactArchive(archivePath, artifactDigest(archive))).toThrow(
+          expect.objectContaining({
+            message: expect.stringMatching(/unzip.*PATH.*ENOENT/u),
+            cause: expect.objectContaining({ code: "ENOENT", path: "unzip" }),
+          }),
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "checks local unzip before acquiring manifest evidence from GitHub",
+    () => {
+      const root = tempDirs.make("release-manifest-acquisition-");
+      const { calls } = ghFixture(root, {
+        "repos/openclaw/openclaw/actions/runs/123/artifacts?*": { artifacts: [] },
+      });
+      vi.stubEnv("PATH", root);
+      try {
+        expect(() => createReleaseEvidenceClient().loadManifest("123", 1)).toThrow(
+          expect.objectContaining({
+            message: expect.stringMatching(/unzip.*PATH.*ENOENT/u),
+            cause: expect.objectContaining({ code: "ENOENT", path: "unzip" }),
+          }),
+        );
+        expect(existsSync(calls)).toBe(false);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it.skipIf(!hasUnzip)(
     "hashes and safely streams one bounded manifest entry from the exact artifact ZIP",
     () => {
       const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
@@ -1591,6 +1636,22 @@ describe("release CI summary child correlation", () => {
         expect(() => readManifestArtifactArchive(archivePath, `sha256:${"0".repeat(64)}`)).toThrow(
           "artifact digest mismatch",
         );
+
+        const corruptArchive = Buffer.from(archive);
+        // Corrupt the payload CRC without changing the entry inventory.
+        corruptArchive.writeUInt8(0, 30 + Buffer.byteLength(MANIFEST_ARTIFACT_ENTRY));
+        for (const { bytes, message } of [
+          { bytes: Buffer.from("not a ZIP"), message: "artifact entry list is invalid" },
+          { bytes: corruptArchive, message: "artifact entry could not be read safely" },
+        ]) {
+          writeFileSync(archivePath, bytes);
+          expect(() => readManifestArtifactArchive(archivePath, artifactDigest(bytes))).toThrow(
+            expect.objectContaining({
+              message: expect.stringContaining(message),
+              cause: expect.objectContaining({ status: expect.any(Number) }),
+            }),
+          );
+        }
 
         const extraEntryArchive = makeStoredZip({
           [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),

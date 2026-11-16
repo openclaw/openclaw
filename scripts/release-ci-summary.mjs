@@ -1984,6 +1984,15 @@ export function validateManifestArtifactCompatibility(artifact, manifest, runId,
   throw new Error(`legacy release validation manifest artifact is not compatible: ${runId}`);
 }
 
+function manifestArchiveReadError(error, message) {
+  return new Error(
+    error?.code === "ENOENT"
+      ? "Local archive prerequisite missing: install unzip and ensure it is on PATH (ENOENT)."
+      : message,
+    { cause: error },
+  );
+}
+
 export function readManifestArtifactArchive(archivePath, expectedDigest) {
   const archiveSize = statSync(archivePath).size;
   if (
@@ -2009,8 +2018,11 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
       maxBuffer: MAX_MANIFEST_ENTRY_LIST_BYTES,
       stdio: ["ignore", "pipe", "pipe"],
     });
-  } catch {
-    throw new Error("release validation manifest artifact entry list is invalid");
+  } catch (error) {
+    throw manifestArchiveReadError(
+      error,
+      "release validation manifest artifact entry list is invalid",
+    );
   }
   const entries = entryList.split(/\r?\n/u).filter((entry) => entry.length > 0);
   if (entries.length !== 1 || entries[0] !== MANIFEST_ARTIFACT_ENTRY) {
@@ -2025,8 +2037,11 @@ export function readManifestArtifactArchive(archivePath, expectedDigest) {
       maxBuffer: MAX_RELEASE_ARTIFACT_BYTES + 1,
       stdio: ["ignore", "pipe", "pipe"],
     });
-  } catch {
-    throw new Error("release validation manifest artifact entry could not be read safely");
+  } catch (error) {
+    throw manifestArchiveReadError(
+      error,
+      "release validation manifest artifact entry could not be read safely",
+    );
   }
   if (manifestBytes.byteLength < 1 || manifestBytes.byteLength > MAX_RELEASE_ARTIFACT_BYTES) {
     throw new Error("release validation manifest artifact entry size is invalid");
@@ -2041,6 +2056,15 @@ function downloadParentManifestEvidence(
   manifestPath,
   immutableReads,
 ) {
+  // A missing host prerequisite must not look like invalid remote qualification evidence.
+  try {
+    execFileSync("unzip", ["-v"], { stdio: "ignore", timeout: GH_COMMAND_TIMEOUT_MS });
+  } catch (error) {
+    throw manifestArchiveReadError(
+      error,
+      "Local archive prerequisite failed: unzip -v could not run.",
+    );
+  }
   const targetRepository = repository ?? DEFAULT_REPO;
   const artifacts = [];
   for (let page = 1; page <= 10; page += 1) {
