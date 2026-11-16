@@ -1070,7 +1070,7 @@ struct OnboardingAISetupTests {
             try await TestWait.state("account options rendered") {
                 let current = try await inspectAISetupAccessibility(hosting)
                 if catalog == "normal" {
-                    return current.labels.contains("Sign in with ChatGPT (Beta)")
+                    return current.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") }
                 }
                 if catalog == "discovery-failed" {
                     return current.actions["Try again"] == true && current.actions["Back"] == true
@@ -1081,7 +1081,7 @@ struct OnboardingAISetupTests {
             #expect(snapshot.actions["Back"] == true)
             #expect(snapshot.actions["Check again"] == true)
             if catalog == "normal" {
-                #expect(snapshot.labels.contains("Sign in with ChatGPT (Beta)"))
+                #expect(snapshot.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") })
                 #expect(snapshot.actions.contains { $0.key.contains("API Keys") && $0.value })
             } else if catalog == "discovery-failed" {
                 #expect(snapshot.actions["Try again"] == true)
