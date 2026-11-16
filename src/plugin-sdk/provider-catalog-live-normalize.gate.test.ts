@@ -73,6 +73,11 @@ describe("live discovery unknown-model gate", () => {
       shown: ["proxy-chat"],
     },
     {
+      name: "LiteLLM completion mode is non-chat without a chat sibling",
+      rows: [{ id: "proxy-legacy", object: "model", mode: "completion" }],
+      shown: [],
+    },
+    {
       name: "Together language is non-chat only in a listing that names a chat type",
       rows: [
         { id: "together/llama-instruct", type: "chat" },

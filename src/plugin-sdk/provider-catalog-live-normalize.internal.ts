@@ -128,12 +128,14 @@ const NON_TEXT_MODEL_ID_PATTERN =
 
 // Provider-declared model kinds: `type` (Together, Venice, Vercel, models.dev), LiteLLM `mode`,
 // Hugging Face `pipeline_tag`, oMLX/NVIDIA `model_type`, DeepInfra `metadata.tags` and the
-// Ollama `capabilities` list. Together's `language` is its completions type, so it is neither
-// chat nor non-chat here; the listing-level pass in buildOpenAICompatibleLiveModels decides it.
+// Ollama `capabilities` list. Explicit non-chat values (LiteLLM `completion`, `embedding`, ...)
+// decide on their own. Together's `language` is also its completions type but means chat on
+// Vercel, so it is neither here; the listing-level pass in buildOpenAICompatibleLiveModels decides
+// it. Ollama's `completion` capability means chat and is caught by the endpoint check first.
 const CHAT_MODEL_KIND =
   /^(?:chat|text|llm|vlm|text-generation|(?:image|audio|video)-text-to-text)$/;
 const NON_CHAT_MODEL_KIND =
-  /(?:^|[_-])(?:embed(?:dings?)?|rerank(?:er|ing)?|image|video|audio|speech|tts|stt|asr|transcri(?:be|ption)|music|inpaint|upscale|realtime|moderation|decisions?|evaluation|ocr|search)(?:$|[_-])/;
+  /(?:^|[_-])(?:embed(?:dings?)?|rerank(?:er|ing)?|image|video|audio|speech|tts|stt|asr|transcri(?:be|ption)|music|inpaint|upscale|realtime|moderation|decisions?|evaluation|ocr|search|completion)(?:$|[_-])/;
 
 function readLiveModelKinds(record: Record<string, unknown> | undefined): Map<string, string[]> {
   const kinds = new Map<string, string[]>();
