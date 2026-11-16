@@ -260,7 +260,7 @@ it.each([
 );
 
 it.each(["same", "before admission", "during admission", "rearm"] as const)(
-  "delivers queued requester wakes by key, fenced only by a rearm (%s)",
+  "fences queued requester wakes across %s",
   async (replacement) => {
     const rearm = replacement === "rearm";
     const child = makeSettledChild(
@@ -315,9 +315,8 @@ it.each(["same", "before admission", "during admission", "rearm"] as const)(
         }
       }
       execute.resolve();
-      // A store selector change does not retire the wake; the requester key is the address.
-      expect(await pending).toBe(!rearm);
-      expect(startedTurns).toEqual(rearm ? [] : [REQUESTER]);
+      expect(await pending).toBe(replacement === "same");
+      expect(startedTurns).toEqual(replacement === "same" ? [REQUESTER] : []);
       if (rearm) {
         expect(current.requesterSettleWake).toMatchObject({ rearmGeneration: 2 });
         expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
@@ -327,6 +326,17 @@ it.each(["same", "before admission", "during admission", "rearm"] as const)(
           requesterSettleWake: undefined,
           completion: { resultText: "retained child result" },
         });
+      }
+      if (!rearm && replacement !== "same") {
+        expect(complete).toHaveBeenCalledWith(
+          [child],
+          1,
+          expect.objectContaining({
+            error: "store replaced",
+            disposition: "intentional_non_delivery",
+          }),
+          expect.any(Function),
+        );
       }
     } finally {
       execute.resolve();

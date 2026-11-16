@@ -1,5 +1,6 @@
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
@@ -355,6 +356,7 @@ export const startSubagentAnnounceCleanupFlow = (
     current.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
   let latestDeliveryError = getDeliveryLastError(entry);
   let committedDeliveryOwner: SubagentRunRecord | undefined;
+  let storeReplaced = false;
   let waitForRequesterDelivery: (() => Promise<void> | undefined) | undefined;
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
@@ -438,6 +440,9 @@ export const startSubagentAnnounceCleanupFlow = (
           entry,
           cleanupGeneration,
           committedDeliveryOwner,
+          () => {
+            storeReplaced = true;
+          },
         ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
       );
     },
@@ -629,6 +634,26 @@ export const startSubagentAnnounceCleanupFlow = (
       }
     }
     assertPersistenceCurrent();
+    if (
+      context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
+      getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&
+      (storeReplaced ||
+        (shouldSuspendPendingFinalDelivery(entry) &&
+          !isSystemEventStoreCurrent(
+            entry.requesterSessionKey,
+            entry.requesterStorePath,
+            entry.requesterAgentId,
+          )))
+    ) {
+      await suspendPendingFinalDelivery(context, {
+        runId,
+        entry,
+        reason: "permanent_failure",
+        error: "store replaced",
+        storeReplaced: true,
+      });
+      return;
+    }
     await finalizeAnnounceCleanup(announceOutcome);
   });
   return true;
