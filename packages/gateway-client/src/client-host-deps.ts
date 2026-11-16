@@ -43,10 +43,13 @@ const DEFAULT_HOST_DEPS: Required<GatewayClientHostDeps> = {
 export function resolveHostDeps(
   overrides?: GatewayClientHostDeps,
 ): Required<GatewayClientHostDeps> {
-  return Object.fromEntries(
+  const resolved = Object.fromEntries(
     Object.entries(DEFAULT_HOST_DEPS).map(([key, fallback]) => [
       key,
+      // SAFETY: Object.entries widens keys to string; these keys are DEFAULT_HOST_DEPS's own.
       overrides?.[key as keyof GatewayClientHostDeps] ?? fallback,
     ]),
-  ) as Required<GatewayClientHostDeps>;
+  );
+  // SAFETY: every DEFAULT_HOST_DEPS key is present, paired with its override or its default.
+  return resolved as Required<GatewayClientHostDeps>;
 }
