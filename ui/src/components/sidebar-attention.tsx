@@ -181,32 +181,23 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const generation = panelGeneration;
     const scope = routeScope();
-    if (item.action.kind === "openClawIdBrowserApproval") {
+    if (
+      item.action.kind === "openClawIdBrowserApproval" ||
+      item.action.kind === "openClawIdRecovery"
+    ) {
       const client = context.gateway.snapshot.client;
       try {
-        const { openBrowserRequestApproval } =
+        const { openOwnerInboxAction } =
           await import("../lib/openclaw-id/open-browser-approval.ts");
-        await openBrowserRequestApproval(
-          client,
-          item.action.remote,
+        await openOwnerInboxAction(
+          context,
+          item.action,
           () => isCurrentPanel(generation, scope) && client === context.gateway.snapshot.client,
         );
       } catch (error) {
         showToast({ message: formatUiError(error), severity: "error" });
-      }
-      return;
-    }
-    if (item.action.kind === "openClawIdRecovery") {
-      const client = context.gateway.snapshot.client;
-      try {
-        const { openSidebarKeyRecovery } = await import("./openclaw-id/key-attention.ts");
-        if (isCurrentPanel(generation, scope) && client === context.gateway.snapshot.client) {
-          await openSidebarKeyRecovery(context);
-        }
-      } catch (error) {
-        showToast({ message: formatUiError(error), severity: "error" });
       } finally {
-        context.sidebarAttention.refreshOpenClawId();
+        if (item.action.kind === "openClawIdRecovery") context.sidebarAttention.refreshOpenClawId();
       }
       return;
     }

@@ -5,4 +5,5 @@
 # Local reader regression also proves notice transport cannot gate SAS denial.
 # Review repairs add production-reader replacement/in-flight and uncertain-handoff
 # regressions, mounted-UI recovery navigation, and real predecessor-row reopen proof.
-689
+# Lazy Inbox action coverage preserves retirement fences and recovery error ownership.
+768
