@@ -213,7 +213,7 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "./state-migrations.workspace-setup.js";
-import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-context.js";
 import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,
@@ -2328,10 +2328,10 @@ async function executeLegacyStateMigrations(
       });
       legacySessionSurfaces =
         params.legacySessionSurfaces ??
-        (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
-          config: params.cfg,
-          env,
-        });
+        (await import("../plugins/legacy-session-surfaces.js").then(
+          ({ prepareLegacySessionSurfaces }) =>
+            prepareLegacySessionSurfaces({ config: params.cfg, env }),
+        ));
       // Capture ownership before orphan-key rewrites. Atomic replacement can split
       // a configured filesystem alias from the standard target pathname.
       const { sessionMigrationAgentId: ownershipAgentId } = resolveLegacyStateMigrationOwner({

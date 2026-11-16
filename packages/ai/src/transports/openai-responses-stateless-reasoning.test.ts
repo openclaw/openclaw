@@ -1,7 +1,8 @@
 import type { Context } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
+import * as hash from "../utils/hash.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "./openai-responses-compaction-replay.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
@@ -40,6 +41,37 @@ describe.each([
   { name: "transport-owned", convert: convertResponsesMessages },
   { name: "provider-owned", convert: convertProviderResponsesMessages },
 ])("$name stateless reasoning replay", ({ convert }) => {
+  it("hashes assistant fallback IDs only when needed and once per message", () => {
+    const hashing = vi.spyOn(hash, "shortHash");
+    try {
+      const message = fixtures.createAssistant(model, [
+        {
+          type: "thinking",
+          thinking: "reason",
+          thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_signed", summary: [] }),
+        },
+        { type: "text", text: "answer", textSignature: "msg_signed" },
+      ]);
+      message.responseId = "resp_hash_fixture";
+      const providers = new Set(["openai"]);
+      const input = convert(model, { messages: [message] }, providers);
+      expect(input.at(-1)).toMatchObject({ id: "msg_signed", role: "assistant" });
+      expect(
+        hashing.mock.calls.filter(([value]) => value.includes("resp_hash_fixture")),
+      ).toHaveLength(0);
+      message.content.push({ type: "text", text: "unsigned" }, { type: "text", text: "second" });
+      for (const replayResponsesItemIds of [true, false]) {
+        hashing.mockClear();
+        convert(model, { messages: [message] }, providers, { replayResponsesItemIds });
+        expect(
+          hashing.mock.calls.filter(([value]) => value.includes("resp_hash_fixture")),
+        ).toHaveLength(replayResponsesItemIds ? 1 : 0);
+      }
+    } finally {
+      hashing.mockRestore();
+    }
+  });
+
   it("omits reasoning that has neither a replay ID nor authorized encrypted state", () => {
     const context = history("session-previous");
     const before = structuredClone(context);

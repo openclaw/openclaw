@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  reportPendingWorkspaceResultFailure,
   workerDisappearanceError,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
@@ -695,30 +696,10 @@ export async function recoverPendingWorkspaceResults(
             });
           } catch (error) {
             try {
-              const currentFacts = await placements.readProjection([pending.sessionId], {
-                current: true,
-              });
-              const current = currentFacts.placements.get(pending.sessionId);
-              const candidate = currentFacts.pendingResults.get(pending.sessionId);
-              const currentPending =
-                candidate &&
-                candidate.sessionId === pending.sessionId &&
-                candidate.environmentId === pending.environmentId &&
-                candidate.ownerEpoch === pending.ownerEpoch &&
-                candidate.placementGeneration === pending.placementGeneration &&
-                candidate.claimId === pending.claimId &&
-                candidate.runId === pending.runId &&
-                candidate.gatewayInstanceId === pending.gatewayInstanceId
-                  ? candidate
-                  : undefined;
-              if (
-                currentPending &&
-                isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)
-              ) {
-                await recovery.reportFailure(boundedWorkerError(error));
-              }
+              await reportPendingWorkspaceResultFailure({ placements, pending, recovery, error });
             } catch {
-              // Transcript reporting must not weaken the durable recovery fence.
+              // Reporting failure cannot revive a retired result; its durable
+              // failed placement still records why the preserved ref was refused.
             }
           }
         },

@@ -6,16 +6,19 @@ import { resolveStateDir } from "../../config/paths.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
-import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
+import { checkUpdateCandidate } from "../../infra/update-candidate-check.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
-import { resolveBundledDirFromPackageRoot } from "../../plugins/bundled-dir.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
 import { parseUpdateTimeoutMs } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
-/** Candidate-owned inspection for external supervisors; never admits a mutable update. */
+/**
+ * Candidate-owned inspection for external supervisors; never admits a mutable update.
+ * It proves the readable config and the candidate's recovery runtime. Doctor and
+ * Gateway startup are proven after activation, where the supervisor owns rollback.
+ */
 export async function updatePreflightCommand(
   options: {
     sourceRoot?: string;
@@ -25,7 +28,7 @@ export async function updatePreflightCommand(
   const receipt = {
     protocol: 1,
     mode: "preflight",
-    coverage: "isolated-core-startup",
+    coverage: "candidate-runtime",
   } as const;
   let candidateVersion: string | null = null;
   const controller = new AbortController();
@@ -45,8 +48,8 @@ export async function updatePreflightCommand(
       throw new Error("Candidate package version is unavailable.");
     }
     const timeoutMs = parseUpdateTimeoutMs(options.timeout);
-    const sourceRoot = options.sourceRoot;
-    if (sourceRoot && !path.isAbsolute(sourceRoot)) {
+    // Protocol-1 supervisors still pass --source-root; the runtime check needs no serving plugins.
+    if (options.sourceRoot && !path.isAbsolute(options.sourceRoot)) {
       throw new Error("Candidate preflight requires an absolute source package root.");
     }
     const env = cloneEnvWithPlatformSemantics(process.env);
@@ -65,7 +68,7 @@ export async function updatePreflightCommand(
               shellEnvFallback: "defer",
               suppressFutureVersionWarning: true,
             }).readConfigFileSnapshot();
-            // A parse/include/read failure has no resolved input for Doctor to rehearse.
+            // A parse/include/read failure leaves no input for the candidate's Doctor.
             // Schema-invalid and legacy inputs remain with the candidate's repair owner.
             if (
               (snapshot.exists && !isRecord(snapshot.parsed)) ||
@@ -77,53 +80,31 @@ export async function updatePreflightCommand(
                 reason: "config-source-invalid",
               };
             }
-            const result = await validateUpdateCandidateCanary({
+            const result = await checkUpdateCandidate({
               root,
-              ...(sourceRoot
-                ? {
-                    sourceBundledPlugins: {
-                      packageRoot: sourceRoot,
-                      directory: resolveBundledDirFromPackageRoot(sourceRoot),
-                    },
-                  }
-                : {}),
-              config: snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
-              stateDir: resolveStateDir(env),
               env,
+              stateDir: resolveStateDir(env),
               nodeRunner: process.execPath,
               timeoutMs,
               signal: resolveCommandProcessSignal(),
+              requireRuntime: true,
             });
-            // Older runtimes and advisory probe timeouts can return ok without readiness.
-            const ready =
-              result.status === "ok" &&
-              result.phase === "readiness" &&
-              result.steps.some(
-                (step) =>
-                  step.name === "candidate-gateway-startup" &&
-                  step.exitCode === 0 &&
-                  !step.advisory,
-              );
-            const status = result.status === "error" ? "blocked" : ready ? "ready" : "unverified";
-            if (status !== "ready") {
-              for (const line of result.logTail.slice(-8)) {
+            if (result.status !== "ok") {
+              for (const step of result.steps) {
                 defaultRuntime.error(
-                  redactSupportDiagnosticLine(line, {
+                  redactSupportDiagnosticLine(step.stderrTail ?? "Update checks failed.", {
                     env,
                     stateDir: resolveStateDir(env),
                   }),
                 );
               }
+              return {
+                status: "blocked" as const,
+                phase: "runtime",
+                reason: "runtime-check-failed",
+              };
             }
-            return {
-              status,
-              phase: result.phase,
-              ...(result.status === "error"
-                ? { reason: result.reason }
-                : ready
-                  ? {}
-                  : { reason: "readiness-unverified" }),
-            };
+            return { status: "ready" as const, phase: "runtime" };
           }),
         controller.signal,
       ),

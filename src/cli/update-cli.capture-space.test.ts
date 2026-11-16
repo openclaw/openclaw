@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { assert, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import * as diskSpace from "../infra/disk-space.js";
-import * as inspection from "../infra/update-candidate-state.inspection.js";
+import * as workerRuntime from "../infra/runtime-worker-url.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
@@ -34,6 +35,8 @@ describe("update without an original-state snapshot", () => {
       const root = await setup.mockPackageInstallAtCaseDir();
       const store = resolveUpdateCaptureRoot(resolveStateDir());
       const availableBytes = 12345;
+      const fixtureRoot = setup.tempDirs.make("capture-space-fixture-");
+      const measured = path.join(fixtureRoot, "capacity-measured");
       if (capture === "payload") {
         const readSpace = diskSpace.tryReadDiskSpace;
         vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) =>
@@ -44,7 +47,8 @@ describe("update without an original-state snapshot", () => {
       } else {
         // The subprocess performs real discovery and backup preflight. Only statfs's
         // external capacity measurement is fixed, scoped to this run's capture tree.
-        const preload = path.join(setup.tempDirs.make("capture-space-preload-"), "capacity.cjs");
+        const preload = path.join(fixtureRoot, "capacity.cjs");
+        const entry = path.join(fixtureRoot, "inspection.mjs");
         await fs.writeFile(
           preload,
           `
@@ -52,23 +56,30 @@ const fs = require('node:fs');
 const original = fs.statfsSync;
 fs.statfsSync = function (target, ...args) {
   const result = original.call(this, target, ...args);
-  return String(target).startsWith(${JSON.stringify(store + path.sep)}) && String(target).endsWith('.databases')
-    ? { ...result, bsize: 1, bavail: ${availableBytes} }
-    : result;
+  if (String(target).startsWith(${JSON.stringify(store + path.sep)}) && String(target).endsWith('.databases')) {
+    fs.writeFileSync(${JSON.stringify(measured)}, "measured");
+    return { ...result, bsize: 1, bavail: ${availableBytes} };
+  }
+  return result;
 };
 require('node:module').syncBuiltinESMExports();
 `,
         );
-        const runWorker = inspection.runUpdateStateInspectionWorker;
-        vi.spyOn(inspection, "runUpdateStateInspectionWorker").mockImplementation((params) =>
-          runWorker({
-            ...params,
-            sourceEnv: {
-              ...params.sourceEnv,
-              NODE_OPTIONS: `${params.sourceEnv.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
-            },
-          }),
+        await fs.writeFile(
+          entry,
+          `import { fileURLToPath } from "node:url";
+import ${JSON.stringify(pathToFileURL(preload).href)};
+const [operation] = process.argv.splice(2, 1);
+process.argv[1] = fileURLToPath(operation);
+await import(operation);`,
         );
+        const resolveArgv = workerRuntime.resolveRuntimeWorkerArgv;
+        vi.spyOn(workerRuntime, "resolveRuntimeWorkerArgv").mockImplementation((url, execPath) => {
+          const args = resolveArgv(url, execPath);
+          return path.basename(url.pathname).startsWith("update-candidate-state.worker.")
+            ? [...args.slice(0, -1), entry, url.href]
+            : args;
+        });
       }
 
       let result: UpdateRunResult | undefined;
@@ -81,6 +92,9 @@ require('node:module').syncBuiltinESMExports();
         },
       });
 
+      if (capture === "database") {
+        expect(await fs.readFile(measured, "utf8")).toBe("measured");
+      }
       expect(result?.status).toBe("ok");
       const runId = result?.runId;
       assert(runId);

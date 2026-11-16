@@ -312,25 +312,27 @@ export function BoardModal(props: {
             </button>
           </openclaw-modal-actions>
         </form>
-        <Loading
-          on={completion()}
-          fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
-        >
-          <Errored
-            fallback={(error) => (
-              <WorkboardToast
-                owner={draft()}
-                message={formatUiError(error())}
-                key={completion()}
-                tone="error"
-                outcomeSource
-              />
-            )}
+        {!draft().sessions ? (
+          <Loading
+            on={completion()}
+            fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
           >
-            {completed()}
-            <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
-          </Errored>
-        </Loading>
+            <Errored
+              fallback={(error) => (
+                <WorkboardToast
+                  owner={draft()}
+                  message={formatUiError(error())}
+                  key={completion()}
+                  tone="error"
+                  outcomeSource
+                />
+              )}
+            >
+              {completed()}
+              <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
+            </Errored>
+          </Loading>
+        ) : undefined}
       </>
     </Dialog>
   );

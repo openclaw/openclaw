@@ -25,6 +25,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import {
   sessionControllerMailboxes,
+  reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -51,7 +52,7 @@ import {
   isGoalContinuationPlacementCurrent,
   createGoalContinuationReturn,
 } from "./goal-continuation.js";
-import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import type { FollowupRun } from "./queue/types.js";
 
 // mock-isolation: This unit contract observes the actual built-in context consumer without a provider call.
@@ -72,7 +73,6 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
 // mock-isolation: Queue insertion is observed here; real draining is covered by server.chat-goal.
 vi.mock("./queue/enqueue.js", () => ({
   enqueueFollowupRun: vi.fn(() => true),
-  getFollowupQueueDepth: vi.fn(() => 0),
 }));
 
 const workerPlacement = vi.hoisted(() => ({
@@ -177,7 +177,17 @@ function fixture() {
     operation,
     runFollowup: vi.fn(async () => {}),
   };
-  return { params, controller, operation };
+  const reserveInput = () =>
+    reserveSessionControllerSource(params.queueKey, {
+      policy: params.settings,
+      target: captureSessionTarget({
+        storeScope: params.storePath,
+        sessionKey: params.sessionKey,
+        agentId: params.base.run.agentId,
+        incarnation: params.expectedSession.sessionId,
+      }),
+    });
+  return { params, controller, operation, reserveInput };
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -185,7 +195,6 @@ beforeEach(() => {
   workerPlacement.supported = true;
   workerPlacement.current.mockReset();
   vi.mocked(enqueueFollowupRun).mockClear();
-  vi.mocked(getFollowupQueueDepth).mockReturnValue(0);
   vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(entry());
 });
 afterEach(async () => {
@@ -211,13 +220,14 @@ describe("Goal continuation eligibility", () => {
   it.each([
     [true, "remote-exec", "workerGoal"],
     [true, "local", "localCodexGoal"],
+    [true, "local-no-authority", "localCodexGoal"],
     [true, "worker-turn", undefined],
     [true, "wrong-session", undefined],
     [true, "unsupported", undefined],
     [true, "no-authority", undefined],
     [false, "local", "localCodexGoal"],
     [false, "worker-required", undefined],
-    [false, "no-authority", undefined],
+    [false, "no-authority", "localCodexGoal"],
     [false, "revoked", undefined],
   ] as const)("checks Codex Goal admission (placed=%s, %s)", async (placed, mode, marker) => {
     const f = fixture();
@@ -228,11 +238,11 @@ describe("Goal continuation eligibility", () => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: mode === "wrong-session" ? "other" : f.params.sessionKey,
-        state: mode === "local" ? "local" : "requested",
+        state: mode === "local" || mode === "local-no-authority" ? "local" : "requested",
         executionMode: mode === "worker-turn" ? "worker-turn" : "remote-exec",
       });
     }
-    if (mode !== "no-authority") {
+    if (mode !== "no-authority" && mode !== "local-no-authority") {
       f.params.base.operatorAuthority = {
         profileId: "operator",
         scopes: ["operator.admin"],
@@ -258,14 +268,18 @@ describe("Goal continuation eligibility", () => {
     }
   });
   it.each([
-    ["localCodexGoal", "local", false, true],
-    ["localCodexGoal", "worker", false, false],
-    ["workerGoal", "local", false, false],
-    ["workerGoal", "worker", false, true],
-    ["localCodexGoal", "local", true, false],
+    ["localCodexGoal", "local", false, true, true],
+    ["localCodexGoal", "local", false, false, true],
+    ["localCodexGoal", "worker", false, true, false],
+    ["localCodexGoal", "worker", false, false, false],
+    ["workerGoal", "local", false, true, false],
+    ["workerGoal", "worker", false, true, true],
+    ["workerGoal", "worker", false, false, false],
+    ["localCodexGoal", "local", true, true, false],
+    ["localCodexGoal", "local", true, false, false],
   ] as const)(
-    "checks %s Codex placement against %s (requires worker=%s)",
-    async (marker, current, requiresWorker, expected) => {
+    "checks %s Codex placement against %s (requires worker=%s, operator=%s)",
+    async (marker, current, requiresWorker, hasOperatorAuthority, expected) => {
       workerPlacement.current.mockReturnValue({
         ...localPlacement(identity.sessionId),
         sessionKey: "agent:main:goal",
@@ -277,7 +291,7 @@ describe("Goal continuation eligibility", () => {
           continuation: { ...identity, [marker]: true },
           agentId: "main",
           sessionKey: "agent:main:goal",
-          hasOperatorAuthority: true,
+          hasOperatorAuthority,
           requiresWorker,
         }),
       ).resolves.toBe(expected);
@@ -323,6 +337,15 @@ describe("Goal continuation eligibility", () => {
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
     { meta: { stopReason: "refusal" } },
     { didSendDeterministicApprovalPrompt: true },
+    {
+      acceptedSessionSpawns: [
+        {
+          runId: "child",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
+      ],
+    },
     { payloads: [{ text: "failed", isError: true }] },
   ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();
@@ -448,7 +471,7 @@ describe("Goal queue custody", () => {
         f.controller.abort();
       }
       if (change === "new input") {
-        vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+        f.reserveInput();
       }
       if (change === "goal replacement") {
         current.goal!.id = "new-goal";
@@ -848,7 +871,7 @@ describe("Goal return from committed child custody", () => {
       boundary !== "command failure" && boundary !== "unverified command",
     );
     if (boundary === "queued input") {
-      vi.mocked(getFollowupQueueDepth).mockReturnValue(1);
+      f.reserveInput();
     }
     if (boundary === "unsettled sibling") {
       children.mockResolvedValue([{ runId: "sibling" }]);

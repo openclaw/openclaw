@@ -186,6 +186,7 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyL
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
+ *   allowUnavailableNodeFallback?: boolean;
  * }} [options]
  * @returns {PackageCliNodeRuntime | null}
  */
@@ -200,6 +201,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
+    allowUnavailableNodeFallback = false,
   } = options;
   const pathApi = platform === "win32" ? win32 : posix;
   const delimiter = platform === "win32" ? ";" : ":";
@@ -295,6 +297,9 @@ export function probePackageCliNodeRuntime(options = {}) {
       continue;
     }
     if (result?.status !== 0) {
+      if (allowUnavailableNodeFallback) {
+        continue;
+      }
       return null;
     }
 

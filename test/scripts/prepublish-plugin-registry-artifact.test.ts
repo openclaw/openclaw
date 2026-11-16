@@ -35,9 +35,9 @@ import {
 import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
 import { listenLoopback, respondJson } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 import {
   SOURCE_SHA,
+  createRegistrySource,
   VERSION,
   registryFixture,
   sha256,
@@ -49,17 +49,6 @@ const PACKAGE_NAME = "@openclaw/discord";
 const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const BUILD_AND_PACK = path.resolve("scripts/lib/plugin-npm-build-and-pack.mts");
 const registryTempDirs = useAutoCleanupTempDirTracker(afterEach);
-const fixtureCommitArgs = [
-  "-c",
-  "user.email=release-test@example.invalid",
-  "-c",
-  "user.name=Release Test",
-  "-c",
-  "commit.gpgsign=false",
-  "commit",
-  "-m",
-  "test: seed release source",
-];
 const execFileAsync = promisify(execFile);
 const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 const registryPackage = (name: string, version = VERSION, tarballPath = "/tmp/package.tgz") => ({
@@ -107,51 +96,11 @@ function crossOsTuple(paths: ReturnType<typeof fixture>) {
 }
 
 function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild = false) {
-  const repoRoot = registryTempDirs.make("openclaw-prepublish-plugin-cli-");
-  const scriptsDir = path.join(repoRoot, "scripts", "lib");
-  mkdirSync(scriptsDir, { recursive: true });
-  writeJson(path.join(repoRoot, "package.json"), { name: "openclaw", version: VERSION });
-  for (const name of packageNames) {
-    const packageDir = path.join(repoRoot, "extensions", name.split("/")[1]!);
-    mkdirSync(packageDir, { recursive: true });
-    writeJson(path.join(packageDir, "package.json"), {
-      name,
-      version: VERSION,
-      openclaw: { release: { publishToNpm: true } },
-    });
-  }
-  writeFileSync(
-    path.join(scriptsDir, "plugin-npm-runtime-build.mjs"),
-    'console.log("runtime build stdout");\n',
+  return createRegistrySource(
+    registryTempDirs.make("openclaw-prepublish-plugin-cli-"),
+    packageNames,
+    combinedBuild,
   );
-  writeFileSync(
-    path.join(scriptsDir, "plugin-npm-package-manifest.mjs"),
-    `import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-const repoRoot = process.cwd();
-const packageDir = process.argv[process.argv.indexOf("--run") + 1];
-const outputDir = process.argv[process.argv.indexOf("--pack-destination") + 1];
-const staging = path.join(repoRoot, ".pack-fixture");
-fs.mkdirSync(path.join(staging, "package"), { recursive: true });
-fs.copyFileSync(path.join(repoRoot, packageDir, "package.json"), path.join(staging, "package", "package.json"));
-const pkg = JSON.parse(fs.readFileSync(path.join(staging, "package", "package.json"), "utf8"));
-const tarball = pkg.name.slice(1).replace("/", "-") + "-" + pkg.version + ".tgz";
-execFileSync("tar", ["-czf", path.join(outputDir, tarball), "-C", staging, "package"]);
-console.log("package manifest stdout");
-`,
-  );
-  if (combinedBuild) {
-    writeCombinedBuildFixture(repoRoot, packageNames, VERSION);
-  }
-  execFileSync("git", ["init"], { cwd: repoRoot });
-  execFileSync("git", ["add", "."], { cwd: repoRoot });
-  execFileSync("git", fixtureCommitArgs, { cwd: repoRoot });
-  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-  }).trim();
-  return { repoRoot, sourceSha };
 }
 
 function sourceMetadata(packageDir: string) {

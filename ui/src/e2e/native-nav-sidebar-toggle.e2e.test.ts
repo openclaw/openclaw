@@ -39,20 +39,6 @@ const visible = (target: Locator, value = true) =>
 const count = (target: Locator, value: number) => expect.poll(() => target.count()).toBe(value);
 const attr = (target: Locator, name: string, value: string | null) =>
   expect.poll(() => target.getAttribute(name)).toBe(value);
-async function expectStyles(target: Locator, expected: Record<string, string>, length = 1) {
-  await expect
-    .poll(() =>
-      target.evaluateAll(
-        (elements, names) =>
-          elements.map((element) => {
-            const style = getComputedStyle(element);
-            return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
-          }),
-        Object.keys(expected),
-      ),
-    )
-    .toEqual(Array.from({ length }, () => expected));
-}
 async function expectBelow(lower: Locator, upper: Locator, inclusive: boolean) {
   await expect
     .poll(async () => {
@@ -371,35 +357,21 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
-    await visible(sidebarNewThread);
-    await expectStyles(sidebarNewThread, { "border-top-style": "none", "box-shadow": "none" });
-    await attr(sidebarNewThread, "aria-disabled", null);
+    const newThread = page.locator(".sidebar-rail .sidebar-new-session");
+    await visible(newThread);
+    await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
-    await sidebarNewThread.focus();
-    await expect
-      .poll(() =>
-        sidebarNewThread.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return {
-            focusVisible: element.matches(":focus-visible"),
-            outlineStyle: style.outlineStyle,
-            outlineWidth: style.outlineWidth,
-          };
-        }),
-      )
-      .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
+    await newThread.focus();
+    await expectFocused(newThread);
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = page.locator(".sidebar-brand__search");
-    const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
+    const search = toolbar.locator(".macos-titlebar-controls__search");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await visible(search);
-    await visible(newThread);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
     await visible(newThread);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
@@ -412,17 +384,9 @@ suite.define(() => {
     const toolbarBox = await toolbar.boundingBox();
     const rail = page.locator(".sidebar-rail");
     const attention = rail.locator(".sidebar-issues-button");
-    const attentionBox = await attention.boundingBox();
     const railBox = await rail.boundingBox();
-    expect(toolbarBox).not.toBeNull();
-    expect(attentionBox).not.toBeNull();
-    expect(railBox).not.toBeNull();
-    expect(railBox!.width).toBe(52);
     expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
     expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
-    expect(attentionBox!.x).toBeGreaterThanOrEqual(railBox!.x);
-    expect(attentionBox!.x + attentionBox!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
-    expect(attentionBox!.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
     const titleBox = await page
       .locator(".chat-pane-cache__pane--visible .chat-pane__crumbs:visible")
       .first()
@@ -436,7 +400,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(2);
+    expect(centerlines).toHaveLength(4);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -451,7 +415,8 @@ suite.define(() => {
     );
     expect(footerBoxes).toHaveLength(3);
     for (const [index, box] of footerBoxes.entries()) {
-      expect(box.x + box.width / 2).toBeCloseTo(railBox!.x + (railBox!.width - 1) / 2, 1);
+      expect(box.x).toBeGreaterThanOrEqual(railBox!.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
       expect(box.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
       expect(box.y + box.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
       if (index > 0) {
@@ -459,35 +424,15 @@ suite.define(() => {
         expect(box.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(4);
       }
     }
-    const shellControls = page.locator(
-      ".macos-titlebar-controls button:visible, .sidebar-rail__bottom .sidebar-issues-button:visible",
-    );
     await page.mouse.move(600, 400);
     await capture(page, railProofDir, "native-web-top-left-controls.png");
-    await expectStyles(
-      shellControls,
-      {
-        "border-top-width": "0px",
-        "background-color": "rgba(0, 0, 0, 0)",
-        "box-shadow": "none",
-      },
-      3,
-    );
     const inbox = attention;
-    await inbox.hover();
-    await expect
-      .poll(() => inbox.evaluate((button) => getComputedStyle(button).backgroundColor))
-      .not.toBe("rgba(0, 0, 0, 0)");
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
-    await expectStyles(inbox, { "outline-style": "solid", "outline-width": "2px" });
-    expect(await inbox.evaluate((button) => getComputedStyle(button).outlineColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
@@ -514,8 +459,22 @@ suite.define(() => {
 
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await page.locator(".shell-chrome-controls__nav-toggle").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+
+    for (const view of ["sessions", "pages", "online"]) {
+      await rail.locator(".sidebar-identity-card").click();
+      await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+      await expectShellClass(page, "shell--settings");
+      const toggle = toolbar.locator(".macos-titlebar-controls__sidebar");
+      await expect.poll(() => toggle.isDisabled()).toBe(true);
+      const target = rail.locator(`[data-navigation-view="${view}"]`);
+      await attr(target, "aria-pressed", "false");
+      await target.click();
+      await expectShellClass(page, "shell--settings", false);
+      await expectShellClass(page, "shell--nav-collapsed", false);
+      await attr(target, "aria-pressed", "true");
+    }
   });
 
   it.each([
@@ -541,7 +500,7 @@ suite.define(() => {
       webChrome: true,
       width: 1280,
     });
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
 

@@ -299,7 +299,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     readBackend: () => getAttachedBackend(operation),
     requestStop: (effect) => expireOwner(effect, false),
     expireCleanup: (effect) => expireOwner(effect, true),
-    onWarning: (decision) =>
+    onBlocked: (decision) =>
       diag.warn(
         `reply watchdog: sessionKey=${currentSessionKey} action=${decision.action} reason=${decision.reason}`,
       ),

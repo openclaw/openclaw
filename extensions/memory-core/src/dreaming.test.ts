@@ -220,10 +220,14 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
 }
 
 function getDreamingService(api: DreamingPluginApiTestDouble) {
-  return expectDefined(
-    api.registerService.mock.calls.find(([service]) => service.id === "memory-core-dreaming"),
+  const service = expectDefined(
+    api.registerService.mock.calls.find(([entry]) => entry.id === "memory-core-dreaming"),
     "memory-core-dreaming service registration",
   )[0];
+  if (service.apiVersion !== 2) {
+    throw new Error("Expected dreaming service API version 2");
+  }
+  return service;
 }
 
 async function triggerDreamingServiceStart(

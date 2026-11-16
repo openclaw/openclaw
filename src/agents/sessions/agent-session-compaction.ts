@@ -1,20 +1,17 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
-import {
-  capCompactionSummary,
-  compactWithoutSummary,
-} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
+import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
-  compactAfterSummaryRefusal,
-  isCompactionSummaryRefusal,
+  compactWithoutNewSummary,
+  settleCompactionSafeguardCancellation,
+  settleCompactionSummary,
+  withCompactionSummaryRoute,
 } from "../compaction-summary-refusal.js";
 import {
   calculateContextTokens,
@@ -27,24 +24,26 @@ import {
   type CompactionResult,
   type AgentMessage,
 } from "../runtime/index.js";
-import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 import { AgentSessionInspection } from "./agent-session-inspection.js";
 import {
   agentSessionDeferThresholdCompaction,
   agentSessionRunProviderCompaction,
 } from "./agent-session-types.js";
-import { unwrapCoreResult } from "./agent-session-utils.js";
+import { compactionErrorMessage, unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
   assertCompactionRequestCanFit,
+  commitSessionCompactionSummary,
   createCompactionRequestBudget,
+  createStandaloneCompactionRequestBudget,
   estimateCompactedRequestTokens,
-  estimateCompactionHistoryTokens,
+  replayTokenBudget,
   resolveCompactionRetentionBudget,
   type CompactionRequestBudget,
   type CompactionRequestConstraints,
 } from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
+import { SAFETY_MARGIN, estimateCompactionHistoryTokens } from "./context-token-pressure.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
@@ -62,11 +61,6 @@ type CompactionWorkOutcome =
   | { status: "aborted" }
   | { status: "skipped"; reason: string };
 type SettledCompactionWorkOutcome = Exclude<CompactionWorkOutcome, { status: "aborted" }>;
-
-function compactionErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.trim() ? message : fallback;
-}
 
 /** @internal */
 export const agentSessionAutomaticCompaction: unique symbol = Symbol.for(
@@ -277,6 +271,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     requestBudget?: CompactionRequestBudget;
     requestFromEntryId?: string;
     pendingUserEntryId?: string;
+    requestRequiresCompaction?: true;
     onSummaryReady?: () => void;
   }): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
@@ -308,7 +303,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const pathEntries = this.sessionManager.getBranch();
-    const requestBudget = options.requestBudget;
+    const requestBudget =
+      options.requestBudget ??
+      createStandaloneCompactionRequestBudget({
+        maxSummaryChars: options.settings.maxSummaryChars,
+        contextWindow: model.contextWindow ?? 0,
+        reserveTokens: options.settings.reserveTokens,
+        systemPrompt: this.agent.state.systemPrompt,
+        tools: this.agent.state.tools,
+      });
     const pendingUserIdempotencyKey = requestBudget?.pendingTokens
       ? requestBudget.pendingUserIdempotencyKey
       : undefined;
@@ -330,7 +333,11 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     const contextMessages = requestBudget ? buildSessionContext(pathEntries).messages : [];
     assertCompactionRequestCanFit(contextMessages, requestBudget, true);
     const retention = requestBudget
-      ? resolveCompactionRetentionBudget(requestBudget, contextMessages)
+      ? resolveCompactionRetentionBudget(
+          requestBudget,
+          contextMessages,
+          options.settings.maxSummaryChars,
+        )
       : undefined;
     const requestTokenLimit =
       requestBudget && retention
@@ -338,7 +345,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         : undefined;
     const requestBoundaryEntryId = options.requestFromEntryId ?? pathEntries[pendingEntryIndex]?.id;
     let preparation: CompactionPreparation | undefined;
-    if (isManual && !options.requestState && !requestBudget && pendingEntryIndex < 0) {
+    if (
+      isManual &&
+      !options.requestState &&
+      pendingEntryIndex < 0 &&
+      (!requestBudget || options.summaryOutputPolicy === "none")
+    ) {
       const manualPreflight = preflightManualSessionCompaction(pathEntries, options.settings);
       if (!manualPreflight.compactable) {
         throw new Error(manualPreflight.reason);
@@ -407,10 +419,13 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
     let compactionResult: CompactionResult | undefined;
     let fromExtension = false;
-    if (options.summaryOutputPolicy === "deterministic") {
+    let withoutSummary = options.summaryOutputPolicy === "deterministic";
+    if (withoutSummary) {
       // Summary producers, including session_before_compact hooks, already failed.
-      compactionResult = unwrapCoreResult(compactWithoutSummary(preparation));
+      compactionResult = compactWithoutNewSummary(preparation, this.sessionManager);
     } else if (this.currentExtensionRunner.hasHandlers("session_before_compact")) {
+      // Cancellation provenance belongs to this attempt; an earlier hook may decline first.
+      setCompactionSafeguardCancellation(this.sessionManager, undefined);
       const extensionResult = await this.currentExtensionRunner.emit({
         type: "session_before_compact",
         preparation,
@@ -424,7 +439,16 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       });
 
       if (extensionResult?.cancel) {
-        return { status: "aborted" };
+        const floor = await settleCompactionSafeguardCancellation(
+          this.sessionManager,
+          preparation,
+          options,
+        );
+        if (!floor) {
+          return { status: "aborted" };
+        }
+        compactionResult = floor;
+        withoutSummary = true;
       }
 
       if (extensionResult?.compaction) {
@@ -434,32 +458,17 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     if (!compactionResult) {
-      // Hooks keep the original input. Only the host's core path bounds raw focus
-      // before escaping, and both summaries and any retry share this prepared text.
-      const focus = normalizeOptionalString(options.customInstructions);
-      const boundedFocus = focus ? resolveCompactionInstructions(focus, undefined) : undefined;
-      const focusInstructions = boundedFocus
-        ? wrapUntrustedPromptDataBlock({ label: "Compaction focus", text: boundedFocus })
-        : "";
-      const unresolvedRequestInstructions = preparation.latestUnresolvedUserRequest
-        ? [
-            "The run owner will resume this request after compaction. Preserve it as current work.",
-            wrapUntrustedPromptDataBlock({
-              label: "Latest unresolved user request",
-              text: preparation.latestUnresolvedUserRequest,
-            }),
-          ].join("\n")
-        : "";
-      const coreInstructions = [focusInstructions, unresolvedRequestInstructions]
-        .filter(Boolean)
-        .join("\n\n");
+      const coreInstructions = buildCoreCompactionInstructions(
+        options.customInstructions,
+        preparation.latestUnresolvedUserRequest,
+      );
       const runCoreCompaction = () =>
         compact(
           preparation,
           model,
           auth.apiKey,
           auth.headers,
-          coreInstructions || undefined,
+          coreInstructions,
           options.signal,
           compactionThinkingLevel,
           this.agent.streamFn,
@@ -481,10 +490,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           return { status: "aborted" };
         }
       }
-      compactionResult =
-        !result.ok && isCompactionSummaryRefusal(result.error)
-          ? compactAfterSummaryRefusal(preparation)
-          : unwrapCoreResult(result);
+      compactionResult = settleCompactionSummary(result, preparation, this.sessionManager);
     }
     options.onSummaryReady?.();
 
@@ -493,8 +499,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     }
 
     const completedCompaction = {
-      ...compactionResult,
-      summary: capCompactionSummary(compactionResult.summary),
+      ...withCompactionSummaryRoute(compactionResult, this.sessionManager, model, withoutSummary),
+      summary: commitSessionCompactionSummary(compactionResult, preparation, withoutSummary, () =>
+        replayTokenBudget(this, model, options.settings, projectReplacement(compactionResult, "")),
+      ),
     };
 
     // Custom hooks may choose a different retained boundary. Validate their

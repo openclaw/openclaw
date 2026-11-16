@@ -1,2 +1,0 @@
-# Registration-to-completion reuse across admitted, inherited, and managed workspaces, plus caller scope fixtures.
-115

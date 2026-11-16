@@ -42,9 +42,12 @@ import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
+  expectChatEvent,
+  expectPreparedProject,
   initializeRepository,
   publishRepositoryFixtureCheckpoint,
   removeOwnedSessionWorktree,
+  retryRemoteProjectSession,
   settleWorkspaceRuns,
   successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
@@ -110,28 +113,6 @@ function mockDispatch() {
     counts: { block: 0, final: 0, tool: 0 },
   });
 }
-function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining(fields),
-    expect.anything(),
-  );
-}
-function expectPreparedProject(
-  entry: SessionEntry | null | undefined,
-  sessionId: string,
-  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
-  projectRoot: string,
-  worktree: boolean,
-) {
-  expect(entry).toMatchObject({
-    sessionId,
-    projectId: project.id,
-    ...(worktree
-      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
-  });
-}
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
   options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
@@ -152,7 +133,11 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   const { storePath } = await createSessionStoreDir();
   const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
   const materialization = createDeferredCore<T>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  const materializationStarted = createDeferredCore();
+  projectCloneMocks.materialize.mockImplementationOnce(() => {
+    materializationStarted.resolve();
+    return materialization.promise;
+  });
   if (options.recordInput) {
     projectCloneMocks.prepareIdentity.mockResolvedValue({
       token: "protected-native-token",
@@ -166,7 +151,7 @@ async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjec
   } else {
     mockDispatch();
   }
-  return { storePath, projectRoot, project, materialization };
+  return { storePath, projectRoot, project, materialization, materializationStarted };
 }
 
 type CreatedSession = {
@@ -196,7 +181,7 @@ function createRemoteSession(
   );
 }
 
-test.each([
+test.for([
   { mode: "ready", worktree: true, sandboxed: false, image: true, baseRef: "main" },
   { mode: "ready", worktree: false, sandboxed: true },
   { mode: "abort", worktree: true },
@@ -204,16 +189,18 @@ test.each([
   { mode: "retry", worktree: true },
 ])(
   "remote project $mode (worktree=$worktree, sandboxed=$sandboxed)",
-  async ({ mode, worktree, sandboxed, image, baseRef }) => {
+  async ({ mode, worktree, sandboxed, image, baseRef }, { signal: testSignal }) => {
     const ready = mode === "ready";
     if (ready) {
       vi.stubEnv("GH_TOKEN", "");
       vi.stubEnv("GITHUB_TOKEN", "");
     }
-    const { storePath, projectRoot, project, materialization } = await remoteProjectFixture(
-      `openclaw-remote-${mode}-`,
-      { sandboxed, alias: ready, recordInput: ready },
-    );
+    const { storePath, projectRoot, project, materialization, materializationStarted } =
+      await remoteProjectFixture(`openclaw-remote-${mode}-`, {
+        sandboxed,
+        alias: ready,
+        recordInput: ready,
+      });
     const attachments = image
       ? [
           {
@@ -342,13 +329,12 @@ test.each([
           );
         }
         const prepared = readEntry(storePath, key);
-        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
-        if (worktree) {
-          expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
-          expect(prepared?.spawnedCwd).not.toBe(projectRoot);
-          expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
-          await removeWorktree(prepared!.worktree!.id);
-        }
+        expectPreparedProject(prepared, sessionId, project, projectRoot);
+        expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe(
+          baseRef ?? "origin/main",
+        );
+        expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
+        await removeWorktree(prepared!.worktree!.id);
       } else if (mode === "abort") {
         expect(created?.runStarted).toBe(true);
         await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
@@ -387,6 +373,7 @@ test.each([
         const entryAfterCreation = readEntry(storePath, key);
         const failureMessage =
           "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        await withinTest(materializationStarted.promise, testSignal);
         materialization.reject(new ProjectCloneError("network", failureMessage));
         await settleWorkspaceRuns(context, storePath, key);
         expectChatEvent(broadcast, {
@@ -434,26 +421,50 @@ test.each([
           }),
         );
 
+        if (!worktree) {
+          // Older URL-only sessions saved no worktree intent; retry must still isolate them.
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: key, storePath },
+            { ...entryAfterFailure!, pendingWorktree: undefined },
+          );
+        }
+        if (worktree) {
+          const retryFailure =
+            "Synthetic retry clone failure; check the Gateway Git configuration.";
+          projectCloneMocks.materialize.mockRejectedValueOnce(
+            new ProjectCloneError("clone_failed", retryFailure),
+          );
+          await retryRemoteProjectSession(key, "remote-project-failed-retry", context);
+          await settleWorkspaceRuns(context, storePath, key);
+          const history = await request("chat.history", { sessionKey: key }, controlUiClient);
+          expect(history).toMatchObject({
+            sessionInfo: {
+              sessionId,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: "remote-project-failed-retry",
+              lastRunError: expect.stringContaining(retryFailure),
+            },
+          });
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        }
         const retriedMaterialization = createDeferredCore<typeof project>();
         projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
         const restartedContext = { broadcast, dedupe: new Map() };
 
         try {
-          const retried = await request<{ runId: string; status: string }>(
-            "chat.send",
-            {
-              sessionKey: key,
-              agentId: "main",
-              message: "Retry the remote project",
-              idempotencyKey: "remote-project-retry",
-            },
-            { ...controlUiClient, context: restartedContext },
+          const retried = await retryRemoteProjectSession(
+            key,
+            "remote-project-retry",
+            restartedContext,
           );
           expect(retried).toMatchObject({
             runId: "remote-project-retry",
             status: "started",
           });
-          await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
+          await vi.waitFor(() =>
+            expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(worktree ? 3 : 2),
+          );
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
           for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
@@ -474,7 +485,7 @@ test.each([
           expect(error?.[1]).toBeUndefined();
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           const preparedEntry = readEntry(storePath, key);
-          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot);
           expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
           expect(preparedEntry).not.toHaveProperty("pendingWorktree");
           if (preparedEntry?.worktree) {
@@ -669,7 +680,7 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
-test("sessions.create terminalizes remote project preparation outside a sandboxed agent workspace", async () => {
+test("sessions.create isolates a remote project outside a sandboxed agent workspace", async () => {
   const root = tempDirs.make("openclaw-session-remote-project-sandbox-");
   const workspace = await initializeRepository(root, "workspace");
   const outside = await initializeRepository(root, "outside");
@@ -680,6 +691,7 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
   projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
   const broadcast = vi.fn();
   const context = { broadcast };
+  mockDispatch();
 
   let key: string | undefined;
   try {
@@ -694,20 +706,17 @@ test("sessions.create terminalizes remote project preparation outside a sandboxe
 
     materialization.resolve(project);
     await settleWorkspaceRuns(context, storePath, key);
-    expectChatEvent(broadcast, {
-      runId,
-      sessionKey: key,
-      state: "error",
-      errorMessage: expect.stringContaining(
-        "sessions.create project is outside the sandboxed agent workspace",
-      ),
-    });
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(readEntry(storePath, key)?.projectId).toBe(undefined);
+    expectChatEvent(broadcast, { runId, sessionKey: key, state: "final" });
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    const prepared = readEntry(storePath, key);
+    expect(prepared?.projectId).toBe(project.id);
+    expect(prepared?.worktree?.id).toBeDefined();
+    expect(prepared?.spawnedCwd).not.toBe(outside);
     expect(readEntry(storePath, key)?.status).not.toBe("running");
   } finally {
     materialization.resolve(project);
     await settleWorkspaceRuns(context, storePath, key, true);
+    await removeOwnedSessionWorktree(key);
   }
 });
 

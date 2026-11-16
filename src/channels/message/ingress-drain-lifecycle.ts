@@ -1,3 +1,4 @@
+import type { FollowupQueueDisposition } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
@@ -38,6 +39,8 @@ export type ChannelIngressDispatchLifecycle = {
    * Drain releases the claim for retry.
    */
   onAbandoned: () => void | Promise<void>;
+  /** Intentional followup queue-cap loss: dead-letter without retrying or adopting. */
+  onDropped?: (reason: FollowupQueueDisposition) => void | Promise<void>;
 };
 
 /** Maps a drain lifecycle onto the reply-lane ownership surface. */
@@ -55,6 +58,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
       deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
       onAbandoned: lifecycle.onAbandoned,
+      onDropped: lifecycle.onDropped,
       abortSignal: lifecycle.abortSignal,
     },
   };

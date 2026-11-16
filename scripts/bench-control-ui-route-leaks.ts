@@ -37,9 +37,11 @@ import {
   createControlUiMockGatewayInitScript,
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
@@ -380,11 +382,11 @@ function censusTarget(id: CensusRoute): RouteTarget {
 
 function censusFixture(
   id: CensusRoute,
-  base: ControlUiMockGatewayScenario,
-): ControlUiMockGatewayScenario {
+  base: NativeControlUiMockGatewayScenario,
+): NativeControlUiMockGatewayScenario {
   const methods = new Set(base.featureMethods ?? []);
   const methodResponses = { ...base.methodResponses };
-  const changes: Partial<ControlUiMockGatewayScenario> = {};
+  const changes: Partial<NativeControlUiMockGatewayScenario> = {};
   const add = (name: string, response: unknown) => {
     methods.add(name);
     methodResponses[name] = response;
@@ -673,11 +675,7 @@ function censusReady({ id, sessionKey }: { id: CensusRoute; sessionKey: string }
     return (
       text('[data-provider-id="codex"]', "MEMORY.md") &&
       !present(".memory-import__loading") &&
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          '[data-test-id="memory-import-page"] button',
-        ),
-      ].some((node) => node.textContent?.trim() === "Refresh" && !node.disabled)
+      present('[data-test-id="memory-import-page"] button[aria-label="Refresh"]:not(:disabled)')
     );
   }
   if (id === "debug") {
@@ -765,11 +763,10 @@ function routeTarget(id: ProbeRoute, sessionKey: string): RouteTarget {
     notifications: "openclaw-config-page .settings-section .settings-row__control .settings-status",
     secrets:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__empty, openclaw-secrets-page .settings-section .settings-empty",
-    approvals:
-      "openclaw-approvals-page .approval-history-table[aria-busy=false] .data-table-empty-state",
+    approvals: "openclaw-approvals-page .settings-empty",
     search: 'openclaw-search-page select[aria-label="Search provider"]:not(:disabled)',
     labs: "openclaw-labs-page .settings-section input[role=switch]:not(:disabled)",
-    about: "openclaw-about-page .about-hero__links a",
+    about: "openclaw-about-page nav a.about-link",
     memory: ".memory-page__panel :is(a.memory-page__link,button:not(:disabled))",
     devices:
       "openclaw-devices-page .device-entry, openclaw-devices-page .settings-section .settings-empty",
@@ -843,7 +840,7 @@ function fixtureFor(
   build: { buildId: string; version: string },
   id: ProbeRoute,
   baseUrl: string,
-): ControlUiMockGatewayScenario {
+): NativeControlUiMockGatewayScenario {
   if (isDockScenario(id)) {
     return dockFixture(build, id);
   }
@@ -1343,7 +1340,7 @@ async function summarizeCoverage(
   coverage: CoverageEntry[],
   requests: AssetRequest[],
   root: string,
-  assets: Awaited<ReturnType<typeof prepareControlUiMockGatewayScenario>>["assets"],
+  assets: Awaited<ReturnType<typeof prepareNativePluginMockGatewayScenario>>["assets"],
 ) {
   const scripts = await Promise.all(
     requests.map(async (request) => {
@@ -1703,7 +1700,7 @@ try {
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const routeFixture = fixtureFor(variant.build, route, server.baseUrl);
-              const prepared = await prepareControlUiMockGatewayScenario(
+              const prepared = await prepareNativePluginMockGatewayScenario(
                 route === "apps"
                   ? appsPilotFixture(routeFixture, appsSandbox!.descriptor)
                   : routeFixture,
@@ -1928,15 +1925,12 @@ try {
                   const approvalsSettled =
                     routeId !== "approvals" ||
                     (document
-                      .querySelector(
-                        ".approval-history-table[aria-busy=false] .data-table-empty-state",
-                      )
-                      ?.textContent?.trim() ===
-                      "No resolved approvals in the rolling 30-day window." &&
-                      document
-                        .querySelector(".standing-grants-table .data-table-empty-state")
-                        ?.textContent?.trim() ===
-                        "No standing grants. Answer an automation approval with Always allow to mint one.");
+                      .getElementById("approval-history-title")
+                      ?.closest(".settings-section")
+                      ?.querySelector(".settings-empty")
+                      ?.textContent?.trim() === "No resolved approvals in the last 30 days." &&
+                      document.querySelector(".standing-grants-empty")?.textContent?.trim() ===
+                        "No standing grants yet. Choose Always allow on an automation approval to create one.");
                   // SAFETY: Every measured page receives this fixture before navigation.
                   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
                   const enabled = (candidateSelector: string) =>
@@ -2102,34 +2096,29 @@ try {
               const observedAfterReady = Array.from(requests.values(), (request) =>
                 Object.assign({}, request),
               );
-              const activityCutoff = after.NavigationStart! + readyMs / 1_000;
-              const requestsAtReady =
-                route === "activity" && activityMedia
-                  ? observedAfterReady
-                      .filter((request) => request.timestampSeconds! <= activityCutoff)
-                      .map((request) => {
-                        const item = Object.assign({}, request);
-                        if ((item.finishedTimestampSeconds ?? Infinity) > activityCutoff) {
-                          delete item.finishedTimestampSeconds;
-                          delete item.wireBytes;
-                        }
-                        if ((item.failedTimestampSeconds ?? Infinity) > activityCutoff) {
-                          delete item.failedTimestampSeconds;
-                          delete item.failed;
-                        }
-                        return item;
-                      })
-                  : observedRequestsAtReady;
-              if (route === "activity" && activityMedia) {
-                result.observedRequestsAtReady = observedRequestsAtReady;
-                result.observedRequestsAfterReady = observedAfterReady;
-                result.phaseClockEvidence = {
-                  navigationStart: after.NavigationStart,
-                  coldMetricTimestamp: after.Timestamp,
-                  sameDocumentCutoffMs: readyMs,
-                  rawCutoffSeconds: activityCutoff,
-                };
-              }
+              const coldCutoff = after.NavigationStart! + readyMs / 1_000;
+              const requestsAtReady = observedAfterReady
+                .filter((request) => request.timestampSeconds! <= coldCutoff)
+                .map((request) => {
+                  const item = Object.assign({}, request);
+                  if ((item.finishedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.finishedTimestampSeconds;
+                    delete item.wireBytes;
+                  }
+                  if ((item.failedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.failedTimestampSeconds;
+                    delete item.failed;
+                  }
+                  return item;
+                });
+              result.observedRequestsAtReady = observedRequestsAtReady;
+              result.observedRequestsAfterReady = observedAfterReady;
+              result.phaseClockEvidence = {
+                navigationStart: after.NavigationStart,
+                coldMetricTimestamp: after.Timestamp,
+                sameDocumentCutoffMs: readyMs,
+                rawCutoffSeconds: coldCutoff,
+              };
               result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
                 /\.m?js$/u.test(new URL(request.url).pathname),
               );
@@ -2473,26 +2462,24 @@ try {
                 }),
                 readyMs,
               );
-              if (route === "activity" && activityMedia) {
-                result.rpcObservedAtMs = data.observedAtMs;
-                const clock = qualifyRouteNetworkClock(
-                  requestsAtReady,
-                  after.NavigationStart!,
-                  data.resources.filter((resource) => resource.responseEnd > 0),
-                );
-                result.clockQualification = clock;
-                if (!clock.passed) {
-                  result.routeClockFailure = true;
-                  result.networkAndCoverageTotalsWithheld = true;
-                  throw new Error("Activity cold clock did not qualify; raw evidence retained");
-                }
-                result.networkAtReady = routeNetworkPhase(
-                  requestsAtReady,
-                  after.NavigationStart!,
-                  0,
-                  readyMs,
-                );
+              result.rpcObservedAtMs = data.observedAtMs;
+              const clock = qualifyRouteNetworkClock(
+                requestsAtReady,
+                after.NavigationStart!,
+                data.resources.filter((resource) => resource.responseEnd > 0),
+              );
+              result.clockQualification = clock;
+              if (!clock.passed) {
+                result.routeClockFailure = true;
+                result.networkAndCoverageTotalsWithheld = true;
+                throw new Error("Route cold clock did not qualify; raw evidence retained");
               }
+              result.networkAtReady = routeNetworkPhase(
+                requestsAtReady,
+                after.NavigationStart!,
+                0,
+                readyMs,
+              );
               // Keep the first open ahead of artifact analysis and screenshots.
               let activityImmediateCell: InteractionResult | undefined;
               if (activityImmediate) {
@@ -3183,7 +3170,7 @@ try {
               );
             }
             if (result.routeClockFailure) {
-              throw new Error("Activity clock qualification failed; remaining contexts aborted");
+              throw new Error("Route clock qualification failed; remaining contexts aborted");
             }
             if (result.dockClockFailure) {
               throw new Error("Dock clock qualification failed; stopped after saving the failure");

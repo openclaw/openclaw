@@ -152,7 +152,7 @@ export function requestSharedHistory(
   sessions: ChatHistorySessions | null,
   ...[
     client,
-    requestKey,
+    baseRequestKey,
     method,
     sessionKey,
     requestAgentId,
@@ -173,7 +173,7 @@ export function requestSharedHistory(
     inputRunIds,
     historyState,
   );
-  requestKey += JSON.stringify(params.knownState);
+  const requestKey = baseRequestKey + JSON.stringify(params.knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();

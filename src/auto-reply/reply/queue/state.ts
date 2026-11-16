@@ -12,7 +12,6 @@ import {
   getExistingSessionControllerMailbox,
   sessionControllerMailboxes,
   clearSessionControllerMailbox,
-  retireSessionControllerInput,
   type SessionControllerMailbox,
 } from "../../../sessions/session-controller.mailbox.js";
 import {
@@ -118,11 +117,12 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
         }
       }
       sourceCount -= 1;
-      source.onQueueDisposition?.("queue-cap-old");
-      // Eviction closes selection synchronously; callback completion is asynchronous.
       if (source.controllerInput) {
-        retireSessionControllerInput(source.controllerInput);
+        source.controllerInput.payload = "unbound";
       }
+      source.onQueueDisposition?.("queue-cap-old");
+      // Selection closes now; source custody lasts through the durable drop receipt.
+      completeFollowupRunLifecycle(source, { kind: "dropped", reason: "queue-cap-old" });
       if (entry.entries.length === 0) {
         queue.summaryElisions.splice(entryIndex, 1);
       }

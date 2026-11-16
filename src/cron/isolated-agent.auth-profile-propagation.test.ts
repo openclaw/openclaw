@@ -326,7 +326,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     { trigger: "event", cli: true },
     { trigger: "cron", cli: false },
   ] as const)(
-    "explains a legacy bound account refusal for $trigger with cli=$cli (#144047)",
+    "handles a legacy bound job whose default moves for $trigger with cli=$cli (#144047)",
     async ({ trigger, cli }) => {
       await saveProfiles({ "openai:work": apiKey(), "claude-cli:personal": oauth("claude-cli") });
       const cfg = config();
@@ -356,15 +356,26 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       }
       const result = await runWithConfig(cfg, reloaded, trigger);
 
-      expect(result.status).toBe("error");
-      expect(result.error).toContain("incompatible with its recorded inference account and route");
-      expect(result.error).toContain(cli ? "CLI login" : "different provider");
-      expect(result.error).toContain("account openai:work (no recorded runtime)");
-      expect(result.error).toContain(
-        "openclaw automations edit <jobId> --model <provider/model>@<profileId>",
-      );
       expect(reloaded.inferenceBinding).toEqual(binding);
       expect((await loadCronJobsStore(storePath)).jobs[0]?.inferenceBinding).toEqual(binding);
+      if (!cli) {
+        // Another provider records no account, so it selects credentials live, like an
+        // interactive run, and never borrows the recorded openai account.
+        expect(result.status, result.error).toBe("ok");
+        expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        const params = h.runEmbeddedAgentMock.mock.lastCall?.[0];
+        expect(params?.scheduledLiveProviderAuth).toBe(true);
+        expect(params?.authProfileBinding).toBeUndefined();
+        expect(params?.authProfileId).not.toBe("openai:work");
+        return;
+      }
+      // On the recorded provider, a CLI login still can't replace the recorded account.
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("runs openai on account openai:work");
+      expect(result.error).toContain("signs in through its own CLI login");
+      expect(result.error).toContain(
+        `openclaw automations edit ${reloaded.id} --model <provider/model>@<profileId>`,
+      );
       expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();
@@ -456,6 +467,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       const cfg = await claudeCliConfig();
       const binding = await capture(cfg);
       const inference = await prepareCronRunInference({
+        job: { id: "job-cli-failure" },
         binding: binding ?? undefined,
         cfg,
         agentDir: state.agentDir(),
@@ -479,17 +491,20 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         // Fail the resolver's second store read, after the saved account was admitted.
         // Failing initial authorization would never reach the compatibility wrapper.
         await expect(
-          inference.resolveCliAuthProfile((selected) =>
-            resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: "claude-cli",
-              authProfileProvider: "anthropic",
-              config: cfg,
-              agentDir: state.agentDir(),
-              selected,
-              loadAuthProfileStoreForRuntimeAsync: async () => {
-                throw failure;
-              },
-            }),
+          inference.resolveCliAuthProfile(
+            binding!.provider,
+            (selected) =>
+              resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: "claude-cli",
+                authProfileProvider: "anthropic",
+                config: cfg,
+                agentDir: state.agentDir(),
+                selected,
+                loadAuthProfileStoreForRuntimeAsync: async () => {
+                  throw failure;
+                },
+              }),
+            async () => undefined,
           ),
         ).rejects.toBe(failure);
         const message = normalizeCronRunErrorText(failure);
@@ -515,6 +530,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       const cfg = await claudeCliConfig();
       const binding = await capture(cfg);
       const inference = await prepareCronRunInference({
+        job: { id: "job-cli-failure" },
         binding: binding ?? undefined,
         cfg,
         agentDir: state.agentDir(),
@@ -524,18 +540,21 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       }
       try {
         await expect(
-          inference.resolveCliAuthProfile((selected) =>
-            resolveCliExecutionAuthProfileId({
-              cliExecutionProvider: "claude-cli",
-              authProfileProvider: "anthropic",
-              config: cfg,
-              agentDir: state.agentDir(),
-              selected,
-              loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => ({
-                version: 1,
-                profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
+          inference.resolveCliAuthProfile(
+            binding!.provider,
+            (selected) =>
+              resolveCliExecutionAuthProfileId({
+                cliExecutionProvider: "claude-cli",
+                authProfileProvider: "anthropic",
+                config: cfg,
+                agentDir: state.agentDir(),
+                selected,
+                loadAuthProfileStoreForRuntimeAsync: async (): Promise<AuthProfileStore> => ({
+                  version: 1,
+                  profiles: kind === "missing" ? {} : { [claudeProfile]: apiKey() },
+                }),
               }),
-            }),
+            async () => undefined,
           ),
         ).rejects.toMatchObject({
           message: expect.stringContaining("--model <provider/model>@<profileId>"),
@@ -978,7 +997,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
     expect(result.status).toBe("error");
     expect(result.error).toContain(`account ${claudeProfile} on runtime claude-cli`);
-    expect(result.error).toContain("captured for runtime claude-cli");
+    expect(result.error).toContain("recorded for runtime claude-cli");
     expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(h.runCliAgentMock).not.toHaveBeenCalled();
   });
@@ -1058,7 +1077,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
 
       expect(result.status).toBe("error");
       expect(result.error).toContain(
-        `Automation inference account ${claudeProfile} on runtime ${binding.runtime} was removed or signed out`,
+        `runs on account ${claudeProfile}, which was removed or signed out`,
       );
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(h.runCliAgentMock).not.toHaveBeenCalled();

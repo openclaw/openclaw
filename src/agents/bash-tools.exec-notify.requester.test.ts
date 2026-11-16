@@ -45,7 +45,7 @@ it.each([
           sessionKey,
           requesterOrigin: { sessionKey, messageProvider: "telegram", senderId },
         },
-        () => prepareExecExitNotification(process, false),
+        () => prepareExecExitNotification(process, false, false),
       );
       const target = expectDefined(process.notifySessionTarget, "exec completion destination");
       expect(readSessionEventTargetCommandOwner(target)?.requester.senderId).toBe(

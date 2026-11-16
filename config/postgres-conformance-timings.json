@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "source": "Six successful PostgreSQL conformance jobs from scheduled main runs 40173153410 and 40177240126 (2026-10-25). File seconds are the median of up to two observed occupied-slot estimates from timestamped case intervals, including imports/hooks; configurations run sequentially with three file workers. Preparation is the observed median from job start to first Vitest process, split by runtime preparation; configuration overhead is the median residual after occupied file slots, clamped at zero for timestamp rounding. This is calibration, not a holdout forecast. Unobserved existing files retain prior weights; new targets retain the allocator default. Measurements price work and never select test inventory.",
+  "source": "Six successful PostgreSQL conformance jobs from scheduled main runs 40173153410 and 40177240126 (2026-10-25). File seconds are the median of up to two observed occupied-slot estimates from timestamped case intervals, including imports/hooks; configurations run sequentially with three file workers. Preparation is the observed median from job start to first Vitest process, split by runtime preparation; configuration overhead is the median residual after occupied file slots, clamped at zero for timestamp rounding. This is calibration, not a holdout forecast. Unobserved existing files retain prior weights; new targets retain the allocator default. Measurements price work and never select test inventory. The admission-scope.test.ts entry uses the 92.475s first-case-start to last-case-finish span from run 43840855416, job 133209836291, head e3c400d194ebad1c5312068257a5a818e54ec6b9 (2026-11-16). All nine cases passed; this single sample excludes initial import time and the later job timeout is not suite-success evidence.",
   "workers": 3,
   "preparationSeconds": {
     "base": 140.089,
@@ -233,8 +233,8 @@
       "seconds": 1.228
     },
     "src/infra/database-engine/admission-scope.test.ts": {
-      "group": "unit-fast",
-      "seconds": 4.66
+      "group": "unit-fast-isolated",
+      "seconds": 92.475
     },
     "src/infra/database-engine/admitted-diagnostics.test.ts": {
       "group": "infra",

@@ -9,7 +9,8 @@ import {
 } from "./doctor-health-contributions.test-support.js";
 import type { HealthFinding } from "./health-checks.js";
 
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: vi.fn(),
 }));
 

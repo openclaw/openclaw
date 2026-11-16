@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it } from "vitest";
-import { applyControlUiAccent } from "./control-ui-presentation.ts";
+import {
+  applyControlUiAccent,
+  applyControlUiOperatorSeamColor,
+} from "./control-ui-presentation.ts";
 
 function luminance(hex: string) {
   const channels = hex.match(/[a-f\d]{2}/gi)!.map((value) => {
@@ -66,16 +69,36 @@ it("keeps the ring visible on both the page and an elevated control surface", ()
   expect(contrast(ring, "#707070")).toBeGreaterThanOrEqual(3);
 });
 
-it("preserves authored primary and send ink before and after a custom accent", () => {
+it("preserves authored icon ink through inherited, custom, and reset accents", () => {
   const palette = document.head.appendChild(document.createElement("style"));
   palette.textContent =
     ":root { --accent: #d97757; --accent-hover: #e68b6b; --accent-foreground: #fffefa; --primary: #d97757; --primary-hover: #e68b6b; --primary-foreground: #241f1b; --chat-send-foreground: #ffffff; --chat-send-hover-bg: #ba6650; --bg: #101014; }";
   const root = document.documentElement;
   try {
-    for (const accent of ["theme", "#707070", "theme"]) {
+    applyControlUiOperatorSeamColor("#ff8066");
+    for (const accent of [
+      undefined,
+      "theme",
+      "#ff8066",
+      "#ffffff",
+      "#000000",
+      "theme",
+      undefined,
+    ]) {
       applyControlUiAccent(accent);
       if (accent !== "theme") {
-        expect(root.style.getPropertyValue("--chat-send-foreground")).toBe("#ffffff");
+        expect(root.style.getPropertyValue("--accent")).toBe(accent ?? "#ff8066");
+        for (const [family, ink] of [
+          ["chat-send", "#ffffff"],
+          ["sidebar-rail-action", "#fffefa"],
+        ]) {
+          expect(root.style.getPropertyValue("--" + family + "-foreground")).toBe(ink);
+          for (const state of ["", "-hover", "-active"]) {
+            expect(
+              contrast(root.style.getPropertyValue("--" + family + state + "-bg"), ink!),
+            ).toBeGreaterThanOrEqual(state ? 4.5 : 3);
+          }
+        }
         continue;
       }
       const computed = getComputedStyle(root);
@@ -93,6 +116,7 @@ it("preserves authored primary and send ink before and after a custom accent", (
       }
     }
   } finally {
+    applyControlUiOperatorSeamColor();
     palette.remove();
   }
 });

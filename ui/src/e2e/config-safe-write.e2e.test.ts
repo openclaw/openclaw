@@ -3,9 +3,12 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -212,21 +215,15 @@ suite.define(() => {
         expect.soft(box && box.x >= 0 && box.x + box.width <= viewport.width).toBe(true);
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
-      // Let the resize settle so the comparison below only sees save feedback.
-      await page.locator(".shell").evaluate(async (element) => {
-        await Promise.all(element.getAnimations().map((animation) => animation.finished));
-      });
-      let fieldBefore = await endpoint.boundingBox();
+      // Observe the responsive handoff before settling its layout transitions.
+      const shell = page.locator(".shell");
       await expect
-        .poll(
-          async () => {
-            const previous = fieldBefore;
-            fieldBefore = await endpoint.boundingBox();
-            return previous?.x === fieldBefore?.x && previous?.y === fieldBefore?.y;
-          },
-          { interval: 500 },
-        )
-        .toBe(true);
+        .poll(() => shell.evaluate((element) => element.classList.contains("shell--mobile-nav")))
+        .toBe(false);
+      await shell.evaluate(finishElementAnimations);
+      await waitForControlUiProofSurface(endpoint, [endpoint]);
+      await waitForControlUiFrameLayout([shell, endpoint]);
+      const fieldBefore = await endpoint.boundingBox();
       await gateway.resolveDeferred("config.set");
       await expectSaveStatus(page, "Saved");
       expect(await endpoint.boundingBox()).toEqual(fieldBefore);

@@ -13,6 +13,50 @@ import settingsStyles from "../styles/settings.css?inline";
 const optionsFor = (...values: string[]) =>
   values.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }));
 
+it("keeps the native switch geometry and blocks activation while its initial read is pending", async () => {
+  const host = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => host.remove());
+  const target = host.attachShadow({ mode: "open" }).appendChild(document.createElement("div"));
+  const [pending, setPending] = createSignal(true);
+  const onChange = vi.fn();
+  mountSolid(
+    () => (
+      <>
+        <style>
+          {startupStyles}
+          {settingsStyles}
+        </style>
+        <SettingsToggleRow
+          title="Session source"
+          checked={true}
+          pending={pending()}
+          onChange={onChange}
+        />
+      </>
+    ),
+    { container: target },
+  );
+  await nextFrame();
+  const input = target.querySelector<HTMLInputElement>("input")!;
+  const control = target.querySelector<HTMLElement>(".settings-toggle__control")!;
+  const before = control.getBoundingClientRect().toJSON();
+  expect(input.disabled).toBe(true);
+  expect(input.getAttribute("aria-hidden")).toBe("true");
+  expect(getComputedStyle(control).visibility).toBe("hidden");
+  input.click();
+  expect(onChange).not.toHaveBeenCalled();
+  setPending(false);
+  flush();
+  await nextFrame();
+  expect(target.querySelector("input")).toBe(input);
+  expect(control.getBoundingClientRect().toJSON()).toEqual(before);
+  expect(input.disabled).toBe(false);
+  expect(input.hasAttribute("aria-hidden")).toBe(false);
+  expect(getComputedStyle(control).visibility).toBe("visible");
+  input.click();
+  expect(onChange).toHaveBeenCalledExactlyOnceWith(false);
+});
+
 it("animates Applying before lazy settings styles load", async () => {
   const container = document.createElement("div");
   // Keep lazy route keyframes from masking a missing startup animation owner.

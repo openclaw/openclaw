@@ -15,6 +15,7 @@ against it. It runs unchanged in Node (>= 24), browsers and Workers: WebCrypto o
 | [discovery.md](discovery.md)   | OCF-191 | Discovery API v1: descriptor, devices, claws, snapshot mirror, mailbox, relay admission, enrollment |
 | [enrollment.md](enrollment.md) | OCF-190 | Invites, SAS device approval, kit enrollment, reference membership authority rules                  |
 | [acceptance.md](acceptance.md) | OCF-274 | Spec section 11 acceptance tests: which run here, which need the full system                        |
+| [versioning.md](versioning.md) | -       | Version markers, unsupported versions, unknown fields, bootstrap, support window                    |
 
 Source material: the owner-key spec v0.2 ("OpenClaw ID remote access: owner key and device
 approval protocol", 2026-10-29) and the iroh spike (`tailcat-spike/docs/iroh/`). Spec
@@ -29,16 +30,36 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
    pin (fp(R), claw_id, binding_seq).
 2. **Discovery cannot forge an accepted statement.** It holds no owner key, no Gateway key
    (K_gw) and no device key. It can withhold, delay, replay or reorder; it cannot add a member,
-   an owner device, an invite, an approval or a binding, and a replayed revocation cannot
+   an owner device, a node, an invite, an approval or a binding, and a replayed revocation cannot
    remove a key that was approved again.
 3. **No credential before verification.** A client opens a tunnel only to the K_srv of a
    ServerBinding it has verified against its pin, and releases stored tokens only after that.
 4. **Approvals travel directly.** Membership changes and invite approvals reach the Gateway
    over the tunnel or direct loopback, never through the mailbox. The mailbox carries only
    requests and root-signed statements (kit enrollment, revocation).
-5. **A claw's root never changes.** R is pinned at linking, only by the local operator on
-   direct loopback, and nothing replaces it: owner reset is out of scope for this version
-   (OCF-319). Certificates have no expiry unless one is entered explicitly (enrollment.md).
+5. **Only the machine replaces a claw's root.** R is pinned at linking, only by the local
+   operator on direct loopback. Owner reset on the machine replaces it, vouched for by the
+   Gateway key K_gw; a client never moves its pin to the new root, it is set up again
+   (enrollment.md, "Owner reset"). Certificates have no expiry unless one is entered
+   explicitly (enrollment.md).
+
+6. **Nodes are a separate key class.** Node W has no owner/member authority. An owner or R
+   signs every node admission; neither Discovery nor K_gw alone can add a node. A redemption
+   is pending only. Keys stay local; join links carry only a short-lived invitation and pin.
+
+## What these guarantees assume
+
+The invariants above hold against a hostile Discovery and a hostile relay. They assume that
+the code a client runs is trustworthy: for browsers, the loader and Service Worker served at
+the claw origin, and every update to them. Code delivery is trusted, like the Gateway host.
+Whoever can replace that code can skip pin verification, read stored tokens and the
+extractable peer key W, sign with the device key D (a non-extractable key cannot be exported,
+but code running in its origin can still use it), and read a recovery kit typed into the page.
+The protocol cannot detect this.
+
+The loader integration must therefore document, before remote access is on by default, who
+serves the initial loader and its updates, how that path is separated from Discovery's
+deployment and credentials, and how claw origins are isolated from each other.
 
 ## Layout
 
@@ -50,3 +71,10 @@ docs/           these documents
 ```
 
 Run the tests: `pnpm test packages/openclaw-id-protocol`.
+
+Check portable source types without Node ambient types or `DOM.Iterable`:
+`node scripts/run-tsgo.mjs -p packages/openclaw-id-protocol/tsconfig.portable.json`.
+The language library is ES2023 because canonicalization and snapshots use `Array.toSorted`.
+Avoid DOM iterators even when the local compiler exposes them in `DOM`: vendored Discovery
+and loader consumers may use DOM declarations that require a separate `DOM.Iterable` library.
+Their vendor builds remain the final consumer compatibility check.

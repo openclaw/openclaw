@@ -3,6 +3,7 @@ import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
+import type { CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.types.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
@@ -17,7 +18,6 @@ import type {
 import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { ConversationRecallContext } from "../../conversation-recall.types.js";
-import type { CronCreatorAuthorityCapability } from "../../cron-creator-authority-context.js";
 import type {
   BlockReplyChunking,
   EmbeddedAgentEvent,
@@ -156,6 +156,11 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /**
+   * A scheduled candidate on a provider its job records no account for (a configured fallback):
+   * it selects credentials live, like an interactive run, instead of being refused as unrecorded.
+   */
+  scheduledLiveProviderAuth?: boolean;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */

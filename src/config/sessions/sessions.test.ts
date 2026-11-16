@@ -64,6 +64,16 @@ const pendingDelivery = {
 
 it.each<NormalizationCase>([
   [
+    "retained ISO endedAt with an explicit offset and exact millisecond precision",
+    { endedAt: "2026-06-11T19:50:58.538000+02:00" },
+    { endedAt: 1_781_200_258_538 },
+  ],
+  [
+    "retained ISO endedAt at the Unix epoch without fractional seconds",
+    { endedAt: "1970-01-01T00:00:00Z" },
+    { endedAt: 0 },
+  ],
+  [
     "legacy numeric strings",
     { spawnDepth: "2", inputTokens: "32", runtimeMs: "0", estimatedCostUsd: "0.25" },
     { spawnDepth: 2, inputTokens: 32, runtimeMs: 0, estimatedCostUsd: 0.25 },

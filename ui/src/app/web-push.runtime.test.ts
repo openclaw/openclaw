@@ -2,10 +2,15 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import {
+  createWebPushCapabilityRuntime,
   getExistingSubscription,
   subscribeToWebPush,
   unsubscribeFromWebPush,
@@ -180,3 +185,46 @@ it.each(["loading", "native denied", "storage unavailable"])(
     expect(storage.getItem("openclaw.control.notificationsAutoPrompt.v1")).toBeNull();
   },
 );
+
+it.each([
+  { enabled: false, embedded: true },
+  { enabled: true, embedded: true },
+  { enabled: true, embedded: false },
+])("preserves off reads and protects enabled ID pages: %o", async ({ enabled, embedded }) => {
+  document.documentElement.setAttribute("data-openclaw-id-enabled", String(enabled));
+  document.documentElement.setAttribute("data-openclaw-control-ui-base-path", "");
+  vi.stubGlobal("__openclawTransport", embedded ? { createWebSocket: vi.fn() } : undefined);
+  vi.stubGlobal("Notification", { permission: "default" });
+  const getSubscription = vi.fn().mockResolvedValue(null);
+  installServiceWorker(
+    new Promise<ServiceWorkerRegistration>(() => {}),
+    async () => ({ pushManager: { getSubscription } }) as unknown as ServiceWorkerRegistration,
+  );
+  const { client, request } = gatewayClient();
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client,
+      hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
+    } as unknown as Parameters<typeof createApplicationGatewaySnapshot>[0]),
+  );
+  let read: Promise<unknown> | undefined;
+  let subscription: string | undefined;
+  const runtime = createWebPushCapabilityRuntime({
+    gateway,
+    publish: (patch) => {
+      read ??= patch.read;
+      subscription = patch.subscription ?? subscription;
+    },
+  });
+  try {
+    await Promise.resolve(read).catch(() => undefined);
+    expect(getSubscription).toHaveBeenCalledTimes(enabled ? 0 : 1);
+    expect(request).not.toHaveBeenCalled();
+    expect(subscription).toBe("missing");
+  } finally {
+    runtime.dispose();
+    document.documentElement.removeAttribute("data-openclaw-id-enabled");
+    document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
+  }
+});

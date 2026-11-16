@@ -1,9 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { gatewayDiscoveryReadOptions } from "../config/sessions/combined-store-paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
 import { resolveSqliteReadScope } from "../config/sessions/session-accessor.sqlite-read-scope.js";
 import { toDatabaseOptions } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { SessionGroupMembershipSnapshot } from "./session-group-catalog.types.js";
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
@@ -13,7 +15,13 @@ export function readSessionGroupMembership(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): SessionGroupMembershipSnapshot {
-  const stores = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).map((target) => {
+  const stores = resolveAllAgentSessionStoreTargetsSync(
+    cfg,
+    gatewayDiscoveryReadOptions(cfg, {
+      env,
+      snapshot: readAgentDatabaseDeletionSnapshot(env, "runtime-discovery"),
+    }),
+  ).map((target) => {
     const resolved = resolveSqliteReadScope({ ...target, env });
     const options = toDatabaseOptions(resolved);
     return { agentId: target.agentId, storePath: resolveOpenClawAgentSqlitePath(options) };

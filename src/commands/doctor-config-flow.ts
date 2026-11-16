@@ -34,7 +34,7 @@ import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import * as notes from "./doctor/emit-notes.js";
-import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { doctorConfigRevision, finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
   applyRetiredConfigStep,
@@ -119,10 +119,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
     }),
   );
-  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
     const soleAgentId = tryResolveSoleAgentId(config);
-    return runWithPluginMetadataSnapshot(
+    return pluginMetadataSnapshotScope.run(
       {
         config,
         workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
@@ -140,8 +139,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   let modelRetirementRepairRan = false;
-  let modelRetirementOnly = false;
+  let modelRetirementBlockers = ["model-retirement"];
   let channelWorkObserved = false;
+  const configAdvisories: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
@@ -518,7 +518,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           env: process.env,
           blockedCodexProviderPlan,
           pluginMetadataSnapshotState,
-          runWithPluginMetadataSnapshot,
+          runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
           ...(prompter
             ? {
                 onCapabilityConsent: createPluginCapabilityConsentPrompter({
@@ -535,7 +535,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       params.options.json !== true,
     );
     state = repairSequence.state;
-    configRepairWarnings.push(...repairSequence.warningNotes);
+    configRepairWarnings.push(...repairSequence.repairWarningNotes);
+    configAdvisories.push(...repairSequence.advisoryNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -546,7 +547,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
-    modelRetirementOnly = repairSequence.modelRetirementOnly;
+    modelRetirementBlockers = repairSequence.modelRetirementBlockers;
     if (repairSequence.authProfilesRepaired) {
       const { refreshGatewayAuthStateAfterAuthProfileRepair } =
         await import("./doctor/auth-profile-repair.js");
@@ -592,7 +593,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   // Retain normalized source facts before retirement removes heartbeat settings.
-  const modelBillingRouteConfig = state.candidate;
   const preRetiredConfigState = state;
   state = await applyRetiredConfigStep({
     state,
@@ -644,7 +644,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
-    modelBillingRouteConfig,
+    modelBillingRouteConfig: preRetiredConfigState.candidate,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
@@ -667,23 +667,47 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
+  const retirementOnlyBlockers = [
+    ...modelRetirementBlockers,
+    state !== preRetiredConfigState && "config-repair",
+    !snapshot.exists && "config-missing",
+    !snapshot.valid && "config-invalid",
+    legacyStep.blocksWrite && "legacy-write-blocked",
+    deferHeartbeat && "heartbeat-deferred",
+    !preflight.preflightLegacyStateConfig && "preflight-unsettled",
+    preflight.configChanged && "preflight-config-changed",
+    preflight.stateMigrationUnsettled && "state-migration-unsettled",
+    preflight.cronStoreSelectionUnresolved && "cron-selection-unresolved",
+    Boolean(preflight.heartbeatMigrationSource) && "heartbeat-migration",
+    Boolean(preflight.modelBillingRouteMigrationSource) && "billing-migration",
+    configRepairWarnings.length > 0 && "repair-warning",
+    mutableAllowlistWarnings.length > 0 && "mutable-allowlist-warning",
+    pluginWarnings.length > 0 && "plugin-warning",
+    Boolean(migrationResult.modelBillingRouteWarnings?.length) && "billing-warning",
+    pluginMetadataSnapshotState.inventoryChanged && "plugin-inventory-changed",
+    channelWorkObserved && "channel-work",
+    providerRenames.length > 0 && "provider-renames",
+    blockedCodexModelIdentities.size > 0 && "blocked-models",
+    retiredPhoneControlCleanup.cleanupPending && "phone-cleanup",
+    migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound",
+    Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused",
+  ].filter((blocker): blocker is string => Boolean(blocker));
+
   const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     cfg,
-    heartbeatMigrationSource: modelBillingRouteConfig,
-    ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
-      ? {
-          confirmedConfigSource: {
-            path: snapshot.path,
-            hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
-          },
-        }
-      : {}),
+    heartbeatMigrationSource: preRetiredConfigState.candidate,
+    confirmedConfigSource:
+      shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
+        ? doctorConfigRevision(snapshot)
+        : finalized.confirmedConfigSource,
     ...(referenceSource ? { referenceSource } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
-    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
+    ...(configRepairWarnings.length || configAdvisories.length
+      ? { warnings: [...new Set([...configRepairWarnings, ...configAdvisories])] }
+      : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
@@ -708,32 +732,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
-    retirementOnly:
-      modelRetirementOnly &&
-      state === preRetiredConfigState &&
-      snapshot.exists &&
-      snapshot.valid &&
-      !legacyStep.blocksWrite &&
-      !deferHeartbeat &&
-      Boolean(preflight.preflightLegacyStateConfig) &&
-      !preflight.configChanged &&
-      !preflight.stateMigrationUnsettled &&
-      !preflight.cronStoreSelectionUnresolved &&
-      !preflight.heartbeatMigrationSource &&
-      !preflight.modelBillingRouteMigrationSource &&
-      configRepairWarnings.length === 0 &&
-      mutableAllowlistWarnings.length === 0 &&
-      pluginWarnings.length === 0 &&
-      !migrationResult.modelBillingRouteWarnings?.length &&
-      !pluginMetadataSnapshotState.inventoryChanged &&
-      !channelWorkObserved &&
-      providerRenames.length === 0 &&
-      blockedCodexModelIdentities.size === 0 &&
-      !retiredPhoneControlCleanup.cleanupPending &&
-      migrationResult.postSessionPluginMigrationPlanBound === true &&
-      !migrationResult.postSessionPluginMigration?.step.refusal,
+    retirementOnly: retirementOnlyBlockers.length === 0,
+    retirementOnlyBlockers,
     ...migrationResult,
-    runWithPluginMetadataSnapshot,
+    runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
     invalidatePluginMetadataSnapshot,
   };
   return configResult;

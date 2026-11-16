@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
+import { promises as fs } from "node:fs";
+import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -110,7 +111,7 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
   const input = resolve(projectPath);
-  const inputStat = await lstat(input).catch(() => undefined);
+  const inputStat = await stat(input).catch(() => undefined);
   if (!inputStat) {
     throw new TemplateProjectError(
       "project_not_found",
@@ -207,13 +208,12 @@ export async function createTemplateProject(
   const createdPaths: string[] = [];
   await mkdir(root, { recursive: true });
   try {
-    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-    });
+    await using packageFile = await fs.open(packageJsonPath, "wx");
     createdPaths.push(packageJsonPath);
-    await writeFile(templateMarkdownPath, templateMarkdown, { encoding: "utf8", flag: "wx" });
+    await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+    await using templateFile = await fs.open(templateMarkdownPath, "wx");
     createdPaths.push(templateMarkdownPath);
+    await writeFile(templateFile, templateMarkdown, "utf8");
   } catch (error) {
     await Promise.allSettled(createdPaths.map((path) => unlink(path)));
     if (initialState === "missing") {
@@ -311,25 +311,14 @@ export async function validateTemplateProject(
   if (!template.ok) {
     return { ok: false, root, diagnostics: template.diagnostics };
   }
-  const excludedSource = [
-    ...(template.snapshot.openClawProfile
-      ? [
-          {
-            path: template.snapshot.openClawProfile.sourcePath,
-            diagnosticPath: "$.metadata.openclaw.config",
-          },
-        ]
-      : []),
-    ...template.snapshot.workspaceSources.map((source) => ({
-      path: source.sourcePath,
-      diagnosticPath: "$.workspace",
-    })),
-  ].find((source) => isExcludedProjectSource(source.path));
+  const excludedSource = template.snapshot.workspaceSources.find((source) =>
+    isExcludedProjectSource(source.sourcePath),
+  );
   if (excludedSource) {
     return failure(
       "project_excluded_source",
-      excludedSource.diagnosticPath,
-      `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
+      "$.workspace",
+      `Selected project source ${JSON.stringify(excludedSource.sourcePath)} cannot come from .git or node_modules.`,
     );
   }
   const reservedPackageSource = template.snapshot.workspaceSources.find(
@@ -380,8 +369,10 @@ export async function validateTemplateProject(
     "CLAW.md",
     ...(license ? ["LICENSE"] : []),
     ...(template.packageBootstrap ? ["BOOTSTRAP.md"] : []),
-    ...(template.snapshot.openClawProfile ? [template.snapshot.openClawProfile.sourcePath] : []),
     ...template.snapshot.workspaceSources.map((source) => source.sourcePath),
+    ...(template.snapshot.bundledSources ?? []).flatMap((source) =>
+      source.snapshot.files.map((file) => `${source.path}/${file.path}`),
+    ),
   ];
   const portableSelectedPaths = new Map<string, string>();
   for (const path of selectedPathList) {
@@ -414,21 +405,26 @@ export async function validateTemplateProject(
     const visit = async (directory: string): Promise<void> => {
       const entries = await readdir(resolve(root, directory), { withFileTypes: true });
       for (const entry of entries) {
-        entryCount += 1;
+        const path = directory ? `${directory}/${entry.name}` : entry.name;
+        const selected =
+          !entry.isDirectory() && selectedPathKeys.has(projectPathKey(path, caseInsensitive));
+        // Selected files are already bounded by the reader's workspace and bundled limits.
+        if (!selected) {
+          entryCount += 1;
+        }
         if (entryCount > MAX_PROJECT_ENTRIES) {
           throw new TemplateProjectError(
             "project_too_many_entries",
-            `Template projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
+            `Template projects may contain at most ${MAX_PROJECT_ENTRIES} folders and unselected files outside excluded dependency and source-control trees.`,
           );
         }
-        const path = directory ? `${directory}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
           if (entry.name === ".git" || entry.name === "node_modules") {
             excluded.push(`${path}/`);
           } else {
             await visit(path);
           }
-        } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
+        } else if (!selected) {
           excluded.push(path);
         }
       }

@@ -16,17 +16,14 @@ import {
   OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX,
   workspaceSizeRecoveryPaths,
 } from "./workspace-manifest-comparison.js";
-import {
-  captureWorkspaceManifestDocument,
-  parseWorkspaceManifestPair,
-} from "./workspace-manifest-worker.js";
+import { parseWorkspaceManifestPair } from "./workspace-manifest-worker.js";
 import { manifestPath, MAX_RECONCILIATION_FILE_BYTES } from "./workspace-manifest.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import { hasWorkerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type RecoveryState = Pick<
   ReturnType<typeof projectionOperations>,
-  "current" | "canonicalPaths" | "baselineDocument" | "buildCacheInputs"
+  "current" | "canonicalPaths" | "baselineDocument" | "buildCacheInputs" | "capture"
 >;
 
 function recoveryPath(value: string) {
@@ -43,13 +40,7 @@ function recoveryPath(value: string) {
 async function hasAggregateOverflow(state: RecoveryState): Promise<boolean> {
   const baseline = await state.baselineDocument();
   const retained = await state.buildCacheInputs();
-  const selected = state.current();
-  const current = await captureWorkspaceManifestDocument({
-    root: selected.projection_path,
-    baseCommit: selected.base_commit,
-    buildCacheInputs: new Set(retained),
-  });
-  state.current();
+  const current = await state.capture("canonical");
   try {
     await parseWorkspaceManifestPair({
       baseRaw: baseline.rawManifest,

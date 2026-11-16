@@ -594,15 +594,31 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     ).toEqual([]);
   });
 
-  it("refuses unsafe directories with repairable units", async () => {
-    await writeFixtureFile(unitPath, previousUnit);
-    await fs.chmod(unitPath, 0o664);
-    await fs.chmod(path.dirname(unitPath), 0o775);
+  it.each(["service", "definition"])(
+    "identifies the unsafe %s directory without changing it",
+    async (kind) => {
+      await writeFixtureFile(unitPath, previousUnit);
+      await fs.chmod(unitPath, 0o664);
+      const directory = kind === "service" ? path.dirname(unitPath) : path.join(root, "operator");
+      if (kind === "definition") {
+        const dropIn = await input(
+          "operator/custom.conf",
+          "[Service]\nEnvironment=FIXTURE=retained\n",
+        );
+        managerDefinition(dropIn);
+      }
+      await fs.chmod(directory, 0o775);
 
-    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
-    await expectFiles({ [unitPath]: { contents: previousUnit, mode: 0o664 } });
-    expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
-  });
+      await expectRefusal(
+        { kind: "unknown", reason: "unsafe-permissions", path: directory },
+        "SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]",
+        JSON.stringify(directory),
+      );
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o775);
+      await expectFiles({ [unitPath]: { contents: previousUnit, mode: 0o664 } });
+      expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
+    },
+  );
 
   it("repairs owned writable state dirs before publication", async () => {
     const mode = 0o777;

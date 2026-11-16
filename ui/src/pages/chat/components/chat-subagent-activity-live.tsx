@@ -1,4 +1,4 @@
-import { createStore, onSettled } from "solid-js";
+import { createMemo, createStore, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../../../lib/observer-digest.ts";
@@ -9,7 +9,6 @@ import {
   normalizeAgentId,
   resolveUiSessionRowAgentId,
 } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatSubagentActivity as ChatSubagentActivityRow } from "../chat-subagent-wait.ts";
 import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
@@ -38,10 +37,7 @@ function matchesRun(
 }
 
 /** Details consumes current observer digests without reading child history. */
-function SubagentActivityLive(
-  props: SubagentActivityProps,
-  host: SolidBridgeElement<SubagentActivityProps>,
-) {
+export function ChatSubagentActivity(props: SubagentActivityProps) {
   const context = useOptionalApplication();
   // The cache retains only digests belonging to the currently displayed runs.
   const [digests, setDigests] = createStore<Record<string, SessionObserverDigest>>(
@@ -86,7 +82,7 @@ function SubagentActivityLive(
         return;
       }
       const digest = event.payload;
-      const row = host.rows.find((candidate) => matchesRun(candidate, digest));
+      const row = props.rows.find((candidate) => matchesRun(candidate, digest));
       if (!row) {
         return;
       }
@@ -102,8 +98,8 @@ function SubagentActivityLive(
       unsubscribeEvents();
     };
   });
-  const rows = () => {
-    return props.rows.map((row) => {
+  const rows = createMemo(() => {
+    const value = props.rows.map((row) => {
       const live = digests[row.key];
       const stored = row.session.observerDigest;
       const digest = pickFreshestObserverDigest(
@@ -118,37 +114,7 @@ function SubagentActivityLive(
           live && digest === live && live.planProgress?.total ? live.planProgress : undefined,
       };
     });
-  };
+    return value;
+  });
   return <SubagentActivity {...props} rows={rows()} />;
-}
-
-export const ChatSubagentActivity = defineSolidBridge<SubagentActivityProps>(
-  "openclaw-chat-subagent-activity",
-  SubagentActivityLive,
-  {
-    properties: {
-      rows: { default: [], attribute: false },
-      limit: { default: undefined, attribute: false },
-      onOpenSubagent: { default: undefined, attribute: false },
-      onOpenSession: { default: undefined, attribute: false },
-    },
-    connected: (host) => {
-      host.style.display = "contents";
-    },
-  },
-);
-type ChatSubagentActivityElement = SolidBridgeElement<SubagentActivityProps>;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-subagent-activity": HTMLAttributes<ChatSubagentActivityElement> &
-        Properties<ChatSubagentActivityElement> & {
-          "prop:rows"?: SubagentActivityProps["rows"];
-          "prop:limit"?: SubagentActivityProps["limit"];
-          "prop:onOpenSubagent"?: SubagentActivityProps["onOpenSubagent"];
-          "prop:onOpenSession"?: SubagentActivityProps["onOpenSession"];
-        };
-    }
-  }
 }

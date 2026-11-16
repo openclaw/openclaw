@@ -21,6 +21,7 @@ export type ConfirmDialogOptions = {
   confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
+  compact?: boolean;
   signal?: AbortSignal;
   skipPreference?: ConfirmDialogSkipPreference;
   requiredAcknowledgement?: string;

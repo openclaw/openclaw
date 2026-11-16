@@ -174,6 +174,7 @@ export async function collectPluginDoctorStateMigrationPlans(
       env,
       inventory: params.inventory,
       pluginIds: params.pluginIds,
+      includeDisabled: params.includeDisabled,
       surfaces: ["stateMigrations"],
       assertCurrent: () => params.repairAuthority?.assertCurrent(),
     });

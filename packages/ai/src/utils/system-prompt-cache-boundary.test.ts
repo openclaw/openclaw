@@ -5,6 +5,7 @@ import {
   ensureSystemPromptCacheBoundary,
   prependSystemPromptAdditionAfterCacheBoundary,
   splitSystemPromptCacheBoundary,
+  splitSystemPromptCacheBoundaryForWire,
   stripSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
@@ -51,6 +52,19 @@ describe("ensureSystemPromptCacheBoundary", () => {
     expect(splitSystemPromptCacheBoundary(result)).toEqual({
       stablePrefix: "Marker-free override",
       dynamicSuffix: "Per-turn media task hint",
+    });
+    expect(splitSystemPromptCacheBoundaryForWire(result)).toEqual({
+      stablePrefix: "Marker-free override",
+      dynamicSuffix: "\nPer-turn media task hint",
+    });
+    expect(
+      splitSystemPromptCacheBoundaryForWire(
+        ensureSystemPromptCacheBoundary("Marker-free override"),
+      ),
+    ).toEqual({ stablePrefix: "Marker-free override\n", dynamicSuffix: "" });
+    expect(splitSystemPromptCacheBoundaryForWire(SYSTEM_PROMPT_CACHE_BOUNDARY)).toEqual({
+      stablePrefix: "",
+      dynamicSuffix: "\n",
     });
   });
 });

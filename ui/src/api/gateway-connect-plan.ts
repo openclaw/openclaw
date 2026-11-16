@@ -1,3 +1,5 @@
+/// <reference lib="es2026.typedarrays" />
+
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -17,6 +19,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import {
+  CONTROL_UI_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
   type ControlUiBootstrapProfileHint,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -31,7 +34,6 @@ import type {
 } from "../app/native-gateway-auth.ts";
 import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
-import { bytesToHex } from "../lib/bytes-hex.ts";
 import {
   loadDeviceAuthToken,
   loadOrCreateDeviceIdentity,
@@ -85,15 +87,6 @@ export type GatewayBrowserConnectOptions = {
 
 export const CONTROL_UI_OPERATOR_ROLE = "operator";
 
-export const CONTROL_UI_OPERATOR_SCOPES = [
-  "operator.admin",
-  "operator.read",
-  "operator.write",
-  "operator.approvals",
-  "operator.questions",
-  "operator.pairing",
-] as const;
-
 export type ConnectPlan = {
   generation: number;
   params: ConnectParams;
@@ -116,7 +109,7 @@ export async function deriveLegacyV4RecoveryScope(material: string | undefined):
   }
   try {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return bytesToHex(new Uint8Array(digest));
+    return new Uint8Array(digest).toHex();
   } catch {
     return "";
   }

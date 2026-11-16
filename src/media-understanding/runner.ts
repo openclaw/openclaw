@@ -7,6 +7,7 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
@@ -64,6 +65,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   resolveModelEntries,
   resolveScopeDecision,
@@ -71,12 +73,10 @@ import {
 } from "./resolve.js";
 import {
   buildModelDecision,
-  formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 export {
   createMediaAttachmentCache,

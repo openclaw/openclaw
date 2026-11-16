@@ -104,7 +104,16 @@ it("names the admitted writer in a contending BEGIN and clears it after rollback
   );
 });
 
-it.each(["session.lifecycle.delete", "sessions.transcript-hydration.cron-model"])(
+it.each([
+  "session.lifecycle.delete",
+  "session.transcript.append-turn",
+  "session.transcript.prepare-rewrite",
+  "session.metadata.append",
+  "trajectory.runtime.append",
+  "session context snapshot read",
+  "sessions.transcript-maintenance",
+  "sessions.transcript-hydration.cron-model",
+])(
   "attributes and bounds %s statements without counting consumers or exposing SQL",
   (operation) => {
     const { db, advance, run, warning, logger } = fixture();
@@ -128,7 +137,7 @@ it.each(["session.lifecycle.delete", "sessions.transcript-hydration.cron-model"]
           }
           advance(400);
         },
-        operation === "session.lifecycle.delete" ? { operationLabel: operation } : {},
+        operation.startsWith("sessions.transcript-hydration.") ? {} : { operationLabel: operation },
       ),
     );
     const id = expect.stringMatching(/^[a-f0-9]{16}$/);

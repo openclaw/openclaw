@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   UPDATE_NPM_ERROR_CODES,
+  UPDATE_RUN_CAUSES,
   UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
@@ -273,6 +274,7 @@ export const UpdateRunRecordSchema = z.object({
     campaignId: text.optional(),
     doctorHint: text.optional(),
     nextAction: text.optional(),
+    cause: z.enum(UPDATE_RUN_CAUSES).optional(),
   }),
   target: z.object({
     channel: text.optional(),
