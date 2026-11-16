@@ -17,6 +17,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { resolveGatewayAuth } from "./auth-resolve.js";
 import type { GatewayClientOptions } from "./client.js";
+import { projectGatewayUrlForDiagnostics } from "./connection-details.js";
 import { isLoopbackGatewayUrl } from "./net.js";
 
 export type GatewayCallDeviceAuthOptions = Pick<
@@ -220,16 +221,21 @@ export async function loadStoredOperatorDeviceAuthToken(
 /**
  * A device with no identity behind gateway.remote.edgeAuth reaches the Gateway
  * through the proxy but holds no scopes. `gateway call` is read-only and cannot
- * pair it; the TUI can.
+ * pair it; the TUI can. An explicit --url stays in the command, because a bare
+ * `openclaw tui` may select another Gateway (for example a local one).
  */
 export function withEdgeAuthPairingHint(
   error: Error,
   edgeAuthHeaders: Readonly<Record<string, string>> | undefined,
   deviceIdentity: DeviceIdentity | null,
+  explicitUrl: string | undefined,
 ): Error {
   const details = "details" in error ? error.details : undefined;
   if (edgeAuthHeaders && !deviceIdentity && readMissingScopeErrorDetails(details)) {
-    error.message = `${error.message}\nFix: this device is not paired with this Gateway yet. Run \`openclaw tui\` once to pair this device, approve the request in that Gateway's Control UI (Settings -> Devices), then retry.`;
+    const tui = explicitUrl
+      ? `openclaw tui --url ${projectGatewayUrlForDiagnostics(explicitUrl)}`
+      : "openclaw tui";
+    error.message = `${error.message}\nFix: this device is not paired with this Gateway yet. Run \`${tui}\` once to pair this device, approve the request in that Gateway's Control UI (Settings -> Devices), then retry.`;
   }
   return error;
 }
