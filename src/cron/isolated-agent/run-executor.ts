@@ -119,3 +119,5 @@ async function executeCronRunOwned(params: CronRunExecutionParams): Promise<Cron
     completedPromptRuns,
   };
 }
+
+// CI probe: no behavior change.

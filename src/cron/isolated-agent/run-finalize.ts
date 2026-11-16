@@ -489,3 +489,5 @@ export async function finalizeCronRun(params: {
   }
   return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }
+
+// CI probe: no behavior change.
