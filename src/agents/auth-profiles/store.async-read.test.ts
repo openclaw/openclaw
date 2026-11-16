@@ -13,7 +13,7 @@ import {
 import { revokeAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
-import { refreshAuthProfileFileState } from "./file-state.js";
+import * as fileState from "./file-state.js";
 import * as migration from "./legacy-source-diagnostic.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
@@ -30,6 +30,7 @@ import { createAuthProfileStoreRuntime } from "./store.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
 const reader = vi.hoisted(() => ({
+  agentId: "main",
   identity: undefined,
   databaseIdentity: undefined,
   source: { kind: "shared-state" as const, databasePath: "/fixture/shared.sqlite" },
@@ -44,7 +45,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   reader.assertCurrent.mockReset();
   reader.read.mockReset();
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockReturnValue(reader);
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockResolvedValue(reader);
 });
 
 function useAgentWorkerRows() {
@@ -288,7 +289,7 @@ it.each([false, true])(
         path.join(localDir, "auth-profiles.json"),
         JSON.stringify(customStore("custom:legacy", "fixture-legacy")),
       );
-      await refreshAuthProfileFileState();
+      await fileState.refreshAuthProfileFileState();
       inheritedRows.resolve(inherited);
       if (populated) {
         await expect(loading).resolves.toMatchObject({ profiles: local.profiles });
@@ -385,3 +386,41 @@ it.each(["matching inherited", "unrelated inherited", "selected"] as const)(
     }
   },
 );
+
+it("refuses a cold runtime read retired during registry discovery", async () => {
+  const { root, agentDir, load } = setupWorker("registry-retirement");
+  reader.read.mockResolvedValue(readableRows(customStore("custom:account")));
+  const admission = vi.spyOn(fileState, "captureAuthProfileFileIdentityAsync");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const realpath = fs.promises.realpath;
+  vi.spyOn(fs.promises, "realpath").mockImplementation(async (...args) => {
+    if (String(args[0]) === agentDir) {
+      entered.resolve();
+      await release.promise;
+    }
+    return Reflect.apply(realpath, fs.promises, args);
+  });
+  const loading = load();
+  void loading.catch(() => {});
+  try {
+    await Promise.race([
+      entered.promise,
+      loading.then(() => {
+        throw new Error("Runtime read did not enter cold registry discovery");
+      }),
+    ]);
+    const closing = Promise.all(
+      revokeAgentDatabaseResources({ path: path.join(agentDir, "openclaw-agent.sqlite") }),
+    );
+    release.resolve();
+    await closing;
+    await expect(loading).rejects.toThrow(/closed|revoked/);
+    expect(reader.read).not.toHaveBeenCalled();
+    expect(admission).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await Promise.allSettled([loading]);
+    await Promise.all(revokeAgentDatabaseResources({ rootPath: root }));
+  }
+});

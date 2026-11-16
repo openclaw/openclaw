@@ -31,7 +31,6 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import { buildPersistedAuthProfileState } from "./state.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
 import type {
@@ -70,7 +69,7 @@ export async function publishInlineAuthFailure(
   if (entries.length === 0) {
     return;
   }
-  const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const read = async (databasePath: string, kind: "agent" | "shared-state") => {
     const revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
     const nativeCurrent =
@@ -98,9 +97,8 @@ export async function publishInlineAuthFailure(
       rows = await readSharedAuthProfileRows(context);
       assertCurrent = () => context.admission.assertCurrent();
     } else {
-      const reader = prepareAgentAuthProfileRowsRead({
+      const reader = await prepareAgentAuthProfileRowsRead({
         databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
         env: owner.env,
       });
       readers.add(reader);

@@ -186,7 +186,11 @@ export async function captureSessionEventTargetForHost(
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      // A session-scoped surface is this session's own policy, so its follow-ups need no ceiling.
+      const sessionScopedSurface =
+        caller.sessionEventToolsAllowSessionScoped === true &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)

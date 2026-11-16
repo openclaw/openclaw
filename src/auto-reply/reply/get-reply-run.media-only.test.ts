@@ -915,6 +915,52 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
+  it.each([
+    ["off", "low"],
+    ["low", "low"],
+    ["high", "high"],
+  ] as const)(
+    "resolves Talk preference %s against the selected consult model",
+    async (requested, expected) => {
+      const catalog = [
+        {
+          provider: "anthropic",
+          id: "claude-opus-5-5",
+          name: "Claude Opus",
+          reasoning: true,
+          compat: { thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" },
+        },
+      ];
+      await runPrepared({
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+        modelState: {
+          ...nonReasoningModelState(),
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+        resolvedThinkLevel: requested,
+        opts: { thinkingLevelOverride: requested, normalizeThinkingLevelOverride: true },
+      });
+      const run = requireRunReplyAgentCall().followupRun.run;
+      expect(run.thinkLevel).toBe(expected);
+      expect(run.thinkLevelOverride).toBe(requested);
+    },
+  );
+
+  it("does not clamp inherited thinking without a Talk override", async () => {
+    await runPrepared({
+      provider: "openai",
+      model: "chat-latest",
+      modelState: nonReasoningModelState(),
+      resolvedThinkLevel: "high",
+      opts: { normalizeThinkingLevelOverride: true },
+    });
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.thinkLevel).toBe("high");
+    expect(run.thinkLevelOverride).toBeUndefined();
+  });
+
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
     vi.mocked(buildSourceConversationContext).mockImplementation(
