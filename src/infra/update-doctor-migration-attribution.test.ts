@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { adoptUpdateBootDatabaseWrites } from "../cli/update-cli/update-command-database-backup.js";
 import {
   observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
@@ -74,6 +75,61 @@ function migrate(database: DatabaseSync, pathname: string) {
     database.exec("ALTER TABLE retained ADD COLUMN migrated;");
   });
 }
+
+it.each([false, true])(
+  "attributes successful boot writes before the next Doctor unless state already changed: %s",
+  async (preexistingWrite) => {
+    const { root, pathname, env } = fixture(
+      "credentials.sqlite",
+      "INSERT INTO retained VALUES (7);",
+    );
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    expect(generations[pathname]).toEqual(expect.any(String));
+    const backup: UpdateDatabaseBackup = {
+      directory: root,
+      databases: [
+        {
+          path: pathname,
+          snapshotPath: pathname,
+          userVersion: 0,
+          sha256: "0".repeat(64),
+          sizeBytes: fs.statSync(pathname).size,
+        },
+      ],
+      sourcePaths: [pathname],
+      missingPaths: [],
+      sourceGenerations: generations,
+      warnings: [],
+      migration: { name: "first Doctor", backup: root, from: generations, to: generations },
+    };
+    if (preexistingWrite) {
+      using database = new DatabaseSync(pathname);
+      database.exec("UPDATE retained SET value = 8;");
+    }
+    const result = await adoptUpdateBootDatabaseWrites(backup, env, async () => {
+      using database = new DatabaseSync(pathname);
+      database.exec("UPDATE retained SET value = 9;");
+      return { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+    });
+    expect(result.status).toBe("ok");
+    const { receipt, warnings } = await withCapture(env, backup.migration!.to, async () => {
+      using database = new DatabaseSync(pathname);
+      if (preexistingWrite) {
+        expect(() => migrate(database, pathname)).toThrow(
+          "SQLite migration source changed after update capture:",
+        );
+      } else {
+        migrate(database, pathname);
+        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 9 }]);
+      }
+    });
+    expect(receipt?.unchanged).toBe(!preexistingWrite);
+    expect(backup.migration!.from).toEqual(generations);
+    if (!preexistingWrite) {
+      expect(warnings).toEqual([]);
+    }
+  },
+);
 
 it("refuses a changed companion the session never opened", async () => {
   const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
