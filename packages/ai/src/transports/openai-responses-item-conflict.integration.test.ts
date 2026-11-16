@@ -205,12 +205,18 @@ it.each([
 );
 
 it.each([
-  ['{ "n": 1 }', false],
-  ['{"n":9007199254740993}', false],
-  ['{ "n": 9007199254740993 }', true],
+  ['{ "n": 1 }', false, "same"],
+  ['{"n":9007199254740993}', false, "same"],
+  ['{ "n": 9007199254740993 }', true, "same"],
+  ['{"n":9007199254740993}', false, "provider"],
+  ['{"n":9007199254740993}', false, "api"],
+  ['{"n":9007199254740993}', false, "model"],
 ] as const)(
-  "retains completed tool argument bytes across a cold reopen: %s (streamed=%s)",
-  async (argumentsText, streamed) => {
+  "retains completed tool argument bytes across a cold reopen: %s (streamed=%s, identity=%s)",
+  async (argumentsText, streamed, identity) => {
+    const host = getAiTransportHost();
+    configureAiTransportHost({});
+    onTestFinished(() => configureAiTransportHost(host));
     const call = wireCall("exact", "record_value", argumentsText);
     const server = await createResponsesLoopbackServer((turn) =>
       turn === 1
@@ -251,16 +257,23 @@ it.each([
     const storedTranscript = JSON.stringify(messages);
     const reloaded: Context["messages"] = JSON.parse(storedTranscript);
     messages.splice(0, messages.length, ...reloaded);
+    const saved = messages[1];
+    assert(saved?.role === "assistant");
+    if (identity === "provider") saved.provider = "other-responses-provider";
+    if (identity === "api") saved.api = "openai-completions";
+    if (identity === "model") saved.model = "other-model";
     cleanupSessionResources();
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(2);
     expect(server.requests[1]?.previous_response_id).toBeUndefined();
     expect(server.requests[1]?.input).toContainEqual(
-      expect.objectContaining({ type: "function_call", id: call.id, arguments: argumentsText }),
+      expect.objectContaining({
+        type: "function_call",
+        ...(identity === "same" ? { id: call.id } : {}),
+        arguments: identity === "same" ? argumentsText : '{"n":"9007199254740993"}',
+      }),
     );
     // A real argument edit must not resurrect the original provider bytes.
-    const saved = messages[1];
-    assert(saved?.role === "assistant");
     const edited = saved.content.find((block) => block.type === "toolCall");
     assert(edited);
     edited.arguments = { n: 2 };
@@ -301,10 +314,8 @@ it.each(["library", "gateway"])(
   "does not replay a degenerate aborted function item through %s",
   async (owner) => {
     const host = getAiTransportHost();
-    if (owner === "gateway") {
-      configureAiTransportHost({ transformTransportMessages });
-      onTestFinished(() => configureAiTransportHost(host));
-    }
+    configureAiTransportHost(owner === "gateway" ? { transformTransportMessages } : {});
+    onTestFinished(() => configureAiTransportHost(host));
     const call = wireCall("partial", "record_value");
     const server = await createResponsesLoopbackServer((turn) => {
       if (turn === 1) {

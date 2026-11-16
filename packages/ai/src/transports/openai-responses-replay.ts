@@ -25,14 +25,14 @@ export function normalizeOpenAIResponsesReasoningReplayItem(
 export function replayOpenAIResponsesToolArguments(
   block: ToolCall,
   providerStyle: boolean,
-  isDifferentModel: boolean,
+  sameModel: boolean,
 ): string {
   const value = providerStyle
     ? JSON.stringify(block.arguments)
     : typeof block.arguments === "string"
       ? block.arguments
       : JSON.stringify(block.arguments ?? {});
-  const signature = !isDifferentModel && block.argumentsSignature;
+  const signature = sameModel && block.argumentsSignature;
   return signature && signature.value === value && typeof signature.raw === "string"
     ? signature.raw
     : value;

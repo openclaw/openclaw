@@ -560,7 +560,11 @@ function convertResponsesMessagesWithStyle(
             call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: replayOpenAIResponsesToolArguments(block, providerStyle, isDifferentModel),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
           previousReplayItemWasReasoning = false;
         }

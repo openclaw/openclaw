@@ -29,6 +29,7 @@ function responseMessage(id: string, text: string) {
 
 it.each([
   "healthy",
+  "legacy",
   "recovered",
   "snapshot-recovered",
   "failed-repair",
@@ -37,7 +38,7 @@ it.each([
 ] as const)(
   "preserves Responses replay across a cold runner reopen (%s)",
   async (mode) => {
-    const conflictingReplay = mode !== "healthy";
+    const conflictingReplay = mode !== "healthy" && mode !== "legacy";
     const deferred = mode.startsWith("deferred");
     await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
       const sessionId = "responses-cold-prefix";
@@ -176,7 +177,7 @@ it.each([
                   id: "fc_" + id,
                   call_id: "call_" + id,
                   name: "cache_probe",
-                  arguments: requests.length === 1 ? "{ }" : "{}",
+                  arguments: requests.length === 1 && mode !== "legacy" ? "{ }" : "{}",
                 }
               : responseMessage("msg_" + id, "synthetic answer"),
           ];
@@ -287,7 +288,7 @@ it.each([
             expect.objectContaining({
               type: "function_call",
               id: "fc_response_1",
-              arguments: "{ }",
+              arguments: mode === "legacy" ? "{}" : "{ }",
             }),
           );
         }
