@@ -1,10 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
-import { setTimeout as delay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { monotonicDeadlineAfter, remainingMonotonicMs } from "../../shared/monotonic-time.js";
 import {
   isPidDefinitelyDead,
   isPidDefinitelyDeadAsync,
@@ -475,15 +473,12 @@ function readProcessRows(): ProcessRow[] {
  * caller-observed children (adopted orphans), and all of their descendants, even
  * those that started a new session. The owner's own helpers (its direct children
  * other than the command root) and their descendants are not the command's.
- * `earlier` is a previous census: each of its processes that still runs the same
- * command stays named, even after the parent that tied it to the command exited.
  * Undefined when the process table cannot be read: the caller must then stop the
  * tree instead of releasing processes it cannot account for.
  */
-function describeReleasedProcesses(
+export function describeReleasedProcesses(
   rootPid: number | undefined,
   adoptedPids: readonly number[] = [],
-  earlier: readonly ReleasedProcess[] = [],
 ): ReleasedProcess[] | undefined {
   let rows: ProcessRow[];
   try {
@@ -522,14 +517,8 @@ function describeReleasedProcesses(
       .filter((row) => row.pid !== rootPid && !adoptedPids.includes(row.pid))
       .map((row) => row.pid),
   );
-  const known = new Map(earlier.map(({ pid, command }) => [pid, command]));
   const seeds = rows
-    .filter(
-      (row) =>
-        adoptedPids.includes(row.pid) ||
-        row.pgid === process.pid ||
-        (known.has(row.pid) && known.get(row.pid) === truncateCommand(row.command)),
-    )
+    .filter((row) => adoptedPids.includes(row.pid) || row.pgid === process.pid)
     .map((row) => row.pid)
     .filter((pid) => pid !== process.pid && !helpers.has(pid));
   const released = closure(seeds);
@@ -537,42 +526,14 @@ function describeReleasedProcesses(
     .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
     .toSorted((left, right) => left.pid - right.pid)
     .map(({ pid, command }) =>
-      command === undefined ? { pid } : { pid, command: truncateCommand(command) },
+      command === undefined
+        ? { pid }
+        : {
+            pid,
+            command:
+              command.length > MAX_RELEASED_COMMAND_CHARS
+                ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
+                : command,
+          },
     );
-}
-
-function truncateCommand(command: string | undefined): string | undefined {
-  return command && command.length > MAX_RELEASED_COMMAND_CHARS
-    ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
-    : command;
-}
-
-// A process the command leaves running is a service only if it still runs this long after root exit.
-const RELEASE_SETTLE_MS = 2_000;
-const RELEASE_SETTLE_POLL_MS = 100;
-
-/**
- * After root exit, only what still runs at the end of the settle window was left
- * running on purpose: helpers that are still exiting (git, cp, tee) are not services.
- * Each census keeps the earlier survivors, so none escapes by outliving its parent.
- * A root that still runs is handed off at once. Undefined when the census fails or
- * `releasing` turns false (cancellation then owns the tree).
- */
-export async function settleSurvivors(
-  rootPid: number | undefined,
-  subreaper: { children(): readonly number[] } | undefined,
-  releasing: () => boolean,
-): Promise<ReleasedProcess[] | undefined> {
-  const deadline = monotonicDeadlineAfter(RELEASE_SETTLE_MS);
-  let survivors = describeReleasedProcesses(rootPid, subreaper?.children());
-  while (
-    survivors?.length &&
-    !survivors.some(({ pid }) => pid === rootPid) &&
-    remainingMonotonicMs(deadline) > 0 &&
-    releasing()
-  ) {
-    await delay(Math.min(RELEASE_SETTLE_POLL_MS, remainingMonotonicMs(deadline)));
-    survivors = describeReleasedProcesses(rootPid, subreaper?.children(), survivors);
-  }
-  return releasing() ? survivors : undefined;
 }

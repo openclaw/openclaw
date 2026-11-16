@@ -11,7 +11,7 @@ import {
   type ProcessSession,
 } from "./bash-process-registry.js";
 
-/** Services are admitted, never evicted: background sessions plus adopted survivors. */
+/** Declared services (`background: true`) are admitted, never evicted. Survivors are tracked, not counted. */
 const MAX_SERVICES_PER_SESSION = 16;
 const MAX_SERVICES_PER_GATEWAY = 64;
 
@@ -24,7 +24,9 @@ const reservations = resolveGlobalSingleton(
 
 /** Explain the limit when a new service would cross it; undefined when there is room. */
 function serviceCapacityError(scopeKey: string | undefined): string | undefined {
-  const running = listRunningSessions().filter((session) => !session.exited);
+  const running = listRunningSessions().filter(
+    (session) => session.independentService === true && !session.exited,
+  );
   const reserved = [...reservations];
   const inSession =
     running.filter((session) => session.scopeKey === scopeKey).length +
@@ -123,9 +125,9 @@ function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
 
 /**
  * Adopt every process a completed command left running as a tracked background
- * session of its session. Capacity is checked only where a service is declared
- * (`reserveServiceSlot`): a survivor is never stopped for capacity, so nothing
- * escapes custody and no helper is killed. Returns the lines for the tool result.
+ * session of its session. Capacity belongs to declared services only
+ * (`reserveServiceSlot`): a survivor neither counts nor is stopped for capacity,
+ * so nothing escapes custody and no helper is killed. Returns the lines for the tool result.
  */
 export function adoptExecSurvivors(
   parent: ProcessSession,
