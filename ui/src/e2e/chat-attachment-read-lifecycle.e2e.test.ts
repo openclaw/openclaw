@@ -19,7 +19,6 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
-import { openSessionsPageFromSidebar } from "./sidebar-customization.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -142,7 +141,8 @@ suite.define(() => {
         buffer: Buffer.from("Synthetic attachment payload survives Home handoff."),
       });
       await home.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
-      await openSessionsPageFromSidebar(page);
+      // Sessions opens from a group heading, and this ungrouped roster has none.
+      await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
       await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
       await page.locator("openclaw-sessions-page").waitFor();
       await page.locator(".sidebar-footer-bar__home").click();

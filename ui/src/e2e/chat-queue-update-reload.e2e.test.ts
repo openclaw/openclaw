@@ -12,7 +12,6 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { openSessionsPageFromSidebar } from "./sidebar-customization.test-support.ts";
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
@@ -174,7 +173,8 @@ suite.define(() => {
         .getByText("Save or cancel your queued message edit before reloading.", { exact: true })
         .waitFor();
       if (otherPage) {
-        await openSessionsPageFromSidebar(page);
+        // Sessions opens from a group heading, and this ungrouped roster has none.
+        await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
         await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
       }
       await exactButton(page, "Review edit").click();
