@@ -13,11 +13,13 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 
 it.each([
-  [[], true],
-  [["plugin:workboard/board-b1"], false],
-  [["plugin:workboard/workboard"], false],
-  [["plugin:workboard/board-b2"], true],
-])("marks one rail item for an open board with pins %j", async (pins, moreMarked) => {
+  [[], []],
+  [["plugin:workboard/board-b1"], ["plugin:workboard/board-b1"]],
+  [["plugin:workboard/workboard"], ["plugin:workboard/workboard"]],
+  [["plugin:workboard/workboard", "plugin:workboard/board-b1"], ["plugin:workboard/board-b1"]],
+  [["plugin:workboard/board-b2"], []],
+])("marks one rail item for an open board with pins %j", async (pins, marked) => {
+  const moreMarked = marked.length === 0;
   // A board's own page is open; only the rail item that shows it is marked.
   const original = window.location.href;
   onTestFinished(() => window.history.replaceState(null, "", original));
@@ -65,5 +67,5 @@ it.each([
       .filter((pin) => pin.querySelector('a[aria-current="page"]'))
       .map((pin) => pin.getAttribute("data-sidebar-entry"));
   await vi.dynamicImportSettled();
-  await waitForSolid(() => expect(markedPins()).toEqual(moreMarked ? [] : pins));
+  await waitForSolid(() => expect(markedPins()).toEqual(marked));
 });

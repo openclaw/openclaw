@@ -222,6 +222,23 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         : route === "plugin" && pluginPage === entry.key;
     });
   });
+  // A section's pin stands for its open children unless the open child is pinned itself:
+  // the most specific pin marks where you are.
+  const sectionsYielding = createMemo(() => {
+    opened();
+    const registrations = host.pluginNavigation();
+    return new Set(
+      registrations
+        .filter(
+          (item) =>
+            item.value.parent &&
+            pins().includes(`plugin:${item.key}`) &&
+            navigationItemCurrent(registrations, item, window.location, false),
+        )
+        .map((item) => `${item.pluginId}/${item.value.parent}`),
+    );
+  });
+  const standsForSection = (key: string) => !sectionsYielding().has(key);
   return [
     <nav
       ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
@@ -312,7 +329,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
         <For each={sectionPins()}>
-          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
         </For>
         <openclaw-tooltip prop:content={t("nav.pages")}>
           <button
@@ -336,7 +353,9 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         <Show when={otherPins().length > 0}>
           <span class="sidebar-rail__separator" aria-hidden="true" />
         </Show>
-        <For each={otherPins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
+        <For each={otherPins()}>
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
+        </For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>,
@@ -372,6 +391,7 @@ function renderRailPin(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   zone: () => SidebarZone,
+  standsForSection: (key: string) => boolean,
 ): JSX.Element {
   const serialized = serializeSidebarEntry(entry);
   const session = () => (entry.type === "session" ? zone().sessionRows.get(entry.key) : undefined);
@@ -453,7 +473,7 @@ function renderRailPin(
                     prop:kind={"navigation"}
                     prop:navigationKey={entry.key}
                     prop:navigationChildren={false}
-                    prop:navigationSection={true}
+                    prop:navigationSection={entry.type === "plugin" && standsForSection(entry.key)}
                     prop:navigationMenus={host.sidebarMenus}
                   />
                 </Show>
