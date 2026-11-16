@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -712,9 +713,10 @@ process.exitCode = errors.length ? 1 : 0;
         coveredCommit: covered,
       },
     ]);
-    const snapshotFiles = readdirSync(join(cwd, ".git/openclaw-release-cache"));
+    const [snapshotFile] = readdirSync(join(cwd, ".git/openclaw-release-cache"));
+    assert(snapshotFile, "collector must persist a live GitHub snapshot");
     const liveSnapshot = JSON.parse(
-      readFileSync(join(cwd, ".git/openclaw-release-cache", snapshotFiles[0]), "utf8"),
+      readFileSync(join(cwd, ".git/openclaw-release-cache", snapshotFile), "utf8"),
     );
     expect(liveSnapshot.target).toBe(target);
     expect(JSON.stringify(liveSnapshot)).not.toContain("historicalProvenance");
