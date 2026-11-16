@@ -240,6 +240,35 @@ try {
         (Number(swiftVersion[1]) === 6 && Number(swiftVersion[2]) >= 3),
       "Swift 6.3 or newer is required by the pinned Package.swift",
     );
+    const variant = process.env.GOAL24_PERMISSION_VARIANT;
+    assert.ok(["candidate", "legacy-control"].includes(variant), "unknown permission variant");
+    summary.permissionVariant = variant;
+    summary.evidenceKind = "candidate versus legacy-callback negative control; not baseline build";
+    if (variant === "legacy-control") {
+      const permissionFile = path.join(
+        source,
+        "apps/macos/Sources/OpenClaw/PermissionManager.swift",
+      );
+      const original = fs.readFileSync(permissionFile, "utf8");
+      const fixed = "request { @Sendable _ in continuation.resume() }";
+      const legacy = `request { _ in
+                DispatchQueue.main.async { continuation.resume() }
+            }`;
+      assert.equal(original.split(fixed).length, 2, "exactly one fixed callback required");
+      fs.writeFileSync(permissionFile, original.replace(fixed, legacy));
+      // Keep the production owner, request seam, and regression unchanged; restore
+      // only the original actor-inheriting callback and too-late main-queue hop.
+      const patch = capture("git", [
+        "diff",
+        "--",
+        "apps/macos/Sources/OpenClaw/PermissionManager.swift",
+      ]);
+      fs.writeFileSync(path.join(output, "legacy-control.patch"), patch + "\n");
+      summary.controlPatchSha256 = createHash("sha256")
+        .update(patch + "\n")
+        .digest("hex");
+      summary.legacyReferenceSha = "2f4ae4d3284bf17ad4930cf6770dac14c025bfc1";
+    }
     run("native-assets", "node", ["scripts/prepare-apple-mermaid.mjs"], 300000);
     run(
       "swift-build",
@@ -278,7 +307,7 @@ try {
     );
     env.PATH = shims + path.delimiter + env.PATH;
     summary.outcome = "test-failure";
-    run(
+    const permissionExit = run(
       "permissions-test",
       "node",
       [
@@ -293,10 +322,11 @@ try {
         "-gline-tables-only",
         "--skip-build",
         "--filter",
-        "PermissionManagerTests",
+        "PermissionManagerTests.*speech authorization completion can enter from a background queue",
         "--no-parallel",
       ],
       300000,
+      variant === "legacy-control",
     );
     const records = fs
       .readFileSync(events, "utf8")
@@ -313,15 +343,43 @@ try {
     );
     assert.equal(tests.length, 1, "exact PermissionManager regression not discovered");
     const id = tests[0].payload.id;
-    for (const kind of ["testStarted", "testEnded"]) {
+    const started = records.filter(
+      (record) => record.kind === "event" && record.payload.kind === "testStarted",
+    );
+    const ended = records.filter(
+      (record) => record.kind === "event" && record.payload.kind === "testEnded",
+    );
+    assert.equal(started.length, 1, "exactly one selected test must start");
+    assert.equal(started[0].payload.testID, id);
+    if (variant === "legacy-control") {
+      assert.notEqual(permissionExit, 0, "legacy callback must fail");
+      assert.equal(ended.length, 0, "legacy callback must trap before test completion");
+      const log = fs.readFileSync(path.join(output, "permissions-test.log"), "utf8");
+      assert.match(
+        log,
+        /(?:Signal 4|signal code 4|SIGILL|SIGTRAP|Trace\/BPT trap)/i,
+        "control must terminate with the native actor trap, not setup failure",
+      );
+      assert.match(
+        log,
+        /_dispatch_assert_queue_fail|swift_task_checkIsolated|swift_task_isCurrentExecutor/,
+        "control must contain an executor isolation assertion",
+      );
+      assert.match(
+        log,
+        /PermissionManager.*requestSpeechRecognitionAuthorization|requestSpeechRecognitionAuthorization.*PermissionManager/,
+        "control must identify the production permission callback in its crash stack",
+      );
+      summary.controlFailure = "native executor assertion at production speech callback entry";
+    } else {
+      assert.equal(ended.length, 1, "candidate must complete exactly one test");
+      assert.equal(ended[0].payload.testID, id);
       assert.ok(
-        records.some(
-          (record) =>
-            record.kind === "event" && record.payload.kind === kind && record.payload.testID === id,
-        ),
-        "regression did not " + kind,
+        records.some((record) => record.kind === "event" && record.payload.kind === "runEnded"),
       );
     }
+    summary.permissionStarted = started.length;
+    summary.permissionCompleted = ended.length;
     summary.permissionRegression = id;
   }
   summary.outcome = "pass";

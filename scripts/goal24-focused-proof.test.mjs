@@ -107,7 +107,7 @@ for (const version of ["6.3", "6.4", "7.0", "6.2", "unknown"]) {
   test("Swift minimum-toolchain preflight: " + version, () => {
     const source = fs.readFileSync(driver, "utf8");
     const start = source.indexOf('    summary.swift = capture("swift", ["--version"]);');
-    const end = source.indexOf('    run("native-assets"', start);
+    const end = source.indexOf("    const variant = process.env.GOAL24_PERMISSION_VARIANT;", start);
     assert.ok(start >= 0 && end > start);
     const check = () =>
       vm.runInNewContext(source.slice(start, end), {
@@ -161,6 +161,61 @@ for (const scenario of ["baseline", "fixed", "zero", "setup-failure", "partial",
         status: variant === "baseline" ? 1 : 0,
       });
     if (["baseline", "fixed"].includes(scenario)) {
+      assert.doesNotThrow(check);
+    } else {
+      assert.throws(check);
+    }
+  });
+}
+
+// Synthetic admission tests, not macOS product proof: execute the real gate.
+for (const scenario of [
+  "candidate",
+  "legacy-control",
+  "zero",
+  "extra",
+  "setup",
+  "wrong-stack",
+  "completed-control",
+]) {
+  test("permission causal evidence gate: " + scenario, () => {
+    const source = fs.readFileSync(driver, "utf8");
+    const start = source.indexOf("    const started = records.filter(");
+    const end = source.indexOf("    summary.permissionRegression = id;", start);
+    assert.ok(start >= 0 && end > start);
+    const variant = scenario === "candidate" ? "candidate" : "legacy-control";
+    const records = [{ kind: "event", payload: { kind: "testStarted", testID: "off-main" } }];
+    if (scenario === "zero") {
+      records.length = 0;
+    }
+    if (scenario === "extra") {
+      records.push(records[0]);
+    }
+    if (["candidate", "completed-control"].includes(scenario)) {
+      records.push({ kind: "event", payload: { kind: "testEnded", testID: "off-main" } });
+      records.push({ kind: "event", payload: { kind: "runEnded" } });
+    }
+    let log =
+      "Signal 4 _dispatch_assert_queue_fail closure in PermissionManager.requestSpeechRecognitionAuthorization";
+    if (scenario === "setup") {
+      log = "compiler failed";
+    }
+    if (scenario === "wrong-stack") {
+      log = "Signal 4 _dispatch_assert_queue_fail unrelated callback";
+    }
+    const check = () =>
+      vm.runInNewContext(source.slice(start, end), {
+        assert,
+        records,
+        variant,
+        id: "off-main",
+        permissionExit: variant === "candidate" ? 0 : 1,
+        summary: {},
+        fs: { readFileSync: () => log },
+        path,
+        output: "/synthetic",
+      });
+    if (["candidate", "legacy-control"].includes(scenario)) {
       assert.doesNotThrow(check);
     } else {
       assert.throws(check);
