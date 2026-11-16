@@ -193,11 +193,12 @@ async function measureOwners() {
     sql = {},
     phases = {};
   const undo = [];
-  const originalExec = DatabaseSync.prototype.exec;
+  const execDescriptor = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec");
+  assert(execDescriptor && typeof execDescriptor.value === "function");
   DatabaseSync.prototype.exec = function (statement) {
     const start = performance.now(),
       previous = active.get(this);
-    const result = originalExec.call(this, statement);
+    const result = execDescriptor.value.call(this, statement);
     if (/^\s*BEGIN\b/i.test(statement) && this.location() === options.path) {
       active.set(this, { start: performance.now(), statement });
     } else if (previous && /^\s*(COMMIT|ROLLBACK)\b/i.test(statement)) {
@@ -211,7 +212,7 @@ async function measureOwners() {
     return result;
   };
   undo.push(() => {
-    DatabaseSync.prototype.exec = originalExec;
+    Object.defineProperty(DatabaseSync.prototype, "exec", execDescriptor);
   });
   const timed = (name, run) => {
     const start = performance.now();

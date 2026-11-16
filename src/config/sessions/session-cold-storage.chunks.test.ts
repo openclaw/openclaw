@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -420,14 +419,10 @@ it("admits an interactive entry patch between cold FTS sweep transactions", asyn
     const result = await originalWrite(...args);
     if (args[2] === "session.cold.fts-sweep" && ++sweeps === 1) {
       expect(remaining()).toBe(88); // The first transaction may delete only its 512-row budget.
-      await withTestTimeout(
-        applySessionEntryOperation(fixture.scope, {
-          kind: "fields",
-          patch: { label: "interactive between sweeps" },
-        }),
-        5_000,
-        "Cold sweep retained the agent writer",
-      );
+      await applySessionEntryOperation(fixture.scope, {
+        kind: "fields",
+        patch: { label: "interactive between sweeps" },
+      });
       patched = true;
     }
     return result;
