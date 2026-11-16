@@ -78,7 +78,6 @@ export type ChatDetailsMobileRootProps = {
   subagents?: Omit<ChatDetailsSubagentsProps, "mobile" | "collapsed">;
   /** Complete Processes section; its owner retains the empty exit envelope. */
   processes?: JSX.Element;
-  skills?: JSX.Element;
   /** The complete mobile Environment section, including its own heading and group. */
   environment?: JSX.Element;
   pullRequests?: ChatPullRequestMobileCollectionProps & { summary: ChatDetailsMobileEntry };
@@ -344,7 +343,6 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         )}
       </Show>
-      {props.skills}
       {props.processes}
     </div>
   );

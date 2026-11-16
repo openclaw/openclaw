@@ -47,7 +47,12 @@ async function fixture(initialSettings?: typeof settings) {
   };
   const entry = { ...original, ...initialSettings };
   replaceSessionEntrySync(scope, entry);
-  const generation = await prepareSessionGenerationFacts({ ...scope, ...entry });
+  // These cases exercise the live-writer fence; stored references follow the key.
+  const generation = await prepareSessionGenerationFacts({
+    ...scope,
+    ...entry,
+    exactLifecycle: true,
+  });
   onTestFinished(() => generation.release());
   return { database, scope, generation };
 }
@@ -83,7 +88,9 @@ it.each([false, true])(
     });
     const results = await prepareSessionGenerationFactsBatch(
       scopes.map((scope, index) =>
-        index === 1 ? { ...scope, lifecycleRevision: "stale-generation" } : scope,
+        index === 1
+          ? { ...scope, lifecycleRevision: "stale-generation", exactLifecycle: true as const }
+          : scope,
       ),
     );
     onTestFinished(() => {

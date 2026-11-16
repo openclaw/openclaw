@@ -109,9 +109,10 @@ it.each([
           if (
             conflictingReplay &&
             ((mode === "failed-repair" && requests.length === 5) ||
+              // Only cold replay resends this ciphertext; the repair drops rejected reasoning.
               payload.input.some((value) => {
                 const item = value as Record<string, unknown>;
-                return item.id === "fc_response_1";
+                return item.encrypted_content === "encrypted_response_1";
               }))
           ) {
             conflicts++;
@@ -152,7 +153,9 @@ it.each([
           }
           const comparable = effectiveInput.map((value) => {
             const item = value as Record<string, unknown>;
+            // Provider item IDs render no tokens; cold replay omits unverifiable ones.
             return item.type === "function_call" ||
+              item.type === "reasoning" ||
               (item.type === "message" && item.role === "assistant")
               ? omitWireFields(item, ["id", "status"])
               : item;
@@ -287,7 +290,7 @@ it.each([
           expect(requests[3]?.input).toContainEqual(
             expect.objectContaining({
               type: "function_call",
-              id: "fc_response_1",
+              call_id: "call_response_1",
               arguments: mode === "legacy" ? "{}" : "{ }",
             }),
           );
