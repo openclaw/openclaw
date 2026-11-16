@@ -10,25 +10,30 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   margin-top: 26px;
 }
 
-.apps-section:first-child {
-  margin-top: 0;
-}
-
 /* Cards intentionally do not sit inside a .settings-group surface (one level
    of elevation only), so the section gap is applied here. */
 .apps-section > .settings-section__heading {
   margin: 0 0 var(--space-3);
 }
 
+/* Cards sit two per row in the page column; an odd last card keeps its cell
+   width and leaves the other one empty. */
+.apps-page {
+  container-type: inline-size;
+}
+
 .apps-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4, 16px);
 }
 
+/* Horizontal card: the art fills the left edge to edge, the copy and actions
+   sit on the right. */
 .apps-card {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -44,7 +49,10 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 }
 
 .apps-card__art {
-  aspect-ratio: 16 / 9;
+  position: relative;
+  flex: none;
+  width: 42%;
+  min-height: 148px;
   background: linear-gradient(
     135deg,
     color-mix(in srgb, var(--apps-art-a) 70%, var(--card)),
@@ -53,6 +61,8 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 }
 
 .apps-card__art img {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -77,12 +87,14 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 16px 16px;
 }
 
-/* Wrapping keeps the nowrap badge from squeezing the title into a mid-word
-   break on narrow cards: the badge drops to its own line instead. */
+/* The badge sits right after the name. Wrapping keeps the nowrap badge from
+   squeezing the title into a mid-word break on narrow cards: the badge drops
+   to its own line instead. */
 .apps-card__title-row {
   display: flex;
   flex-wrap: wrap;
@@ -96,11 +108,10 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   color: var(--text);
 }
 
-/* Growing right-aligns an inline badge (title absorbs the slack) yet leaves
-   a wrapped badge left-aligned under the title. Basis must stay auto: a 0%
-   basis would let the badge share the line and squeeze the title again. */
+/* Basis must stay auto: a 0% basis would let the badge share the line and
+   squeeze the title again. */
 .apps-card__title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md, 15px);
@@ -179,7 +190,7 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
 }
 
 .apps-pair-hint {
-  margin: 10px 2px 0;
+  margin: 10px 0 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -227,5 +238,25 @@ openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-wor
   .apps-card__cta:hover,
   .apps-pill:hover {
     transform: none;
+  }
+}
+
+/* Narrow columns read one card per row; at phone widths the art goes back on
+   top of the copy. */
+@container (max-width: 760px) {
+  .apps-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container (max-width: 520px) {
+  .apps-card {
+    flex-direction: column;
+  }
+
+  .apps-card__art {
+    width: 100%;
+    min-height: 0;
+    aspect-ratio: 16 / 9;
   }
 }
