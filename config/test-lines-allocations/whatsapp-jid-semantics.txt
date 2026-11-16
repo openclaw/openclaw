@@ -1,4 +1,4 @@
 # Covers distinct protocol, authorization, quote, delivery, setup, session, and
 # account-inheritance migration regressions across the canonical JID cutover.
-# Net test growth is 1132 lines; the standard allowance covers the first 400.
-732
+# Net test growth is 1226 lines; the standard allowance covers the first 400.
+826

@@ -1,6 +1,8 @@
 // Whatsapp tests cover approval reactions plugin behavior.
 import { cleanMessage } from "baileys";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { openBaileysLidMapping } from "../../../test/helpers/baileys-lid-mapping.test-support.js";
 import {
   maybeResolveWhatsAppApprovalReaction,
   registerWhatsAppApprovalReactionTarget,
@@ -105,6 +107,27 @@ describe("WhatsApp approval reactions", () => {
     });
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+  });
+
+  it("rejects stale reverse mappings before resolving an approval", async () => {
+    await withTempDir("whatsapp-approval-mapping-", async (authDir) => {
+      const mappings = await openBaileysLidMapping(authDir);
+      await mappings.storeLIDPNMappings([{ lid: "777@lid", pn: "15551230000@s.whatsapp.net" }]);
+      await mappings.storeLIDPNMappings([{ lid: "888@lid", pn: "15551230000@s.whatsapp.net" }]);
+      expect(await mappings.getPNForLID("777@lid")).toContain("15551230000:");
+      await registerExecApprovalTarget({ remoteJid: "777@lid" });
+      const options = { authDir, lidLookup: mappings };
+      expect(
+        await maybeResolveWhatsAppApprovalReaction({
+          cfg: approvalConfig(["+15551230000"]),
+          accountId: "default",
+          msg: buildReactionMessage({ remoteJid: "777@lid" }),
+          resolveInboundJid: (jid) => resolveJidToE164(jid, options),
+          resolveReactionTargetJids: (jid) => resolveEquivalentWhatsAppDirectChatJids(jid, options),
+        }),
+      ).toBe(true);
+      expect(resolverMocks.resolveWhatsAppApproval).not.toHaveBeenCalled();
+    });
   });
 
   it("registers reaction state when only allow-always is available", async () => {

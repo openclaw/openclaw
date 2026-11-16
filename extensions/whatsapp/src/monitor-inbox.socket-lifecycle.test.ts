@@ -516,10 +516,12 @@ describe("web monitor inbox socket lifecycle", () => {
   });
 
   it("socket session suppresses self-echo after a late accepted send", async () => {
+    const mappingPath = path.join(getAuthDir(), "lid-mapping-999.json");
+    fs.writeFileSync(mappingPath, JSON.stringify("987654"));
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
     const baileysCache = createBaileysCacheSupport();
-    const { listener, sock, inbound } = await primeInboundReplyHandle({
+    const { listener, sock } = await primeInboundReplyHandle({
       onMessage,
       socketRef,
       baileysCache,
@@ -539,7 +541,7 @@ describe("web monitor inbox socket lifecycle", () => {
           }),
       );
 
-      const replyPromise = inbound.platform.reply("pong");
+      const replyPromise = listener.sendMessage("+999", "pong");
       await expectSocketOperationTimeout("sendMessage", replyPromise);
     } finally {
       vi.useRealTimers();
@@ -550,9 +552,13 @@ describe("web monitor inbox socket lifecycle", () => {
     await expect(
       baileysCache.socketOptions.getMessage({
         id: "late-accepted",
-        remoteJid: "999@s.whatsapp.net",
+        remoteJid: "987654@lid",
       }),
     ).resolves.toBe(message);
+    fs.unlinkSync(mappingPath);
+    expect(
+      lookupInboundMessageMetaForTarget(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", "late-accepted"),
+    ).toMatchObject({ remoteJid: "987654@lid", fromMe: true, body: "pong" });
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [
@@ -560,7 +566,7 @@ describe("web monitor inbox socket lifecycle", () => {
           key: {
             id: "late-accepted",
             fromMe: true,
-            remoteJid: "999@s.whatsapp.net",
+            remoteJid: "987654@lid",
           },
           message: { conversation: "pong" },
           messageTimestamp: 1_700_000_001,
@@ -571,6 +577,7 @@ describe("web monitor inbox socket lifecycle", () => {
     await settleInboundWork();
 
     expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.signalRepository.lidMapping.getPNForLID).not.toHaveBeenCalled();
     expect(socketRef.current).toBe(sock);
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
 

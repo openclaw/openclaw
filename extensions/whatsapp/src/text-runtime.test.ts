@@ -186,20 +186,4 @@ describe("WhatsApp text runtime", () => {
     expect(jidToE164("1555000:2@c.us")).toBe("+1555000");
     expect(jidToE164("not-a-phone@s.whatsapp.net")).toBeNull();
   });
-
-  it("uses a prepared E164 without consulting the LID mapping store", async () => {
-    const getPNForLID = vi.fn();
-    await expect(
-      resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", {
-        knownE164: "+15551230000",
-        lidLookup: { getPNForLID },
-      }),
-    ).resolves.toEqual([
-      "777@hosted.lid",
-      "777@lid",
-      "15551230000@hosted",
-      "15551230000@s.whatsapp.net",
-    ]);
-    expect(getPNForLID).not.toHaveBeenCalled();
-  });
 });

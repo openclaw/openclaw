@@ -35,11 +35,12 @@ const normalizePhone = (candidate: string) =>
   /^\+?\d+$/.test(candidate) ? normalizeE164(candidate) : null;
 const normalizeLid = (candidate: string) => (/^\d+$/.test(candidate) ? candidate : null);
 
-export function readWhatsAppLidToPnMappings(params: {
+type StoredLidMapping = { kind: "mapped"; e164: string } | { kind: "rejected" };
+
+function* readLidToPnMappingCandidates(params: {
   lid: string;
   mappingDirs: readonly string[];
-}): string[] {
-  const phones = new Set<string>();
+}): Generator<StoredLidMapping, void> {
   for (const dir of new Set(params.mappingDirs.map((candidate) => resolveUserPath(candidate)))) {
     const phone = readMappingFile(
       path.join(dir, `lid-mapping-${params.lid}_reverse.json`),
@@ -54,9 +55,22 @@ export function readWhatsAppLidToPnMappings(params: {
     );
     // Baileys can leave the old reverse entry when it replaces a PN's LID.
     if (currentLid && currentLid !== params.lid) {
+      yield { kind: "rejected" };
       continue;
     }
-    phones.add(phone);
+    yield { kind: "mapped", e164: phone };
+  }
+}
+
+export function readWhatsAppLidToPnMappings(params: {
+  lid: string;
+  mappingDirs: readonly string[];
+}): string[] {
+  const phones = new Set<string>();
+  for (const mapping of readLidToPnMappingCandidates(params)) {
+    if (mapping.kind === "mapped") {
+      phones.add(mapping.e164);
+    }
   }
   return [...phones];
 }
@@ -64,13 +78,12 @@ export function readWhatsAppLidToPnMappings(params: {
 export function readWhatsAppLidToPnMapping(params: {
   lid: string;
   options?: WhatsAppLidMappingFileOptions;
-}): string | null {
-  return (
-    readWhatsAppLidToPnMappings({
-      lid: params.lid,
-      mappingDirs: resolveLidMappingDirs(params.options),
-    })[0] ?? null
-  );
+}): StoredLidMapping | { kind: "missing" } {
+  const candidate = readLidToPnMappingCandidates({
+    lid: params.lid,
+    mappingDirs: resolveLidMappingDirs(params.options),
+  }).next();
+  return candidate.done ? { kind: "missing" } : candidate.value;
 }
 
 export function readWhatsAppPnToLidMapping(params: {

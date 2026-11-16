@@ -123,7 +123,7 @@ function addEquivalentDirectChatCandidate(
 
 export async function resolveEquivalentWhatsAppDirectChatJids(
   jid: string | null | undefined,
-  opts?: JidToE164Options & { lidLookup?: LidLookup; knownE164?: string | null },
+  opts?: JidToE164Options & { lidLookup?: LidLookup },
 ): Promise<string[]> {
   const directJid = classifyWhatsAppDirectJid(jid);
   if (!directJid) {
@@ -148,20 +148,7 @@ export async function resolveEquivalentWhatsAppDirectChatJids(
     return candidates;
   }
 
-  const knownPhoneDigits = opts?.knownE164?.match(/^\+(\d+)$/)?.[1];
-  if (knownPhoneDigits) {
-    const knownPnDomain = directJid.server === "hosted.lid" ? "hosted" : "s.whatsapp.net";
-    addEquivalentDirectChatCandidate(
-      candidates,
-      encodeWhatsAppJid(knownPhoneDigits, knownPnDomain),
-    );
-    return candidates;
-  }
-
-  const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(directJid.jid));
-  addEquivalentDirectChatCandidate(candidates, mappedPn, "pn");
-
-  const e164 = jidToE164(directJid.jid, { ...opts, logMissing: false });
+  const e164 = await resolveJidToE164(directJid.jid, { ...opts, logMissing: false });
   const localPnDomain = directJid.server === "hosted.lid" ? "hosted" : "s.whatsapp.net";
   addEquivalentDirectChatCandidate(
     candidates,
@@ -178,12 +165,12 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (directJid.kind === "pn") {
     return `+${directJid.user}`;
   }
-  const phone = readWhatsAppLidToPnMapping({
+  const mapping = readWhatsAppLidToPnMapping({
     lid: directJid.user,
     options: opts,
   });
-  if (phone) {
-    return phone;
+  if (mapping.kind === "mapped") {
+    return mapping.e164;
   }
   const shouldLog = opts?.logMissing ?? shouldLogVerbose();
   if (shouldLog) {
@@ -203,11 +190,15 @@ export async function resolveJidToE164(
   if (!directJid) {
     return null;
   }
-  const direct = jidToE164(directJid.jid, opts);
-  if (direct) {
-    return direct;
+  if (directJid.kind === "pn") {
+    return `+${directJid.user}`;
   }
-  if (directJid.kind !== "lid" || !opts?.lidLookup?.getPNForLID) {
+  const mapping = readWhatsAppLidToPnMapping({ lid: directJid.user, options: opts });
+  if (mapping.kind === "mapped") {
+    return mapping.e164;
+  }
+  // Baileys may return the same stale reverse entry that the file owner rejected.
+  if (mapping.kind === "rejected" || !opts?.lidLookup?.getPNForLID) {
     return null;
   }
   try {

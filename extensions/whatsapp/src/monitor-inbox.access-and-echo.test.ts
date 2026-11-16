@@ -2,11 +2,13 @@
 import { cleanMessage } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
+import { openBaileysLidMapping } from "../../../test/helpers/baileys-lid-mapping.test-support.js";
 import { whatsappInboundLog } from "./auto-reply/loggers.js";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
 import {
   buildNotifyMessageUpsert,
   getRecordChannelActivityMock,
+  getAuthDir,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
@@ -102,6 +104,33 @@ async function expectOutboundDmSkipsPairing(params: {
 
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
+
+  it("rejects stale reverse mappings before receive admission", async () => {
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({ dmPolicy: "allowlist", allowFrom: ["+15551230000"] }),
+    );
+    const mappings = await openBaileysLidMapping(getAuthDir());
+    await mappings.storeLIDPNMappings([{ lid: "777@lid", pn: "15551230000@s.whatsapp.net" }]);
+    await mappings.storeLIDPNMappings([{ lid: "888@lid", pn: "15551230000@s.whatsapp.net" }]);
+    expect(await mappings.getPNForLID("777@lid")).toContain("15551230000:");
+    const { onMessage, listener, sock } = await openInboxMonitor();
+    sock.signalRepository.lidMapping.getPNForLID.mockImplementation((jid) =>
+      mappings.getPNForLID(jid),
+    );
+    try {
+      emitText(sock, "reassigned-lid", "777@lid", "hello");
+      await waitForInboundWorkDrained();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+      expect(sock.signalRepository.lidMapping.getPNForLID).not.toHaveBeenCalled();
+      emitText(sock, "current-lid", "888@lid", "hello");
+      await waitForMessageCalls(onMessage, 1);
+      await waitForInboundWorkDrained();
+      expectInbound(onMessage, { platform: { senderE164: "+15551230000", chatJid: "888@lid" } });
+    } finally {
+      await listener.close();
+    }
+  });
 
   it.each([false, true])(
     "delivers observed alternate PN identities without lookup (group: %s)",
