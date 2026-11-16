@@ -6,7 +6,7 @@ import {
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { AuthorityRefusal } from "./authority-result.js";
 
-export class UndefinedMemberRoleError extends Error {
+class UndefinedMemberRoleError extends Error {
   constructor(role: string) {
     super(`The role ${role} is not defined on this claw. Choose another role on the Access page.`);
   }

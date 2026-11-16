@@ -63,7 +63,7 @@ function recoveryFixture(id: string, body: string) {
   };
 }
 
-it("joins host-local recovery cleanup without blocking foreground work", async () => {
+it("joins host-local recovery cleanup without synchronous recursive removal", async () => {
   await using fixture = recoveryFixture(
     "recovery-cleanup",
     'module.exports = { id: "recovery-cleanup", register(api) { api.registerProvider({ id: "recovery-provider", label: "Active", auth: [], normalizeModelId: ({ modelId }) => `active:${modelId}` }); } };',
@@ -92,11 +92,16 @@ it("joins host-local recovery cleanup without blocking foreground work", async (
         .filter((entry) => !capturesBefore.includes(entry));
       expect(addedCaptures).toHaveLength(1);
       const recoveryRoot = path.join(captureParent, addedCaptures[0]!);
-      // Physical removal must yield to already queued foreground work, not synchronously drain.
-      const foreground = Promise.resolve().then(() => {
-        expect(fs.existsSync(recoveryRoot)).toBe(true);
-      });
-      await Promise.all([recovery.dispose(), foreground]);
+      // Native async removal can finish before a queued microtask; observe blocking work instead.
+      const synchronousRemovals = vi.spyOn(fs, "rmSync");
+      try {
+        await recovery.dispose();
+        expect(
+          synchronousRemovals.mock.calls.filter(([, options]) => options?.recursive),
+        ).toHaveLength(0);
+      } finally {
+        synchronousRemovals.mockRestore();
+      }
       expect(fs.existsSync(recoveryRoot)).toBe(false);
       expect(fs.readdirSync(captureParent)).toEqual(capturesBefore);
       expect(
