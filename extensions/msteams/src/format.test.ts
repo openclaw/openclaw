@@ -4,11 +4,26 @@ import { formatMSTeamsMarkdown } from "./format.js";
 
 describe("formatMSTeamsMarkdown", () => {
   it.each([
+    ["keeps task lists as Teams lists", "- [x] shipped\n- [ ] pending"],
     [
-      "falls task lists back to checkbox text",
-      "- [x] shipped\n- [ ] pending",
-      "[x] shipped\n[ ] pending",
+      "writes bullets as Markdown lists",
+      "Steps:\n* Call the plant\n* Book a carrier",
+      "Steps:\n\n- Call the plant\n- Book a carrier",
     ],
+    [
+      "nests lists under the parent marker",
+      "1. Ship today\n   - SO-1042\n2. Hold",
+      "1. Ship today\n   - SO-1042\n2. Hold",
+    ],
+    ["keeps heading levels Teams renders", "# Report\n\n#### Detail", "# Report\n\n### Detail"],
+    ["keeps paragraph line breaks", "Status: late\nOwner: Maria", "Status: late  \nOwner: Maria"],
+    ["keeps quoted line breaks", "> one\n> two", "> one  \n> two"],
+    [
+      "keeps a quote that starts a list item",
+      "- > quoted\n1. > also quoted",
+      "- > quoted\n\n1. > also quoted",
+    ],
+    ["does not break before a list", "Steps:\n\n- Call\n- Book"],
     ["preserves escaped mention brackets", String.raw`@[Alice \[Ops\]](29:abc)`],
     ["preserves transport-owned images", "![chart](https://example.com/chart_(final).png)"],
     ["preserves nested image opener text", "![plot](https://example.com/a![b].png)"],
@@ -34,7 +49,7 @@ describe("formatMSTeamsMarkdown", () => {
 
   it("protects table-looking fenced blocks inside blockquotes", () => {
     const fence = "> ```\n> | A | B |\n> |---|---|\n> ![x](https://e.test/a?x=1&amp;y=2)\n> ```";
-    expect(formatMSTeamsMarkdown(`${fence}\n\n# Next`, "off")).toBe(`${fence}\n**Next**`);
+    expect(formatMSTeamsMarkdown(`${fence}\n\n#### Next`, "off")).toBe(`${fence}\n### Next`);
   });
 
   it("preserves quoted text around fenced code", () => {
@@ -47,14 +62,14 @@ describe("formatMSTeamsMarkdown", () => {
   });
 
   it("does not hide later blocks behind malformed images", () => {
-    const output = formatMSTeamsMarkdown("![x](bad\n\n# Next)", "off");
-    expect(output).toContain("**Next");
-    expect(output).not.toContain("# Next");
+    const output = formatMSTeamsMarkdown("![x](bad\n\n#### Next)", "off");
+    expect(output).toContain("### Next");
+    expect(output).not.toContain("#### Next");
   });
 
   it("does not let nested images complete malformed outer candidates", () => {
-    const output = formatMSTeamsMarkdown("![broken\n# Next ![x](https://e.test/x.png)", "off");
-    expect(output).toContain("**Next");
+    const output = formatMSTeamsMarkdown("![broken\n#### Next ![x](https://e.test/x.png)", "off");
+    expect(output).toContain("### Next");
     expect(output).toContain("![x](https://e.test/x.png)");
   });
 

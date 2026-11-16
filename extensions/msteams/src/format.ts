@@ -17,6 +17,7 @@ const ESCAPED_MARKDOWN_RE = /\\[\\`*_{}[\]()#+\-.!|>~]/gu;
 const MARKDOWN_ENTITY_RE = /&(?:#\d+|#x[\da-f]+|[a-z][a-z\d]+);/giu;
 const TOKEN_END = "\u{E002}";
 
+// Teams renders Markdown headings (levels 1-3), bullet, numbered, and task lists natively.
 // Teams supports strikethrough on desktop and iOS, but not Android.
 const MSTEAMS_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
   mechanism: "markdown",
@@ -24,10 +25,6 @@ const MSTEAMS_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
     underline: "strip",
     spoiler: "fallback",
     codeLanguage: "fallback",
-    heading: "fallback",
-    bulletList: "fallback",
-    orderedList: "fallback",
-    taskList: "fallback",
     table: "fallback",
   },
   chunk: { limit: 80_000, unit: "utf16", hardCap: 100_000 },
@@ -37,7 +34,74 @@ const MSTEAMS_MARKERS = {
   bold: { open: "**", close: "**" },
   italic: { open: "*", close: "*" },
   strikethrough: { open: "~~", close: "~~" },
+  heading_1: { open: "# ", close: "" },
+  heading_2: { open: "## ", close: "" },
+  heading_3: { open: "### ", close: "" },
+  heading_4: { open: "### ", close: "" },
+  heading_5: { open: "### ", close: "" },
+  heading_6: { open: "### ", close: "" },
 } as const;
+
+// The IR writes list items as plain "• " lines nested by two spaces. Teams joins those
+// lines into one paragraph, so write Markdown markers instead, nested under the width of
+// the parent item's marker (a list inside "1. " needs three spaces).
+function teamsListEdits(ir: MarkdownIR): MarkdownTextEdit[] {
+  const edits: MarkdownTextEdit[] = [];
+  const markerWidths: number[] = [];
+  const items = (ir.listItems ?? []).toSorted(
+    (left, right) => (left.listMarker?.start ?? 0) - (right.listMarker?.start ?? 0),
+  );
+  for (const item of items) {
+    if (!item.listMarker || item.depth === undefined) {
+      continue;
+    }
+    // Edit only the marker the IR wrote: the marker range can also cover a quote prefix
+    // inserted right after it.
+    const start = item.listMarker.start;
+    const marker =
+      item.kind === "bullet" ? "- " : (/^\d+\. /u.exec(ir.text.slice(start))?.[0] ?? "");
+    markerWidths.length = item.depth;
+    const indent = " ".repeat(markerWidths.reduce((total, width) => total + width, 0));
+    markerWidths.push(marker.length);
+    const indentStart = start - 2 * item.depth;
+    if (ir.text.slice(indentStart, start) !== indent) {
+      edits.push({ start: indentStart, end: start, text: indent });
+    }
+    if (item.kind === "bullet" && ir.text.startsWith("• ", start)) {
+      edits.push({ start, end: start + 2, text: marker });
+    }
+  }
+  return edits;
+}
+
+const BLOCK_LINE_RE = /^(?:[ \t]*(?:[-*+]|\d+[.)])[ \t]|#{1,6}[ \t]|[ \t]*$)/u;
+const QUOTE_PREFIX_RE = /^(?:> ?)*/u;
+
+// Teams joins single newlines inside a paragraph or quote. Keep the author's line
+// breaks as Markdown hard breaks (two trailing spaces, which message chunking trims
+// cleanly), except around block starts and block placeholders.
+function keepTeamsLineBreaks(text: string, isBlockLine: (line: string) => boolean): string {
+  const lines = text.split("\n");
+  return lines
+    .map((line, index) => {
+      const next = lines[index + 1];
+      if (next === undefined || isBlockLine(line) || isBlockLine(next)) {
+        return line;
+      }
+      const quote = QUOTE_PREFIX_RE.exec(line)![0];
+      const body = line.slice(quote.length);
+      const nextBody = next.slice(QUOTE_PREFIX_RE.exec(next)![0].length);
+      const sameQuote = quote.trim() === QUOTE_PREFIX_RE.exec(next)![0].trim();
+      return sameQuote &&
+        body.trim() &&
+        !/^#{1,6}[ \t]/u.test(body) &&
+        !/(?: {2}|\\)$/u.test(body) &&
+        !BLOCK_LINE_RE.test(nextBody)
+        ? `${line}  `
+        : line;
+    })
+    .join("\n");
+}
 
 function restoreTokens(text: string, prefix: string, values: readonly string[]): string {
   // Empty value tables can still have matching markers after normalization.
@@ -333,10 +397,11 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     return positions.map((position) => ({ start: position, end: position, text: "> " }));
   });
   const rewritten = rewriteMarkdownIR(codeProtected, edits);
-  const ir = {
+  const quoted = {
     ...rewritten,
     styles: rewritten.styles.filter((span) => span.style !== "blockquote"),
   };
+  const ir = rewriteMarkdownIR(quoted, teamsListEdits(quoted));
   const rendered = renderMarkdownWithMarkers(
     ir,
     {
@@ -351,8 +416,17 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
+  const blockTokens = [
+    ...codeRegions.flatMap((region, index) =>
+      region.includes("\n") ? [`${tokenPrefix}c${index}${TOKEN_END}`] : [],
+    ),
+    `${tokenPrefix}t`,
+  ];
+  const withLineBreaks = keepTeamsLineBreaks(rendered, (line) =>
+    blockTokens.some((token) => line.includes(token)),
+  );
   return protectedValues.reduce(
     (text, { prefix, values }) => restoreTokens(text, prefix, values),
-    restoreTokens(rendered, `${tokenPrefix}c`, codeRegions),
+    restoreTokens(withLineBreaks, `${tokenPrefix}c`, codeRegions),
   );
 }
