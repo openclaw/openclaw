@@ -110,3 +110,10 @@ it("uses package identity and non-final intermediate sends", () => {
     "Do not repeat a card’s name or installation status as surrounding prose",
   );
 });
+
+it("sends a greeting before setup reads without sweeping the workspace", () => {
+  const prompt = buildTemplateOpeningMessage({ failures: [], mcpServers: [] }, agent);
+  expect(prompt).toContain("Send this greeting immediately, before any reads or other setup tools");
+  expect(prompt).toContain("Do not read every workspace file");
+  expect(prompt).not.toContain("Sending: do the tool work first");
+});
