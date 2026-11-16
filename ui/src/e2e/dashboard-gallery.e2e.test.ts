@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -82,6 +82,9 @@ async function waitForPreview(card: Locator) {
   await frame.waitFor();
   await frame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
 }
+// Beside the open Dashboards sidebar the page is an empty state; the gallery shows with it closed.
+const closeSidebar = (page: Page) =>
+  page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
 async function searchDashboards(gallery: Locator, query: string) {
   const field = gallery.getByRole("searchbox", { name: "Search dashboards", exact: true });
   if (!(await field.isVisible())) {
@@ -143,6 +146,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
+        await closeSidebar(page);
         const gallery = page.locator("openclaw-dashboards-page");
         const header = gallery.locator(".dashboards-header");
         await gallery.locator(".dashboards-loading").waitFor();
@@ -226,6 +230,7 @@ suite.define(() => {
           cases: [responseCase({ hasBoard: true }, list([]))],
         });
         await page.reload();
+        await closeSidebar(page);
         await gallery.locator(".dashboards-loading").waitFor();
         await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
@@ -338,6 +343,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { sessions: rows });
       await page.goto(`${suite.server.baseUrl}dashboards`);
+      await closeSidebar(page);
       const gallery = page.locator("openclaw-dashboards-page");
       const entries = gallery.locator("[data-dashboard-session]");
       await entries.first().waitFor();
@@ -473,6 +479,7 @@ suite.define(() => {
         await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
         await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+        await closeSidebar(page);
         const gallery = page.locator("openclaw-dashboards-page");
         const releaseCard = gallery.locator("[data-dashboard-session]", {
           hasText: "Release health",
@@ -520,6 +527,7 @@ suite.define(() => {
         const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
         await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
+        await closeSidebar(page);
         await searchDashboards(gallery, "Release health");
         await releaseCard.locator("a").click();
         await page.waitForURL(

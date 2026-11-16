@@ -86,6 +86,9 @@ function isDashboardRequest(request: { params?: unknown }): boolean {
   );
 }
 
+// Beside the open Dashboards sidebar the page is an empty state; the gallery shows with it closed.
+const closeSidebar = (page: Page) =>
+  page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
 const listRequests = (gateways: MockGatewayControls[]) =>
   Promise.all(gateways.map((gateway) => gateway.getRequests("sessions.list")));
 function requestCounts(requests: Array<{ params?: unknown }>) {
@@ -102,6 +105,7 @@ suite.define(() => {
         dashboardResponse(sessionsResult(key, "Deploy monitor", 1)),
       );
       await page.goto(`${suite.server.baseUrl}dashboards`);
+      await closeSidebar(page);
       const dashboards = page.locator("openclaw-dashboards-page");
       await dashboards.getByText("Deploy monitor", { exact: true }).waitFor();
       await page.clock.install();
@@ -152,6 +156,7 @@ suite.define(() => {
           },
         );
         await page.goto(`${suite.server.baseUrl}dashboards`);
+        await closeSidebar(page);
         const dashboards = page.locator("openclaw-dashboards-page");
         if (!suspending) {
           await dashboards.getByRole("alert").waitFor();
@@ -244,6 +249,7 @@ suite.define(() => {
           await appContext.dispose();
         }
         await waitForControlUiRoute(page, { pathname: "/dashboards", routeId: "dashboards" });
+        await closeSidebar(page);
       });
       await eachTab(({ page, dashboardLabel }) =>
         page.getByText(dashboardLabel, { exact: true }).waitFor(),
