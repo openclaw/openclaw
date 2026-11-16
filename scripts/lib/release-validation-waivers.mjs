@@ -26,6 +26,22 @@ const STABLE_114_D843_CI_FAILURES = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.11.5",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.5 performance waiver on " +
+      "2026-11-16 at 18:13 UTC after reviewing FRV 43898101600/1, child " +
+      "43899049574/1: all 15 runs exceeded RSS budgets, including gateway " +
+      "1418.1-1521 MB versus 1177/1193 MB and agent 1385-1456.7 MB versus " +
+      "1150 MB. One CPU interval was inconclusive. Baseline parity with " +
+      "2026.11.4 is unverified; this is explicit acceptance, not non-regression proof. " +
+      "This release-wide grant covers only the named Kova threshold failures. " +
+      "Retain raw failures and reports; no global budget changes or not-run exemption. " +
+      "Other jobs, missing or cancelled evidence, build/setup, crashes, correctness, " +
+      "isolation, data integrity, install/update and publication gates remain blocking.",
+  },
   ...[
     {
       childRole: "normalCi",

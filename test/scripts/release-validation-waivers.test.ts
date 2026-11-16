@@ -5,6 +5,7 @@ import {
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   evaluateReleaseChildPolicy,
+  releaseQualificationExemptions,
   validateReleaseWaiverAggregates,
 } from "../../scripts/lib/release-validation-waivers.mjs";
 
@@ -320,4 +321,29 @@ it.each([
       getJobLog: () => "##[error]" + cause,
     }),
   ).resolves.toBeUndefined();
+});
+
+it("admits only the authorized 2026.11.5 Kova failure without skipping qualification", () => {
+  const kova = {
+    ...child,
+    key: "productPerformance",
+    jobs: [{ ...failedJob, id: 133410712957, name: "Kova mock provider performance" }],
+  };
+  expect(terminalPolicyPass(kova, "2026.11.5")).toBe(true);
+  expect(kova.conclusion).toBe("failure");
+  expect(kova.jobs[0].conclusion).toBe("failure");
+  expect(releaseQualificationExemptions("2026.11.5", "stable")).toEqual([]);
+  expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
+  expect(terminalPolicyPass({ ...kova, key: "normalCi" }, "2026.11.5")).toBe(false);
+  for (const conclusion of ["cancelled", "timed_out"]) {
+    expect(
+      terminalPolicyPass({ ...kova, jobs: [{ ...kova.jobs[0], conclusion }] }, "2026.11.5"),
+    ).toBe(false);
+  }
+  expect(
+    terminalPolicyPass(
+      { ...kova, jobs: [...kova.jobs, { ...failedJob, id: 2, name: "Build candidate" }] },
+      "2026.11.5",
+    ),
+  ).toBe(false);
 });
