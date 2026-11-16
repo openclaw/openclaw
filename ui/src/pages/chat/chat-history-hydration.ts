@@ -22,7 +22,6 @@ import {
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
-  reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
   clearHistoryCursor,
 } from "./chat-history-snapshot.ts";
@@ -182,7 +181,9 @@ export async function hydrateChatHistory(
     if (!isCurrent()) {
       return undefined;
     }
+    let cursorReset = false;
     if (isHistoryCursor(response) && response.kind === "reset") {
+      cursorReset = true;
       clearHistoryCursor(state, sessionKey, requestAgentId);
       response = await request();
       if (!isCurrent()) {
@@ -198,6 +199,33 @@ export async function hydrateChatHistory(
       : undefined;
     if (!isCurrent()) {
       return undefined;
+    }
+    // Recovery is lazy: first history has no held transcript to reconcile.
+    const { fillHeldHistoryGap, reconcileHistoryTail } =
+      !isHistoryCursor(response) && state.currentSessionId
+        ? await import("./chat-history-held-gap.ts")
+        : { fillHeldHistoryGap: undefined, reconcileHistoryTail: undefined };
+    if (!isCurrent()) {
+      return undefined;
+    }
+    if (
+      cursorReset &&
+      !isHistoryCursor(response) &&
+      !requests.windowReset?.isCurrent() &&
+      fillHeldHistoryGap
+    ) {
+      response = await fillHeldHistoryGap(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        response,
+        isCurrent,
+        read.signal,
+      );
+      if (!isCurrent()) {
+        return undefined;
+      }
     }
     // Live history wins even if a pending IndexedDB read settles in the next microtask.
     retireInitialChatSnapshot(state);
@@ -304,19 +332,21 @@ export async function hydrateChatHistory(
     const retainsTranscriptIdentity =
       !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
-      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
-      (previousDisplayedLeafEntryId === undefined ||
-        previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
-    const reconciledHistory = retainsTranscriptIdentity
-      ? reconcileHistoryTail({
-          nextMessages: visibleMessages,
-          nextPagination,
-          nextSessionId,
-          previousMessages: previousTerminalMessages,
-          previousPagination,
-          previousSessionId,
-        })
-      : null;
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId);
+    const reconciledHistory =
+      retainsTranscriptIdentity && reconcileHistoryTail
+        ? reconcileHistoryTail({
+            sameLeaf:
+              previousDisplayedLeafEntryId === undefined ||
+              previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
+            nextMessages: visibleMessages,
+            nextPagination,
+            nextSessionId,
+            previousMessages: previousTerminalMessages,
+            previousPagination,
+            previousSessionId,
+          })
+        : null;
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,

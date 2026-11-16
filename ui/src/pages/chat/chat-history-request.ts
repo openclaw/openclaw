@@ -69,7 +69,7 @@ export function captureChatHistoryRun(
 
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
-const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
+export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
@@ -380,7 +380,7 @@ export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector
   return messageId && sessionId ? { messageId, sessionId } : null;
 }
 
-async function requestOlderChatHistoryPage(
+export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,

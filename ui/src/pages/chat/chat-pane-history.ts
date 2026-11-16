@@ -344,9 +344,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
 
   protected consumeHistoryIntent(): boolean {
     const consumed = this.historyIntentTimer !== null;
-    if (this.historyIntentTimer !== null) {
-      window.clearTimeout(this.historyIntentTimer);
-    }
+    window.clearTimeout(this.historyIntentTimer ?? undefined);
     this.historyIntentTimer = window.setTimeout(() => {
       this.historyIntentTimer = null;
     }, CHAT_HISTORY_INTENT_IDLE_MS);
@@ -355,14 +353,16 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
 
   protected handleTranscriptHistoryIntent(event: Event): void {
     const root = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    const upward = this.historyInput.isUpward(event);
+    if (!root || !this.historyInput.isUpward(event)) {
+      return;
+    }
+    // Initial placement may not emit a scroll; native input establishes the jump's origin.
+    this.transcriptScrollTop = root.scrollTop;
     if (
-      !root ||
       !this.presented ||
       !this.visuallyPresented ||
       !this.transcript.isPositionSettled ||
       this.transcript.isProgrammaticScroll ||
-      !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.history.loadingOlder ||
       !this.hasOlderMessages() ||
