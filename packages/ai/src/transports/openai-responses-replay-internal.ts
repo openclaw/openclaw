@@ -94,7 +94,7 @@ export function createResponsesItemConflictRecovery(
   let attempted = false;
   let applied = false;
   return {
-    applied() {
+    applied: () => {
       applied = true;
     },
     async retry(
