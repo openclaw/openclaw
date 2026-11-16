@@ -297,7 +297,6 @@ describe("package scripts", () => {
       "src/commands/doctor-gateway-auth-token.windows.test.ts",
       "src/infra/state-migrations.legacy-session-store.test.ts",
       "src/infra/sqlite-snapshot.test.ts",
-      "src/state/openclaw-state-ownership.test.ts",
       "src/media/local-media-path.windows.test.ts",
       "src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts",
       "src/infra/ssh-client.windows.test.ts",

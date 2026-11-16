@@ -394,11 +394,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-attachment-spacing.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
-    "ui/src/e2e/chat-attributed-identity.e2e.test.ts",
-    ["chat", "config", "profile"],
-    ["ui/src/components/solid/viewer-facepile.tsx"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-background-invalidation.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/chat-state-host.ts"],
@@ -2042,7 +2037,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/usage/usage-page.tsx"],
   ),
   pageWatch("ui/src/e2e/usage-tool-count.e2e.test.ts", ["usage"]),
-  pageWatch("ui/src/e2e/warm-boot.e2e.test.ts", ["chat", "profile", "sessions"]),
   pageWatch("ui/src/e2e/workboard-board-widget-layout.e2e.test.ts", [
     "chat",
     "plugin",

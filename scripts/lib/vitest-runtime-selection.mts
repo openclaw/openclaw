@@ -121,7 +121,6 @@ const toolingOnlyUnitFiles = new Set([
   "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
   "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
-  "test/scripts/ci-workflow-cost.test.ts",
   "test/scripts/ci-test-timings.test.ts",
   "test/scripts/ci-ui-e2e-selection.test.ts",
   "test/scripts/database-worker-compat.test.ts",
