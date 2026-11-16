@@ -29,10 +29,12 @@ export function createReferenceComposerBinding(
     let readSkills:
       | typeof import("../chat/skill-references.ts").readComposerSkillReferences
       | undefined;
+    let stopCatalog: (() => void) | undefined;
     const skillsLoader = createIdleImport(
       () => import("../chat/skill-references.ts"),
       (module) => {
         readSkills = module.readComposerSkillReferences;
+        stopCatalog = module.subscribeSlashCommands(requestActivation);
       },
     );
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
@@ -62,6 +64,7 @@ export function createReferenceComposerBinding(
         // Retire only after a successful handoff; a failed mount keeps native editing.
         native.abort();
         stopActivation();
+        stopCatalog?.();
       }
     }
     const loader = createIdleImport(
@@ -229,7 +232,11 @@ export function createReferenceComposerBinding(
       () => {
         composing = false;
         entryHistory = snapshot();
-        requestAnimationFrame(() => activate());
+        requestAnimationFrame(() => {
+          if (!native.signal.aborted) {
+            requestActivation();
+          }
+        });
       },
       { signal: native.signal },
     );
@@ -241,6 +248,7 @@ export function createReferenceComposerBinding(
       editor?.destroy();
       loader.dispose();
       skillsLoader.dispose();
+      stopCatalog?.();
     };
   });
 }

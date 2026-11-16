@@ -1,6 +1,8 @@
 import { findMarkdownCodeRegions } from "../../../../packages/markdown-core/src/markdown-code-regions.js";
 import { getSkillDisplayName, SLASH_COMMANDS } from "./commands.ts";
 
+export { subscribeSlashCommands } from "./commands.ts";
+
 export type ComposerSkillReference = { start: number; end: number; name: string; label: string };
 
 /** Presentation only: the canonical $command remains the draft and wire format.
@@ -39,10 +41,7 @@ export function readComposerSkillReferences(
         (item) =>
           item.source === "skill" &&
           item.skillReferenceable === true &&
-          (item.name.replaceAll("_", "-") === lookup ||
-            getSkillDisplayName(item)
-              .toLowerCase()
-              .replace(/[\s_]+/gu, "-") === lookup),
+          item.name.replaceAll("_", "-") === lookup,
       );
     if (command) {
       references.push({ start, end, name: command.name, label: getSkillDisplayName(command) });
