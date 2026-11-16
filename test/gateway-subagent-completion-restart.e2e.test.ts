@@ -29,12 +29,22 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it
   .skipIf(process.platform === "win32")
-  .for(["nested", "captured", "announcing", "announcing-crash", "private-announcing"] as const)(
+  .for([
+    "nested",
+    "captured",
+    "announcing",
+    "announcing-crash",
+    "private-announcing",
+    "busy-requester",
+    "retrying-requester",
+  ] as const)(
   "recovers session completion custody through a real Gateway restart (%s)",
   { timeout: 180_000 },
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
     const privateContinuation = kind === "private-announcing";
+    const busyRequester = kind === "busy-requester";
+    const retryingRequester = kind === "retrying-requester";
     const rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
@@ -111,6 +121,13 @@ it
               text.includes("CAPTURED_CUSTODY_RESULT") &&
               (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
             ) {
+              if (retryingRequester && !restarted) {
+                response.writeHead(400, { "content-type": "application/json" });
+                response.end(
+                  JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
+                );
+                return;
+              }
               if (interruptAnnounce && !restarted) {
                 announcing = true;
                 return;
@@ -129,6 +146,10 @@ it
                 message: "CUSTODY_SIBLING_TASK",
                 timeoutSeconds: 0,
               });
+            } else if (busyRequester || retryingRequester) {
+              if (restarted || retryingRequester) {
+                reply("HUB_WAITING_FOR_OWNED_RESULTS");
+              }
             } else if (
               privateContinuation ||
               text.includes("already_pending") ||
@@ -248,6 +269,16 @@ it
         if (!isRecord(event)) {
           return false;
         }
+        if (busyRequester || retryingRequester) {
+          return (
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.role === "user" &&
+            isRecord(event.message.provenance) &&
+            event.message.provenance.sourceSessionKey === siblingKey &&
+            event.message.provenance.sourceTool === "subagent_announce"
+          );
+        }
         // Direct results are persisted in their runtime carrier, yielded batches in the input.
         const message = privateContinuation
           ? event.type === "custom_message" && event
@@ -313,9 +344,14 @@ it
           ).toMatchObject({ status: "ok", yielded: true });
           await vi.waitFor(() => expect(leafStarted).toBe(true), { timeout: 15_000 });
         }
-        expect(
-          await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
-        ).toMatchObject({ status: "ok", ...(privateContinuation ? {} : { yielded: true }) });
+        if (!busyRequester) {
+          expect(
+            await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({
+            status: "ok",
+            ...(privateContinuation || retryingRequester ? {} : { yielded: true }),
+          });
+        }
         if (privateContinuation) {
           assert(finishChild);
           finishChild();
@@ -326,21 +362,42 @@ it
         }
         phase = "captured result awaiting requester cohort";
         finishCaptured();
+        if (busyRequester || retryingRequester) {
+          assert(finishChild);
+          finishChild();
+        }
         await vi.waitFor(
           () =>
             expect(readRun(capturedRunId!)).toMatchObject({
               spawnMode: "session",
               completionTarget: "parent",
               completion: { required: true, resultText: "CAPTURED_CUSTODY_RESULT" },
-              delivery: { status: "pending" },
+              delivery: {
+                status: retryingRequester ? expect.stringMatching(/pending|delivered/) : "pending",
+              },
             }),
           { timeout: 15_000 },
         );
         const before = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        if (!privateContinuation) {
+        if (!privateContinuation && !retryingRequester) {
           expect(JSON.stringify(before.messages)).not.toContain("CAPTURED_CUSTODY_RESULT");
+        }
+        if (retryingRequester) {
+          phase = "retry pending after requester settled";
+          await vi.waitFor(
+            () => {
+              expect(readRun(capturedRunId!).delivery).toMatchObject({
+                status: "delivered",
+                requesterDelivery: { state: "consumed" },
+              });
+              expect(
+                readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId,
+              ).toBeUndefined();
+            },
+            { timeout: 30_000 },
+          );
         }
         if (interruptAnnounce) {
           phase = "requester announce in flight";
@@ -364,10 +421,16 @@ it
           );
         }
         phase = "restart";
+        if (retryingRequester) {
+          const current = readRestartSession(instance.state.agentDir("main"), rootKey);
+          expect(current?.resumeAfterRestart).toBeUndefined();
+          expect(current?.mainRestartRecovery).toBeUndefined();
+          expect(current?.lifecycleRunId).toBeUndefined();
+        }
         if (kind === "nested") {
           expect(readRun(childRunId)).toMatchObject({ pauseReason: "sessions_yield" });
         }
-        if (kind === "announcing-crash") {
+        if (kind === "announcing-crash" || retryingRequester) {
           await instance.crashGateway();
         } else {
           await instance.stopGateway();
@@ -380,7 +443,9 @@ it
           delivery: {
             status: privateContinuation
               ? expect.stringMatching(/^(pending|delivered)$/)
-              : "pending",
+              : retryingRequester
+                ? "delivered"
+                : "pending",
           },
         });
         if (interruptAnnounce) {
@@ -402,13 +467,18 @@ it
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });
-            expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
-            expect(history.messages).not.toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ customType: "run-failed-before-reply" }),
-              ]),
-            );
+            if (!retryingRequester) {
+              expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+              expect(history.messages).not.toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ customType: "run-failed-before-reply" }),
+                ]),
+              );
+            }
             expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            if (busyRequester || retryingRequester) {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            }
             expect(readCapturedInputs()).toHaveLength(1);
             if (interruptAnnounce) {
               expect(completedReplies).toBe(1);
@@ -426,8 +496,11 @@ it
         const after = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+        if (!retryingRequester) {
+          expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+        }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });
+        expect(instance.logs()).not.toContain("idempotency key conflicts");
         expect(readCapturedInputs()).toHaveLength(1);
         if (interruptAnnounce) {
           expect(completedReplies).toBe(1);

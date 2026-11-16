@@ -6,6 +6,7 @@ export type SubagentRunMutation<T> = {
   value: T;
   postimages?: ReadonlyMap<string, SubagentRunRecord | null>;
   rekeys?: ReadonlyMap<string, string>;
+  removalReason?: string;
   terminalEvents?: readonly {
     input: NonNullable<SubagentRegistryWrite["terminalEvents"]>[number];
     sessionEntryCurrent?: SessionEntryCurrentCheck;

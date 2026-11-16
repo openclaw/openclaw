@@ -6,6 +6,7 @@ export type SubagentRegistryWrite = {
   writeId: string;
   values: readonly SubagentRunSqliteRow[];
   deleteRunIds: readonly string[];
+  removalReason?: string;
   terminalEvents?: readonly Pick<
     SessionStateEventWrite,
     "event" | "now" | "sessionEntryCurrentSource"
