@@ -168,10 +168,11 @@ export function validateOpenClawPackageInstallCompatibility(
         error: `invalid package.json openclaw.compat.pluginApi: ${compatibility.error}`,
         code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
       };
+    default:
+      return {
+        ok: false,
+        error: `plugin "${params.pluginId}" requires plugin API ${compatibility.range}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      };
   }
-  return {
-    ok: false,
-    error: `plugin "${params.pluginId}" requires plugin API ${compatibility.range}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
-    code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-  };
 }
