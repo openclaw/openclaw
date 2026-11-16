@@ -75,7 +75,7 @@ export function chatItemGroups(
 }
 
 /** What woke the work a part resumes, which opens it with a Resumed rule. */
-export function partContinuation(item: AgentRunFrameInput | ChatItem) {
+function partContinuation(item: AgentRunFrameInput | ChatItem) {
   return readProjectedContinuation(chatItemGroups(item)[0]?.messages[0]?.message);
 }
 

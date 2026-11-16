@@ -4,7 +4,7 @@ import { getAgentToolExecutionContext } from "../../../../packages/agent-core/sr
  *
  * Serializes reads and mutations targeting the same real file while allowing independent files to run in parallel.
  */
-import { resolveIdentityPathViaExistingAncestorSync } from "../../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../../infra/path-existence.js";
 import { enqueueKeyedTask } from "../../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 

@@ -442,7 +442,8 @@ async function prepareSimpleCompletionModelCore(
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);

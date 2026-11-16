@@ -47,7 +47,7 @@ const proof: Record<string, unknown> = {
 const saveProof = () =>
   fs.writeFile(path.join(artifactDir, "proof.json"), JSON.stringify(proof, null, 2) + "\n");
 const suite = createControlUiE2eSuite({
-  name: "Wait clocks through a real Gateway",
+  name: "Child handoff status through a real Gateway",
   startServerBeforeBrowser: true,
   resources: {
     async run(signal) {
@@ -115,7 +115,7 @@ function lifecycle(row: GatewaySessionRow) {
     hasActiveSubagentRun: row.hasActiveSubagentRun,
   };
 }
-function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow) {
+function assertChildContinues(parent: GatewaySessionRow, child: GatewaySessionRow) {
   expect(parent.startedAt).toBeGreaterThan(0);
   expect(parent.endedAt).toBeGreaterThanOrEqual(parent.startedAt!);
   expect(parent.hasActiveSubagentRun).toBe(true);
@@ -132,36 +132,6 @@ async function clocks(parent: Locator) {
       source: "transcript",
     })),
   );
-}
-async function waitForClocks(parent: Locator) {
-  let measured: Awaited<ReturnType<typeof clocks>> = [];
-  // The outer status can be visible before its elapsed-clock content mounts.
-  await expect
-    .poll(async () => {
-      measured = await clocks(parent);
-      return measured.length > 0 && measured.every((clock) => clock.text !== "");
-    })
-    .toBe(true);
-  return measured;
-}
-function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: number) {
-  expect(measured.length).toBeGreaterThan(0);
-  for (const clock of measured) {
-    expect(clock.text).not.toBe("");
-    expect(clock.text).not.toMatch(/\d{4,}|[dh]/u);
-    const elapsedMs = Math.max(1_000, clock.sampledAt - endedAt);
-    const displayedMs = [...clock.text.matchAll(/(\d+)([ms])/gu)].reduce(
-      (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
-      0,
-    );
-    // Allow one polling tick plus subsecond display rounding.
-    expect(
-      displayedMs,
-      clock.source + " must use the persisted latest parent end",
-    ).toBeGreaterThanOrEqual(elapsedMs - 2_000);
-    expect(displayedMs).toBeLessThanOrEqual(elapsedMs + 1_000);
-    expect(Date.now() - endedAt).toBeLessThan(120_000);
-  }
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
   const text = (await page.locator("body").textContent()) ?? "";
@@ -195,7 +165,7 @@ async function capture(page: Page, parent: Locator, name: string, content: Locat
 }
 
 suite.define(() => {
-  it("uses the latest settled parent clock across update and reload until its visible child completes", async (test) => {
+  it("keeps child activity through a settled parent update and reload without retaining its handoff wait", async (test) => {
     const started = performance.now();
     await suite.runScenario(test, {
       retainedState: () => instance.stateDir,
@@ -254,10 +224,12 @@ suite.define(() => {
           await expect.poll(() => provider.requests.length).toBeGreaterThan(0);
           await provider.waitForChild(signal);
           await expect.poll(async () => (await rows()).parent.endedAt ?? 0).toBeGreaterThan(0);
-          await waiting.waitFor();
+          await waiting.getByText("Wait for subagents", { exact: true }).waitFor();
+          expect(await waiting.count()).toBe(1);
+          expect(await clocks(parent)).toEqual([]);
           expect(await parent.locator(".agent-chat__composer-run-status").count()).toBe(0);
           const initial = await rows();
-          assertWaitLifecycle(initial.parent, initial.child);
+          assertChildContinues(initial.parent, initial.child);
           const initialHistory = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
@@ -279,59 +251,54 @@ suite.define(() => {
             .filter({ hasText: fixture.updateReply });
           await expect.poll(() => updateReply.count()).toBe(1);
           await updateReply.waitFor();
-          await waiting.waitFor();
+          await waiting.waitFor({ state: "hidden" });
           await provider.check();
           const updated = await rows();
-          assertWaitLifecycle(updated.parent, updated.child);
+          assertChildContinues(updated.parent, updated.child);
           expect(updated.parent.startedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(updated.parent.endedAt).toBeGreaterThan(initial.parent.endedAt!);
           expect(wire.completed.filter((rpc) => rpc.request.method === "chat.send")).toHaveLength(
             2,
           );
           expect(updated.child.startedAt).toBe(initial.child.startedAt);
-          const updatedClocks = await waitForClocks(parent);
-          assertClocks(updatedClocks, updated.parent.endedAt!);
+          const updatedClocks = await clocks(parent);
+          expect(updatedClocks).toEqual([]);
           proof.updated = {
             parent: lifecycle(updated.parent),
             child: lifecycle(updated.child),
             clocks: updatedClocks,
           };
           proof.toolReceipts = provider.receipts;
-          await capture(page, parent, "after-parent-update", [
-            waiting,
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
+          await capture(page, parent, "after-parent-update", [updateReply]);
 
-          proof.stage = "reload persisted parent wait";
+          proof.stage = "reload settled parent with child continuing";
           await page.reload();
           await waitForControlUiGatewayReady(page);
-          await waiting.waitFor();
+          await expect.poll(() => updateReply.count()).toBe(1);
+          await updateReply.waitFor();
+          await waiting.waitFor({ state: "hidden" });
           // Reload can hydrate with chat.history.delta; use a fresh public history RPC
-          // to independently bind the displayed clock to the persisted session row.
+          // to independently bind the settled parent to its persisted lifecycle.
           const history = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
             limit: 50,
           });
           const reloaded = await rows();
-          assertWaitLifecycle(reloaded.parent, reloaded.child);
+          assertChildContinues(reloaded.parent, reloaded.child);
           expect(reloaded.parent.startedAt).toBe(updated.parent.startedAt);
           expect(reloaded.parent.endedAt).toBe(updated.parent.endedAt);
           expect(reloaded.child.startedAt).toBe(initial.child.startedAt);
           expect(history.sessionInfo).toBeDefined();
           expect(history.sessionInfo!.endedAt).toBe(updated.parent.endedAt);
-          const reloadedClocks = await waitForClocks(parent);
-          assertClocks(reloadedClocks, updated.parent.endedAt!);
+          const reloadedClocks = await clocks(parent);
+          expect(reloadedClocks).toEqual([]);
           proof.reloaded = {
             parent: lifecycle(reloaded.parent),
             child: lifecycle(reloaded.child),
             clocks: reloadedClocks,
             historySessionInfo: history.sessionInfo ? lifecycle(history.sessionInfo) : null,
           };
-          await capture(page, parent, "after-reload", [
-            waiting,
-            parent.getByRole("paragraph").filter({ hasText: fixture.updateReply }),
-          ]);
-          expect(reloadedClocks).toHaveLength(updatedClocks.length);
+          await capture(page, parent, "after-reload", [updateReply]);
 
           proof.stage = "actual child completion and parent resume";
           provider.releaseChild();
