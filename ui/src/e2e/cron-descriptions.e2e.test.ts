@@ -81,9 +81,19 @@ suite.define(() => {
 
   it("configured duration precision: shows exact saved intervals in rows and details", async () => {
     const cases = [
-      { id: "minute-control", everyMs: 60_000, text: "Every 1m" },
-      { id: "mixed-interval", everyMs: 90_000, text: "Every 1m 30s" },
-      { id: "precise-interval", everyMs: 3_661_001, text: "Every 1h 1m 1s 1ms" },
+      { id: "minute-control", everyMs: 60_000, text: "Every 1m", cadence: "Every 1 minute" },
+      {
+        id: "mixed-interval",
+        everyMs: 90_000,
+        text: "Every 1m 30s",
+        cadence: "Every 1 minute 30 seconds",
+      },
+      {
+        id: "precise-interval",
+        everyMs: 3_661_001,
+        text: "Every 1h 1m 1s 1ms",
+        cadence: "Every 1 hour 1 minute 1 second 1 millisecond",
+      },
     ] as const;
     const jobs = cases.map(
       ({ id, everyMs }) =>
@@ -115,7 +125,7 @@ suite.define(() => {
         const text = cases[index]?.text;
         expect({ row: rowText, detail }).toEqual({
           row: text,
-          detail: `${text} · Paused`,
+          detail: `${cases[index]?.cadence} · Paused`,
         });
         await page.locator('[data-test-id="cron-back"]').click();
         await row.waitFor();
