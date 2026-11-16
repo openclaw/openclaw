@@ -55,8 +55,9 @@ it.each([
 });
 
 it.each<[string, string, number, Partial<ModelDefinitionConfig>?, number?]>([
-  ["custom", cloud, 262_144],
-  ["custom:cloud", local, 262_144],
+  // Uncurated hosted/cloud models take the generic conservative default.
+  ["custom", cloud, 32_768],
+  ["custom:cloud", local, 32_768],
   ["custom", local, 32_768],
   ["custom", local, 16_384, { contextWindow: 32_768 }],
   ["custom", local, 4096, { contextWindow: 4096 }],
