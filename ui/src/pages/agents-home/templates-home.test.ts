@@ -575,13 +575,22 @@ describe("Templates discovery", () => {
 });
 
 it.each(["card", "detail"])(
-  "shows Template artwork and falls back on an image error in the %s",
+  "shows Template artwork and falls back to the Blobster in the %s",
   async (surface) => {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    const options = { templateIconUrl, templatesEnabled: true };
-    const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
+    const create = (iconUrl?: string) => {
+      const options = { templateIconUrl: iconUrl, templatesEnabled: true };
+      return surface === "card" ? createPage(options).page : createDetail(options).detail;
+    };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
+    // Only the Blobster fallback has two filled eyes; its stroke takes the container's color.
+    const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
+    const withoutArtwork = create();
+    await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
+    expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+
+    const container = create(templateIconUrl);
     await waitForSolid(() =>
       expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(templateIconUrl),
     );
@@ -590,6 +599,6 @@ it.each(["card", "detail"])(
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
-    expect(container.querySelector(`${selector} svg`)).not.toBeNull();
+    expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
   },
 );

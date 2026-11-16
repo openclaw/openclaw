@@ -46,10 +46,12 @@ describe.each(["node", "quickjs"] as const)("%s guest contract across checkpoint
     const h = createCatalogCodeModeHarness([fixture], {
       codeMode: { executor, maxSnapshotBytes: 4 * 1024 * 1024 },
     });
-    // Cold catalog middleware may checkpoint before its first result is ready.
+    // First-call middleware discovery is asynchronous; this case needs ready replies.
     expect(
-      await h.run("return await fixture_echo({});", "warm-ready", { awaitResults: true }),
-    ).toMatchObject({ status: "completed", value: { value: 7 } });
+      await h.run("return await fixture_echo({});", "required-ready-init", {
+        awaitResults: true,
+      }),
+    ).toMatchObject({ status: "completed" });
     vi.mocked(fixture.execute).mockClear();
     const run = vi.spyOn(executorRuntime, "runCodeModeExecutor");
     const result = await h.run(

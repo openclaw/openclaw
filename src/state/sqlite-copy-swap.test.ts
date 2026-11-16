@@ -9,7 +9,7 @@ import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
-import { buildSqliteByCopy, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
+import { buildSqliteWithFoldIns, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
 import { applyPlan, copyTree, diffTree } from "./state-upgrade-tree.js";
 
 const corpusDir = fileURLToPath(
@@ -126,7 +126,7 @@ describe("generic rebuild data rules", () => {
     db.exec(sourceSql);
     db.close();
     const out = path.join(dir, "next.sqlite");
-    const report = buildSqliteByCopy(
+    const { report } = buildSqliteWithFoldIns(
       {
         label: "test",
         version: 2,
@@ -134,8 +134,10 @@ describe("generic rebuild data rules", () => {
         stamp: () => {},
         map,
       },
+      [],
       source,
       out,
+      dir,
     );
     const built = new DatabaseSync(out, { readOnly: true });
     try {
@@ -192,7 +194,7 @@ describe("generic rebuild data rules", () => {
       INSERT INTO c VALUES ('kept', 'a', '1'), ('gone', 'a', '2'), ('gone', 'b', '3');`);
     db.close();
     const out = path.join(dir, "next.sqlite");
-    const report = buildSqliteByCopy(
+    const { report } = buildSqliteWithFoldIns(
       {
         label: "test",
         version: 2,
@@ -203,8 +205,10 @@ describe("generic rebuild data rules", () => {
         stamp: () => {},
         map: {},
       },
+      [],
       source,
       out,
+      dir,
     );
     const built = new DatabaseSync(out, { readOnly: true });
     try {
