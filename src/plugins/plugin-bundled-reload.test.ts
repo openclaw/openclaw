@@ -230,7 +230,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   expect(fs.readdirSync(fileURLToPath(load(instance).directory.href))).toContain("alias");
   expect(host.count).toBe(1);
   await runWorker(load(instance).workerUrl);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     instance.captureModuleLoaderRecovery(),
   );
   await instance.dispose();
@@ -296,7 +296,7 @@ it("captures bundled WebAssembly libraries without requiring their bundled-away 
   const load = (owner: PluginInstance) =>
     (owner.loadModule(entry) as { default(): boolean }).default();
   expect(load(instance)).toBe(true);
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     instance.captureModuleLoaderRecovery(),
   );
   await instance.dispose();
@@ -422,7 +422,7 @@ it.each([
   expect(load(second).increment()).toBe(2);
   expect(host.count).toBe(2);
   expect(await second.run(() => load(second).late())).toBe("B late");
-  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+  const recovery = await withPluginSourceCaptureDirectory(captures, () =>
     second.captureModuleLoaderRecovery(),
   );
   await second.dispose();
