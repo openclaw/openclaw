@@ -91,7 +91,7 @@ describe("provider-catalog-live-runtime", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
   afterEach(() => vi.restoreAllMocks());
 
-  it("requires chat metadata or a catalog declaration, including models.dev modalities", async () => {
+  it("hides declared non-chat rows, including models.dev modalities, and keeps unknown rows", async () => {
     const { fetchGuard } = buildFetchGuard({
       data: [
         { id: "voice-v2", modalities: { input: ["text"], output: ["audio"] } },
@@ -117,12 +117,12 @@ describe("provider-catalog-live-runtime", () => {
       result.provider.models
         .filter((model) => model.inference?.chat !== false)
         .map((model) => model.id),
-    ).toEqual(["catalog-chat", "multimodal"]);
+    ).toEqual(["catalog-chat", "multimodal", "unclassified"]);
     expect(
       result.provider.models
         .filter((model) => model.inference?.chat === false)
         .map((model) => model.id),
-    ).toEqual(["contradictory", "disabled-chat", "unclassified", "voice-v2"]);
+    ).toEqual(["contradictory", "disabled-chat", "voice-v2"]);
   });
 
   it("fetches and dedupes live model ids with opaque resolved auth", async () => {
@@ -499,6 +499,7 @@ describe("provider-catalog-live-runtime", () => {
       }),
       models[1],
       expect.objectContaining({ id: "sunsetting-chat" }),
+      expect.objectContaining({ id: "unknown-model" }),
       expect.objectContaining({ id: "vision-chat" }),
     ];
     expect(first.models.filter((model) => model.inference?.chat !== false)).toEqual(expected);
