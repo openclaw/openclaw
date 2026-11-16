@@ -17,6 +17,11 @@ const enOpenClawIdDialogs = {
     runsTools: "Runs tools",
     revokeNode: "Its node goes too: {device} stops running tools for your claw.",
     approvalDeny: "They do not match",
+    approvalMemberClaim: "This browser says they are {member}.",
+    approvalMemberCompare:
+      "Approve only if {member} reads you this same code over a channel you trust. If you were not expecting this, deny.",
+    approvalMemberCode: "Enter the code the member reads to you",
+    approvalReportedLocation: "Location reported by OpenClaw ID: {location}",
     approvalApprove: "The numbers match",
     approvalEmpty:
       "No new devices are waiting for approval. Start “Approve from another device” on the new device.",

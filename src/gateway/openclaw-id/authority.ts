@@ -673,7 +673,7 @@ export function createOpenClawIdAuthority(
      */
     async ownerView(peerKey: string) {
       const current = await load();
-      const view = await readOwnerView(current, peerKey);
+      const view = await readOwnerView(current, peerKey, profiles.read);
       return record === current ? view : undefined;
     },
 

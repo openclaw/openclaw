@@ -19,6 +19,7 @@ const fixture = vi.hoisted(() => ({
   expired: false,
   uncertain: false,
   tools: undefined as OwnerApprovalRequest["tools"],
+  member: undefined as OwnerApprovalRequest["member"],
   listeners: new Set<() => void>(),
   decide: vi.fn(),
 }));
@@ -33,6 +34,7 @@ vi.mock("../../lib/openclaw-id/owner-approval-lifetime.ts", () => ({
           id: "request",
           label: "Firefox on Linux",
           tools: fixture.tools,
+          member: fixture.member,
           code: fixture.code,
           busy: fixture.uncertain,
           expired: fixture.expired,
@@ -60,6 +62,7 @@ afterEach(async () => {
   fixture.expired = false;
   fixture.uncertain = false;
   fixture.tools = undefined;
+  fixture.member = undefined;
   fixture.decide.mockReset();
 });
 
@@ -104,10 +107,42 @@ describe("local owner matching-number dialog", () => {
     });
     expect(document.querySelector<HTMLInputElement>('input[type="number"]')!.value).toBe("");
     approve().click();
-    expect(fixture.decide).toHaveBeenCalledWith("request", true, null);
+    expect(fixture.decide).toHaveBeenCalledWith("request", true, null, "");
     [...document.querySelectorAll("button")]
       .find((button) => button.getAttribute("aria-label") === "Close")!
       .click();
+    await done;
+  });
+  it("requires the code read by the member and shows only a claimed identity", async () => {
+    fixture.code = "482917";
+    fixture.member = { name: "Alice", email: "alice@example.test", location: "Example City" };
+    const done = showOwnerApprovalDialog({
+      client: {} as GatewayBrowserClient,
+      onDevices: vi.fn(),
+    });
+    const approve = () =>
+      [...document.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("The numbers match"),
+      )!;
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("This browser says they are Alice"),
+    );
+    expect(document.body.textContent).toContain(
+      "reads you this same code over a channel you trust",
+    );
+    expect(document.querySelector('input[type="number"]')).toBeNull();
+    expect(approve().disabled).toBe(true);
+    const input = document.querySelector<HTMLInputElement>('input[inputmode="numeric"]')!;
+    input.value = "000000";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(approve().disabled).toBe(true));
+    expect(fixture.decide).not.toHaveBeenCalled();
+    input.value = "482917";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() => expect(approve().disabled).toBe(false));
+    approve().click();
+    expect(fixture.decide).toHaveBeenCalledWith("request", true, null, "482917");
+    document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click();
     await done;
   });
   it("removes confirmation for expired or uncertain requests and opens Your devices", async () => {

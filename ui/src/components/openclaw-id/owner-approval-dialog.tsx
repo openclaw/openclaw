@@ -27,6 +27,7 @@ function ApprovalRow(props: {
   onDevices: () => void;
 }) {
   const [days, setDays] = createSignal("");
+  const [comparedCode, setComparedCode] = createSignal("");
   const expiry = () => (days().trim() ? Number(days()) : null);
   const valid = () =>
     expiry() === null || (Number.isSafeInteger(expiry()) && expiry()! > 0 && expiry()! <= 3650);
@@ -39,9 +40,26 @@ function ApprovalRow(props: {
       <strong class="openclaw-id-approval__browser openclaw-id-owner-enter">
         {props.request.label}
       </strong>
+      <Show when={props.request.member}>
+        {(member) => (
+          <p class="openclaw-id-devices__description">
+            {t("openclawId.approvalMemberClaim", { member: member().name })}
+            <Show when={member().email}>
+              <br />
+              {member().email}
+            </Show>
+            <Show when={member().location}>
+              <br />
+              {t("openclawId.approvalReportedLocation", { location: member().location! })}
+            </Show>
+          </p>
+        )}
+      </Show>
       <Show when={!props.request.error && !props.request.expired}>
         <p class="openclaw-id-devices__description openclaw-id-owner-enter">
-          {t("openclawId.approvalCompare")}
+          {props.request.member
+            ? t("openclawId.approvalMemberCompare", { member: props.request.member.name })
+            : t("openclawId.approvalCompare")}
         </p>
       </Show>
       <Show when={!props.request.error && !props.request.expired && props.request.tools}>
@@ -98,21 +116,37 @@ function ApprovalRow(props: {
         )}
       </Show>
       <Show when={!inactive()}>
-        <label class="openclaw-id-approval__expiry openclaw-id-owner-enter">
-          <span>
-            {t("openclawId.regenExpiry")}
-            <small>{t("openclawId.regenExpiryHint")}</small>
-          </span>
-          <input
-            type="number"
-            min="1"
-            max="3650"
-            inputmode="numeric"
-            value={days()}
-            onInput={(event) => setDays(event.currentTarget.value)}
-            disabled={props.request.busy}
-          />
-        </label>
+        <Show when={props.request.member}>
+          <label class="openclaw-id-approval__expiry">
+            <span>{t("openclawId.approvalMemberCode")}</span>
+            <input
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              autocomplete="off"
+              value={comparedCode()}
+              onInput={(event) => setComparedCode(event.currentTarget.value)}
+              disabled={props.request.busy}
+            />
+          </label>
+        </Show>
+        <Show when={!props.request.member}>
+          <label class="openclaw-id-approval__expiry openclaw-id-owner-enter">
+            <span>
+              {t("openclawId.regenExpiry")}
+              <small>{t("openclawId.regenExpiryHint")}</small>
+            </span>
+            <input
+              type="number"
+              min="1"
+              max="3650"
+              inputmode="numeric"
+              value={days()}
+              onInput={(event) => setDays(event.currentTarget.value)}
+              disabled={props.request.busy}
+            />
+          </label>
+        </Show>
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button
             type="button"
@@ -125,13 +159,19 @@ function ApprovalRow(props: {
           <button
             type="button"
             class="btn primary"
-            disabled={props.request.busy || !props.request.code || !valid()}
+            disabled={
+              props.request.busy ||
+              !props.request.code ||
+              !valid() ||
+              (Boolean(props.request.member) && comparedCode() !== props.request.code)
+            }
             onClick={() => {
               const duration = expiry();
               void props.owner.decide(
                 props.request.id,
                 true,
                 duration === null ? null : Math.floor(Date.now() / 1000) + duration * 86400,
+                comparedCode(),
               );
             }}
           >

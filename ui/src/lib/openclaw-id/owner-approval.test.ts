@@ -63,8 +63,9 @@ const macNode = {
 
 async function setup(
   refuse = false,
-  invalid?: "sender" | "expired" | "commitment" | "node",
+  invalid?: "sender" | "expired" | "commitment" | "node" | "member" | "point",
   node?: typeof macNode,
+  memberAccount?: string,
 ) {
   const root = await generateEd25519Signer();
   const d = await generateEd25519Signer();
@@ -72,6 +73,9 @@ async function setup(
   held.w = await generateEd25519Signer();
   const n = await generateEd25519Signer();
   const ephN = await generateEphemeralKey();
+  if (invalid === "point") {
+    ephN.publicKey = new Uint8Array(32);
+  }
   const rootPub = formatEd25519PublicKey(root.publicKey);
   const clawId = "12".repeat(16);
   const ts = Math.floor(Date.now() / 1000);
@@ -104,6 +108,7 @@ async function setup(
     peer_key: formatIrohEndpointKey(n.publicKey),
     label: "New browser",
     ...(node ? { node } : {}),
+    ...(memberAccount ? { member_account_id: memberAccount } : {}),
   };
   const commit = await sasCommitment(ephN.publicKey, start);
   const sender = await fingerprint(start.device_pub);
@@ -143,6 +148,10 @@ async function setup(
   const operations: string[] = [];
   let submitted: SignedStatement<"MembershipChange"> | undefined;
   let handoff: unknown;
+  let members =
+    invalid === "member"
+      ? []
+      : [{ accountId: "alice", displayName: "Alice", email: "alice@example.test" }];
   const mockClient = {
     request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
       if (params.action === "submit") {
@@ -166,6 +175,7 @@ async function setup(
             clawId,
             rootPub,
             seq: 1,
+            members,
             ownerDevices: [
               {
                 devicePub: cert.body.device_pub,
@@ -194,6 +204,10 @@ async function setup(
         const { payload } = JSON.parse(params.body as string);
         operations.push(payload.step);
         if (payload.step === "accept") {
+          if (invalid === "point") {
+            queue.push(message("key", { eph_pub: bytesToHex(ephN.publicKey) }));
+            return { status: 200, body: "{}" };
+          }
           const ephE = hexToBytes(payload.data.eph_pub);
           shared = await sasSharedSecret(ephN, ephE);
           transcript = await sasTranscript({
@@ -219,13 +233,18 @@ async function setup(
   owner = createOwnerApproval(client, vi.fn(), kitUsed, memberDeviceAdded);
   owner.start();
   if (invalid) {
-    await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(invalid === "commitment" ? 3 : 2));
+    await vi.waitFor(() =>
+      expect(reads).toBeGreaterThanOrEqual(invalid === "commitment" || invalid === "point" ? 3 : 2),
+    );
   } else {
     await vi.waitFor(() => expect(owner.read().requests[0]?.code).toBeTruthy());
     expect(owner.read().requests[0]?.code).toBe(matching);
   }
   return {
     client,
+    removeMember: () => {
+      members = [];
+    },
     request: mockClient.request,
     operations,
     read: () => ({ submitted, handoff }),
@@ -279,6 +298,44 @@ describe("local original-D SAS approval", () => {
       expect(owner.read().requests).toEqual([]);
     },
   );
+  it("adds the existing member only after the owner enters the matching code", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    expect(owner.read().requests[0]?.member).toMatchObject({
+      name: "Alice",
+      email: "alice@example.test",
+    });
+    await owner.decide(f.id, true, null, "wrong");
+    expect(f.operations).toEqual(["accept"]);
+    expect(owner.read().requests[0]?.error).toContain("six-digit");
+    await owner.decide(f.id, true, null, owner.read().requests[0]?.code);
+    expect(f.operations).toEqual(["accept", "submit", "sealed"]);
+    expect(f.read().submitted?.body.target).toMatchObject({
+      op: "add_member_device",
+      account_id: "alice",
+      label: "New browser",
+    });
+    expect(f.read().submitted?.body.target).not.toHaveProperty("role");
+    expect(f.read().handoff).toMatchObject({ cert: null });
+  });
+  it("never presents a claim for a nonmember", async () => {
+    const f = await setup(false, "member", undefined, "stranger");
+    expect(owner.read().requests).toEqual([]);
+    expect(f.operations).toEqual([]);
+  });
+  it("refuses a member removed after comparison before any grant is sent", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    const code = owner.read().requests[0]?.code;
+    f.removeMember();
+    await owner.decide(f.id, true, null, code);
+    expect(f.operations).toEqual(["accept"]);
+    expect(owner.read().requests[0]?.error).toContain("no longer available");
+  });
+  it("denies a member request without a membership write", async () => {
+    const f = await setup(false, undefined, undefined, "alice");
+    await owner.decide(f.id, false);
+    expect(f.operations).toEqual(["accept", "abort"]);
+    expect(f.read().submitted).toBeUndefined();
+  });
   it("approves an app's node in the same change, bound by the compared number", async () => {
     const f = await setup(false, undefined, macNode);
     expect(owner.read().requests[0]?.tools).toEqual({ commands: ["system.run"], caps: ["screen"] });
@@ -288,6 +345,14 @@ describe("local original-D SAS approval", () => {
       op: "add_owner_device",
       node: { ...macNode, label: "New browser" },
     });
+  });
+  it("rejects a low-order point per request and keeps reading owner notices", async () => {
+    const f = await setup(false, "point", undefined, "alice");
+    expect(owner.read().requests).toEqual([]);
+    expect(owner.read().error).toBeNull();
+    f.notice("fp:local");
+    await vi.waitFor(() => expect(f.kitUsed).toHaveBeenCalledWith("local"));
+    expect(f.operations).toEqual(["accept"]);
   });
   it("names the device in a kit-used notice", async () => {
     const f = await setup();

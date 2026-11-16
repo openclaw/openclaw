@@ -31,6 +31,7 @@ type Attempt = {
   start: SasStart;
   commitment: string;
   sender: string;
+  member?: { name: string; email: string | null; location: string | null };
   expires: number;
   expiryTimer?: ReturnType<typeof setTimeout>;
   ephemeral: EphemeralKey;
@@ -46,6 +47,7 @@ type Attempt = {
 export type OwnerApprovalRequest = {
   id: string;
   label: string;
+  member?: { name: string; email: string | null; location: string | null };
   /**
    * What the new device's node may use, when it also asked to run tools for the claw. Its node
    * key and this surface are in the SAS commitment, so the compared code covers them.
@@ -99,7 +101,7 @@ const expiredRequest = "This device request expired or was cancelled.";
 /** Owns one cancellable mailbox reader and bounded SAS attempts for this original browser D. */
 export function createOwnerApproval(
   client: GatewayBrowserClient,
-  onRequest: () => void,
+  onRequest: (request: OwnerApprovalRequest) => void,
   onKitUsed: (device: string | undefined) => void = () => {},
   onMemberDeviceAdded: () => void = () => {},
 ) {
@@ -118,6 +120,7 @@ export function createOwnerApproval(
   const projectRequest = (id: string, a: Attempt): OwnerApprovalRequest => ({
     id,
     label: a.start.label,
+    member: a.member,
     ...(a.start.node
       ? {
           tools: {
@@ -169,7 +172,17 @@ export function createOwnerApproval(
     abort.signal.throwIfAborted();
     await mail!.call("send", {
       to: attempt.sender,
-      payload: { kind: "enrollment", request_id: attempt.start.request_id, step, data },
+      payload: {
+        kind: "enrollment",
+        request_id: attempt.start.request_id,
+        step,
+        data: {
+          ...data,
+          ...(attempt.start.member_account_id
+            ? { member_account_id: attempt.start.member_account_id }
+            : {}),
+        },
+      },
     });
   };
 
@@ -204,7 +217,30 @@ export function createOwnerApproval(
     if (message.from.device_fp !== sender) {
       return;
     }
+    let member: Attempt["member"];
+    if (d.member_account_id !== undefined) {
+      if (
+        typeof d.member_account_id !== "string" ||
+        !d.member_account_id ||
+        node ||
+        [...attempts.values()].some((a) => a.start.member_account_id === d.member_account_id)
+      ) {
+        return;
+      }
+      const ctx = await readOwnerApprovalContext(client);
+      const current = ctx.link.members?.find((m) => m.accountId === d.member_account_id);
+      if (!current || !mail!.own.body.caps.includes("manage_members")) {
+        return;
+      }
+      member = {
+        name: current.displayName || current.email || current.accountId,
+        email: current.email,
+        location:
+          typeof message.location_hint === "string" ? message.location_hint.slice(0, 256) : null,
+      };
+    }
     const attempt: Attempt = {
+      member,
       start: {
         request_id: payload.request_id,
         claw_id: mail!.clawId,
@@ -212,6 +248,9 @@ export function createOwnerApproval(
         peer_key: d.peer_key,
         label: d.label,
         ...(node ? { node } : {}),
+        ...(typeof d.member_account_id === "string"
+          ? { member_account_id: d.member_account_id }
+          : {}),
       },
       commitment: d.commit,
       sender,
@@ -244,7 +283,7 @@ export function createOwnerApproval(
       throw failure;
     }
     publish();
-    onRequest();
+    onRequest(projectRequest(payload.request_id, attempt));
   };
 
   // Reveal must match N's commitment before computing the matching number.
@@ -288,7 +327,13 @@ export function createOwnerApproval(
       drop(p.request_id);
       return;
     }
-    attempt.secret = await sasSharedSecret(attempt.ephemeral, ephemeralN);
+    try {
+      attempt.secret = await sasSharedSecret(attempt.ephemeral, ephemeralN);
+    } catch {
+      // Invalid peer points reject this request, not the shared mailbox reader.
+      drop(p.request_id);
+      return;
+    }
     attempt.transcript = await sasTranscript({
       start: attempt.start,
       commit: attempt.commitment,
@@ -396,7 +441,12 @@ export function createOwnerApproval(
       listeners.clear();
     },
     /** Deny never submits membership. Approval admits first, then releases the sealed handoff. */
-    async decide(id: string, approve: boolean, expiresAt: number | null = null) {
+    async decide(
+      id: string,
+      approve: boolean,
+      expiresAt: number | null = null,
+      comparedCode?: string,
+    ) {
       const a = attempts.get(id);
       if (!a || a.busy) {
         return;
@@ -423,51 +473,72 @@ export function createOwnerApproval(
         if (!a.code || !a.secret || !a.transcript) {
           throw new Error("Wait for the matching number on both screens.");
         }
+        if (a.member && comparedCode !== a.code) {
+          throw new Error("Enter the six-digit code the member reads to you.");
+        }
         const ctx = await readOwnerApprovalContext(client);
+        if (
+          a.start.member_account_id &&
+          !ctx.link.members?.some((m) => m.accountId === a.start.member_account_id)
+        ) {
+          throw new Error("This browser request is no longer available.");
+        }
         const own = ctx.link.ownerDevices?.find(
           (d) => d.devicePub === formatEd25519PublicKey(mail!.signer.publicKey),
         );
         if (
           !own ||
-          !own.cert.body.caps.includes("approve_device") ||
+          !own.cert.body.caps.includes(a.member ? "manage_members" : "approve_device") ||
           ctx.link.clawId !== mail!.clawId ||
           !ctx.binding
         ) {
           throw new Error("This browser is no longer an active owner device.");
         }
-        const cert = await signStatement(
-          "OwnerDeviceCert",
-          ownerDeviceCertBody({
-            // SAFETY: checked by isEd25519PublicKey when the start message was accepted.
-            device_pub: a.start.device_pub as `ed25519:${string}`,
-            // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
-            peer_keys: [a.start.peer_key as `iroh:${string}`],
-            label: a.start.label,
-            caps: own.cert.body.caps,
-            now: now(),
-            expires_at: expiresAt,
-          }),
-          mail!.signer,
-        );
+        const cert = a.member
+          ? null
+          : await signStatement(
+              "OwnerDeviceCert",
+              ownerDeviceCertBody({
+                // SAFETY: checked by isEd25519PublicKey when the start message was accepted.
+                device_pub: a.start.device_pub as `ed25519:${string}`,
+                // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
+                peer_keys: [a.start.peer_key as `iroh:${string}`],
+                label: a.start.label,
+                caps: own.cert.body.caps,
+                now: now(),
+                expires_at: expiresAt,
+              }),
+              mail!.signer,
+            );
         const statement = await signStatement(
           "MembershipChange",
           {
             claw_id: mail!.clawId,
             seq: ctx.link.seq! + 1,
-            target: {
-              op: "add_owner_device",
-              cert,
-              ...(a.start.node
-                ? {
-                    node: {
-                      // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
-                      peer_key: a.start.node.peer_key as `iroh:${string}`,
-                      label: a.start.label,
-                      description: a.start.node.description,
-                    },
-                  }
-                : {}),
-            },
+            target: a.start.member_account_id
+              ? {
+                  op: "add_member_device",
+                  account_id: a.start.member_account_id,
+                  // SAFETY: startAttempt validates the two key formats.
+                  peer_key: a.start.peer_key as `iroh:${string}`,
+                  // SAFETY: startAttempt validates the two key formats.
+                  device_pub: a.start.device_pub as `ed25519:${string}`,
+                  label: a.start.label,
+                }
+              : {
+                  op: "add_owner_device",
+                  cert: cert!,
+                  ...(a.start.node
+                    ? {
+                        node: {
+                          // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
+                          peer_key: a.start.node.peer_key as `iroh:${string}`,
+                          label: a.start.label,
+                          description: a.start.node.description,
+                        },
+                      }
+                    : {}),
+                },
             issued_at: now(),
           },
           mail!.signer,
