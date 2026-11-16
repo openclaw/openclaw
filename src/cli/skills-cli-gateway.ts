@@ -13,6 +13,7 @@ import {
 import { captureRuntimeConfigAsyncReader, readBestEffortConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 
 const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
@@ -45,7 +46,7 @@ export async function callSkillsGateway<T>(params: {
 export function normalizeExplicitAgentId(agentId?: string): string | undefined {
   const normalizedAgentId = agentId?.trim();
   if (agentId !== undefined && !normalizedAgentId) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   if (!normalizedAgentId) {
     return undefined;

@@ -11,6 +11,7 @@ import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
@@ -502,6 +503,13 @@ describe("skills cli commands", () => {
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+  it("leaves blank-agent diagnostics to the root renderer before resolving skills", async () => {
+    await expect(run(["list", "--agent", " \t ", "--json"])).rejects.toBeInstanceOf(
+      ExpectedCliError,
+    );
+    expectUnused(mocks.workspace, mocks.gateway, mocks.status);
+    expect([...stdout, ...errors]).toEqual([]);
   });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";
