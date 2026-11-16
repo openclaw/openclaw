@@ -139,6 +139,8 @@ describe("settings sidebar search", () => {
     });
     search.input.focus();
     search.enter("collapse task progress");
+    // The first search loads its module before Solid can publish the results.
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(labels(".settings-sidebar__subitem-label")).toContain("Chat"));
     expect(container.querySelector(".settings-sidebar__search-input")).toBe(search.input);
     expect(document.activeElement).toBe(search.input);
