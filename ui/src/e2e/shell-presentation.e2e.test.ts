@@ -55,7 +55,9 @@ suite.define(() =>
           if (width < 900) {
             await page.keyboard.press("Escape");
           } else {
+            // Off a session page, the Sessions item also returns to the last session.
             await page.locator('[data-navigation-view="sessions"]').click();
+            await waitForControlUiRoute(page, { routeId: "chat" });
           }
           await expect.poll(() => shell.getAttribute("class")).not.toContain(collapsedClass);
           await assertSidebarIdentity();
