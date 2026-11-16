@@ -952,6 +952,33 @@ case skipped on macOS. Independent preservation and local ClawSweeper review
 found no lost contract or actionable finding. This closes the earlier FIFO
 setup cleanup follow-up; no production change is claimed.
 
+### MCP CLI workspace cleanup custody
+
+At `a56ba88e924fad822fd8f447f1b67e82c13c6f42`, the MCP CLI harness empties
+its directory tracker before asynchronous removal succeeds. A failed removal
+leaves the directory untracked and unavailable to a later cleanup attempt.
+Delegate removal to the existing shared cleanup helper; preserve allocation,
+explicit caller-owned teardown, mock restoration and exit-code restoration.
+All five consumer suites remain: 46 declarations / 57 expanded cases. Test
+support changes by +2/-3 lines; production and shared helper code are unchanged.
+
+Direct execution of the baseline cleanup body with an injected removal failure
+leaves the failed directory present and untracked after both cleanup attempts.
+The other directory is removed and the exact error and exit code are preserved.
+The same fault in an existing Vitest consumer case confirms that the candidate
+retains the failed path and removes it on the second cleanup call. Both versions
+remove the healthy workspace and restore the temporary home, environment, cwd
+and exit code. Observations precede emergency cleanup; temporary instrumentation
+was restored byte for byte.
+
+All five consumer suites pass on both versions: 56 cases pass and the one
+Windows-only case is skipped on macOS. Baseline wall time was 106.39 seconds;
+the candidate took 138.65 seconds (121.87 seconds reported by Vitest). These are
+qualification observations, not speed-comparison data. The unchanged shared
+helper passes 11 cases with its Windows-only case skipped. Independent
+preservation and full local ClawSweeper review found no actionable issue.
+This closes the earlier MCP temporary-directory removal follow-up.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
