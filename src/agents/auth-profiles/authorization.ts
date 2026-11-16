@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -27,7 +26,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   getScopedAuthProfileEnv,
   getScopedSharedAuthStore,
@@ -103,15 +102,11 @@ export async function captureAuthProfileAuthorization(params: {
       agentId?: string;
       agentDir?: string;
       observation: ReturnType<typeof retainAuthProfileAuthorizationObservation>;
-      reader?: ReturnType<typeof prepareAgentAuthProfileRowsRead>;
+      reader?: Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>;
       incarnation?: string;
     };
     const targets: Target[] = paths.map((databasePath) => ({
       databasePath,
-      agentId:
-        databasePath === sharedPath && ownership.location === "state-db"
-          ? undefined
-          : resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
       agentDir: databasePath === sharedPath ? undefined : agentDir,
       observation: retainAuthProfileAuthorizationObservation(databasePath, profileId),
     }));
@@ -156,16 +151,17 @@ export async function captureAuthProfileAuthorization(params: {
       const publishers = targets.map((target) => target.observation.prepareRead());
       const rows = await Promise.all(
         targets.map(async (target) => {
-          if (target.agentId === undefined) {
+          if (target.databasePath === sharedPath && ownership.location === "state-db") {
             return readSharedAuthProfileRows(context, undefined, "canonical");
           }
-          target.reader ??= prepareAgentAuthProfileRowsRead({
+          target.reader ??= await prepareAgentAuthProfileRowsRead({
             databasePath: target.databasePath,
             agentId: target.agentId,
             env,
             // Runtime credential projections omit private authorization incarnations.
             source: "canonical",
           });
+          target.agentId = target.reader.agentId;
           return target.reader.read();
         }),
       );

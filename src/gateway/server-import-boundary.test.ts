@@ -39,6 +39,10 @@ const graph = createRuntimeImportGraph(
     "src/gateway/agent-turn/agent-turn-service.ts",
     "src/daemon/service-command.ts",
     "src/config/legacy-workboard-database.ts",
+    "src/infra/sqlite-readonly-worker-context.ts",
+    "src/infra/update-doctor-migration-context.ts",
+    "src/infra/client-credential-store.ts",
+    "src/infra/client-credential.worker.ts",
   ],
   { sourceImports: true },
 );
@@ -181,6 +185,17 @@ console.log("prewarm-cold-selection-ok");`,
     ["src/config/legacy-workboard-database.ts", "src/infra/database-engine/open.ts"],
   ])("loads %s without the demand-only %s", (entry, deferred) => {
     expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
+  });
+
+  it.each([
+    "src/infra/sqlite-readonly-worker-context.ts",
+    "src/infra/update-doctor-migration-context.ts",
+    "src/infra/client-credential-store.ts",
+    "src/infra/client-credential.worker.ts",
+  ])("reads cancellation in %s without loading SQLite workers", (entry) => {
+    const modules = collectStaticValueImports(entry);
+    expect(modules).not.toContain(path.normalize("src/infra/sqlite-readonly-worker.ts"));
+    expect(modules).not.toContain(path.normalize("src/infra/sqlite-readonly-worker-pool.ts"));
   });
 
   it("prepares worker exec approvals without loading model completion", () => {

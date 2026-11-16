@@ -47,7 +47,7 @@ const session = () =>
     argv: [],
     retainLifetime: false,
     requestArgs: () => [],
-    readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
+    readBudget: async () => ({ timeoutMs: 5_000, size: "fixture" }),
     deadlineOwnedByCaller: () => true,
     timeoutError: () => new Error("unexpected timeout"),
     closeTimeoutMs: 5_000,
