@@ -806,6 +806,7 @@ class MainViewModel internal constructor(
   internal fun saveGatewayConfigAndConnect(
     plan: GatewayConnectPlan,
     addition: GatewayAdditionRequest? = null,
+    onTargetAdmitted: (String) -> Unit = {},
   ) {
     if (addition != null && (gatewayAdditionRequestState.value !== addition || !canBeginQuickGatewayConnection(ensureRuntime()))) return
     // Only an explicitly confirmed, still-current addition enters connection admission.
@@ -833,6 +834,7 @@ class MainViewModel internal constructor(
         return@launchGatewayConnectionOperation
       }
       val blankCredentials = config.token.isEmpty() && config.bootstrapToken.isEmpty() && config.password.isEmpty()
+      withContext(Dispatchers.Main) { if (operation()) onTargetAdmitted(endpoint.stableId) }
       val preservesPairedTarget =
         targetAlreadyPaired && blankCredentials && plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_ENDPOINT
       val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE && !preservesPairedTarget

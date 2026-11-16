@@ -206,18 +206,18 @@ class RootScreenFoldTest {
       assertClearOfHinge(action, hinge)
       action.performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
-      val input = composeRule.onNode(hasSetTextAction() and hasText("Host"))
-      input.performScrollTo().performClick().performTextReplacement("gateway.test")
-      val draft = composeRule.onNode(hasSetTextAction() and hasText("gateway.test"))
+      val input = composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test"))
+      input.performScrollTo().performClick().performTextReplacement("https://gateway.test:8443")
+      val draft = composeRule.onNode(hasSetTextAction() and hasText("https://gateway.test:8443"))
       val editorId = draft.fetchSemanticsNode().id
       for (features in listOf(emptyList(), listOf(testFold(hinge)), emptyList())) {
         emit(features)
-        draft.assertTextEquals("gateway.test").assertIsFocused()
+        draft.assertTextEquals("https://gateway.test:8443").assertIsFocused()
         assertEquals("Fold changes must keep the live input node", editorId, draft.fetchSemanticsNode().id)
       }
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       composeRule.onNodeWithText("Set up manually").assertIsDisplayed().performClick()
-      composeRule.onNode(hasSetTextAction() and hasText("gateway.test")).performScrollTo().assertIsDisplayed()
+      composeRule.onNode(hasSetTextAction() and hasText("https://gateway.test:8443")).performScrollTo().assertIsDisplayed()
     }
   }
 

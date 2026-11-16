@@ -22,7 +22,7 @@ import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
-import ai.openclaw.app.ui.canFinishOnboarding
+import ai.openclaw.app.ui.canFinishNodeCapabilityApproval
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
@@ -329,10 +329,10 @@ class GatewayBootstrapAuthTest {
         }
 
         fun ready(): Boolean =
-          canFinishOnboarding(
-            isConnected = runtime.gatewayConnectionDisplay.value.isConnected,
+          canFinishNodeCapabilityApproval(
+            isOperatorConnected = runtime.gatewayConnectionDisplay.value.isConnected,
             isNodeConnected = runtime.nodeConnected.value,
-            nodeCapabilityApproval = runtime.nodeCapabilityApproval.value,
+            approval = runtime.nodeCapabilityApproval.value,
           )
 
         connectSession(if (nodeFirst) "nodeSession" else "operatorSession")
@@ -1825,6 +1825,29 @@ class GatewayBootstrapAuthTest {
       assertEquals("other-token", prefs.loadGatewayCredentials(other).token)
       assertNull(authStore.loadToken(target, deviceId, "node"))
       assertEquals("other-node-token", authStore.loadToken(other, deviceId, "node"))
+    }
+
+  @Test
+  fun browserIdentityRetirementClearsOnlyTargetOfflineChat() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val prefs = testPrefs(app)
+      val transcriptCache = RecordingTranscriptCache()
+      val runtime = trackRuntime(NodeRuntime(app, prefs, transcriptCache))
+      val target = GatewayEndpoint.manual("target.example.test", 443, tlsEnabled = true)
+      val other = GatewayEndpoint.manual("other.example.test", 443, tlsEnabled = true)
+      for (endpoint in listOf(target, other)) {
+        prefs.gatewayRegistry.upsert(GatewayRegistryEntry(stableId = endpoint.stableId, kind = GatewayRegistryEntryKind.MANUAL, name = "Synthetic Gateway", host = endpoint.host, port = endpoint.port, tls = true))
+      }
+      val registrations = prefs.gatewayRegistry.entries.value
+      val identity = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+      val store = DeviceAuthStore(prefs)
+      store.saveToken(other.stableId, identity, "node", "other-principal-token")
+      runtime.retireBrowserConnections(target.host, target.port)
+      assertEquals(listOf(target.stableId), transcriptCache.clearedGatewayIds)
+      assertEquals(registrations, prefs.gatewayRegistry.entries.value)
+      assertEquals(identity, DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId)
+      assertEquals("other-principal-token", store.loadToken(other.stableId, identity, "node"))
     }
 
   @Test

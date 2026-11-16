@@ -39,6 +39,7 @@ import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyChild
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -49,6 +50,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.TextLayoutResult
@@ -357,6 +359,10 @@ class SettingsScreensContrastTest {
       for (key in listOf("Scan or paste a setup code to add another gateway.", "Unencrypted", "Secure (TLS)")) {
         if (key == "Unencrypted") {
           composeRule.onNodeWithText(nativeString("Manual Gateway")).performScrollTo().performClick()
+          val url = composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test"))
+          url.performScrollTo()
+          composeRule.onNodeWithText(nativeString("Unencrypted")).assertDoesNotExist()
+          url.performTextReplacement("gateway.example.test")
         }
         val label = nativeString(key)
         composeRule.onNodeWithText(label, useUnmergedTree = true).performScrollTo()

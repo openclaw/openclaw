@@ -10,6 +10,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -37,6 +38,15 @@ class SecurePrefsCommitTest {
 
     assertEquals("app-token", prefs.getString("access-a"))
     assertNull(prefs.getString("access-b"))
+  }
+
+  @Test
+  fun browserProfileWritePreservesTheSynchronousCommitResult() {
+    val (prefs, backing) = fixture()
+    ReflectionHelpers.setField(prefs, "plainPrefs", backing)
+    assertTrue(prefs.saveBrowserSessionProfile("https://gateway.example.test:443", "synthetic-profile", "synthetic-epoch"))
+    backing.failNextCommit = true
+    assertFalse(prefs.saveBrowserSessionProfile("https://gateway.example.test:443", "replacement-profile", "replacement-epoch"))
   }
 
   private fun fixture(): Pair<SecurePrefs, CommitControlledPreferences> {

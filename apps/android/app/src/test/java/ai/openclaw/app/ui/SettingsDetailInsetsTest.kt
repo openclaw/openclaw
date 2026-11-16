@@ -120,11 +120,12 @@ class SettingsDetailInsetsTest {
 
   @Test
   @Config(qualifiers = "w360dp-h800dp-420dpi")
-  fun gatewayCredentialsAreMaskedWhileHostAndPortRemainOrdinary() {
+  fun gatewayCredentialsAreMaskedWhileGatewayUrlRemainsOrdinary() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     val prefs = SecurePrefs(app, app.getSharedPreferences("gateway-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     prefs.setManualHost("127.0.0.1")
     prefs.setManualPort(18789)
+    prefs.setManualTls(true)
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val models = ViewModelStore()
     try {
@@ -138,8 +139,8 @@ class SettingsDetailInsetsTest {
       }
 
       composeRule.onNodeWithText("Manual Gateway").performScrollTo().performClick()
-      assertGatewayInputPresentation("127.0.0.1", "192.168.0.25", secret = false)
-      assertGatewayInputPresentation("18789", "18790", secret = false)
+      assertGatewayInputPresentation("https://127.0.0.1:18789", "https://192.168.0.25:18790", secret = false)
+      composeRule.onNodeWithContentDescription("Port").assertDoesNotExist()
       assertGatewayInputPresentation("Setup code", "synthetic-setup-code", secret = true)
       assertGatewayInputPresentation("Token", "synthetic-token", secret = true)
       assertGatewayInputPresentation("Bootstrap", "synthetic-bootstrap", secret = true)

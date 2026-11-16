@@ -273,7 +273,12 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
   if (!tls && !isLocalCleartextGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
-  val defaultPort = if (tls) 443 else 18789
+  val defaultPort =
+    when (scheme) {
+      "https", "wss" -> 443
+      "http" -> 80
+      else -> 18789 // Keep the established bare ws Gateway convention.
+    }
   val port = gatewayPort(uri.port, defaultPort) ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
   val contextPath = normalizeGatewayContextPath(uri.rawPath)
   val displayHost = if (host.contains(":")) "[$host]" else host
@@ -380,6 +385,10 @@ internal fun resolveDefaultManualGatewayPort(
   hostInput: String,
   tls: Boolean,
 ): Int {
+  // Complete URLs own their standard or explicit port; only bare hosts use the legacy default.
+  if (hostInput.contains("://")) {
+    parseGatewayEndpointResult(hostInput).config?.let { return it.port }
+  }
   val host =
     hostInput
       .trim()
@@ -453,6 +462,17 @@ internal fun composeGatewayManualUrl(
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
+}
+
+/** Presents persisted legacy host/port/TLS values as one editable URL without losing custom ports. */
+internal fun gatewayManualAddressForEditing(
+  hostInput: String,
+  portInput: String,
+  tls: Boolean,
+): String {
+  val transport = gatewayManualTransportPresentation(hostInput, tls)
+  val url = composeGatewayManualUrl(hostInput, portInput, transport.effectiveTls) ?: return hostInput
+  return parseGatewayEndpointResult(url).config?.displayUrl ?: hostInput
 }
 
 /** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */

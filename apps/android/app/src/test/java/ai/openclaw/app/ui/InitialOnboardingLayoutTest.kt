@@ -50,6 +50,7 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -63,6 +64,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -145,8 +147,7 @@ class InitialOnboardingLayoutTest {
     withOnboarding { _, _ ->
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
-      assertInputPresentation("Host", "127.0.0.1", secret = false, scroll = true)
-      assertInputPresentation("18789", "18790", secret = false, scroll = true)
+      assertInputPresentation("https://gateway.example.test", "http://127.0.0.1:18790", secret = false, scroll = true)
       assertInputPresentation("Paste token", "synthetic-token", secret = true, scroll = true)
       assertInputPresentation("Password optional", "synthetic-password", secret = true, scroll = true)
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToIndex(0)
@@ -176,7 +177,7 @@ class InitialOnboardingLayoutTest {
       ) {
         composeRule.onNode(hasSetTextAction() and hasText(previous)).performScrollTo().performTextReplacement(next)
       }
-      changeHost("Host", "127.0.0.1")
+      changeHost("https://gateway.example.test", "127.0.0.1")
       val cleartext = composeRule.onNodeWithText("Unencrypted")
       val tls = composeRule.onNodeWithText("Secure (TLS)")
 
@@ -582,6 +583,59 @@ class InitialOnboardingLayoutTest {
     }
   }
 
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun operatorReadyDoesNotWaitForOptionalNodeList() =
+    withApprovalGateway { runtime, _, gateway ->
+      gateway.holdNodeLists()
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      val urlField = hasSetTextAction() and hasText("https://gateway.example.test")
+      if (composeRule.onAllNodes(urlField).fetchSemanticsNodes().isNotEmpty()) {
+        composeRule.onNode(urlField).performScrollTo().performTextReplacement("http://127.0.0.1:${gateway.port}")
+      } else {
+        composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
+        composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
+      }
+      composeRule.onNodeWithText("Test connection").performClick()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          runtime.gatewayConnectionDisplay.first { it.isConnected }
+          gateway.heldNodeListReceived.await()
+        }
+      }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.waitForIdle()
+      capturePermissions("operator-node-loading")
+      composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
+      composeRule.onNodeWithText("Capture photos and clips from this phone").assertIsDisplayed()
+      capturePermissions("operator-native-continued")
+    }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun operatorCanContinueChatWithoutApprovingPendingPhoneSurface() =
+    withApprovalGateway { runtime, viewModel, gateway ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test")).performScrollTo().performTextReplacement("http://127.0.0.1:${gateway.port}")
+      composeRule.onNodeWithText("Test connection").performClick()
+      drainWithMainLooper {
+        withTimeout(10_000) {
+          runtime.gatewayConnectionDisplay.first { it.isConnected }
+          viewModel.nodeCapabilityApproval.first { it == GatewayNodeCapabilityApproval.Unapproved }
+        }
+      }
+      composeRule.mainClock.advanceTimeByFrame()
+      composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
+      capturePermissions("optional-node-pending")
+      composeRule.onAllNodesWithText("openclaw nodes pending").assertCountEquals(1)
+      composeRule.onNodeWithText("Continue to chat").performClick()
+      assertTrue(viewModel.onboardingCompleted.value)
+      assertFalse(gateway.approvedRequest.isCompleted)
+      assertEquals(GatewayNodeCapabilityApproval.Unapproved, runtime.nodeCapabilityApproval.value)
+    }
+
   private fun capturePermissions(name: String) {
     System.getenv("OPENCLAW_PERMISSION_PROOF_DIR")?.let { directory ->
       val bitmap = composeRule.onNodeWithTag(OnboardingViewportTag).captureToImage().asAndroidBitmap()
@@ -650,8 +704,7 @@ class InitialOnboardingLayoutTest {
     withApprovalGateway(nativeApproval = true) { runtime, viewModel, gateway ->
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
-      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
-      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
+      composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test")).performScrollTo().performTextReplacement("http://127.0.0.1:${gateway.port}")
       composeRule.onNodeWithText("Test connection").performClick()
       drainWithMainLooper { withTimeout(10_000) { gateway.nodeConnectReceived.await() } }
       runtime.refreshNodesDevices()
@@ -729,8 +782,7 @@ class InitialOnboardingLayoutTest {
 
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Set up manually").performClick()
-      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
-      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
+      composeRule.onNode(hasSetTextAction() and hasText("https://gateway.example.test")).performScrollTo().performTextReplacement("http://127.0.0.1:${gateway.port}")
       composeRule.onNodeWithText("Test connection").performClick()
       awaitUnapprovedRefreshCompletion()
       composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()

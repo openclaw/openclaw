@@ -22,6 +22,10 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class NodeApp : Application() {
   val prefs: SecurePrefs by lazy { SecurePrefs(this) }
+  internal val browserSessions by lazy {
+    ai.openclaw.app.gateway
+      .ReverseProxyBrowserSessions(prefs)
+  }
 
   internal val toolDisplayConfig: ToolDisplayConfig by lazy {
     assets.open("tool-display.json").bufferedReader().use { ToolDisplayConfig.parse(it.readText()) }
@@ -69,7 +73,7 @@ class NodeApp : Application() {
   private fun ensureRuntime(initialForeground: Boolean): NodeRuntime =
     synchronized(runtimeLock) {
       runtimeInstance
-        ?: NodeRuntime(this, prefs, initialForeground = initialForeground).also {
+        ?: NodeRuntime(this, prefs, initialForeground = initialForeground, browserAuthorizationProvider = browserSessions::authorization).also {
           runtimeInstance = it
           disconnectIfStopped(it)
         }
@@ -123,6 +127,27 @@ class NodeApp : Application() {
     runtimeScope.launch { block() }
   }
 
+  /** Starting an explicit login retires cached data belonging to the previous principal first. */
+  internal suspend fun beginBrowserSignIn(target: okhttp3.HttpUrl) =
+    kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+      val login = browserSessions.begin(target)
+      try {
+        ensureRuntime().retireBrowserConnections(target.host, target.port)
+        login
+      } catch (failure: Exception) {
+        browserSessions.cancel(login)
+        throw failure
+      }
+    }
+
+  /** Retire only this app browser session, not the identity provider or other Gateways. */
+  internal suspend fun signOutBrowserSession(target: okhttp3.HttpUrl) =
+    kotlinx.coroutines.withContext(Dispatchers.Main.immediate) {
+      browserSessions.revoke(target)
+      ensureRuntime().retireBrowserConnections(target.host, target.port)
+      browserSessions.signOut(target)
+    }
+
   /** Clears pairing auth without racing lazy process-runtime construction. */
   suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =
@@ -135,6 +160,7 @@ class NodeApp : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    browserSessions // Restore profile references on the UI thread; native requests only use their cookie managers.
     NativeStringResources.install(this)
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
