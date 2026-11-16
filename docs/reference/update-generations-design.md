@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                    |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).    |
-| Release directories behind a linked root     | In review as [#198835](https://github.com/openclaw/openclaw/pull/198835). |
-| Owed steps after the commit point            | Proposed.                                                                 |
-| Stop, publish, and rollback in the candidate | Not designed.                                                             |
+| Slice                                        | Status                                                                 |
+| -------------------------------------------- | ---------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922). |
+| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835). |
+| Owed steps after the commit point            | Proposed.                                                              |
+| Stop, publish, and rollback in the candidate | Not designed.                                                          |
 
 ## Why change it
 
@@ -407,13 +407,19 @@ update tries the layout again.
 
 This covers every precondition of the switch:
 
-- the candidate's `bin` launchers differ from the ones the prefix has
+- the candidate's `openclaw` launcher is not the link the prefix already has.
+  The comparison covers only the launchers the update manages, so a candidate
+  that adds another command still switches
 - `releases/` cannot be created, or is on another filesystem than the package
   path
 - the package path or the candidate cannot be captured or read
-- the Gateway service starts a path inside a release. The swap does not help
-  here, because the service would still start the old directory. The update
-  rebinds the service to the package path itself and warns if it cannot.
+- the Gateway service starts a path inside a release. Switching the link
+  would leave the service on the old release, so the update replaces that
+  release in place and reports the package path as its result. The restart's
+  service refresh then binds the service to the package path, and the update
+  warns with the `openclaw gateway install --force` command for the case where
+  it does not. Once the service names the package path, the next update
+  switches releases.
 
 A refusal remains only where another writer is changing the installation
 during the run: the link or the candidate changed between capture and the
@@ -478,14 +484,29 @@ something the source showed.
   post-switch service revalidation correctly calls it another installation.
   The first version of #198835 refused before any change when the managed
   service starts a path inside a release, and named `openclaw gateway install
-  --force` from the package path as the fix. Decision 8 replaces that refusal:
-  the update rebinds the service itself, as an install-root refresh like a pnpm
-  generation change. This installation's own service writes keep the package
-  path (the adoption cell checks the unit).
+  --force` from the package path as the fix. Decision 8 replaces that refusal.
+  The plan was to switch the link and then rebind the service as an
+  install-root refresh, like a pnpm generation change. In the Docker cell the
+  post-update ownership check ran before the rebind, called the service
+  another installation, and left the Gateway stopped. As built, the update
+  replaces the release the service starts in place, so the service starts the
+  new version without a rewrite, and reports the package path as the update
+  root so the restart's service refresh binds the service there. With
+  `--no-restart` the service keeps the release path until its next restart.
+  Separately, `--no-restart` with a running Gateway can fail on any package
+  install: the Gateway restarts itself for the replaced installation while
+  update Doctor stops it. That was measured on a plain install from `main`,
+  it is independent of release directories, and
+  [#200181](https://github.com/openclaw/openclaw/pull/200181) proposes the
+  fix. Until it lands the in-place Docker cell stops the Gateway first.
+  This installation's own service writes keep the package path (the adoption
+  cell checks the unit).
 - **Launchers.** The first version refused before any change when a candidate
   adds or renames a `bin` entry. Decision 8 replaces that with the swap for
   that run, which installs the new launchers and leaves a plain directory; the
-  next update adopts again.
+  next update adopts again. The comparison covers only the launchers the swap
+  publishes (`openclaw`). Comparing every `bin` entry made a candidate with an
+  added command fall back on every update and never adopt the layout.
 - **Adoption** moves the plain directory into `releases/<label>` and renames
   a prepared temporary link naming it onto the empty package path, then
   switches as usual. Between the two renames the package path is missing.
@@ -643,17 +664,17 @@ older release, with no download when that release is still retained. See
 
 ## Risks
 
-| Risk                                                     | Severity | Mitigation                                                                                                                                                                                                 |
-| -------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, executor and journal identity, and a service definition written by a published updater through the link (observed; the update rebinds it, decision 8). |
-| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                                                                         |
-| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed.                                                      |
-| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                                                                                |
-| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                                                                      |
-| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                                                                                    |
-| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                                                                                 |
-| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                                                                               |
-| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                                                                       |
+| Risk                                                     | Severity | Mitigation                                                                                                                                                                                                                                                |
+| -------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, executor and journal identity, and a service definition written by a published updater through the link (observed; the update replaces that release in place and the restart rebinds it, decision 8). |
+| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                                                                                                                        |
+| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed.                                                                                                     |
+| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                                                                                                                               |
+| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                                                                                                                     |
+| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                                                                                                                                   |
+| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                                                                                                                                |
+| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                                                                                                                              |
+| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                                                                                                                      |
 
 ## Review slices
 
@@ -701,7 +722,7 @@ on November 15, 2026.
 | 5   | Whether to accept the B1 package marker.                                   | Yes. It ships with #197922.                                                                                                                                                                                                                                                                                                                                                                   | None.                                                                        |
 | 6   | Whether npm-owned global prefixes take a linked root.                      | Not now. It needs its own proposal.                                                                                                                                                                                                                                                                                                                                                           | That proposal.                                                               |
 | 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                                                                                                                                                                                                                                                                   | None.                                                                        |
-| 8   | Whether a condition that prevents the link switch may fail the update.     | No. The run takes the swap, or rebinds the service, with a recorded warning. See [the layout never fails an update](#the-layout-never-fails-an-update).                                                                                                                                                                                                                                       | The change to #198835.                                                       |
+| 8   | Whether a condition that prevents the link switch may fail the update.     | No. The run takes the swap, or replaces a service-bound release in place, with a recorded warning. See [the layout never fails an update](#the-layout-never-fails-an-update).                                                                                                                                                                                                                 | None. Landed in #198835.                                                     |
 
 ## Not doing
 
