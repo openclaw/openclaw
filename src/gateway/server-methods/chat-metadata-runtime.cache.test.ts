@@ -255,6 +255,13 @@ test.each(["resolve", "reject"] as const)(
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const firstError = new Error("evicted projection failed");
+    let first: Promise<unknown> | undefined;
+    onTestFinished(async () => {
+      release.resolve();
+      await first;
+      await harness.runtime.stop();
+    });
+    await harness.refresh();
     harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
       entered.resolve();
       await release.promise;
@@ -264,16 +271,18 @@ test.each(["resolve", "reject"] as const)(
       const models = [{ ...facts.modelCatalog.entries[0]!, id: "old", name: "old" }];
       return { modelCatalog: models, models };
     });
-    const first = harness.read({ agentId: "agent-0" }).then(
+    first = harness.read({ agentId: "agent-0" }).then(
       (value) => value,
       (error: unknown) => error,
     );
-    onTestFinished(async () => {
-      release.resolve();
-      await first;
-      await harness.runtime.stop();
-    });
-    await entered.promise;
+    await Promise.race([
+      entered.promise,
+      first.then((result) => {
+        throw result instanceof Error
+          ? result
+          : new Error("Projection settled before reaching the barrier");
+      }),
+    ]);
     for (const agentId of agentIds.slice(1)) {
       await harness.read({ agentId });
     }
@@ -302,6 +311,7 @@ test("coalesces stale projection waiters onto the replacement", async () => {
     await Promise.allSettled(reads);
     await harness.runtime.stop();
   });
+  await harness.refresh();
   await harness.read();
   const previous = await harness.buildProjection.mock.results[0]!.value;
   harness.invalidProjections.add(previous);
@@ -317,7 +327,14 @@ test("coalesces stale projection waiters onto the replacement", async () => {
     return await value;
   };
   reads.push(harness.read({ withCurrent }), harness.read({ withCurrent }));
-  await entered.promise;
+  await Promise.race([
+    entered.promise,
+    ...reads.map((read) =>
+      read.then(() => {
+        throw new Error("Stale projection read settled before reaching the barrier");
+      }),
+    ),
+  ]);
   release.resolve();
   expect(await Promise.all(reads)).toEqual([await harness.read(), await harness.read()]);
   expect(harness.buildProjection).toHaveBeenCalledTimes(2);
