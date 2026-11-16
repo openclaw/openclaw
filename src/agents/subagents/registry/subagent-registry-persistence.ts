@@ -358,6 +358,7 @@ async function commitRows<T>(
     values,
     deleteRunIds: [...postimages].flatMap(([id, row]) => (row ? [] : [id])),
     removalReason: planned.removalReason,
+    terminalRows: planned.terminalRows,
     terminalEvents: planned.terminalEvents?.map(({ input }) => structuredClone(input)),
   };
   if (!values.length && !write.deleteRunIds.length && !write.terminalEvents?.length) {

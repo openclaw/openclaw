@@ -37,6 +37,7 @@ it
     "private-announcing",
     "busy-requester",
     "retrying-requester",
+    "unmarked-requester",
   ] as const)(
   "recovers session completion custody through a real Gateway restart (%s)",
   { timeout: 180_000 },
@@ -457,6 +458,26 @@ it
           expect(readRun(childRunId)).toMatchObject({
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
+        }
+        if (kind === "unmarked-requester") {
+          // Recreate the persisted incident state: a settled, unmarked requester still owes
+          // this real child result. Change only the stopped fixture's requester markers.
+          const db = openNodeSqliteDatabase(
+            path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
+          );
+          try {
+            db.prepare(
+              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.lifecycleRunId', '$.resumeAfterRestart', '$.mainRestartRecovery') WHERE session_key = ?",
+            ).run(rootKey);
+          } finally {
+            db.close();
+          }
+          const current = readRestartSession(instance.state.agentDir("main"), rootKey);
+          expect(current?.lifecycleRunId).toBeUndefined();
+          expect(current?.resumeAfterRestart).toBeUndefined();
+          expect(current?.mainRestartRecovery).toBeUndefined();
+          expect(readCapturedInputs()).toHaveLength(0);
+          expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
         }
         restarted = true;
         await instance.startGateway();
