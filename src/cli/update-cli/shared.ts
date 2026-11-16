@@ -14,6 +14,7 @@ import { UPDATE_GIT_RETRY_DELAYS_MS, withGitNetworkRetry } from "../../infra/git
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
@@ -50,7 +51,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
-import { throwExpectedCliError } from "../failure-output.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
 export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
@@ -224,28 +225,25 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
   const invocationRoot = process.argv[1]
     ? await resolveOpenClawPackageRoot({ cwd: path.dirname(path.resolve(process.argv[1])) })
     : null;
-  return (
+  const root =
     invocationRoot ??
     (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, cwd: process.cwd() })) ??
-    process.cwd()
-  );
+    process.cwd();
+  // Node starts a release by its real path. Update the release link, never the
+  // release behind it; other links and plain directories keep the root found above.
+  return resolvePackageReleaseSlotForRootSync(root) ?? root;
 }
 
-export async function runUpdateStep(params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs?: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  input?: string;
-  runCommand?: Parameters<typeof runStep>[0]["runCommand"];
-  results?: UpdateStepResult[];
-}): Promise<UpdateStepResult> {
+export async function runUpdateStep(
+  params: Omit<Parameters<typeof runStep>[0], "cwd" | "runCommand" | "stepIndex" | "totalSteps"> &
+    Partial<Pick<Parameters<typeof runStep>[0], "cwd" | "runCommand">>,
+): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
     cwd: params.cwd ?? process.cwd(),
-    runCommand: params.runCommand ?? runCommandWithTimeout,
+    runCommand:
+      params.runCommand ??
+      ((argv, options) => runCommandWithTimeout(argv, { ...options, killProcessTree: true })),
     stepIndex: 0,
     totalSteps: 0,
   });

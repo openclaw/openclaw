@@ -1,5 +1,5 @@
 /** Locale-independent Task Scheduler registration and runtime facts. */
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,6 +7,7 @@ import { hasErrnoCode, isErrno } from "../infra/errno.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 import { awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import {
@@ -98,24 +99,29 @@ function queryTaskScheduler(
       ? "function Read-Folder($folder) { foreach($task in $folder.GetTasks(1)) { Read-Task $task }; foreach($child in $folder.GetFolders(0)) { Read-Folder $child } }; try { $tasks=@(Read-Folder ($service.GetFolder('\\'))); ConvertTo-Json -InputObject $tasks -Depth 4 -Compress; exit 0 } catch { Write-Output $_.Exception.HResult; exit 2 }"
       : `try { $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false; ${readTask}; exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; Write-Output $exception.HResult; if($lookup){exit 1}; exit 2 }`,
   ].join("; ");
-  const probe = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    {
-      env: resolveServiceManagerEnv(),
-      encoding: "utf8",
-      timeout: probeTimeoutMs,
-      // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
-      windowsHide: false,
-    },
-  );
-  if (probe.error) {
-    if (hasErrnoCode(probe.error, "ETIMEDOUT")) {
+  let probe: SpawnSyncReturns<string>;
+  try {
+    probe = spawnSync(
+      getWindowsPowerShellExePath(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+      {
+        env: resolveServiceManagerEnv(),
+        encoding: "utf8",
+        timeout: probeTimeoutMs,
+        // CREATE_NO_WINDOW makes Windows PowerShell 5.1 fail without output on some hosts.
+        windowsHide: false,
+      },
+    );
+    if (probe.error) {
+      throw probe.error;
+    }
+  } catch (error) {
+    if (hasErrnoCode(error, "ETIMEDOUT")) {
       return {
         status: "unknown",
         detail: `Scheduled Task check timed out after ${probeTimeoutMs} ms (ETIMEDOUT).`,
@@ -125,13 +131,11 @@ function queryTaskScheduler(
     }
     return {
       status: "unknown",
-      detail: probe.error.message,
+      detail: error instanceof Error ? error.message : String(error),
       diagnostic: {
         kind: "spawn",
-        ...(isErrno(probe.error) &&
-        typeof probe.error.errno === "number" &&
-        Number.isSafeInteger(probe.error.errno)
-          ? { errno: probe.error.errno }
+        ...(isErrno(error) && typeof error.errno === "number" && Number.isSafeInteger(error.errno)
+          ? { errno: error.errno }
           : {}),
       },
     };
@@ -342,9 +346,9 @@ export function prepareScheduledTaskSettlement(taskName: string) {
     end: () => Promise<void>,
   ): Promise<ScheduledTaskSettlement> => {
     let ended = false;
-    const deadline = Date.now() + GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+    const deadline = monotonicDeadlineAfter(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
     for (;;) {
-      const remaining = Math.max(1, deadline - Date.now());
+      const remaining = Math.max(1, remainingMonotonicMs(deadline));
       const task = probeScheduledTaskState(
         taskName,
         Math.min(WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS, remaining),
@@ -359,18 +363,21 @@ export function prepareScheduledTaskSettlement(taskName: string) {
           return { status: "settled", taskName, lastRunResult, ended };
         }
         // Reserve 60s for query, 15s for /End, and 60s to confirm the observed task run.
-        if ((state === 2 || state === 4) && Date.now() >= deadline - (ended ? 0 : 135_000)) {
-          if (ended || Date.now() >= deadline) {
+        if (
+          (state === 2 || state === 4) &&
+          remainingMonotonicMs(deadline) <= (ended ? 0 : 135_000)
+        ) {
+          if (ended || remainingMonotonicMs(deadline) <= 0) {
             throw new Error(`Task ${taskName} did not settle; /Run refused.`);
           }
           await end();
           ended = true;
         }
       }
-      if (Date.now() >= deadline) {
+      if (remainingMonotonicMs(deadline) <= 0) {
         return { status: "unavailable", taskName, ended };
       }
-      await sleep(Math.min(100, deadline - Date.now()));
+      await sleep(Math.min(100, remainingMonotonicMs(deadline)));
     }
   };
 }

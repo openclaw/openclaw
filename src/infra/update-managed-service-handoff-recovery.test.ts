@@ -103,28 +103,34 @@ it("records the settlement receipt before releasing a dead legacy lease and admi
   expect(readRun(run.runId)?.steps).toContainEqual(receiptAtRelease);
 });
 
-it.each(["live descendant", "45-minute floor", "larger recorded timeout"] as const)(
-  "preserves the retained generation for %s",
-  async (reason) => {
-    const largerTimeout = reason === "larger recorded timeout";
-    const grace = largerTimeout || reason === "45-minute floor";
-    const ageMs = (largerTimeout ? 46 : 44) * 60_000;
-    const timeoutMs = largerTimeout ? 90 * 60_000 : undefined;
-    const previous = fixture.seed(grace ? { ageMs, timeoutMs } : {});
-    let expected: string | RegExp | Error;
-    if (grace) {
-      expected = new Date(previous.updatedAt + (largerTimeout ? 90 : 45) * 60_000).toISOString();
-    } else {
-      fixture.processCensus.matchingPids.push(81234);
-      expected = /PID 81234.*openclaw update repair/;
-    }
-    await expect(prepareRepair()).rejects.toThrow(expected);
-    expect(fixture.current()).toEqual(previous);
-    if (reason === "live descendant") {
-      expectBlocked();
-    }
+it("preserves the retained generation for a live descendant", async () => {
+  const previous = fixture.seed();
+  fixture.processCensus.matchingPids.push(81234);
+  await expect(prepareRepair()).rejects.toThrow(/PID 81234.*openclaw update repair/);
+  expect(fixture.current()).toEqual(previous);
+  expectBlocked();
+});
+
+it.each([undefined, 90 * 60_000])(
+  "reclaims recent dead owners without a grace delay (%s)",
+  async (timeoutMs) => {
+    fixture.seed({ ageMs: 1_000, timeoutMs });
+    using repair = await prepareRepair();
+    completeRepair(repair);
+    expect(fixture.store.read(fixture.root)).toEqual({ kind: "absent" });
   },
 );
+
+it.each([
+  { ageMs: 1_000, timeoutMs: undefined },
+  { ageMs: 46 * 60_000, timeoutMs: 90 * 60_000 },
+])("keeps the recovery grace for an unknown additional owner (%j)", async (options) => {
+  const previous = fixture.seed(options);
+  fixture.births.set(1_000_005, null);
+  fixture.facts.drivers = [{ pid: 1_000_005, startIdentity: "15" }];
+  await expect(prepareRepair()).rejects.toThrow("recovery grace ends at");
+  expect(fixture.current()).toEqual(previous);
+});
 
 it.each(["unverified intermediate-parent descendant", "incomplete census"])(
   "blocks settlement and the next update for an %s",
@@ -254,8 +260,14 @@ it("settles a dead original's cancelled family with its retained service root", 
   );
 });
 
+it("settles cancelled custody immediately when every recorded owner is dead", async () => {
+  fixture.seedCancellation({ ageMs: 1_000, serviceAgeMs: 500 });
+  using repair = await prepareRepair();
+  completeRepair(repair);
+  expect(fixture.rows()).toEqual([]);
+});
+
 it.each([
-  ["recent retained service root", /recovery grace ends at/],
   ["process referencing the retained service root", /PID 81236/],
   [
     "surviving descendants of the cancelled updater",
@@ -266,9 +278,7 @@ it.each([
   ["unverified candidate", /live or unverified: PID 1000004/],
   ["alias outside the family", /unsupported custody at .*-other\/\.openclaw-update-child-/],
 ] as const)("retains cancelled custody unchanged for %s", async (reason, expected) => {
-  const keys = fixture.seedCancellation(
-    reason === "recent retained service root" ? { serviceAgeMs: 44 * 60_000 } : undefined,
-  );
+  const keys = fixture.seedCancellation();
   if (reason === "process referencing the retained service root") {
     // The run's own facts name other paths; every retired family key is censused too.
     fixture.pathCensus.set(keys.service, [81236]);

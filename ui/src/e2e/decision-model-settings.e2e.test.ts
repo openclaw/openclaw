@@ -68,7 +68,7 @@ suite.define(() => {
   });
 
   it.each([true, false])(
-    "uses Gateway ownership for Set Default state (selection required: %s)",
+    "uses Gateway ownership for Set default state (selection required: %s)",
     async (selectionRequired) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const defaultId = selectionRequired ? "main" : "research";
@@ -107,8 +107,9 @@ suite.define(() => {
             exact: true,
           })
           .click();
-        const defaultAction = page.getByRole("button", {
-          name: selectionRequired ? "Set Default" : "Default",
+        await page.locator(".agents-page-menu__trigger").click();
+        const defaultAction = page.getByRole("menuitem", {
+          name: selectionRequired ? "Set default" : "Default",
           exact: true,
         });
         await defaultAction.waitFor();

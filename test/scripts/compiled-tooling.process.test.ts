@@ -18,7 +18,13 @@ it("loads installed tooling when the prepared CLI validates native Vitest option
       "--",
       "--invalid-native-vitest-option",
     ],
-    testRunnerFixtureEnv({ TMPDIR: directory, TMP: directory, TEMP: directory }),
+    testRunnerFixtureEnv({
+      // Reuse the running Bun when the fixture's isolated HOME hides its cache.
+      ...(process.versions.bun ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
+      TMPDIR: directory,
+      TMP: directory,
+      TEMP: directory,
+    }),
     5_000,
     { signal, requireProcessTreeExit: process.platform !== "win32" },
   );

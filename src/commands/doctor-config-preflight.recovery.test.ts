@@ -35,6 +35,49 @@ async function expectClobbered(configPath: string, original?: string) {
   }
 }
 
+it.for([true, false])(
+  "keeps the active included prompt grant %s ahead of an opposite older backup",
+  async (grant, { configPath, home }) => {
+    const backup = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: {
+        enabled: false,
+        entries: { example: { hooks: { allowPromptInjection: !grant } } },
+      },
+    });
+    const lastGoodPath = configPath + ".last-good";
+    await fs.writeFile(lastGoodPath, backup);
+    const fingerprint = createConfigHealthFingerprint({
+      raw: backup,
+      parsed: JSON.parse(backup),
+      stat: await fs.stat(lastGoodPath),
+    });
+    patchConfigHealthEntryToStore(
+      { env: process.env, homedir: () => home, logger: { warn() {} } },
+      configPath,
+      { lastKnownGood: fingerprint, lastPromotedGood: fingerprint },
+    );
+    const includePath = path.join(path.dirname(configPath), "active-policy.json");
+    const included = JSON.stringify({
+      enabled: false,
+      entries: { example: { hooks: { allowPromptInjection: grant } } },
+    });
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { $include: "active-policy.json" },
+      update: { channel: "beta" },
+    });
+    await fs.writeFile(includePath, included);
+    await fs.writeFile(configPath, original);
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.sourceConfig.plugins?.entries?.example?.hooks).toMatchObject({
+      allowPromptInjection: grant,
+    });
+    await expectFiles({ [configPath]: original, [includePath]: included, [lastGoodPath]: backup });
+    await expectClobbered(configPath);
+  },
+);
+
 it("preserves an invalid future-writer config instead of restoring an older backup", async ({
   configPath,
 }) => {

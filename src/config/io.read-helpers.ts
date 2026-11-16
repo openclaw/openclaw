@@ -10,6 +10,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { projectUpdateRehearsalDatabaseConfig } from "../infra/update-rehearsal-paths.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { type EnvSubstitutionWarning, resolveConfigEnvVars } from "./env-substitution.js";
@@ -26,6 +27,7 @@ import type {
   NormalizedConfigIoDeps,
   ParseConfigJson5Result,
 } from "./io.read.types.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "./legacy-workboard-database.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -287,7 +289,10 @@ export function resolveConfigForRead(
     onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
-    resolvedConfigRaw,
+    resolvedConfigRaw: normalizeLegacyWorkboardDatabaseConfig(
+      projectUpdateRehearsalDatabaseConfig(resolvedConfigRaw, env),
+      env,
+    ),
     envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(

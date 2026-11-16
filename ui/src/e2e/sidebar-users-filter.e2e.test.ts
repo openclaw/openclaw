@@ -1,8 +1,9 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Sidebar user filter",
@@ -108,6 +109,60 @@ suite.define(() => {
       },
     ));
 
+  it("keeps a person card while the pointer crosses other people toward it", () =>
+    suite.withPage(
+      { colorScheme: "light", locale: "en-US", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        await page.clock.install();
+        await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
+        const person = (id: string) => page.locator(`[data-online-user-id="${id}"]`);
+        const card = page.locator('.person-activity-hovercard[data-open="true"]');
+        const cardText = async () => (await card.textContent()) ?? "";
+        const box = async (id: string) => (await person(id).boundingBox())!;
+        // Row centers hold the action menu, so hover each person's lead.
+        const hoverAda = async () => {
+          await person("ada").hover({ position: { x: 12, y: 12 } });
+          await page.clock.runFor(450);
+          await expect.poll(cardText).toContain("Ada Chen");
+        };
+        // Load the lazy hovercard runtime on running time, then pause the clock.
+        await person("ada").hover({ position: { x: 12, y: 12 } });
+        await card.waitFor();
+        await page.mouse.move(900, 600);
+        await expect.poll(() => card.count()).toBe(0);
+        await pauseVirtualClock(page);
+
+        await hoverAda();
+        const ada = await box("ada");
+        const bob = await box("bob");
+        const target = (await card.boundingBox())!;
+        // The card's lower half sits beside later rows, so the direct path to
+        // it crosses them; none of them may take the card over.
+        await page.mouse.move(target.x + 24, target.y + target.height - 24, { steps: 24 });
+        await page.clock.runFor(600);
+        expect(await card.count()).toBe(1);
+        expect(await cardText()).toContain("Ada Chen");
+
+        // A straight sweep leaves the corridor at once and switches normally.
+        await hoverAda();
+        await page.mouse.move(ada.x + 12, bob.y + bob.height / 2, { steps: 8 });
+        await page.clock.runFor(100);
+        await expect.poll(cardText).toContain("Bob Rivera");
+
+        // Resting on a crossed row inside the corridor hands the card to it.
+        await page.mouse.move(900, 600);
+        await page.clock.runFor(300);
+        await hoverAda();
+        await page.mouse.move(ada.x + ada.width - 8, bob.y + bob.height / 2, { steps: 8 });
+        await page.clock.runFor(100);
+        expect(await cardText()).toContain("Ada Chen");
+        await page.clock.runFor(200);
+        await expect.poll(cardText).toContain("Bob Rivera");
+      },
+    ));
+
   it("aligns quiet person actions on mobile without opening the activity hovercard", () =>
     suite.withPage(
       {
@@ -202,7 +257,16 @@ suite.define(() => {
         };
         await dismissHovercard();
         expect(await rail.getAttribute("aria-label")).toBe("Users");
-        await page.locator(".sidebar-online__title").getByText("Users", { exact: true }).waitFor();
+        const header = page.locator("openclaw-app-sidebar:visible .sidebar-panel-header");
+        const usersTitle = header.locator(".sidebar-panel-header__title");
+        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        const titleStyle = (title: typeof usersTitle) =>
+          title.evaluate((element) => {
+            const { color, fontSize, fontWeight, letterSpacing, textTransform } =
+              getComputedStyle(element);
+            return { color, fontSize, fontWeight, letterSpacing, textTransform };
+          });
+        const usersTitleStyle = await titleStyle(usersTitle);
         await rail.click();
         await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
         const choosePresence = async (value: "all" | "online") => {
@@ -232,6 +296,27 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        // Every panel shares the Sessions header geometry, including the collapse control,
+        // and a Pages list taller than the sidebar scrolls beneath its pinned header.
+        await page.setViewportSize({ width: 1280, height: 320 });
+        const headerGeometry = async () => ({
+          header: await header.boundingBox(),
+          collapse: await header.getByRole("button", { name: "Collapse sidebar" }).boundingBox(),
+        });
+        const usersGeometry = await headerGeometry();
+        await openSidebarPages(page);
+        await usersTitle.getByText("Pages", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
+        const body = page.locator("openclaw-app-sidebar:visible .sidebar-shell__body");
+        await body.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+        expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await header.locator(".sidebar-session-sort").waitFor();
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await usersTitle.getByText("Sessions", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
       },
     ));
 });

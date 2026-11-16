@@ -34,6 +34,7 @@ describe("ensure-cli-startup-build", () => {
     expect(
       ensureCliStartupBuild({
         rootDir,
+        env: { OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "invalid" },
         spawnSync: () => {
           throw new Error("unexpected build");
         },
@@ -56,6 +57,7 @@ describe("ensure-cli-startup-build", () => {
 
   it.each([
     [{ status: 1 }, "cliStartup build profile failed with exit code 1"],
+    [{ status: null, signal: "SIGTERM" }, "cliStartup build profile failed with exit code 1"],
     [{ error: new Error("spawn denied") }, "spawn denied"],
   ] as const)("reports build failure %j", (result, message) => {
     expect(() =>

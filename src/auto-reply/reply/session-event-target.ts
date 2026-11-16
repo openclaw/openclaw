@@ -186,7 +186,11 @@ export async function captureSessionEventTargetForHost(
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      // A session-scoped surface is this session's own policy, so its follow-ups need no ceiling.
+      const sessionScopedSurface =
+        caller.sessionEventToolsAllowSessionScoped === true &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
@@ -360,6 +364,12 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    // The lease follows the key; later admission pins the chat's current transcript.
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);

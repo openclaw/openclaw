@@ -43,47 +43,50 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       };
       await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
-      // Exercise snapshot admission; a clean seal intentionally skips this wait.
+      // Doctor retains snapshot custody; Gateway readiness must read the live database.
       invalidateSqliteDatabaseCleanClose(databasePath);
       const held = createDeferredCore();
       const release = createDeferredCore();
       const startSnapshot = snapshotSource.startSqliteReadOnlyLocationAsync;
       let intercepted = false;
       let snapshotClosed = false;
-      const snapshotsClosedAtReadiness: boolean[] = [];
+      let readinessReached = false;
       const pendingRead = vi.spyOn(pendingMigrations, "readDeferredPluginMigrations");
-      vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync").mockImplementation((...args) => {
-        const preparation = startSnapshot(...args);
-        return {
-          ...preparation,
-          ...flatMapRetainedOperation(preparation, (prepared) =>
-            observeAsyncFixture(async () => {
-              if (
-                !intercepted &&
-                args[1]?.signal !== undefined &&
-                path.toNamespacedPath(path.resolve(args[0])) === path.toNamespacedPath(databasePath)
-              ) {
-                intercepted = true;
-                const cleanup = prepared.cleanupAsync.bind(prepared);
-                vi.spyOn(prepared, "cleanupAsync").mockImplementation(async () => {
-                  snapshotClosed = await cleanup();
-                  return snapshotClosed;
-                });
-                held.resolve();
-                await release.promise;
-              }
-              return prepared;
-            }),
-          ),
-        };
-      });
+      const prepareSnapshot = vi
+        .spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync")
+        .mockImplementation((...args) => {
+          const preparation = startSnapshot(...args);
+          return {
+            ...preparation,
+            ...flatMapRetainedOperation(preparation, (prepared) =>
+              observeAsyncFixture(async () => {
+                if (
+                  !intercepted &&
+                  args[1]?.signal !== undefined &&
+                  path.toNamespacedPath(path.resolve(args[0])) ===
+                    path.toNamespacedPath(databasePath)
+                ) {
+                  intercepted = true;
+                  const cleanup = prepared.cleanupAsync.bind(prepared);
+                  vi.spyOn(prepared, "cleanupAsync").mockImplementation(async () => {
+                    snapshotClosed = await cleanup();
+                    return snapshotClosed;
+                  });
+                  held.resolve();
+                  await release.promise;
+                }
+                return prepared;
+              }),
+            ),
+          };
+        });
       const acquire = vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait");
       const operation = gateway
         ? runStartupConfigPreflight({
             gateway: true,
             observe: false,
             beforeStatePreparation: async () => {
-              snapshotsClosedAtReadiness.push(snapshotClosed);
+              readinessReached = true;
               return true;
             },
           })
@@ -96,20 +99,24 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
           });
       const settled = operation.then(() => "settled" as const);
       try {
-        expect(await Promise.race([held.promise.then(() => "held" as const), settled])).toBe(
-          "held",
-        );
-        expect(pendingRead).not.toHaveBeenCalled();
-        expect(acquire).not.toHaveBeenCalled();
-        expect(snapshotClosed).toBe(false);
-        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
-        release.resolve();
+        if (!gateway) {
+          expect(await Promise.race([held.promise.then(() => "held" as const), settled])).toBe(
+            "held",
+          );
+          expect(pendingRead).not.toHaveBeenCalled();
+          expect(acquire).not.toHaveBeenCalled();
+          expect(snapshotClosed).toBe(false);
+          expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+          release.resolve();
+        }
         const result = await operation;
-        expect(snapshotsClosedAtReadiness.length > 0).toBe(gateway);
-        expect(snapshotsClosedAtReadiness).not.toContain(false);
+        expect(readinessReached).toBe(gateway);
+        if (gateway) {
+          expect(prepareSnapshot).not.toHaveBeenCalled();
+        }
         expect(pendingRead.mock.calls.length > 0).toBe(!gateway);
-        expect(snapshotClosed).toBe(true);
+        expect(snapshotClosed).toBe(!gateway);
         expect(result.snapshot).toMatchObject({
           valid: true,
           sourceConfig: {

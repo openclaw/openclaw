@@ -175,12 +175,13 @@ function readProjectionRows(
       "preparation_key",
       "preparation_purpose",
       "provision_operation_id",
+      "provision_source_json",
       "resource_receipt_json",
       "node_setup_id",
       "node_device_id",
       "shared_host",
       "lease_id",
-      "resource_receipt_json",
+      "retention_json",
       "ssh_host",
       "ssh_port",
       "ssh_user",
@@ -374,8 +375,9 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
       ),
     );
     const add = (sessionId: string): WorkerPlacementRecoveryCandidate => {
-      const candidate = candidates.get(sessionId) ??
+      const candidate: WorkerPlacementRecoveryCandidate = candidates.get(sessionId) ??
         placements.get(sessionId) ?? { sessionId, environmentId: null };
+      candidate.workspaceRecoveryPending = true;
       candidates.set(sessionId, candidate);
       return candidate;
     };
@@ -405,3 +407,10 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
     return [...candidates.values()];
   });
 }
+
+export const workerPlacementReadOperations = {
+  "workers.placementRecoveryCandidates": (_input: undefined, db: EngineConnection) => ({
+    type: "workers.placementRecoveryCandidates" as const,
+    candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+  }),
+};

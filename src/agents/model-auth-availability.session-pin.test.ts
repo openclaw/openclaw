@@ -114,12 +114,19 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
     });
   });
 
-  it.each(["expired-token", "missing", "wrong-provider", "unresolved-oauth"])(
+  it.each(["expired-token", "missing", "drifted-provider", "unresolved-oauth"])(
     "rejects an invalid %s pin before considering shared credentials",
     (state) => {
       const pin = `${provider}:selected`;
       const shared = `${provider}:shared`;
-      const config: OpenClawConfig = { auth: { order: { [provider]: [shared] } } };
+      const config: OpenClawConfig = {
+        auth: {
+          profiles: {
+            [pin]: { provider, mode: state === "unresolved-oauth" ? "oauth" : "token" },
+          },
+          order: { [provider]: [shared] },
+        },
+      };
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
@@ -131,7 +138,7 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
                     ? unresolvedOAuth(provider)
                     : {
                         type: "token" as const,
-                        provider: state === "wrong-provider" ? "other" : provider,
+                        provider: state === "drifted-provider" ? "other" : provider,
                         token: "synthetic-invalid",
                         expires: state === "expired-token" ? 1 : Date.now() + 600_000,
                       },
@@ -167,7 +174,11 @@ describe.each(["acme", "openai"])("%s session account readiness", (provider) => 
           modelId: "gpt-5.5",
           pinnedProfileId: pin,
         }),
-      ).toMatchObject({ availability: false, unavailableReason: "auth-failed" });
+      ).toMatchObject({
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedProfileId: pin,
+      });
     },
   );
 });

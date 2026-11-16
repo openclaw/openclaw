@@ -83,6 +83,10 @@ it.each([
       subagent: {
         complete: vi.fn<PluginRuntime["subagent"]["complete"]>(),
         forkSession: vi.fn<PluginRuntime["subagent"]["forkSession"]>(),
+        runForkedTurn: vi.fn(async () => ({
+          status: "refused" as const,
+          reason: "tool_policy" as const,
+        })),
         run: vi.fn<PluginRuntime["subagent"]["run"]>(),
         waitForRun: vi.fn<PluginRuntime["subagent"]["waitForRun"]>(),
         getSessionMessages: async () => ({ messages: [owner] }),

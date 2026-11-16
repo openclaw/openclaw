@@ -213,7 +213,16 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
 
   protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
-    this.indexedContents.push(entry.content ?? "");
+    const lines: string[] = [];
+    await entry.streamSessionExport?.({
+      onPage: (page) => {
+        lines.push(...page.lines);
+      },
+      onReset: () => {
+        lines.length = 0;
+      },
+    });
+    this.indexedContents.push(lines.join("\n"));
   }
 
   protected override async deleteIndexedFile(

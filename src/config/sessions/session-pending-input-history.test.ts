@@ -313,6 +313,9 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
     }
     const captured = await captureSessionQueuedInputsForRestart(scope);
     expect(captured.queuedInputIds).toEqual(receipts.map((receipt) => receipt.inputId));
+    expect(
+      (await readSessionQueuedInputPage(scope, { queuedInputIds: captured.queuedInputIds })).rows,
+    ).toEqual([]);
     captured.preserve();
     for (const receipt of receipts) {
       receipt.finish("cancelled");

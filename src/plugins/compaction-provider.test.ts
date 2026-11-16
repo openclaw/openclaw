@@ -59,12 +59,12 @@ it("reads providers registered through the plugin API from the active registry",
 });
 
 it.each(["another registry", "shared duplicate", "distinct duplicate"])(
-  "keeps the first provider and its runtime: %s",
+  "keeps the padded first provider and its runtime: %s",
   async (registration) => {
     const active = createTestRegistry();
     const { registry } = active;
     const store = createPluginRuntimeStore<string>("compaction runtime missing");
-    const provider = makeProvider("shared", async () => {
+    const provider = makeProvider(" shared ", async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return store.getRuntime();
     });

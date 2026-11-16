@@ -18,7 +18,13 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("reuses one original across three healthy Doctor repairs and captures a real change", async () => {
+// Five unmocked Doctor repairs is the floor: a fresh install converges on the
+// second repair (the ACP replay repair marker), then reuse needs two healthy
+// runs and one real change. Each repair spawns ~20 SQLite/update child processes
+// and ~10 worker threads: ~12 s locally, ~30 s on a loaded CI Node shard, so
+// the default 120 s test timeout cannot hold them.
+
+it("reuses one original across repeated healthy Doctor repairs and captures a real change", async () => {
   const root = await fs.realpath(dirs.make("doctor-capture-repeat-"));
   const state = path.join(root, "state");
   const temporary = path.join(root, "tmp");
@@ -79,7 +85,7 @@ it("reuses one original across three healthy Doctor repairs and captures a real 
     (await fs.readdir(captureRoot)).filter((name) => name.startsWith("doctor-"));
   const databasePath = path.join(state, "state", "openclaw.sqlite");
   const healthyDatabase = await fs.readFile(databasePath);
-  for (let run = 1; run <= 3; run++) {
+  for (let run = 1; run <= 2; run++) {
     await repair();
     expect.soft(await captures(), `healthy repair ${run}`).toHaveLength(1);
     expect
@@ -96,4 +102,4 @@ it("reuses one original across three healthy Doctor repairs and captures a real 
   await repair();
   expect(await captures()).toHaveLength(2);
   expect(await captures()).toEqual(expect.arrayContaining(before));
-});
+}, 300_000);

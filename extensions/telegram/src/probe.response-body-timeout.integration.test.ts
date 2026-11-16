@@ -136,7 +136,7 @@ describe("probeTelegram cancellation and body deadlines over real sockets", () =
     ["trickle", expect.stringMatching(/response body timed out/i), 200],
   ] as const)("times out %s bodies", async (bodyMode, error, elapsedMs) => {
     // Connection setup and socket scheduling must not consume the probe's budget.
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     mode = bodyMode;
     socketClosed = createDeferred<void>();
     const previousRequestCount = requestCount;

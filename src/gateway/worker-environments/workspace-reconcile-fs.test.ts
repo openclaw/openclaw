@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as manifestWorker from "./workspace-manifest-worker.js";
+import { retainedConflictPaths } from "./workspace-reconcile-core.js";
 import { prepareNonDirectoryTargets } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches } from "./workspace-reconcile-fs.js";
 
@@ -67,4 +68,24 @@ it("does not turn a compute outage into a conflicting file", async () => {
 
   snapshot.mockRejectedValueOnce(new Error("file changed while it was being read"));
   await expect(verify()).resolves.toBe(false);
+});
+
+it("bounds conflict projection for 65,000 paths while retaining ancestor semantics", () => {
+  const applyPaths = new Set(Array.from({ length: 32_500 }, (_, index) => `apply/${index}`));
+  const conflictPaths = Array.from({ length: 32_500 }, (_, index) => `conflict/${index}`);
+  applyPaths.add("parent");
+  applyPaths.add("parent-prefix");
+  conflictPaths.push("parent/child", "blocked", "blocked/child");
+  const started = performance.now();
+  const retained = retainedConflictPaths(
+    { applyPaths, conflictPaths, blockingConflictPaths: ["blocked"] },
+    applyPaths,
+  );
+  const elapsed = performance.now() - started;
+  expect(retained).toHaveLength(65_003);
+  expect(retained).toContain("parent-prefix");
+  expect(retained).toContain("parent/child");
+  expect(retained).not.toContain("parent");
+  expect(retained).not.toContain("blocked/child");
+  expect(elapsed).toBeLessThan(200);
 });

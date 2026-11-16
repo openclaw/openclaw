@@ -96,26 +96,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
   ).threshold;
 }
 
-export function shouldRunMemoryFlush(params: {
-  entry?: Pick<
-    SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "totalTokensVersion" | "compactionCount" | "memoryFlush"
-  >;
-  /**
-   * Optional token count override for flush gating. When provided, this value is
-   * treated as a fresh context snapshot and used instead of the cached
-   * SessionEntry.totalTokens (which may be stale/unknown).
-   */
-  tokenCount?: number;
-  threshold: number;
-}): boolean {
-  return Boolean(
-    shouldRunPreflightCompaction(params) &&
-    params.entry &&
-    !hasAlreadyFlushedForCurrentCompaction(params.entry),
-  );
-}
-
 export function shouldRunPreflightCompaction(params: {
   entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">;
   /**

@@ -330,10 +330,12 @@ initial prompt: deliver its context through the native private context mechanism
 and never inherit the running turn's origin. The registration lives as long as the run.
 
 A runtime that can end its current turn without closing the session can offer
-`ctx.registerTurnInterrupt({ interrupt })`; `interrupt("yield")` requests a graceful
+`ctx.registerTurnInterrupt({ interrupt })`; `interrupt(reason)` requests a graceful
 turn end, after which the stream must finish normally and the session remain
-reusable. OpenClaw calls it after observing the completed `sessions_yield` tool
-result, suppresses subsequent reply text, and drops the registration when the run closes.
+reusable. OpenClaw calls it with `"yield"` after observing the completed `sessions_yield`
+tool result, or with `"source_reply"` after a confirmed final `message` reply to the
+current conversation when no sibling tool is still running. It suppresses subsequent
+reply text and drops the registration when the run closes.
 
 A transport may optionally register `ctx.registerTurnStatus({ capture })` for a
 read-only assessment before the session watchdog recovers a silent model attempt.

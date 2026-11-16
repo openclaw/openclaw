@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import type { createPluginSourceLinkCapture } from "./plugin-generation-file-capture.js";
+import type { PluginInspectedModule } from "./plugin-generation-source-lookup.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import {
   type createPluginDependencyResolver,
@@ -13,7 +14,10 @@ import {
   packageName,
 } from "./plugin-package-metadata-capture.js";
 import { realpathPluginSource } from "./plugin-source-file.js";
-import type { createPluginPackageMapReferences } from "./plugin-source-references.js";
+import {
+  type createPluginPackageMapReferences,
+  visitPluginSourceReferences,
+} from "./plugin-source-references.js";
 
 /** Resolve one captured source's references without transferring its package or lifetime owners. */
 export function createPluginGenerationReferenceCapture({
@@ -31,14 +35,16 @@ export function createPluginGenerationReferenceCapture({
   nativeAdmission,
   resolution,
   references,
+  inspected,
   scope,
   packageMap,
   capturedPaths,
   resolveDependency,
-  captureFile,
+  captureFile: acquireFile,
   captureExecutableFile,
   owner,
   sourceLinks,
+  linkSharedModule,
 }: {
   source: string;
   rootDir: string;
@@ -57,6 +63,7 @@ export function createPluginGenerationReferenceCapture({
   >;
   resolution: ReturnType<typeof createPluginCaptureResolver>;
   references: Map<string, Set<string>>;
+  inspected?: PluginInspectedModule;
   scope?: { source: string; manifest: Record<string, unknown>; aliases: ReadonlySet<string> };
   packageMap: ReturnType<typeof createPluginPackageMapReferences>;
   capturedPaths: Map<string, string>;
@@ -65,8 +72,21 @@ export function createPluginGenerationReferenceCapture({
   captureExecutableFile: (filename: string) => string | undefined;
   owner: Pick<PluginPackageCapture, "state">;
   sourceLinks: Pick<ReturnType<typeof createPluginSourceLinkCapture>, "contains">;
+  /** Bundled development reload keeps host-shared modules canonical; true means handled. */
+  linkSharedModule?: (source: string, local: string, value: string) => boolean;
 }) {
-  return (
+  let acquisitions: Array<PluginInspectedModule["acquisitions"][number]> | undefined;
+  const captureFile = (filename: string) => {
+    acquisitions?.push({ kind: "file", source: filename });
+    acquireFile(filename);
+  };
+  const recordDependency = (importer: string, name: string) => {
+    acquisitions?.push({ kind: "dependency", importer, name });
+    const imports = references.get(importer) ?? new Set<string>();
+    imports.add(name);
+    references.set(importer, imports);
+  };
+  const capture = (
     reference: string,
     kind: "asset" | "import" | "require",
     conditions?: readonly string[],
@@ -102,11 +122,7 @@ export function createPluginGenerationReferenceCapture({
       ).pathname;
       return url.href;
     };
-    const addDependency = (name: string, importer = source) => {
-      const imports = references.get(importer) ?? new Set<string>();
-      imports.add(name);
-      references.set(importer, imports);
-    };
+    const addDependency = (name: string, importer = source) => recordDependency(importer, name);
     if (module && !value.startsWith(".") && !path.isAbsolute(value)) {
       if (isBuiltin(value)) {
         return undefined;
@@ -173,6 +189,9 @@ export function createPluginGenerationReferenceCapture({
       module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
         ? path.join(boundary, path.relative(lexicalBoundary, requested))
         : requested;
+    if (module && linkSharedModule?.(source, local, value)) {
+      return undefined;
+    }
     if (module && !isPathInside(boundary, local)) {
       if (!conditions || !execute) {
         return null;
@@ -228,5 +247,50 @@ export function createPluginGenerationReferenceCapture({
       return input;
     }
     return undefined;
+  };
+  const observed = new Map<string, string | null | undefined>(inspected?.observed);
+  const captureObserved = (
+    reference: string,
+    kind: "asset" | "import" | "require",
+    conditions?: readonly string[],
+  ) => {
+    const key = `${kind}\0${reference}`;
+    // Uninspected external references differ from observed absent local inputs.
+    if (!observed.has(key) || (conditions && execute && observed.get(key) === null)) {
+      observed.set(key, capture(reference, kind, conditions));
+    }
+    return observed.get(key) ?? undefined;
+  };
+  return {
+    observed,
+    capture: captureObserved,
+    *inspect(
+      readSource: () => string,
+      captureFileSteps: (filename: string) => Generator<void, void, void>,
+    ): Generator<void, PluginInspectedModule, void> {
+      if (inspected) {
+        // Rebind the exact acquisition order without retaining a host parser/compiler.
+        for (const acquisition of inspected.acquisitions) {
+          if (acquisition.kind === "file") {
+            yield* captureFileSteps(acquisition.source);
+          } else {
+            recordDependency(acquisition.importer, acquisition.name);
+          }
+        }
+        return inspected;
+      }
+      acquisitions = [];
+      const staticImports = visitPluginSourceReferences(
+        source,
+        readSource(),
+        () => resolution.get(source),
+        entry && !executableEntry
+          ? captureObserved
+          : (reference, kind) => observed.set(`${kind}\0${reference}`, null),
+      );
+      const result = { staticImports, observed: new Map(observed), acquisitions };
+      acquisitions = undefined;
+      return result;
+    },
   };
 }

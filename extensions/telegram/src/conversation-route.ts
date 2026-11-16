@@ -169,14 +169,7 @@ function applyTelegramRuntimeRoute(
     route,
     bindingMode,
     bindingOwnerAvailable: runtimeRoute.bindingOwnerAvailable ?? true,
-    ...(runtimeRoute.bindingRecord
-      ? {
-          runtimeBinding: {
-            ...runtimeRoute.bindingRecord,
-            conversation: { ...runtimeRoute.bindingRecord.conversation },
-          },
-        }
-      : {}),
+    runtimeBinding: runtimeRoute.bindingRecord ?? undefined,
   };
 }
 
@@ -228,15 +221,6 @@ export async function touchTelegramConversationRoute(
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
 }
 
-function resolveTelegramConversationBaseSessionKey(
-  params: Parameters<typeof resolveTelegramNamedAccountBaseSessionKey>[1],
-): string {
-  return resolveTelegramNamedAccountBaseSessionKey(
-    resolveDefaultTelegramAccountId(params.cfg),
-    params,
-  );
-}
-
 /** Outbound DMs reuse inbound binding facts: only an unbound named account is a fallback. */
 export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   cfg: OpenClawConfig;
@@ -253,7 +237,7 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   });
   const isOwnBinding =
     normalizeAgentId(resolvedRoute.agentId) === normalizeAgentId(params.route.agentId);
-  return resolveTelegramConversationBaseSessionKey({
+  return resolveTelegramNamedAccountBaseSessionKey(resolveDefaultTelegramAccountId(params.cfg), {
     cfg: params.cfg,
     route: isOwnBinding ? resolvedRoute : { ...params.route, matchedBy: "default" },
     chatId: params.chatId,
@@ -264,13 +248,21 @@ export function resolveTelegramOutboundDirectBaseSessionKey(params: {
 export function resolveTelegramTargetSession(params: {
   cfg: OpenClawConfig;
   route: TelegramResolvedRoute;
+  bindingMode: TelegramConversationBindingMode;
   chatId: number | string;
   isGroup: boolean;
   senderId?: string | number | null;
   dmThreadId?: number;
   botHasTopicsEnabled?: boolean;
 }): string {
-  const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
+  if (params.bindingMode.kind === "runtime-bound" || params.bindingMode.kind === "configured") {
+    // Bindings select a complete session key, including any target thread.
+    return params.bindingMode.sessionKey;
+  }
+  const baseSessionKey = resolveTelegramNamedAccountBaseSessionKey(
+    resolveDefaultTelegramAccountId(params.cfg),
+    params,
+  );
   return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
     ? resolveThreadSessionKeys({
         baseSessionKey,

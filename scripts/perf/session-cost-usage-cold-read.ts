@@ -267,13 +267,14 @@ async function prepare() {
   console.log(JSON.stringify({ prepared: root, ...fixture }));
 }
 
-function installAllocationPreload() {
-  const directory = path.join(root, "allocation");
+function installWorkerPreload(mode: "allocation" | "writer-timing") {
+  const directory = path.join(root, mode);
   mkdirSync(directory);
   const preload = path.join(directory, "sample.cjs");
   writeFileSync(
     preload,
-    `
+    mode === "allocation"
+      ? `
 const fs = require('node:fs');
 const path = require('node:path');
 const { threadId, isMainThread } = require('node:worker_threads');
@@ -302,29 +303,8 @@ if (!isMainThread) {
   }, 25); timer.unref();
   process.once('exit', () => { if (started && !stopped) capture(); });
 }
-`,
-  );
-  process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, `--require=${JSON.stringify(preload)}`]
-    .filter(Boolean)
-    .join(" ");
-  return directory;
-}
-
-type WriterTiming = {
-  threadId: number;
-  completed: number;
-  holdMs: number;
-  maxHoldMs: number;
-  openTransactions: number;
-};
-
-function installWriterTimingPreload() {
-  const directory = path.join(root, "writer-timing");
-  mkdirSync(directory);
-  const preload = path.join(directory, "sample.cjs");
-  writeFileSync(
-    preload,
-    `
+`
+      : `
 const fs = require('node:fs');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
@@ -378,11 +358,21 @@ if (!isMainThread) {
   return directory;
 }
 
+type WriterTiming = {
+  threadId: number;
+  completed: number;
+  holdMs: number;
+  maxHoldMs: number;
+  openTransactions: number;
+};
+
 async function measure() {
   const fixture: Fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-  const allocationDirectory = values.allocation ? installAllocationPreload() : undefined;
-  const writerTimingDirectory = values["writer-timing"] ? installWriterTimingPreload() : undefined;
+  const allocationDirectory = values.allocation ? installWorkerPreload("allocation") : undefined;
+  const writerTimingDirectory = values["writer-timing"]
+    ? installWorkerPreload("writer-timing")
+    : undefined;
   const { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } =
     await import("../../src/config/runtime-snapshot.js");
   const { refreshCostUsageCacheForAgent } =

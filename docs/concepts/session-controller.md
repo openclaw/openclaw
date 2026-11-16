@@ -147,6 +147,12 @@ For each accepted input, retain identity and custody through these boundaries:
 3. Confirmed consumed, deliberately dropped, cancelled, interrupted, or
    retained with an explicitly uncertain commitment.
 
+An input's `phase`, payload readiness, and retained custody are independent.
+Retirement can be requested while an admitted injection, turn claim, or
+withdrawal hold still owns work. Native acceptance releases input ordering;
+the final injection outcome decides replay custody. Neither retirement nor
+ordering release alone proves settlement.
+
 Runtime acceptance and transcript commitment are separate facts. A failed or
 lost confirmation after possible commitment does not make an input safe to
 replay. Collect batches and overflow summaries retain their contributing input

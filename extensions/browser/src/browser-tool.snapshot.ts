@@ -5,6 +5,7 @@
  */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { imageResultFromFile } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
@@ -191,6 +192,7 @@ function isAriaRefsUnsupportedError(err: unknown): boolean {
 }
 
 export async function executeSnapshotAction(params: {
+  getConfig?: () => OpenClawConfig;
   input: Record<string, unknown>;
   target: BrowserClientTarget;
   profile?: string;
@@ -198,7 +200,8 @@ export async function executeSnapshotAction(params: {
   onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { input, target, profile } = params;
-  const snapshotDefaults = getRuntimeConfig().browser?.snapshotDefaults;
+  const getConfig = params.getConfig ?? getRuntimeConfig;
+  const snapshotDefaults = getConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;
@@ -307,14 +310,15 @@ export async function executeSnapshotAction(params: {
         extraText: text,
         // Keep model-only screenshots out of automatic channel delivery.
         details: { ...resultDetails, media: { outbound: false } },
-        imageSanitization: resolveRuntimeImageSanitization(),
+        imageSanitization: resolveRuntimeImageSanitization(getConfig),
       });
     }
     return textResult(text, resultDetails);
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
-    const tokens = query.toLowerCase().split(/\s+/);
+    // Compare canonical forms without rewriting returned page text or element refs.
+    const tokens = query.toLowerCase().normalize("NFC").split(/\s+/);
     const source =
       snapshot.format === "ai"
         ? snapshot.snapshot
@@ -325,7 +329,7 @@ export async function executeSnapshotAction(params: {
             )
             .join("\n");
     const matches = source.split("\n").filter((line) => {
-      const lower = line.toLowerCase();
+      const lower = line.toLowerCase().normalize("NFC");
       return tokens.every((token) => lower.includes(token));
     });
     const matchedText = matches.join("\n");
@@ -403,6 +407,7 @@ export async function executeSnapshotAction(params: {
  * would be an uncapped aria tree); a full snapshot stays one explicit call away.
  */
 export async function appendNavigatedPageState(params: {
+  getConfig?: () => OpenClawConfig;
   result: AgentToolResult<unknown>;
   targetId?: string;
   target: BrowserClientTarget;
@@ -412,6 +417,7 @@ export async function appendNavigatedPageState(params: {
   let snapshot: AgentToolResult<unknown>;
   try {
     snapshot = await executeSnapshotAction({
+      getConfig: params.getConfig,
       input: { targetId: params.targetId, mode: "efficient" },
       target: params.target,
       profile: params.profile,

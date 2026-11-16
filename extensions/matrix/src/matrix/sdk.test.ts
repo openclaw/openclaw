@@ -1410,11 +1410,11 @@ describe("MatrixClient request hardening", () => {
     };
     const originalVersion = manifest.version;
     const syncStop = matrixJsClient.classicSyncStop;
-    manifest.version = "43.0.1";
+    manifest.version = "44.0.1";
     try {
       const client = createSdkClient();
       await expect(client.quiesceSync()).rejects.toThrow(
-        "Matrix sync quiesce requires matrix-js-sdk 43.0.0; found 43.0.1",
+        "Matrix sync quiesce requires matrix-js-sdk 44.0.0; found 44.0.1",
       );
       expect(syncStop).not.toHaveBeenCalled();
       expect(matrixJsClient.stopClient).not.toHaveBeenCalled();

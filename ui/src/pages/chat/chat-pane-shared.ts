@@ -11,6 +11,7 @@ import { hasModalSurface, registryFor } from "../../components/overlay-registry.
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   PANE_SESSION_HANDOFF_TTL_MS,
@@ -151,13 +152,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
-export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
-export const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
-export const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new thread. Try again in a moment.";
-
 // Expanded questions own only their advertised, enabled numeric shortcuts.
 function questionOwnsNumericShortcut(target: HTMLElement, key: string): boolean {
   return (
@@ -227,8 +221,8 @@ export function focusChatComposerFromKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Keep the native default: paste must reach the composer with its original clipboard data.
   // Block old-target dropdown typeahead from cancelling the transferred input.
-  composer.focus({ preventScroll: true });
+  focusComposerInput(composer, { preventScroll: true });
   event.stopImmediatePropagation();
 }

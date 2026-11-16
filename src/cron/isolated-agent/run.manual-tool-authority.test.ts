@@ -164,10 +164,9 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
       } else {
         expect(toolError).toBeUndefined();
         expect(listHandler).toHaveBeenCalledOnce();
-        // The run gets the job's restricted inventory, not the admin caller's.
+        // Admission keeps the same-job inventory after the admin caller closes.
         expect(toolResult).toMatchObject({
-          details:
-            senderIsOwner === false ? { jobs: [{ id: jobId }] } : { scope: "caller", jobs: [] },
+          details: { jobs: [{ id: jobId }] },
         });
         expect(finishedEvent.status).toBe("ok");
       }

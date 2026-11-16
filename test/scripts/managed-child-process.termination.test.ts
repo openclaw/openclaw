@@ -75,8 +75,30 @@ it.each([
   },
 );
 
+it("uses a mode-independent Darwin census after the group leader exits", () => {
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("group denied"), { code: "EPERM" });
+  });
+  // Legacy BSD ps ignores -g; the exited leader PID then selects no rows.
+  vi.mocked(spawnSync).mockImplementation((_command, args) =>
+    Array.isArray(args) && args[0] === "-A"
+      ? psResult("42 S\n12345 Z\n")
+      : psResult("", { status: 1 }),
+  );
+  expect(
+    inspectManagedProcessGroup(
+      { pid: 12345, exitCode: 0, signalCode: null },
+      { platform: "darwin", errorPolicy: "indeterminate" },
+    ),
+  ).toBe("dead");
+});
+
 it.each([
   { rows: "12345 Z\n", expected: "dead" },
+  { rows: "42 S\n12345 Z\n", expected: "dead" },
+  { rows: "42 Z\n12345 S\n", expected: "indeterminate" },
+  { rows: "42 Z\n", expected: "indeterminate" },
+  { rows: "12345 Z\nmalformed\n", expected: "indeterminate" },
   { rows: "12345 S\n", expected: "indeterminate" },
   { rows: "", expected: "indeterminate" },
   { rows: "12345 Z\n", failed: true, expected: "indeterminate" },
@@ -105,7 +127,7 @@ it.each([
   }
   expect(spawnSync).toHaveBeenCalledWith(
     "ps",
-    ["-g", "12345", "-o", "pgid=,state="],
+    ["-A", "-o", "pgid=,state="],
     expect.objectContaining({ timeout: 5000 }),
   );
 });

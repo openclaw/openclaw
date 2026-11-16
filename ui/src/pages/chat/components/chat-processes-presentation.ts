@@ -1,8 +1,7 @@
 import { action, affects, createMemo, createOptimistic, refresh } from "solid-js";
-import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
 import { canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
-import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import type { ProcessIdentity, ProcessesPanelData } from "../processes-panel-data.ts";
 
 /** Unknown acquisition is pending; a known unavailable capability is a settled outcome. */
 export function isProcessesPresentationReady(
@@ -69,7 +68,7 @@ export function createProcessesPresentation(
   });
 
   // Each row/control gets its own flag so simultaneous Stops remain independent.
-  function createStop(row: () => SessionProcessSummary) {
+  function createStop(row: () => ProcessIdentity) {
     const presentation = createMemo(() => {
       const view = scope();
       if (!view?.connectionRetired) {

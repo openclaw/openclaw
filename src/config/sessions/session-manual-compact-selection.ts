@@ -6,39 +6,55 @@ import {
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
 
-export function selectManualCompactTranscriptLines(
-  lines: readonly string[],
+export function selectManualCompactTranscriptLines<Snapshot>(
+  readLines: (visit: (line: string) => void) => Snapshot,
   requestedMaxLines: number,
-): { lines: readonly string[]; result: SessionTranscriptManualTrimResult } {
-  if (lines.length === 0) {
-    return { lines, result: { compacted: false, reason: "no transcript" } };
-  }
+): { lines: readonly string[]; result: SessionTranscriptManualTrimResult; snapshot: Snapshot } {
   const maxLines = Math.max(1, Math.floor(requestedMaxLines));
-  if (lines.length <= maxLines) {
-    return { lines, result: { compacted: false, kept: lines.length } };
-  }
   const maxTailLines = Math.max(0, maxLines - 1);
-  const tailStart = Math.max(1, lines.length - maxTailLines);
-  const tailLines = lines.slice(tailStart);
+  let header = "";
+  let count = 0;
+  let nextTail = 0;
+  const tail: string[] = [];
+  const snapshot = readLines((line) => {
+    if (count++ === 0) {
+      header = line;
+    } else if (maxTailLines > 0) {
+      tail[nextTail] = line;
+      nextTail = (nextTail + 1) % maxTailLines;
+    }
+  });
+  const tailLines = [...tail.slice(nextTail), ...tail.slice(0, nextTail)];
+  if (count === 0) {
+    return { lines: [], result: { compacted: false, reason: "no transcript" }, snapshot };
+  }
+  if (count <= maxLines) {
+    return { lines: [header, ...tailLines], result: { compacted: false, kept: count }, snapshot };
+  }
   const dependencyIds = new Set(
     tailLines.flatMap(
       (line) => readBackgroundResultPlacement(safeParseJsonRecord(line))?.resultEntryIds ?? [],
     ),
   );
-  // A retained placement owns its original payload even when acceptance predates the trim.
-  const retainedTail = dependencyIds.size
-    ? [
-        ...lines.slice(1, tailStart).filter((line) => {
-          const id = safeParseJsonRecord(line)?.id;
-          return typeof id === "string" && dependencyIds.has(id);
-        }),
-        ...tailLines,
-      ]
-    : tailLines;
-  const retained = normalizeManualCompactTranscriptLines(lines[0], retainedTail);
+  // Retained placements still own payloads accepted before the tail window.
+  const dependencies: string[] = [];
+  if (dependencyIds.size > 0) {
+    let index = 0;
+    const tailStart = count - tailLines.length;
+    readLines((line) => {
+      const position = index++;
+      if (position > 0 && position < tailStart) {
+        const id = safeParseJsonRecord(line)?.id;
+        if (typeof id === "string" && dependencyIds.has(id)) {
+          dependencies.push(line);
+        }
+      }
+    });
+  }
+  const retained = normalizeManualCompactTranscriptLines(header, [...dependencies, ...tailLines]);
   return retained
-    ? { lines: retained, result: { compacted: true, kept: retained.length } }
-    : { lines, result: { compacted: false, kept: 0 } };
+    ? { lines: retained, result: { compacted: true, kept: retained.length }, snapshot }
+    : { lines: [], result: { compacted: false, kept: 0 }, snapshot };
 }
 
 function normalizeManualCompactTranscriptLines(

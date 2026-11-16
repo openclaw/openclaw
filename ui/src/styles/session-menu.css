@@ -37,6 +37,10 @@
   text-align: left;
 }
 
+:where(.session-menu__item) + :where(.session-menu__item) {
+  margin-block-start: var(--menu-item-gap);
+}
+
 .row.session-menu__label {
   gap: 6px;
 }
@@ -63,6 +67,23 @@
 .sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):hover,
 .sidebar-session-sort-menu__item:where(:not(.oc-menu-item)):focus-visible {
   background: var(--bg-hover);
+}
+
+/* Plain choice rows follow the menu's own hover and selected fills. */
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--menu-hover);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"] {
+  background: var(--menu-selected);
+}
+
+.session-menu__item:where(:not(.oc-menu-item))[aria-pressed="true"]:is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .session-menu__item:where(:not(.oc-menu-item)):disabled,

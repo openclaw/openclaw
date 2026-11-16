@@ -98,7 +98,7 @@ export function createRepositoryGatewayMovePreparation(options: {
 }
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
-export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
+async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
   sessionKey: string;

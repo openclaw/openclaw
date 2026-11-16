@@ -83,7 +83,10 @@ export function createSessionThinkingClaims(
       }
     },
     observeEvent(
-      reconciled: Pick<SessionChangedResult, "applied" | "key" | "row" | "deletedKey">,
+      reconciled: Pick<
+        SessionChangedResult,
+        "applied" | "key" | "row" | "admittedRow" | "deletedKey"
+      >,
       eventInfo: ReturnType<typeof readSessionChangedEvent>,
     ): boolean {
       let claimChanged = false;
@@ -115,7 +118,13 @@ export function createSessionThinkingClaims(
           if (claimChanged) {
             claims.set(key, nextClaim);
           }
-        } else if (claim && claimEventIsCurrent && thinkingLevel !== undefined) {
+        } else if (
+          claim &&
+          claimEventIsCurrent &&
+          thinkingLevel !== undefined &&
+          (!reconciled.row || reconciled.admittedRow)
+        ) {
+          // A rejected snapshot retains the old row; it cannot retire a newer thinking claim.
           claimChanged = claims.delete(key);
         }
       }

@@ -89,11 +89,19 @@
   bottom: -2px;
   width: 10px;
   height: 10px;
-  border: 1.5px solid color-mix(in srgb, currentColor 28%, transparent);
-  border-top-color: currentColor;
+  color: var(--accent);
   border-radius: 50%;
   background: var(--bg);
   animation: btn-spinner-spin 1.6s linear infinite;
+}
+
+/* The disc behind the ring stays opaque, so only this layer takes the mask. */
+.chat-processes__spinner::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: var(--spinner-mask);
 }
 .chat-processes__open {
   white-space: normal;
@@ -115,13 +123,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
-}
-.chat-processes__shimmer {
-  background: linear-gradient(100deg, var(--muted) 25%, var(--text) 50%, var(--muted) 75%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: chat-processes-shimmer 2s linear infinite;
 }
 .chat-processes__finished-meta {
   display: flex;
@@ -230,7 +231,9 @@
   background: var(--muted);
   content: "";
 }
-.chat-processes__metadata[data-status="running"] .chat-processes__status::before,
+.chat-processes__metadata[data-status="running"] .chat-processes__status::before {
+  background: var(--status-running);
+}
 .chat-processes__metadata[data-status="completed"] .chat-processes__status::before {
   background: var(--ok);
 }
@@ -573,23 +576,13 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chat-processes__spinner,
-  .chat-processes__shimmer {
+  .chat-processes__spinner {
     animation: none;
-  }
-  .chat-processes__shimmer {
-    background: none;
-    color: var(--muted);
   }
 }
 @media (prefers-reduced-transparency: reduce) {
   .chat-processes__panel[data-mobile="true"] .chat-processes__list,
   .chat-processes__panel[data-mobile="true"] .chat-processes__output {
     mask-image: none;
-  }
-}
-@keyframes chat-processes-shimmer {
-  to {
-    background-position: -200% 0;
   }
 }

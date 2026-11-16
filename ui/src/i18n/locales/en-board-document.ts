@@ -7,9 +7,9 @@ const enBoardDocument = {
     tabsLabel: "Dashboard tabs",
     moreTabs: "More dashboard tabs",
     gridLabel: "Dashboard widgets",
-    emptyTitle: "A clear board, ready for work",
-    emptyHint: "Your agent can pin widgets here — try asking for a status card.",
-    actionFailed: "The dashboard change could not be saved.",
+    emptyTitle: "No widgets yet.",
+    emptyHint: "Ask your agent to pin a status card here.",
+    actionFailed: "Couldn’t save the dashboard change. Try again.",
     actionInProgress: "Another dashboard change is still being saved.",
     announcement: {
       moved: "Moved {title}.",
@@ -21,7 +21,6 @@ const enBoardDocument = {
     widget: {
       cellLabel:
         "Dashboard widget: {title}. Use arrow keys to navigate. Hold Alt and press an arrow key to move it.",
-      moveHandle: "Move {title}",
       resizeHandle: en.board.widget.resizeHandle,
       menuLabel: en.board.widget.menuLabel,
       moveToTab: en.board.widget.moveToTab,

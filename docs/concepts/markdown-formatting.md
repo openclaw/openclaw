@@ -33,6 +33,11 @@ HTML-aware renderers interpret those tags; other renderers keep them literal or
 escape them. HTML block parsing stays disabled so Markdown inside containers
 still works, and bare URLs in their bodies retain normal linkification.
 
+Generated inline code uses CommonMark padding to preserve meaningful edge spaces,
+including values containing tabs or non-breaking spaces. All-space values stay
+unpadded. Workspace filenames continue escaping carriage returns and line feeds
+instead of creating Markdown block boundaries.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |
@@ -121,6 +126,10 @@ delivery behavior across channels.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
 - **Signal:** `[label](url)` -> `label (url)` unless the label already
   matches the URL.
+- **Google Chat:** `[label](url)` -> `<url|label>`. A styled label renders as
+  `label (url)` instead. A label that matches the URL, or the address of a
+  `mailto:` link, is not repeated: when it is styled or holds Google Chat
+  markup characters, it renders once as plain text.
 
 ## Spoilers
 

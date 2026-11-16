@@ -22,9 +22,7 @@ describe("Native Mermaid asset generation", () => {
       build.indexOf('tasks.matching { task -> task.name == "preBuild" }'),
     );
 
-    expect(task).toContain('commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")');
-    expect(task).not.toContain(
-      'commandLine("pnpm", "--filter", "@openclaw/mermaid-renderer", "build")',
-    );
+    expect(task).toMatch(/commandLine\([^,]+, "--dir", "packages\/mermaid-renderer", "build"\)/u);
+    expect(task).not.toContain('"--filter", "@openclaw/mermaid-renderer"');
   });
 });

@@ -117,6 +117,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     effectiveTurnThinkLevel,
   } = params.modelSelection;
   const thinkingCatalog = params.modelSelection.thinkingCatalog;
+  let effectiveTurnThinkingCatalog = thinkingCatalog;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -152,7 +153,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     },
   );
   const { suppressUserTurnPersistence, userTurnTranscriptRecorder } =
-    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry);
+    prepareCommandUserTurnTranscript(params, internalSessionTarget, sessionEntry, runContext);
   const lifecycle = createAgentCommandLifecycle({
     runId,
     lifecycleGeneration: () => lifecycleGeneration,
@@ -452,6 +453,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             agentRuntime: candidateRuntime,
           });
           effectiveTurnThinkLevel = candidateThinkLevel;
+          effectiveTurnThinkingCatalog = candidateThinkingCatalog;
           try {
             const candidateResult = await attemptExecutionRuntime.runAgentAttempt({
               ...runOptions,
@@ -687,6 +689,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
     sessionEntry,
     lifecycleGeneration,
     effectiveTurnThinkLevel,
+    effectiveTurnThinkingCatalog,
     maintenanceAuthProfile,
     compactionAccounting: compactionAccounting.fact,
     compactionRequestBudget: compactionAccounting.requestBudget,

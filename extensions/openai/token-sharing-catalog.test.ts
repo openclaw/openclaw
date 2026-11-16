@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENAI_API_BASE_URL } from "./base-url.js";
-import { buildOpenAIProvider } from "./openai-provider.js";
+import discoveryProvider from "./provider-discovery.js";
 
 const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -31,7 +31,7 @@ async function runCatalog(overrides: Partial<CatalogAuth> = {}, baseUrl?: string
     source: "profile",
     ...overrides,
   };
-  const result = await buildOpenAIProvider().catalog?.run({
+  const result = await discoveryProvider.catalog?.run({
     resolveProviderAuth: () => auth,
     resolveProviderApiKey: () => ({
       apiKey: auth.apiKey,

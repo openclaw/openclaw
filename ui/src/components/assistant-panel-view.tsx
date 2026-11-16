@@ -108,7 +108,7 @@ export function AssistantPanelView(props: {
         <div class="rail-header__actions assistant-panel-actions">
           {state().destination() === "home" ? (
             <button
-              class="rail-header__action assistant-panel-icon"
+              class="oc-icon-button oc-icon-button--28 rail-header__action assistant-panel-icon"
               type="button"
               aria-label={t("assistantPanel.openHome")}
               onClick={() => state().openHomePage()}
@@ -117,7 +117,7 @@ export function AssistantPanelView(props: {
             </button>
           ) : undefined}
           <button
-            class="rail-header__action assistant-panel-icon"
+            class="oc-icon-button oc-icon-button--28 rail-header__action assistant-panel-icon"
             type="button"
             aria-label={
               dock() === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
@@ -127,7 +127,7 @@ export function AssistantPanelView(props: {
             {dock() === "bottom" ? <Icon name="panelRightOpen" /> : <Icon name="panelBottomOpen" />}
           </button>
           <button
-            class="rail-header__action assistant-panel-icon"
+            class="oc-icon-button oc-icon-button--28 rail-header__action assistant-panel-icon"
             type="button"
             aria-label={t("assistantPanel.close")}
             onClick={() => state().setOpen(false)}

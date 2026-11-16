@@ -35,6 +35,9 @@ a second webhook server. If standalone fallback cannot bind the configured
 `serve.port`, the error identifies the likely running Gateway instead of
 printing a raw `EADDRINUSE` failure.
 
+Twilio refusals include the carrier's numeric error code and HTTPS documentation
+link when supplied, so otherwise identical refusal messages can be distinguished.
+
 ## Subcommands
 
 ```bash
@@ -219,6 +222,8 @@ file replacement or observed truncation starts a fresh stream. Slow output pipes
 pause reading instead of accumulating the rest of the log in memory.
 SIGINT or SIGTERM stops either tail source, settles any active history read,
 and exits with status 130 or 143 without printing later records.
+When the output pipe closes (for example `| head -n 1`), tail stops the same
+way and exits with status 0.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |

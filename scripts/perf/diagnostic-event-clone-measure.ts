@@ -5,7 +5,7 @@
 // measures thread CPU and cumulative V8 allocation including bounded queue drain.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { writeFileSync, writeSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -28,7 +28,7 @@ import {
   hasDiagnosticTracePropagationConsumer,
   registerDiagnosticTracePropagationBridge,
 } from "../../src/infra/diagnostic-trace-propagation.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.js";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.js";
 import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
@@ -222,19 +222,14 @@ if (values.mode === "phases") {
   );
   process.exit(0);
 }
-const traceMarker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath: "diagnostic-event-clones" })}\n`,
-  );
 if (values.mode === "promotion") {
   assert(
     values["trace-log"] && globalThis.gc,
     "promotion requires --expose-gc --trace-gc-nvp and --trace-log",
   );
-  traceMarker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", "diagnostic-event-clones");
   globalThis.gc();
-  traceMarker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", "diagnostic-event-clones");
 }
 
 const scope = {
@@ -375,7 +370,7 @@ if (values.mode === "counts") {
   }
   const startedAtEpochMs = Date.now();
   if (values.mode === "promotion") {
-    traceMarker("diagnostics-start");
+    writeGatewayGcTraceMarker("diagnostics-start", "diagnostic-event-clones");
   }
   const cpuBefore = process.cpuUsage();
   const started = performance.now();
@@ -384,7 +379,7 @@ if (values.mode === "counts") {
   const cpu = process.cpuUsage(cpuBefore);
   const endedAtEpochMs = Date.now();
   if (values.mode === "promotion") {
-    traceMarker("diagnostics-stop");
+    writeGatewayGcTraceMarker("diagnostics-stop", "diagnostic-event-clones");
   }
   let sampledBytes: number | undefined;
   let allocationSamples: number | undefined;

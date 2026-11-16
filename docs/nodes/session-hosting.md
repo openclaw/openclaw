@@ -408,12 +408,11 @@ selected folder becomes the session workspace root, so deployments that contain
 `operator.write` sessions with `tools.fs.workspaceOnly` should also set a root list.
 
 For a specific paired device that advertises `workerHost.deviceFolders: true`,
-choose **Existing folder on device** in the workspace picker and enter an
-absolute path on that device. This option is not available for **Auto**, cloud
-workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. Operators with `operator.admin` can also choose **Browse folders
-on** _device_ to list folders on that device through its `fs.listDir` command.
-The listing is not limited to `folders` roots; the device validates the chosen
+choose **Existing folder on** _device_ in the workspace picker. Operators with
+`operator.admin` then browse folders on that device through its `fs.listDir`
+command; other operators enter an absolute path on that device. This option is
+not available for **Auto**, cloud workers, runtimes without worker-turn
+execution, or devices that do not advertise the capability. The listing is not limited to `folders` roots; the device validates the chosen
 folder when the session is created. The Gateway never browses or resolves this
 path locally.
 

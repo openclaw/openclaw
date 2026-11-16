@@ -42,10 +42,24 @@ export function bindReplyOperationQueueDisposition(
 
 /** Admission-owned image facts stay out of the public FollowupRun contract. */
 export type InternalFollowupRun = FollowupRun & {
+  /** Bounded background data expires with this turn; retries attach it only once. */
+  ambientOverflowContext?: {
+    entries: Array<{ sequence: number; line: string }>;
+    attached?: true;
+  };
   currentTurnImagesPrepared?: true;
   /** Fact indexes are relative to this run's media array. */
   mediaImageLayout?: MediaImageLayout;
 };
+
+export function isFollowupOperatorAuthorityCurrent(run: Pick<FollowupRun, "operatorAuthority">) {
+  try {
+    run.operatorAuthority?.assertCurrent();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function isFollowupRunAborted(
   run: Pick<

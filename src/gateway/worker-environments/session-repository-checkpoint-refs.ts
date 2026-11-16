@@ -10,6 +10,11 @@ export const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 
 export function checkpointRef(workspace: SessionRepositoryWorkspaceRecord, ref?: string): string {
+  if (workspace.diskAuthority && ref === undefined) {
+    throw new Error(
+      "Repository work requires a fresh disk export, not its initialization checkpoint",
+    );
+  }
   const selected = ref ?? workspace.checkpointRef;
   if (!selected || !/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(selected)) {
     throw new Error("Repository workspace has no valid checkpoint");

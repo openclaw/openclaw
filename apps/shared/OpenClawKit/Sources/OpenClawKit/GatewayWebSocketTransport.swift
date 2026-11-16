@@ -28,7 +28,6 @@ public final class WebSocketRequestLifetime: @unchecked Sendable {
 
     public init() {}
 
-    // periphery:ignore - External transports use this to order send admission with cancellation.
     /// Enqueue the request while holding the same lock that orders its retirement.
     /// The actions must only enqueue work; running I/O here would block cancellation.
     public func performIfActive(
@@ -154,12 +153,20 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     }
 }
 
+enum WebSocketGatewayRoleError: Error { case incompatibleRole }
+
 public protocol WebSocketSessioning: AnyObject {
+    /// Credential-bearing transports may restrict their Gateway role before any socket opens.
+    var requiredGatewayRole: String? { get }
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox
     func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox
 }
 
 extension WebSocketSessioning {
+    public var requiredGatewayRole: String? {
+        nil
+    }
+
     /// Compatibility path for existing session conformers. URLSession and pinning sessions
     /// override this requirement so operator headers remain attached to the upgrade request.
     public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {

@@ -2,29 +2,15 @@ import {
   capturePluginRegistration,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type {
-  pollProviderOperationJson,
-  postJsonResponse,
-} from "openclaw/plugin-sdk/provider-http";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
 
-const { postJsonResponseMock, pollMock } = vi.hoisted(() => ({
-  postJsonResponseMock: vi.fn<typeof postJsonResponse>(),
-  pollMock: vi.fn<typeof pollProviderOperationJson>(),
-}));
-
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: async () => ({ apiKey: "synthetic-runway-key" }),
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  postJsonResponse: postJsonResponseMock,
-  pollProviderOperationJson: pollMock,
 }));
 
 afterEach(() => vi.restoreAllMocks());
@@ -55,7 +41,9 @@ async function expectBlocked(cfg: OpenClawConfig) {
 
 it("applies configured request policy to the submitted Runway task", async () => {
   const intercepted = new Error("synthetic submission intercepted");
-  postJsonResponseMock.mockRejectedValue(intercepted);
+  const postJsonResponseMock = vi
+    .spyOn(providerHttp, "postJsonResponse")
+    .mockRejectedValue(intercepted);
 
   await expect(
     generateVideo(createProxyRequestModelProviderConfig("runway", "https://runway.example.test")),
@@ -78,19 +66,18 @@ it("applies configured request policy to the submitted Runway task", async () =>
 });
 
 it("denies private polling without needing a proxy override", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
-    "openclaw/plugin-sdk/provider-http",
-  );
-  pollMock.mockImplementation(actual.pollProviderOperationJson);
-  postJsonResponseMock.mockResolvedValue({ id: "synthetic-task" });
+  vi.spyOn(providerHttp, "postJsonResponse").mockResolvedValue({ id: "synthetic-task" });
   await expectBlocked(privateNetworkConfig(false, "http://127.0.0.1:9"));
 });
 
 it.each(["http://127.0.0.1:9/video.mp4", "http://10.0.0.1/video.mp4"])(
   "blocks private result URL %s even when task trust allows private hosts",
   async (url) => {
-    postJsonResponseMock.mockResolvedValue({ id: "synthetic-task" });
-    pollMock.mockResolvedValue({ status: "SUCCEEDED", output: [url] });
+    vi.spyOn(providerHttp, "postJsonResponse").mockResolvedValue({ id: "synthetic-task" });
+    vi.spyOn(providerHttp, "pollProviderOperationJson").mockResolvedValue({
+      status: "SUCCEEDED",
+      output: [url],
+    });
     await expectBlocked(privateNetworkConfig(true));
   },
 );

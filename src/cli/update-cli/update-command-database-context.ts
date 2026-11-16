@@ -27,7 +27,7 @@ import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
 } from "./update-command-service-plan.js";
-import { assertUnavailableGatewayPackageConsumerStopped } from "./update-command-service-revalidation.js";
+import { inspectGatewayArtifactConsumer } from "./update-command-service-revalidation.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -108,7 +108,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       !params.packageAlreadyCurrent &&
       inspected.serviceUpdateVerdict?.kind === "unavailable"
     ) {
-      await assertUnavailableGatewayPackageConsumerStopped({
+      await inspectGatewayArtifactConsumer({
         roots: params.roots,
         env: process.env,
         timeoutMs: params.timeoutMs,

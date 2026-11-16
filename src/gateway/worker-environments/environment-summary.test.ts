@@ -19,6 +19,7 @@ it.each([
       state,
       leaseId,
       resourceReceipt: null,
+      retention: null,
       destroyRequestedAtMs,
       error,
       ownerEpoch: 1,

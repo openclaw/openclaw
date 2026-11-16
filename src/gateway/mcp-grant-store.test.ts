@@ -21,6 +21,7 @@ import {
   resolveMcpLoopbackClientGrant as resolveClient,
   revokeAttachGrant,
   revokeAttachGrantsForSession,
+  revokeMintedMcpLoopbackClientGrant as revokeMinted,
   revokeMcpLoopbackClientGrant as revokeClient,
   revokeMcpLoopbackClientGrantsForRuntime as revokeRuntime,
   transferMcpLoopbackClientGrant as transferClient,
@@ -363,6 +364,84 @@ describe("mcp-grant-store", () => {
     nextController.abort();
     expect(transferred?.isCurrent()).toBe(false);
     expect(resolveClient(grantParams(stable.token, "next-capture"))).toBeUndefined();
+  });
+
+  it("revokes the minted turn through admission, capture and warm bearer replacement", async () => {
+    const stable = mintClient();
+    const next = mintClient({ context: { nativeCronCreatorToolAllowlist: [] } });
+    expect(next).not.toHaveProperty("owner");
+    expect(
+      bindAdmission({
+        token: next.token,
+        runtimeOwnerToken: "runtime-one",
+        admittedRunContext: await admitted("run-minted-owner"),
+      }),
+    ).toBe(true);
+    const sourceCapture = activateCapture(grantParams(next.token, "source-capture"));
+    expect(sourceCapture).toBeTruthy();
+    expect(sourceCapture && sourceCapture.captureNativeToolAuthority(["read"])).toBe(true);
+    expect(deactivateCapture(grantParams(next.token, "source-capture"))).toBe(true);
+    expect(
+      transferClient({
+        sourceToken: next.token,
+        targetToken: stable.token,
+        runtimeOwnerToken: "runtime-one",
+      }),
+    ).toBe(true);
+    const params = grantParams(stable.token, "process-capture");
+    const processCapture = activateCapture(params);
+    expect(processCapture).toBeTruthy();
+    expect(processCapture && processCapture.captureNativeToolAuthority([])).toBe(true);
+    const retained = resolveClient(params);
+    expect(retained?.isCurrent()).toBe(true);
+    expect(deactivateCapture(params)).toBe(true);
+    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const unregister = registerRevocations((event) => events.push(event));
+    try {
+      expect(revokeMinted(next)).toBe(true);
+      expect(revokeMinted(next)).toBe(false);
+      expect(activateCapture(params)).toBe(false);
+      expect(retained?.isCurrent()).toBe(false);
+      expect(events).toEqual([{ token: stable.token, runtimeOwnerToken: "runtime-one" }]);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("fences delayed minted cleanup from successor turns and sibling grants", async () => {
+    const first = mintClient({ admittedRunContext: await admitted("run-minted-first") });
+    const second = mintClient({ admittedRunContext: await admitted("run-minted-second") });
+    const third = mintClient({ admittedRunContext: await admitted("run-minted-third") });
+    const sibling = mintClient({ context: { sessionKey: "agent:main:sibling" } });
+    const otherRuntime = mintClient({ runtimeOwnerToken: "runtime-two" });
+    const transfer = (sourceToken: string) =>
+      transferClient({
+        sourceToken,
+        targetToken: first.token,
+        runtimeOwnerToken: "runtime-one",
+      });
+    const params = grantParams(first.token, "same-process-capture");
+    expect(transfer(second.token)).toBe(true);
+    expect(activateCapture(params)).toBeTruthy();
+    const secondRow = resolveClient(params);
+    expect(revokeMinted(first)).toBe(false);
+    expect(secondRow?.isCurrent()).toBe(true);
+
+    expect(transfer(third.token)).toBe(true);
+    expect(activateCapture(params)).toBeTruthy();
+    const thirdRow = resolveClient(params);
+    expect(secondRow?.isCurrent()).toBe(false);
+    expect(revokeMinted(first)).toBe(false);
+    expect(revokeMinted(second)).toBe(false);
+    expect(revokeMinted(second)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(true);
+    expect(revokeMinted(third)).toBe(true);
+    expect(revokeMinted(third)).toBe(false);
+    expect(activateCapture(params)).toBe(false);
+    expect(thirdRow?.isCurrent()).toBe(false);
+    // Siblings remain present even after every predecessor cleanup has run.
+    expect(revokeClient(sibling.token)).toBe(true);
+    expect(revokeClient(otherRuntime.token)).toBe(true);
   });
 
   it("notifies revocation listeners for single and runtime-wide cleanup", () => {

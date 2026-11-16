@@ -7,7 +7,10 @@ import type { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { SearchSchema, StoreSchema } from "./contract.js";
-import { createPostgresEngineTestFixture } from "./engine-store.test-support.js";
+import {
+  createPostgresEngineTestFixture,
+  openPostgresEngineTestStore,
+} from "./engine-store.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -163,6 +166,16 @@ describe.skipIf(!connection)("PostgreSQL search extension admission", () => {
           .all(),
       ).toEqual([{ id: "one" }]);
       expectDefinitions("keywords-search", "keywords-archive-search");
+      const reader = openPostgresEngineTestStore({
+        anchor: db.anchor,
+        schema,
+        input: { connection: connection!, schemaPrefix: "search_extension_test", readOnly: true },
+      });
+      try {
+        expect(reader.prepare("SELECT id FROM keywords").all()).toEqual([{ id: "one" }]);
+      } finally {
+        reader.close();
+      }
     });
   });
 

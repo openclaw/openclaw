@@ -46,6 +46,7 @@ suite.define(() => {
   it("renders relative assistant media through the session-scoped ticket route", async () => {
     const page = await newChatPage(suite);
     const source = "openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png";
+    const expired = ".openclaw/tmp/proof/expired.png";
     const caption = "Browser proof from this task's workspace.";
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     const requests: URL[] = [];
@@ -61,7 +62,14 @@ suite.define(() => {
           body: JSON.stringify(
             url.searchParams.get("source") === source
               ? mediaTicket("ticket-relative-image")
-              : { available: false, code: "file-not-found", reason: "File not found" },
+              : url.searchParams.get("source") === expired
+                ? {
+                    available: false,
+                    code: "artifact-file-expired",
+                    reason: "file expired (scratch cleaned after 24 h)",
+                    retryable: false,
+                  }
+                : { available: false, code: "file-not-found", reason: "File not found" },
           ),
         });
         return;
@@ -72,7 +80,9 @@ suite.define(() => {
       await route.fulfill({ contentType: "image/png", body: imageBytes });
     });
     await installMockGateway(page, {
-      historyMessages: assistantHistory(`${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png`),
+      historyMessages: assistantHistory(
+        `${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png\n\nMEDIA:${expired}`,
+      ),
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(caption, { exact: false }).first().waitFor();
@@ -87,6 +97,7 @@ suite.define(() => {
       )
       .toBeGreaterThan(0);
     await page.getByText("File not found", { exact: true }).waitFor();
+    await page.getByText("file expired (scratch cleaned after 24 h)", { exact: true }).waitFor();
     expect((await page.locator("body").textContent()) ?? "").not.toContain("MEDIA:");
     expect(requests.some((url) => url.searchParams.get("source") === "missing.png")).toBe(true);
   });

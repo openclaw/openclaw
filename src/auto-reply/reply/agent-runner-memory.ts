@@ -19,7 +19,7 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/preparation.types.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -85,7 +85,6 @@ import {
   resolveCompactionThreshold,
   resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
-  shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
@@ -172,10 +171,10 @@ export async function runSessionCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath: compactionStorePath,
   };
-  const readTranscriptSize = async (sessionId: string, rawBytes?: number) =>
+  const readTranscriptSize = async (sessionId: string) =>
     readCompactionTranscriptBytes({
       target: { ...compactionTarget, sessionId },
-      rawBytes,
+      rawBytes: undefined,
       runtime: params.followupRun.run,
       maxBytes: maxActiveTranscriptBytes,
       contextTokenBudget: contextWindowTokens,
@@ -220,7 +219,7 @@ export async function runSessionCompactionIfNeeded(params: {
           contextWindowTokens,
         });
   const activeTranscriptBytes = shouldCheckActiveTranscriptBytes
-    ? await readTranscriptSize(entry.sessionId, transcriptUsageTokens?.transcriptByteSize)
+    ? await readTranscriptSize(entry.sessionId)
     : undefined;
   assertActive();
   const exceedsTranscriptByteThreshold =
@@ -387,7 +386,8 @@ export async function runSessionCompactionIfNeeded(params: {
         agentAccountId: params.followupRun.run.agentAccountId,
         conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
         chatType: params.followupRun.run.chatType,
-        skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+        // The session projection omits runtime catalogs; reuse this turn's hydrated selection.
+        skillsSnapshot: params.followupRun.run.skillsSnapshot ?? entry.skillsSnapshot,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
         authProfileId: params.followupRun.run.authProfileId,
@@ -578,6 +578,10 @@ export async function runMemoryFlushIfNeeded(
     return { sessionEntry: entry, outcome: "skipped" };
   }
 
+  if (!entry || hasAlreadyFlushedForCurrentCompaction(entry)) {
+    assertMemoryFlushCurrent();
+    return { sessionEntry: entry, outcome: "skipped" };
+  }
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
@@ -592,42 +596,39 @@ export async function runMemoryFlushIfNeeded(
     }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
   );
 
-  const shouldReadTranscript = Boolean(entry && persistedPromptTokens === undefined);
+  const shouldReadTranscript = persistedPromptTokens === undefined;
 
   const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
-  const sessionLogSnapshot = entry
-    ? await readSessionLogSnapshot({
-        agentId: params.followupRun.run.agentId,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-        storePath: params.storePath,
-        includeByteSize: asPositiveFiniteNumber(forceFlushTranscriptBytes) !== undefined,
-        includeTurnTaint: true,
-        includeUsage: shouldReadTranscript,
-        abortSignal,
-      })
-    : undefined;
+  const sessionLogSnapshot = await readSessionLogSnapshot({
+    agentId: params.followupRun.run.agentId,
+    sessionId: params.followupRun.run.sessionId,
+    sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+    storePath: params.storePath,
+    includeByteSize: asPositiveFiniteNumber(forceFlushTranscriptBytes) !== undefined,
+    includeTurnTaint: true,
+    includeUsage: shouldReadTranscript,
+    abortSignal,
+  });
   assertMemoryFlushCurrent();
-  const transcriptByteSize = sessionLogSnapshot?.byteSize;
+  const transcriptByteSize = sessionLogSnapshot.byteSize;
   const shouldForceFlushByTranscriptSize =
     transcriptByteSize !== undefined && transcriptByteSize >= forceFlushTranscriptBytes;
 
-  const transcriptUsageTokens =
-    shouldReadTranscript && entry
-      ? await estimateContextTokensFromSessionTranscript(
-          {
-            agentId:
-              params.followupRun.run.agentId ??
-              resolveAgentIdFromSessionKey(params.sessionKey ?? params.followupRun.run.sessionKey),
-            sessionId: entry.sessionId,
-            sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-            storePath: params.storePath,
-            contextWindowTokens,
-            abortSignal,
-          },
-          sessionLogSnapshot,
-        )
-      : undefined;
+  const transcriptUsageTokens = shouldReadTranscript
+    ? await estimateContextTokensFromSessionTranscript(
+        {
+          agentId:
+            params.followupRun.run.agentId ??
+            resolveAgentIdFromSessionKey(params.sessionKey ?? params.followupRun.run.sessionKey),
+          sessionId: entry.sessionId,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          storePath: params.storePath,
+          contextWindowTokens,
+          abortSignal,
+        },
+        sessionLogSnapshot,
+      )
+    : undefined;
   assertMemoryFlushCurrent();
   const projectedTokenCount = resolveProjectedPromptTokens(
     asPositiveFiniteNumber(persistedPromptTokens),
@@ -637,17 +638,13 @@ export async function runMemoryFlushIfNeeded(
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   const shouldFlushMemory =
-    (params.recoveryContextTokenBudget !== undefined &&
-      entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry)) ||
-    shouldRunMemoryFlush({
+    params.recoveryContextTokenBudget !== undefined ||
+    shouldRunPreflightCompaction({
       entry,
       tokenCount: tokenCountForFlush,
       threshold: flushThreshold,
     }) ||
-    (shouldForceFlushByTranscriptSize &&
-      entry != null &&
-      !hasAlreadyFlushedForCurrentCompaction(entry));
+    shouldForceFlushByTranscriptSize;
 
   if (!shouldFlushMemory) {
     return { sessionEntry: entry, outcome: "skipped" };
@@ -844,7 +841,7 @@ export async function runMemoryFlushIfNeeded(
         return result;
       },
     });
-    emitInternalRunUsageDiagnostic(flushExecution.result, {
+    await emitInternalRunUsageDiagnostic(flushExecution.result, {
       config: params.cfg,
       agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
       agentDir: params.followupRun.run.agentDir,

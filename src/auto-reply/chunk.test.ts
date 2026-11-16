@@ -269,12 +269,11 @@ describe("chunkMarkdownTextWithMode", () => {
     expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
   });
 
-  it.each(["length", "newline"] as const)(
-    "keeps astral text with a fractional limit in %s mode",
-    (mode) => {
-      expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
-    },
-  );
+  it.each([1.5, Number.NaN])("keeps astral text whole at limit %s", (limit) => {
+    for (const mode of ["length", "newline"] as const) {
+      expect(chunkMarkdownTextWithMode("😀", limit, mode)).toEqual(["😀"]);
+    }
+  });
 });
 
 describe("resolveChunkMode", () => {

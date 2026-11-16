@@ -32,7 +32,7 @@ export function realpathExistingAncestorSync(candidate: string): string | undefi
 }
 
 /** Async counterpart for runtime identity capture, including unreadable intermediate paths. */
-export async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
+async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
   const suffix: string[] = [];
   let current = candidate;
   while (true) {
@@ -47,6 +47,18 @@ export async function realpathExistingAncestor(candidate: string): Promise<strin
       current = parent;
     }
   }
+}
+
+export function resolveIdentityPathViaExistingAncestorSync(targetPath: string): string {
+  const fallback = path.resolve(targetPath);
+  // Identity aliases must converge even after an intermediate realpath failure,
+  // or ownership and lock callers can split one resource into separate identities.
+  return realpathExistingAncestorSync(fallback) ?? fallback;
+}
+
+export async function resolveIdentityPathViaExistingAncestor(targetPath: string): Promise<string> {
+  const fallback = path.resolve(targetPath);
+  return (await realpathExistingAncestor(fallback)) ?? fallback;
 }
 
 /** Only definite absence, including a non-directory ancestor, permits an absent verdict. */

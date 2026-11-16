@@ -4,7 +4,7 @@ import { isTransientNetworkError } from "../../packages/ai/src/utils/retryable-n
 import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 import { retryAsync } from "./retry.js";
 
-const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000] as const;
+const CLAWHUB_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000] as const;
 const CLAWHUB_MAX_RETRY_AFTER_MS = 60_000;
 
 type ClawHubResponseHandle = {

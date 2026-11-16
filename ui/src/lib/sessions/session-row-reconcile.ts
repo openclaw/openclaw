@@ -70,10 +70,7 @@ export type SessionChangedEventInfo = {
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
   let next = row;
   for (const [key, value] of Object.entries(row)) {
-    if (
-      value === undefined ||
-      (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
-    ) {
+    if (value === undefined) {
       if (next === row) {
         next = { ...row };
       }

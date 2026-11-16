@@ -1,20 +1,23 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderRuntime,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createMemorySearchDeadlineControl,
   type MemorySearchDeadlineControl,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider, EmbeddingProviderRuntime } from "./embeddings.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 
 type EmbeddingQueryRetryHarness = {
-  provider: EmbeddingProvider;
+  provider: MemoryEmbeddingProvider;
   embedQueryWithRetry: (
     text: string,
     signal?: AbortSignal,
-    provider?: EmbeddingProvider,
-    providerRuntime?: EmbeddingProviderRuntime,
+    provider?: MemoryEmbeddingProvider,
+    providerRuntime?: MemoryEmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
@@ -23,10 +26,10 @@ type EmbeddingQueryRetryHarness = {
 };
 
 function createEmbeddingQueryRetryHarness(
-  embedQuery: EmbeddingProvider["embed"],
+  embedQuery: MemoryEmbeddingProvider["embed"],
   timeoutMs = 60_000,
 ): EmbeddingQueryRetryHarness {
-  const provider: EmbeddingProvider = {
+  const provider: MemoryEmbeddingProvider = {
     id: "test-provider",
     model: "test-embedding-model",
     embed: embedQuery,
@@ -41,7 +44,7 @@ function createEmbeddingQueryRetryHarness(
   }) as EmbeddingQueryRetryHarness;
 }
 
-function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBatch"]) {
+function createEmbeddingBatchRetryHarness(embedBatch: MemoryEmbeddingProvider["embedBatch"]) {
   const manager = Object.assign(
     createEmbeddingQueryRetryHarness(async () => []),
     {
@@ -49,7 +52,7 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
     },
   ) as EmbeddingQueryRetryHarness & {
     embedBatchWithRetry: (
-      inputs: Parameters<EmbeddingProvider["embedBatch"]>[0],
+      inputs: Parameters<MemoryEmbeddingProvider["embedBatch"]>[0],
     ) => Promise<number[][]>;
     waitForEmbeddingRetry: ReturnType<typeof vi.fn>;
   };
@@ -88,8 +91,8 @@ describe("memory model input formatting", () => {
   ])(
     "formats query and document inputs for %s/%s",
     async (id, model, prefixed, queryInstruction, inputFormat) => {
-      const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
-      const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
+      const embed = vi.fn<MemoryEmbeddingProvider["embed"]>(async () => [1, 0]);
+      const embedBatch = vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (inputs) =>
         inputs.map(() => [0, 1]),
       );
       const manager = createEmbeddingBatchRetryHarness(embedBatch);
@@ -146,7 +149,7 @@ describe("memory embedding query retry cancellation", () => {
     const control = createMemorySearchDeadlineControl();
     control.report("pause");
     const ready = createDeferred<void>();
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async () => {
+    const embedQuery = vi.fn<MemoryEmbeddingProvider["embed"]>(async () => {
       await ready.promise;
       return [1, 0, 0, 0];
     });
@@ -177,7 +180,9 @@ describe("memory embedding query retry cancellation", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(rateLimitError());
+    const embedQuery = vi
+      .fn<MemoryEmbeddingProvider["embed"]>()
+      .mockRejectedValue(rateLimitError());
     const manager = createEmbeddingQueryRetryHarness(embedQuery, 10_000);
     const waitForRetrySpy = vi.spyOn(manager, "waitForEmbeddingRetry");
 
@@ -203,7 +208,7 @@ describe("memory embedding query retry cancellation", () => {
 
   it("never starts a provider request for an already-cancelled search", async () => {
     const abortReason = new Error("memory search was cancelled");
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>();
+    const embedQuery = vi.fn<MemoryEmbeddingProvider["embed"]>();
     const manager = createEmbeddingQueryRetryHarness(embedQuery);
 
     await expect(
@@ -219,7 +224,9 @@ describe("memory embedding query retry cancellation", () => {
   it("reaches caller fallback within the memory_search deadline after a hinted 429", async () => {
     vi.useFakeTimers();
     const waits: number[] = [];
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>().mockRejectedValue(rateLimitError());
+    const embedQuery = vi
+      .fn<MemoryEmbeddingProvider["embed"]>()
+      .mockRejectedValue(rateLimitError());
     const manager = Object.assign(createEmbeddingQueryRetryHarness(embedQuery), {
       waitForEmbeddingRetry: async (delayMs: number, _action: string, signal?: AbortSignal) => {
         waits.push(delayMs);
@@ -243,7 +250,7 @@ describe("memory embedding query retry cancellation", () => {
     let elapsedMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     const operationSignals: AbortSignal[] = [];
-    const embedQuery = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
+    const embedQuery = vi.fn<MemoryEmbeddingProvider["embed"]>(async (_input, options) => {
       if (options?.signal) {
         operationSignals.push(options.signal);
       }
@@ -275,9 +282,39 @@ describe("memory embedding query retry cancellation", () => {
 describe.each(["text", "structured"])("memory embedding batch retry boundary (%s)", (kind) => {
   const batchInputs = (texts: string[]) =>
     kind === "text" ? texts : texts.map((text) => ({ text }));
+  it("recovers a watchdog timeout through smaller requests in input order", async () => {
+    vi.useFakeTimers();
+    const aborted: number[] = [];
+    const embedBatch = vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (inputs, options) => {
+      if (inputs.length > 1) {
+        return await new Promise<number[][]>((_, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            aborted.push(inputs.length);
+            reject(new Error("embedding request aborted"));
+          });
+        });
+      }
+      return inputs.map((input) => [Number(typeof input === "string" ? input : input.text)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+    const pending = manager.embedBatchWithRetry(batchInputs(["0", "1", "2"]));
+    const result = expect(pending).resolves.toEqual([[0], [1], [2]]);
+    void result.catch(() => {});
+    try {
+      await vi.runAllTimersAsync();
+      await result;
+      expect(aborted).toEqual([3, 2]);
+      expect(embedBatch.mock.calls.map(([inputs]) => inputs.length)).toEqual([3, 2, 1, 1, 1]);
+      expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("splits a provider row-cap error without retrying oversized requests", async () => {
     const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
-    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+    const embedBatch = vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (inputs) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (texts.length > 10) {
         throw new Error(
@@ -299,7 +336,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
   // #183556: Mistral rejects the whole batch by aggregate tokens, not by item count.
   it("splits an aggregate-token rejection recursively until every batch fits", async () => {
     const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
-    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {
+    const embedBatch = vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async (inputs) => {
       const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
       if (texts.join("").length > 60) {
         throw new Error(
@@ -327,7 +364,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     ],
     ["batch size is invalid, it should not be larger than 10", ["one"]],
   ] satisfies [string, string[]][])("does not retry or split %s", async (message, items) => {
-    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async () => {
+    const embedBatch = vi.fn<MemoryEmbeddingProvider["embedBatch"]>(async () => {
       throw new Error(`openai-compatible embeddings failed: HTTP 400: ${message}`);
     });
     const manager = createEmbeddingBatchRetryHarness(embedBatch);

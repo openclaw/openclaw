@@ -1,4 +1,4 @@
-import type { AgentSideConnection, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AcpEventLedger } from "./event-ledger.js";
@@ -13,7 +13,9 @@ const textUpdate = (text: string): SessionUpdate => ({
   content: { type: "text", text },
 });
 
-function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(async () => {})) {
+type SessionUpdateNotify = (method: string, params: SessionNotification) => Promise<void>;
+
+function harness(notify: SessionUpdateNotify = vi.fn(async () => {})) {
   const ledger = {
     startSession: vi.fn(async () => {}),
     recordUserPrompt: vi.fn(async () => {}),
@@ -25,19 +27,20 @@ function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(asy
     readReplayBySessionKey: vi.fn(async () => ({ complete: true, events: [] })),
   } satisfies AcpEventLedger;
   const updates = new AcpTranslatorSessionUpdates({
-    connection: { sessionUpdate },
+    connection: { notify },
     eventLedger: ledger,
     log: () => {},
   });
-  return { updates, ledger, sessionUpdate };
+  return { updates, ledger, notify };
 }
 
 describe("AcpTranslatorSessionUpdates", () => {
   it("advertises Ultra in the thinking command", async () => {
-    const sessionUpdate = vi.fn<AgentSideConnection["sessionUpdate"]>(async () => {});
-    const { updates } = harness(sessionUpdate);
+    const notify = vi.fn<SessionUpdateNotify>(async () => {});
+    const { updates } = harness(notify);
     await updates.sendAvailableCommands(session, { record: false });
-    const publishedUpdate = sessionUpdate.mock.calls[0]?.[0].update;
+    expect(notify.mock.calls[0]?.[0]).toBe("session/update");
+    const publishedUpdate = notify.mock.calls[0]?.[1].update;
     const think =
       publishedUpdate?.sessionUpdate === "available_commands_update"
         ? publishedUpdate.availableCommands.find((command) => command.name === "think")
@@ -47,7 +50,7 @@ describe("AcpTranslatorSessionUpdates", () => {
 
   it("joins admitted ledger work and blocks reads and writes after shutdown starts", async () => {
     const reading = createDeferred<{ complete: boolean; events: [] }>();
-    const { updates, ledger, sessionUpdate } = harness();
+    const { updates, ledger, notify } = harness();
     ledger.readReplay.mockReturnValueOnce(reading.promise);
     const replay = updates.readLedgerReplay(session);
     const stopped = vi.fn();
@@ -68,7 +71,7 @@ describe("AcpTranslatorSessionUpdates", () => {
         updates.readLedgerReplayBySessionKey(session.sessionKey),
       ]),
     ).toEqual([emptyReplay, emptyReplay, emptyReplay]);
-    expect(sessionUpdate).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
     for (const method of Object.values(ledger)) {
       expect(method).not.toHaveBeenCalled();
     }

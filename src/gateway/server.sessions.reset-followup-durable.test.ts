@@ -44,7 +44,7 @@ afterEach(() => {
 
 // Fixed model output; real followup accounting, reset, and durable recovery own delivery.
 it.each([false, true])(
-  "recovers an unsent ordinary followup only without reset (reset=%s)",
+  "recovers an unsent ordinary followup to the conversation key (reset=%s)",
   async (resetSession) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:reset-followup-durable";
@@ -206,20 +206,15 @@ it.each([false, true])(
         });
       await recover();
 
-      expect(visible).toEqual(resetSession ? [] : ["pre-reset answer"]);
+      expect(visible).toEqual(["pre-reset answer"]);
       expect(retained.sessionGeneration).toEqual({ ...scope, sessionId, lifecycleRevision });
-      if (resetSession) {
-        expect(log.warn).toHaveBeenCalledWith(
-          expect.stringContaining("original session generation no longer accepts"),
-        );
-      }
       // Ordinary followups have no terminal receipt; send or permanent rejection retires the row.
       expect(
         getDeliveryQueueEntryStatus(outboundDeliveryQueueName(retained), retained.id, stateDir),
       ).toBeUndefined();
       expect(await loadUnfinishedDeliveries(stateDir)).toHaveLength(0);
       await recover();
-      expect(visible).toHaveLength(resetSession ? 0 : 1);
+      expect(visible).toHaveLength(1);
     } finally {
       operation.complete();
       typing.cleanup();

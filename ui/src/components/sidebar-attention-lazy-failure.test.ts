@@ -39,6 +39,7 @@ afterEach(() => {
 
 async function mountAttention() {
   const sources = {
+    config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
     gateway: {
       snapshot: { phase: "connected", client: null, hello: null },
       connection: { gatewayUrl: "" },
@@ -75,7 +76,7 @@ it("reports a rejected Inbox import and lets the same trigger retry", async () =
   await waitForSolid(() =>
     expect(showToast).toHaveBeenCalledWith({
       message:
-        "Panel failed to load. Some interface files could not be downloaded. Check your connection, then reload.",
+        "Couldn’t load this panel. Some interface files could not be downloaded. Check your connection, then reload.",
       severity: "error",
     }),
   );

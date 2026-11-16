@@ -1,8 +1,4 @@
-import {
-  appendToolLoopWarning,
-  attachInternalToolExecutionPreparer,
-  InternalToolLoopBlocked,
-} from "../../packages/agent-core/src/internal-hooks.js";
+import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -32,9 +28,8 @@ import {
   buildToolContentPrivateData,
   emitToolBlockedSecurityEvent,
   findSkillUsageMatch,
+  observeToolOutcome,
   prepareToolTerminalPresentation,
-  reconcileLoopCallExecutionParams,
-  recordLoopOutcome,
   recordSkillUsed,
   rememberPendingTerminalPresentation,
   resolveToolDiagnosticIdentity,
@@ -84,15 +79,18 @@ import {
 } from "./code-mode-control-tools.js";
 import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import { markToolExecutionRefused } from "./tool-effect-receipt.js";
-import { buildToolMutationState } from "./tool-mutation.js";
-import { normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  markToolExecutionNotStarted as registerTrustedToolNoStartError,
+  markToolExecutionRefused,
+} from "./tool-effect-receipt.js";
 import {
   formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
+} from "./tool-execution-error.js";
+import { buildToolMutationState } from "./tool-mutation.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { createToolSkillUseRecorder } from "./tool-skill-use-scope.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -356,14 +354,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           runId: ctx?.runId,
         });
-        await recordLoopOutcome({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: blockedCall.toolParams,
-          toolCallId,
-          result: blockedResult,
-          toolCallOrdinal,
-        });
+        observeToolOutcome({ ctx, toolName: normalizedToolName, toolCallOrdinal });
         return blockedResult;
       };
       let preparedParams: unknown;
@@ -431,12 +422,6 @@ export function wrapToolWithBeforeToolCallHook(
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
         await validateToolExecutionParams(toolCallId, executeParams);
-        await reconcileLoopCallExecutionParams({
-          ctx,
-          toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-        });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal, "tool_preparation");
@@ -453,6 +438,7 @@ export function wrapToolWithBeforeToolCallHook(
       const eventBase = buildEventBase(executeParams);
       const recordProgress = captureDiagnosticToolProgress(eventBase);
       let liveness: ReturnType<typeof startToolExecutionLiveness> | undefined;
+      let skillUse: ReturnType<typeof createToolSkillUseRecorder> | undefined;
       const startedAt = Date.now();
       let completed = false;
       try {
@@ -475,7 +461,14 @@ export function wrapToolWithBeforeToolCallHook(
                 ctx?.watchdogAttempt,
               );
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
-              return liveness.run(() => (execute as ForwardedToolExecution)(...args));
+              // Plugin-reported skill reads take this call's run facts, never caller input.
+              const skillUseScope = createToolSkillUseRecorder((match) =>
+                recordSkillUsed({ ctx, match, toolName: normalizedToolName, toolCallId }),
+              );
+              skillUse = skillUseScope;
+              return liveness.run(() =>
+                skillUseScope.run(() => (execute as ForwardedToolExecution)(...args)),
+              );
             });
           result = outcome.ownerDecision
             ? await invoke()
@@ -483,7 +476,6 @@ export function wrapToolWithBeforeToolCallHook(
         } catch (error) {
           throw hookOptions.protectNetworkErrors !== false &&
             tool.resultContentSource === "network" &&
-            !(error instanceof InternalToolLoopBlocked) &&
             getBeforeToolCallFailureDisposition(error) === undefined
             ? protectNetworkToolExecutionError(error, "Tool execution failed.", signal)
             : error;
@@ -496,12 +488,9 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           toolCallOrdinal,
         });
-        await recordLoopOutcome({
+        observeToolOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-          result,
           resultContentSource: tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation: preparedTerminalPresentation?.project?.(result),
@@ -542,13 +531,8 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        // Keep loop hashes and diagnostics on the raw outcome; this note is model feedback only.
-        return outcome.loopWarning ? appendToolLoopWarning(result, outcome.loopWarning) : result;
+        return result;
       } catch (err) {
-        if (err instanceof InternalToolLoopBlocked) {
-          recordPreExecutionDisposition(executeParams, "blocked", "tool-loop", "tool-loop");
-          throw err;
-        }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
             {
@@ -563,12 +547,9 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        await recordLoopOutcome({
+        observeToolOutcome({
           ctx,
           toolName: normalizedToolName,
-          toolParams: executeParams,
-          toolCallId,
-          error: err,
           resultContentSource:
             isTrustedToolExecutionPreflightError(err) || (signal?.aborted && err === signal.reason)
               ? undefined
@@ -577,6 +558,7 @@ export function wrapToolWithBeforeToolCallHook(
         });
         throw err;
       } finally {
+        skillUse?.close();
         liveness?.close(completed);
       }
     },

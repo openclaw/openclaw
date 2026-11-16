@@ -530,6 +530,27 @@ describe("security review workflow trust boundaries", () => {
     expect(result.stdout).toContain("next scheduled pass continues from the same window");
   });
 
+  it("separates organization membership reads from repository writes", () => {
+    const steps = readWorkflow("security-review").jobs.review!.steps;
+    const membershipSteps = steps.filter((step) =>
+      ["membership-token", "membership-token-fallback"].includes(step.id ?? ""),
+    );
+    expect(membershipSteps.map((step) => step.with?.["app-id"])).toEqual(["2729701", "2971289"]);
+    for (const step of membershipSteps) {
+      expect(step.uses).toMatch(/^actions\/create-github-app-token@[a-f0-9]{40}$/u);
+      expect(Object.entries(step.with!).filter(([key]) => key.startsWith("permission-"))).toEqual([
+        ["permission-members", "read"],
+      ]);
+    }
+    expect(membershipSteps[1]?.if).toBe("steps.membership-token.outcome == 'failure'");
+    for (const step of steps.filter((candidate) => candidate.env?.OPENCLAW_SECURITY_REVIEW_MODE)) {
+      expect(step.env?.GH_APP_TOKEN).toBe(
+        "${{ steps.membership-token.outputs.token || steps.membership-token-fallback.outputs.token }}",
+      );
+      expect(step.env?.GITHUB_TOKEN).toBe("${{ github.token }}");
+    }
+  });
+
   it("limits autoscrub writes to PR events and always enforces after failures", () => {
     const steps = readWorkflow("security-review").jobs.review!.steps;
     const commands = steps.filter((step) => step.env?.OPENCLAW_SECURITY_REVIEW_MODE);
@@ -575,7 +596,7 @@ describe("security review workflow trust boundaries", () => {
       ).toBe(allowed);
     }
     const tokenSteps = steps.filter((step) =>
-      step.uses?.startsWith("actions/create-github-app-token@"),
+      ["app-token", "app-token-fallback"].includes(step.id ?? ""),
     );
     expect(tokenSteps.map((step) => step.with?.["app-id"])).toEqual(["2729701", "2971289"]);
     for (const step of tokenSteps) {
@@ -649,8 +670,8 @@ describe("security review workflow trust boundaries", () => {
       writeFileSync(
         join(bin, "npm"),
         `#!${process.execPath}
-const fs = require("node:fs");
-const path = require("node:path");
+import fs from "node:fs";
+import path from "node:path";
 fs.writeFileSync(${JSON.stringify(installLog)}, JSON.stringify({
   args: process.argv.slice(2),
   cwd: process.cwd(),

@@ -494,20 +494,40 @@ describe("bootstrapApplication", () => {
     expect(routerStart).not.toHaveBeenCalled();
   });
 
-  it("stops the router immediately and again after an in-flight start settles", async () => {
-    const runtime = openAt("/settings/appearance", "main");
-    const routerStarted = createDeferred();
-    const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
+  it("keeps a stopped dynamic route retired when its in-flight start settles", async () => {
+    const runtime = openAt("/chat/main/chat/proof", "agent:main:chat:proof");
+    const component = createDeferred<{ renderSolid: () => null }>();
+    vi.spyOn(runtime.router.getRoute("chat")!, "component").mockReturnValue(component.promise);
+    const routerStart = vi.spyOn(runtime.router, "start");
     const routerStop = vi.spyOn(runtime.router, "stop");
 
     const start = runtime.start();
     await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
+    const pending = runtime.router.getState().pendingMatches[0];
+    expect(pending?.routeId).toBe("chat");
     runtime.stop();
     expect(routerStop).toHaveBeenCalledOnce();
+    expect(pending?.abortController.signal.aborted).toBe(true);
+    const stoppedState = runtime.router.getState();
+    const stoppedLocation = window.location.href;
+    const lateRoutes: string[] = [];
+    const unsubscribe = runtime.router.subscribe((state) => {
+      lateRoutes.push(
+        ...state.matches.map((match) => match.routeId),
+        ...state.pendingMatches.map((match) => match.routeId),
+      );
+    });
 
-    routerStarted.resolve();
-    await start;
-    expect(routerStop).toHaveBeenCalledTimes(2);
+    try {
+      component.resolve({ renderSolid: () => null });
+      await start;
+      expect(routerStop).toHaveBeenCalledTimes(2);
+      expect(lateRoutes).toEqual([]);
+      expect(runtime.router.getState()).toEqual(stoppedState);
+      expect(window.location.href).toBe(stoppedLocation);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("resolves runtime startup when the initial route is not found", async () => {

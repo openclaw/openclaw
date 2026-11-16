@@ -20,6 +20,7 @@ import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { hasMutableModelPayloadHook } from "./model-request-body.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
+import { takeResponsesContextUsageInput } from "./openai-responses-context-usage.js";
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
@@ -99,6 +100,7 @@ export function buildOpenAIResponsesParams(
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
   retainUserProvenance = false,
+  onItemRecovery?: () => void,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -108,7 +110,7 @@ export function buildOpenAIResponsesParams(
   const replayResponsesItemIds =
     !usesNativeOpenAICodexResponsesBackend(model) &&
     (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+  const conversion = {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
@@ -116,7 +118,11 @@ export function buildOpenAIResponsesParams(
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,
-  });
+    onItemRecovery,
+  };
+  const messages =
+    takeResponsesContextUsageInput(model, context, conversion) ??
+    convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, conversion);
   // The Responses API rejects an empty `input` array; when the only content
   // for this turn was the system prompt (now carried by `instructions`
   // instead), inject a placeholder input item so the request stays valid.

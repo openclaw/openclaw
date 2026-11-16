@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import JSON5 from "json5";
 import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 
 type ParsedFrontmatter = Record<string, string>;
@@ -13,29 +14,21 @@ export type FrontmatterParseIssue = {
   message: string;
 };
 
-type ParsedYamlValue = {
-  value: string;
-  kind: "scalar" | "structured";
-};
-
 function stripQuotes(value: string): string {
   const quote = value.at(0);
   return (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
 }
 
-function coerceYamlFrontmatterValue(value: unknown): ParsedYamlValue | undefined {
+function coerceYamlFrontmatterValue(value: unknown): string | undefined {
   if (value === null || value === undefined) {
     return undefined;
   }
-  if (typeof value === "string") {
-    return { value: value.trim(), kind: "scalar" };
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return { value: String(value), kind: "scalar" };
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim();
   }
   if (typeof value === "object") {
     try {
-      return { value: JSON.stringify(value), kind: "structured" };
+      return JSON.stringify(value);
     } catch {
       return undefined;
     }
@@ -182,7 +175,13 @@ function parseYamlFrontmatterOnce(
       ) {
         // Keep authored JSON spacing, but exclude YAML comments after the value.
         const valueStart = start + line.length - match[2].length;
-        inlineColonValues.set(match[1], block.slice(valueStart, valueEnd).trim());
+        const inlineValue = block.slice(valueStart, valueEnd).trim();
+        try {
+          JSON5.parse(inlineValue);
+          inlineColonValues.set(match[1], inlineValue);
+        } catch {
+          // Unquoted YAML strings need the normalized JSON for metadata readers.
+        }
       }
     }
 
@@ -190,14 +189,14 @@ function parseYamlFrontmatterOnce(
     for (const [rawKey, value] of Object.entries(parsed)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
-      if (!coerced) {
+      if (coerced === undefined) {
         continue;
       }
       const inlineValue = inlineColonValues.get(key);
       result[key] =
-        coerced.kind === "structured" && inlineValue !== undefined && Object.hasOwn(fallback, key)
+        typeof value === "object" && inlineValue !== undefined && Object.hasOwn(fallback, key)
           ? inlineValue
-          : coerced.value;
+          : coerced;
     }
 
     for (const [key, value] of Object.entries(fallback)) {

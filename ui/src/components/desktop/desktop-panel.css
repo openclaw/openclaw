@@ -136,19 +136,13 @@ openclaw-desktop-panel {
     flex: 1;
   }
   .desktop-sizing {
+    --settings-control-height: 32px;
+
     width: 88px;
-    height: 32px;
     flex: 0 0 auto;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 6px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 12px;
   }
   .desktop-touch-toolbar .desktop-sizing {
-    height: 44px;
+    --settings-control-height: 44px;
   }
   .desktop-sizing-menu__trigger {
     height: 28px;
@@ -328,13 +322,13 @@ openclaw-desktop-panel {
   .desktop-rail__menu--desktop {
     width: 330px;
     padding: 8px;
-    border-radius: 22px;
+    border-radius: var(--menu-radius-large);
   }
   .desktop-rail__menu--desktop .oc-menu-item,
   .desktop-rail__menu--desktop .desktop-toolbar-action {
     min-height: 36px;
     padding: 8px 10px;
-    border-radius: 10px;
+    border-radius: var(--menu-item-radius);
     font-size: 13px;
     line-height: 18px;
     gap: 10px;

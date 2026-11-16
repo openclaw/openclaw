@@ -16,7 +16,7 @@ import { prepareSkillBundle } from "../skills/library/bundle.js";
 import { prepareNodeClaudeSkillSession } from "./claude-skill-session.js";
 
 const workshopFixture = { description: "Fixture", inputSchema: {} };
-const workshopCall = { name: "skill_workshop", arguments: {} };
+const workshopCall = { name: "skill_library", arguments: {} };
 const mcpIdentity = { name: "workshop-fixture", version: "1" };
 const textContent = (text: string | number) => ({ content: [{ type: "text", text }] });
 const markdown = "---\ndescription: Guide\n---\n# Guide\n";

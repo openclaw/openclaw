@@ -42,9 +42,7 @@ it("keeps identity inputs editable through an admitted save and clears its error
       />
     );
   });
-  const input = mounted.container.querySelector<HTMLInputElement>(
-    ".agent-identity-editor__fields input",
-  )!;
+  const input = mounted.container.querySelector<HTMLInputElement>(".agent-identity-editor__name")!;
   const completion = createDeferred<AgentIdentityOutcome>();
   state.identityDraft = { name: "Garden guide", emoji: null, avatar: null };
   state.identitySaving = true;
@@ -57,7 +55,7 @@ it("keeps identity inputs editable through an admitted save and clears its error
   await waitForSolid(() =>
     expect(mounted.getByRole("alert").textContent).toContain("Synthetic identity save rejected"),
   );
-  expect(mounted.container.querySelector(".agent-identity-editor__fields input")).toBe(input);
+  expect(mounted.container.querySelector(".agent-identity-editor__name")).toBe(input);
   expect(input.value).toBe("Garden guide");
   expect(input.disabled).toBe(false);
 
@@ -65,7 +63,7 @@ it("keeps identity inputs editable through an admitted save and clears its error
   input.dispatchEvent(new Event("input", { bubbles: true }));
   await waitForSolid(() => expect(mounted.queryByRole("alert")).toBeNull());
   expect(state.identityDraft.name).toBe("Garden curator");
-  expect(mounted.container.querySelector(".agent-identity-editor__fields input")).toBe(input);
+  expect(mounted.container.querySelector(".agent-identity-editor__name")).toBe(input);
 });
 
 it("switches identity editors while the previous agent save is pending", async () => {
@@ -106,11 +104,10 @@ it("switches identity editors while the previous agent save is pending", async (
   );
   const mounted = mountSolid(() => {
     const props = createMemo(() => page.read());
-    return <Agents {...props()} identitySavePending={page.identitySavePending()} />;
+    return <Agents {...props()} />;
   });
   const input = () =>
-    mounted.container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")!;
-  const saving = () => mounted.container.querySelector('.agent-identity-editor [role="status"]');
+    mounted.container.querySelector<HTMLInputElement>(".agent-identity-editor__name")!;
   const edit = (name: string) => {
     input().value = name;
     input().dispatchEvent(new Event("input", { bubbles: true }));
@@ -124,24 +121,21 @@ it("switches identity editors while the previous agent save is pending", async (
         name: "Main draft",
       }),
     );
-    await waitForSolid(() => expect(saving()?.textContent).toContain("Saving"));
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
     page.setRouteData({ ...routeData, panel: "files" });
     await waitForSolid(() =>
-      expect(mounted.container.querySelector(".agent-identity-editor")).toBeNull(),
+      expect(mounted.container.querySelector(".agent-identity-editor__name")).toBeNull(),
     );
     page.setRouteData(routeData);
     await waitForSolid(() => {
       expect(input().value).toBe("Main draft");
-      expect(saving()?.textContent).toContain("Saving");
     });
     selection.set("research");
     await waitForSolid(() => {
       expect(input().value).toBe("Research");
       expect(input().disabled).toBe(false);
-      expect(saving()).toBeNull();
     });
     pending.resolve();
     await pending.promise;
@@ -154,7 +148,6 @@ it("switches identity editors while the previous agent save is pending", async (
     selection.set("research");
     await waitForSolid(() => {
       expect(input().value).toBe("Research");
-      expect(saving()).toBeNull();
     });
     retiredBeforePresentation.resolve();
   } finally {
