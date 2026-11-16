@@ -480,7 +480,7 @@ describe("backupRestoreCommand", () => {
   it.each([
     ["not a name", undefined, /requires an environment variable name/u],
     ["OC_TEST_UNSET_PG", undefined, /OC_TEST_UNSET_PG is not set; nothing was restored/u],
-    ["OC_TEST_SET_PG", "postgresql:///unused", /requires an archive with PostgreSQL stores/u],
+    ["OC_SET_PG", "unused", /requires an archive with PostgreSQL stores; nothing was restored/u],
   ] as const)("refuses --postgres-connection-env %s", async (env, value, msg) => {
     await withState(async (state) => {
       const archivePath = state.path("backup.tar.gz");
