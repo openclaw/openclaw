@@ -250,6 +250,7 @@ export function createChatMetadataHarness(
     buildProjection,
     readProjection,
     invalidProjections,
+    context,
     runtime,
     read: (params: Partial<Parameters<typeof runtime.read>[0]> = {}) =>
       runtime.read({ agentId: "main", ...params }),

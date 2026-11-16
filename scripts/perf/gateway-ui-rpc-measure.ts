@@ -31,6 +31,10 @@ import {
 import { readBuildIdFromBuildInfoForModuleUrl } from "../../src/version.ts";
 import { stopChild, stopGatewayGracefully } from "../lib/gateway-bench-child.ts";
 import {
+  readGatewayResources,
+  type GatewayResourceSnapshot,
+} from "../lib/gateway-bench-profile.ts";
+import {
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
   parsePositiveInt,
@@ -115,6 +119,10 @@ if (values.help) {
   --providers 10 --models 100       Synthetic config catalog: models per provider; no credentials.
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
+  --method models.list.equivalent-sessions --samples 640 --warmup 0 --no-counters
+                                  One first reply, 64 population reads, 576 hits across 64 shared saved sessions.
+                                  Requires a plain 128-session fixture and 1,000 synthetic models; samples
+                                  owned Gateway resources after forced main-isolate GC outside RPC timing.
   --pr-subscribe-clients 65        Fresh concurrent sockets for each PR subscribe burst; waits for every snapshot.
   --pr-subscribe-passive-keys <file> JSON array of existing sidebar session keys, in addition to --history-key.
   --picker-root <repo>             Synthetic repository for worktrees.branches.
@@ -162,9 +170,22 @@ assert(
 const warmup = parseNonNegativeInt(values.warmup, 2, "--warmup");
 const rttMs = parseNonNegativeInt(values["rtt-ms"], 0, "--rtt-ms");
 const remoteIngress = values["remote-ingress"];
+const equivalentSessionsCase = "models.list.equivalent-sessions";
+const equivalentSessions = values.method?.includes(equivalentSessionsCase) === true;
 const profileSamples = parsePositiveInt(values["profile-samples"], 5, "--profile-samples");
 const providerCount = parseNonNegativeInt(values.providers, 10, "--providers");
 const modelsPerProvider = parsePositiveInt(values.models, 100, "--models");
+assert(
+  !equivalentSessions ||
+    (values.method?.length === 1 &&
+      samples === 640 &&
+      warmup === 0 &&
+      values["no-counters"] &&
+      providerCount * modelsPerProvider === 1000 &&
+      !values.profile &&
+      !values.sync),
+  "equivalent sessions requires its single case, 640 samples, zero warmup, --no-counters, 1,000 models and no profiling/cohort",
+);
 const historyLimit = parsePositiveInt(values["history-limit"], 80, "--history-limit");
 const prSubscribeClients = parsePositiveInt(
   values["pr-subscribe-clients"],
@@ -204,6 +225,21 @@ assert(
   "team-shape fixture required",
 );
 const fixture = rawFixture;
+const equivalentSessionKeys = equivalentSessions
+  ? Array.from({ length: 128 }, (_, index) => index)
+      .filter((index) => index % 10 < 7 && index % 5 !== 0)
+      .slice(0, 64)
+      .map((index) => `agent:main:team-shape-session-${index}`)
+  : [];
+assert(
+  !equivalentSessions ||
+    (fixture.sessionCount === 128 &&
+      fixture.agentCount === 1 &&
+      !fixture.stressCounts &&
+      !fixture.chatStartupTargets &&
+      equivalentSessionKeys.length === 64),
+  "equivalent sessions requires 128 ordinary single-agent sessions without stress/startup overrides",
+);
 const cronJobCount = Number(fixture.cronJobs);
 assert(!values["cron-pages"] || cronJobCount >= 1000, "--cron-pages requires at least 1,000 jobs");
 assert(
@@ -296,6 +332,7 @@ type Sample = {
   payloadSha256?: string;
   arrayCounts?: Record<string, number>;
   syntheticModelCount?: number;
+  sessionModelRevision?: string;
   requestParams?: unknown;
   picker?: unknown;
   pickerCompletionMs?: number;
@@ -333,6 +370,13 @@ const pickerGitCount = () =>
     : undefined;
 const negotiatedExtensions = new Set<string>();
 const records: Sample[] = [];
+const equivalentSessionResources: Array<{
+  phase: "first" | "population" | "hits";
+  responses: number;
+  resources: GatewayResourceSnapshot;
+}> = [];
+let equivalentSelectionSha256: string | undefined;
+const equivalentSessionResponses = new Map<string, { revision: string; payloadSha256: string }>();
 let proxy: Awaited<ReturnType<typeof startProxy>> | undefined;
 const pair = generateKeyPairSync("ed25519");
 const publicKey = publicKeyRawBase64UrlFromEd25519Pem(
@@ -418,6 +462,15 @@ const rpcCases = [
     method: "models.list",
     params: { agentId: "main", view: "configured" },
   },
+  ...(equivalentSessions
+    ? [
+        {
+          id: equivalentSessionsCase,
+          method: "models.list",
+          params: { agentId: "main", view: "configured", preparedOnly: true },
+        },
+      ]
+    : []),
   {
     id: "models.list.provider-config",
     method: "models.list",
@@ -555,6 +608,12 @@ async function waitMarker(side: string, name: string) {
   }
 }
 function requestParams(candidate: (typeof rpcCases)[number], phase: string, round: number) {
+  if (candidate.id === equivalentSessionsCase) {
+    return {
+      ...candidate.params,
+      sessionKey: equivalentSessionKeys[phase === "first" ? 0 : round % 64],
+    };
+  }
   if (candidate.id.startsWith("cron.publication.")) {
     assert(cronPublicationFixture, "Cron publication fixture was not prepared");
     const { sharedKey, earlyKey, lateKey } = cronPublicationFixture;
@@ -945,7 +1004,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
       roundTripMs: performance.now() - started,
       ok: false,
       payloadBytes: 0,
-      requestParams: method === "cron.list" ? params : undefined,
+      requestParams: method === "cron.list" || id === equivalentSessionsCase ? params : undefined,
       error: String(error),
       server: await control("end"),
     });
@@ -986,6 +1045,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   }
   const gitAfter = pickerGitCount();
   const serializedPayload = JSON.stringify(response.payload ?? null);
+  const payloadSha256 = createHash("sha256").update(serializedPayload).digest("hex");
   const syntheticModels =
     method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
   let syntheticModelCount = 0;
@@ -1008,8 +1068,13 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     ok: response.ok,
     payloadBytes: Buffer.byteLength(serializedPayload),
     ...(syntheticModels ? { syntheticModelCount } : {}),
-    payloadSha256: createHash("sha256").update(serializedPayload).digest("hex"),
-    requestParams: method === "cron.list" ? params : undefined,
+    payloadSha256,
+    ...(id === equivalentSessionsCase &&
+    isRecord(response.payload) &&
+    typeof response.payload.sessionModelRevision === "string"
+      ? { sessionModelRevision: response.payload.sessionModelRevision }
+      : {}),
+    requestParams: method === "cron.list" || id === equivalentSessionsCase ? params : undefined,
     ...(picker
       ? {
           picker: response.payload,
@@ -1047,6 +1112,29 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
         syntheticModels?.size === expectedSyntheticModels.size,
       `${id}: every synthetic provider/model pair must appear exactly once`,
     );
+  }
+  if (id === equivalentSessionsCase) {
+    assert(isRecord(response.payload) && isRecord(params) && typeof params.sessionKey === "string");
+    const { sessionModelRevision, ...selection } = response.payload;
+    assert(
+      typeof sessionModelRevision === "string" && sessionModelRevision.length > 0,
+      "saved-session response omitted its current selection revision",
+    );
+    const previous = equivalentSessionResponses.get(params.sessionKey);
+    const observed = { revision: sessionModelRevision, payloadSha256 };
+    if (previous) {
+      assert.deepEqual(
+        observed,
+        previous,
+        "saved-session response changed between equivalent reads",
+      );
+    }
+    equivalentSessionResponses.set(params.sessionKey, observed);
+    // Session revisions belong to the saved row; every model, order and availability field
+    // must stay identical for this fixture's equivalent selections.
+    const selectionSha256 = createHash("sha256").update(JSON.stringify(selection)).digest("hex");
+    equivalentSelectionSha256 ??= selectionSha256;
+    assert.equal(selectionSha256, equivalentSelectionSha256, "equivalent selection output changed");
   }
   if (method === "cron.list" && id !== "cron.list.enabled" && !id.startsWith("cron.publication.")) {
     const jobs = isRecord(response.payload) ? response.payload.jobs : undefined;
@@ -1158,9 +1246,14 @@ async function startProxy() {
   };
 }
 function summaries() {
+  const cases = selected.flatMap(({ id, method }) =>
+    (id === equivalentSessionsCase ? ["first", "population", "hits"] : ["measured"]).map(
+      (phase) => ({ id, method, phase }),
+    ),
+  );
   return Object.fromEntries(
-    selected.map(({ id, method }) => {
-      const rows = records.filter((row) => row.case === id && row.phase === "measured");
+    cases.map(({ id, method, phase }) => {
+      const rows = records.filter((row) => row.case === id && row.phase === phase);
       const distribution = (observations: number[]) =>
         observations.length
           ? {
@@ -1196,7 +1289,7 @@ function summaries() {
           return typeof value === "number" ? value : undefined;
         });
       return [
-        id,
+        id === equivalentSessionsCase ? `${id}.${phase}` : id,
         {
           samples: rows.length,
           ...(id === "controlUi.sessionPullRequests.subscribe.burst"
@@ -1297,6 +1390,12 @@ try {
   const loader = path.join(checkout, "scripts", "tsx.mjs");
   const preload = fileURLToPath(new URL("./gateway-ui-rpc-preload.mjs", import.meta.url));
   const nodeArgs = ["--import", loader, "--import", preload, "--import", stopPreload.href];
+  if (equivalentSessions) {
+    nodeArgs.push(
+      "--import",
+      new URL("../lib/gateway-bench-profile-preload.ts", import.meta.url).href,
+    );
+  }
   if (values["picker-source-dir"]) {
     const sourcePreload = new URL("./checkout-picker-source-preload.mjs", import.meta.url);
     sourcePreload.searchParams.set("source", path.resolve(values["picker-source-dir"]));
@@ -1383,6 +1482,13 @@ try {
       await measureCase(candidate, index === 0 ? "first" : "warmup", connected.peer);
     }
   }
+  if (equivalentSessions) {
+    equivalentSessionResources.push({
+      phase: "first",
+      responses: 1,
+      resources: await readGatewayResources(child, { collectGarbage: true }),
+    });
+  }
   if (values["picker-fixture"] && values["picker-delay-after-warmup"]) {
     writeFileSync(
       path.join(path.resolve(values["picker-fixture"]), "git-delay-seconds"),
@@ -1429,7 +1535,15 @@ try {
           await waitMarker("head", `cell-${cell - 1}`);
         }
       }
-      await measureCase(candidate, "measured", connected.peer, index);
+      const phase = equivalentSessions ? (index < 64 ? "population" : "hits") : "measured";
+      await measureCase(candidate, phase, connected.peer, index);
+      if (equivalentSessions && (index === 63 || index === 639)) {
+        equivalentSessionResources.push({
+          phase: index === 63 ? "population" : "hits",
+          responses: index + 2,
+          resources: await readGatewayResources(child, { collectGarbage: true }),
+        });
+      }
       marker(`cell-${cell}`);
       cell++;
     }
@@ -1439,6 +1553,16 @@ try {
     await waitMarker("head", `cell-${cell - 1}`);
   }
   assertWatcherHealthy();
+  if (equivalentSessions) {
+    assert.deepEqual(
+      ["first", "population", "hits"].map(
+        (phase) => records.filter((record) => record.phase === phase).length,
+      ),
+      [1, 64, 576],
+      "equivalent-session response population changed",
+    );
+    assert.deepEqual([...equivalentSessionResponses.keys()], equivalentSessionKeys);
+  }
   if (cronPublicationFixture) {
     assert.deepEqual(
       await control<CronPublicationFixture>("cron-publication-setup", {
@@ -1539,6 +1663,17 @@ try {
       historyLimit,
       prSubscribeClients,
       prPassiveKeyCount: prPassiveKeys.length,
+      ...(equivalentSessions
+        ? {
+            equivalentSessions: {
+              sessionKeys: equivalentSessionKeys,
+              responses: 641,
+              population: "64 reads: one already-cached selection and 63 additional saved keys",
+              hits: 576,
+              selectionSha256: equivalentSelectionSha256,
+            },
+          }
+        : {}),
     },
     measurement: {
       transport: "real Gateway CLI and WebSocket",
@@ -1569,8 +1704,15 @@ try {
               : "after every timed request completes",
           }
         : { enabled: false },
+      ...(equivalentSessions
+        ? {
+            resourceScope:
+              "owned Gateway PID after forced main-isolate GC, outside IPC timing; heap fields are main-isolate, RSS is whole-process; endpoints are not peak memory",
+          }
+        : {}),
     },
     summaries: summaries(),
+    ...(equivalentSessions ? { equivalentSessionResources } : {}),
     records,
     ...(failure ? { error: failure.message } : {}),
   };

@@ -38,6 +38,7 @@ import {
 } from "./chat-metadata-facts.js";
 import {
   createChatMetadataModelList,
+  resolveSharedModelsListRequest,
   retainPublishedModelsList,
 } from "./chat-metadata-model-list.js";
 import {
@@ -207,13 +208,15 @@ export function createGatewayChatMetadataRuntime(params: {
         ? generation.neutralProjectionByAgentId
         : generation.sessionProjectionByKey;
     const key = neutral ? agent.agentId : sessionProjectionKey(agent.agentId, profiles);
-    const existing = projections.get(key);
-    if (existing) {
+    for (let existing = projections.get(key); existing; existing = projections.get(key)) {
       const prepared = existing.state === "ready" ? existing.projection : await existing.promise;
       if (await withCurrentReadAuthority(authority, () => prepared.isCurrent())) {
         return prepared;
       }
-      projections.delete(key);
+      // Another waiter may already have replaced the stale projection.
+      if (projections.get(key) === existing) {
+        projections.delete(key);
+      }
     }
     const projection = prepareChatMetadataModelProjection({
       context: params.getContext(),
@@ -229,17 +232,23 @@ export function createGatewayChatMetadataRuntime(params: {
             ...prepared,
             agent,
           };
-          projections.set(key, { state: "ready", projection: preparedProjection });
-          pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
+          // Evicted work may finish for its caller without replacing the current slot.
+          if (projections.get(key) === entry) {
+            projections.set(key, { state: "ready", projection: preparedProjection });
+            pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
+          }
           return preparedProjection;
         }),
       )
       .catch((error: unknown) => {
-        projections.delete(key);
+        if (projections.get(key) === entry) {
+          projections.delete(key);
+        }
         throw error;
       });
     void trackWork(projection);
-    projections.set(key, { state: "pending", promise: projection });
+    const entry: AgentProjectionEntry = { state: "pending", promise: projection };
+    projections.set(key, entry);
     // Cold history reads omit evicted projections; canonical reads prepare them on demand.
     pruneMapToMaxSize(projections, CHAT_METADATA_CACHE_MAX_ENTRIES);
     return projection;
@@ -436,14 +445,11 @@ export function createGatewayChatMetadataRuntime(params: {
   ): Promise<ModelsListResult | undefined> => {
     assertAgentDatabaseReadAdmitted(request.agentId);
     const agentId = normalizeAgentId(request.agentId);
-    const key = JSON.stringify([
-      agentId,
-      request.params,
-      request.includeManualSelection,
-      request.requesterProfileId,
-      request.readScope?.sessionKey,
-      request.readScope?.sessionEntry,
-    ]);
+    const selection = resolveSharedModelsListRequest(request);
+    if (!selection) {
+      return undefined;
+    }
+    const key = JSON.stringify([selection.key, request.requesterProfileId]);
     const rebuilding =
       pending !== undefined ||
       getPendingPreparedModelRuntimeReplacement() !== undefined ||
@@ -459,7 +465,11 @@ export function createGatewayChatMetadataRuntime(params: {
     try {
       result = await readCurrent(request.agentId, async (read) => {
         generation = read;
-        const prepared = await read.modelLists.read(request);
+        const prepared = await read.modelLists.read(
+          selection,
+          request.requesterProfileId,
+          request.readScope,
+        );
         return prepared ?? { isCurrent: () => true, read: () => undefined };
       });
     } catch (error) {
