@@ -2315,6 +2315,22 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `defers persistence when port inspection is inconclusive`() async throws {
+        let port = 19111
+        try await self.withLaunchAgentEnvironment(
+            statusPayload: #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
+        {
+            await PortGuardian.shared.setTestingInconclusive(true, forPort: port)
+
+            _ = await self.manager.enableLaunchAgentIfNeeded(port: port).error
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "status" }.count == 1)
+            #expect(calls.filter { $0.first == "install" }.isEmpty)
+            await PortGuardian.shared.setTestingInconclusive(false, forPort: port)
+        }
+    }
+
     @Test func `does not force install when launchd starts during ownership inspection`() async throws {
         let port = 19102
         let statuses = [

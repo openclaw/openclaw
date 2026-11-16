@@ -447,17 +447,24 @@ final class GatewayProcessManager {
         // Pair one launchd snapshot with a current listener read. A PID that starts after the
         // status read cannot look reusable, so the ownership guard preserves it instead of forcing
         // an install; a reusable PID from this same snapshot receives its readiness cycle below.
-        let listener = await PortGuardian.shared.describe(port: request.port)
+        let inspection = await PortGuardian.shared.inspect(port: request.port)
         guard !self.hostingChangeInProgress else { return .skipped }
         // Stop waits for the admitted install before disabling; it only discards queued requests.
         guard request.allowUnconfigured == self.hostsLocalGatewayWithRemotePrimary
         else { return .skipped }
-        if let listener {
+        switch inspection {
+        case let .owned(listener):
             guard listener.pid == launchAgent.runningPID else {
                 // A healthy manually started Gateway may be attached without becoming app-owned.
                 // Persistence checks and retained repair markers must not replace it.
                 return .skipped
             }
+        case .unknown:
+            // An unreadable port may already hold a Gateway; never replace it blind.
+            self.appendLog("[gateway] could not inspect port \(request.port); deferring installation\n")
+            return .skipped
+        case .free:
+            break
         }
 
         var isReadinessRepair = false
@@ -511,19 +518,28 @@ final class GatewayProcessManager {
         }
         if state.runningPID == nil,
            let lastError = state.lastError,
-           lastError.hasPrefix("Gateway ownership could not be verified."),
-           await PortGuardian.shared.describe(port: port) == nil
+           lastError.hasPrefix("Gateway ownership could not be verified.")
         {
-            // Recent logs explain a refused start; they never authorize service repair.
-            return .serviceInspection("Recent Gateway log error (may be from an earlier run): \(lastError)")
+            let inspection = await PortGuardian.shared.inspect(port: port)
+            if case .free = inspection {
+                // Recent logs explain a refused start; they never authorize service repair.
+                return .serviceInspection("Recent Gateway log error (may be from an earlier run): \(lastError)")
+            }
         }
         guard let pid = state.reusablePID,
               pid == startingPID || (startingPID == nil && freshInstall)
         else { return nil }
         // A stable launchd PID that owns the port can still have a wedged health RPC. A listener
         // owned by anyone else is protected and surfaced through the attach path instead.
-        if let listener = await PortGuardian.shared.describe(port: port), listener.pid != pid {
+        let ownership = await PortGuardian.shared.inspect(port: port)
+        switch ownership {
+        case let .owned(listener) where listener.pid != pid:
             return nil
+        case .unknown:
+            // Ownership is unproven, so repair evidence would risk replacing a live Gateway.
+            return nil
+        case .free, .owned:
+            break
         }
         return .timeoutWithRepairEvidence(LaunchAgentReadinessFailure(port: port, pid: pid))
     }
@@ -800,10 +816,17 @@ final class GatewayProcessManager {
         startGeneration: UInt64) async -> Bool
     {
         let port = requestedPort ?? GatewayEnvironment.gatewayPort()
-        let instance = await PortGuardian.shared.describe(port: port)
+        let inspection = await PortGuardian.shared.inspect(port: port)
         guard self.isCurrentGatewayStart(startGeneration) else { return true }
-        let hasListener = instance != nil
-        if hasListener,
+        let instance = inspection.ownedDescriptor
+        // An unreadable port may still hold a Gateway, so it is never treated as free.
+        // Its owner is unknowable, so the profile conflict check cannot run either.
+        let hasListener: Bool
+        switch inspection {
+        case .free: hasListener = false
+        case .owned, .unknown: hasListener = true
+        }
+        if case .owned = inspection,
            await !(self.profileOwnsGateway(
                instance,
                port: port,
@@ -821,6 +844,12 @@ final class GatewayProcessManager {
             context: context,
             deadlinePolicy: .fixed(timeout: hasListener ? 6.5 : 2),
             clock: self.readinessClock)
+        if case .unknown = inspection, case .failed = terminal {
+            guard self.isCurrentGatewayReadiness(context) else { return true }
+            // Neither attach nor a fresh child start is safe until the port is readable.
+            self.fail("Could not determine whether port \(port) is free; retry in a moment.")
+            return true
+        }
         if !hasListener, case .failed = terminal {
             guard self.isCurrentGatewayReadiness(context) else { return true }
             self.existingGatewayDetails = nil
@@ -895,7 +924,11 @@ final class GatewayProcessManager {
         return "pid \(instance.pid) \(instance.command) @ \(path)"
     }
 
-    private func describeAttachFailure(_ error: Error, port: Int, instance: PortGuardian.Descriptor?) -> String {
+    private func describeAttachFailure(
+        _ error: Error,
+        port: Int,
+        inspection: PortGuardian.PortInspection) -> String
+    {
         if let issue = GatewayCompatibilityIssue(error: error) {
             return issue.message
         }
@@ -911,11 +944,15 @@ final class GatewayProcessManager {
         if lower.contains("unexpected response") || lower.contains("invalid response") {
             return "Port \(port) returned non-gateway data; another process is using it."
         }
-        if let instance {
+        switch inspection {
+        case let .owned(instance):
             let instanceText = self.describe(instance: instance)
             return "Gateway listener found on port \(port) (\(instanceText)) but health check failed: \(message)"
+        case .unknown:
+            return "Could not inspect port \(port) to identify its owner; health check failed: \(message)"
+        case .free:
+            return "Gateway listener found on port \(port) but health check failed: \(message)"
         }
-        return "Gateway listener found on port \(port) but health check failed: \(message)"
     }
 
     private func isGatewayTokenAuthFailure(_ error: Error) -> Bool {
@@ -1031,10 +1068,10 @@ extension GatewayProcessManager {
                 let remainingMs = max(1, Double(remaining.seconds) * 1000 + Double(remaining.attoseconds) / 1e15)
                 let data = try await self.probeGatewayHealth(timeoutMs: min(1500, remainingMs), clock: clock)
                 guard self.isCurrentGatewayReadiness(context) else { return .superseded }
-                let instance = await PortGuardian.shared.describe(port: context.port)
+                let inspection = await PortGuardian.shared.inspect(port: context.port)
                 guard self.isCurrentGatewayReadiness(context) else { return .superseded }
                 return .ready(
-                    instance: instance,
+                    instance: inspection.ownedDescriptor,
                     startingPID: context.readinessPID,
                     snapshot: decodeHealthSnapshot(from: data))
             } catch {
@@ -1111,9 +1148,9 @@ extension GatewayProcessManager {
         _ error: Error,
         context: GatewayReadinessContext) async -> GatewayReadinessTerminal
     {
-        let instance = await PortGuardian.shared.describe(port: context.port)
+        let inspection = await PortGuardian.shared.inspect(port: context.port)
         guard self.isCurrentGatewayReadiness(context) else { return .superseded }
-        let reason = self.describeAttachFailure(error, port: context.port, instance: instance)
+        let reason = self.describeAttachFailure(error, port: context.port, inspection: inspection)
         if case .attach = context.purpose { return .failed(.attachProbe(reason)) }
         return .failed(.responsiveProbe(reason))
     }
@@ -1305,13 +1342,18 @@ extension GatewayProcessManager {
             return true
 
         case let .failed(terminalFailure):
-            let instance = await PortGuardian.shared.describe(port: context.port)
+            let inspection = await PortGuardian.shared.inspect(port: context.port)
             // Ownership only matters when something is listening. With no listener, a named
             // profile's startup failure is its own; reporting a port conflict would hide it.
-            let publishable = if instance == nil {
-                self.isCurrentGatewayReadiness(context)
-            } else {
-                await self.canPublishGatewayReadiness(instance: instance, context: context)
+            let publishable: Bool
+            switch inspection {
+            case .free:
+                publishable = self.isCurrentGatewayReadiness(context)
+            case let .owned(instance):
+                publishable = await self.canPublishGatewayReadiness(instance: instance, context: context)
+            case .unknown:
+                // Ownership is unknowable, so only a stale generation blocks publishing.
+                publishable = self.isCurrentGatewayReadiness(context)
             }
             guard publishable else {
                 return false

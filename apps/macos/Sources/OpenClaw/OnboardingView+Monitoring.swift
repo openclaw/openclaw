@@ -282,19 +282,23 @@ extension OnboardingView {
 
     func refreshLocalGatewayProbe() async {
         let port = GatewayEnvironment.gatewayPort()
-        let desc = await PortGuardian.shared.describe(port: port)
-        let managedServicePID: Int32? = if AppProfile.current.isActive, desc != nil {
-            await GatewayLaunchAgentManager.runningGatewayPID()
+        let inspection = await PortGuardian.shared.inspect(port: port)
+        guard case let .owned(desc) = inspection else {
+            // Keep the last probe when the port is unreadable; do not report it as idle.
+            if case .free = inspection { self.localGatewayProbe = nil }
+            return
+        }
+        let managedServicePID: Int32?
+        if AppProfile.current.isActive {
+            managedServicePID = await GatewayLaunchAgentManager.runningGatewayPID()
         } else {
-            nil
+            managedServicePID = nil
         }
-        self.localGatewayProbe = desc.map { desc in
-            LocalGatewayProbe(
-                port: port,
-                pid: desc.pid,
-                command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
-                profile: .current,
-                managedServicePID: managedServicePID)
-        }
+        self.localGatewayProbe = LocalGatewayProbe(
+            port: port,
+            pid: desc.pid,
+            command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
+            profile: .current,
+            managedServicePID: managedServicePID)
     }
 }

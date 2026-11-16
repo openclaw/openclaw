@@ -145,8 +145,8 @@ struct ConnectionModeCoordinatorTests {
             }
 
             do {
-                let descriptor = await PortGuardian.shared.describe(port: port)
-                try #require(descriptor?.pid == listener.processIdentifier)
+                let descriptor = await PortGuardian.shared.inspect(port: port)
+                try #require(descriptor.ownedDescriptor?.pid == listener.processIdentifier)
                 await coordinator.apply(mode: .local, paused: false)
                 guard case .attachedExisting = manager.status else {
                     Issue.record("Expected the existing listener to be attached before cleanup")
@@ -165,8 +165,8 @@ struct ConnectionModeCoordinatorTests {
                     try #require(listener.isRunning, "Connection cleanup terminated an unrecorded listener")
                     try await Task.sleep(for: .milliseconds(50))
                 }
-                let surviving = await PortGuardian.shared.describe(port: port)
-                #expect(surviving?.pid == listener.processIdentifier)
+                let surviving = await PortGuardian.shared.inspect(port: port)
+                #expect(surviving.ownedDescriptor?.pid == listener.processIdentifier)
                 await finish()
             } catch {
                 await finish()

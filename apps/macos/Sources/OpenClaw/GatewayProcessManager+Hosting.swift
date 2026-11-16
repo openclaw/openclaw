@@ -334,11 +334,17 @@ extension GatewayProcessManager {
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let port = GatewayEnvironment.gatewayPort()
-            if await PortGuardian.shared.describe(port: port) != nil {
+            let inspection = await PortGuardian.shared.inspect(port: port)
+            // The probe can take up to 5s; a stop may have started meanwhile.
+            guard self.isCurrentGatewayStart(startGeneration) else { return }
+            switch inspection {
+            case .free:
+                break
+            case .owned, .unknown:
+                // An unreadable port may still be held; attach before starting a child.
                 _ = await self.attachExistingGatewayIfAvailable(port: port, startGeneration: startGeneration)
                 return
             }
-            guard self.isCurrentGatewayStart(startGeneration) else { return }
             let environment = try self.appHostedEnvironment(runtime: runtime)
             try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
             let pid = try await self.childSupervisor.start(configuration: .init(
