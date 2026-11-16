@@ -133,27 +133,31 @@ it.each([
 
 it.each([false, true])("renders literal search text with rich=%s", async (rich) => {
   const literal = "Use <options> &copy; **bold** `PATH` [a]";
+  const link = "https://docs.openclaw.ai/cli/docs?a=(b)&c=d>e";
   vi.mocked(isRich).mockReturnValue(rich);
-  respond([{ title: literal, link: "https://docs.openclaw.ai/cli/docs", snippet: literal }]);
+  respond([{ title: literal, link, snippet: literal }]);
   await search([literal]);
   expect(runtime.error).not.toHaveBeenCalled();
   expect(runtime.exit).not.toHaveBeenCalled();
+  const escapedLink = link.replace(/[!-/:-@[-`{-~]/g, "\\$&");
+  const raw = String(runtime.log.mock.calls[0]?.[0]);
   if (rich) {
     expect(runtime.log.mock.calls).toEqual([
       [`Docs search: ${literal}`],
-      [`- ${literal} (docs.openclaw.ai/cli/docshttps://docs.openclaw.ai/cli/docs)`],
+      [expect.stringContaining(`- ${literal} `)],
       [`  ${literal}`],
     ]);
+    expect(String(runtime.log.mock.calls[1]?.[0])).toContain(link);
     return;
   }
-  const document = new JSDOM(await marked.parse(String(runtime.log.mock.calls[0]?.[0]))).window
-    .document;
+  const document = new JSDOM(await marked.parse(raw)).window.document;
   expect([
     document.querySelector("h1")?.textContent,
     document.querySelector("a")?.textContent,
     document.querySelector("li")?.textContent,
   ]).toEqual([`Docs search: ${literal}`, literal, `${literal} - ${literal}`]);
-  expect(document.querySelector("a")?.href).toBe("https://docs.openclaw.ai/cli/docs");
+  expect(raw).toContain(`(${escapedLink})`);
+  expect(document.querySelector("a")?.getAttribute("href")?.replaceAll("%3E", ">")).toBe(link);
 });
 
 it("rejects oversized docs search responses", async () => {

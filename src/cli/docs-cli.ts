@@ -159,7 +159,7 @@ export function registerDocsCli(program: Command) {
           const title = escapeMarkdownText(item.title);
           const snippet = item.snippet ? escapeMarkdownText(item.snippet) : "";
           const suffix = snippet ? ` - ${snippet}` : "";
-          lines.push(`- [${title}](${item.link})${suffix}`);
+          lines.push(`- [${title}](${escapeMarkdownText(item.link)})${suffix}`);
         }
         defaultRuntime.log(lines.join("\n").trimEnd());
       });
