@@ -41,6 +41,7 @@ import {
   captureManagedWorktreeSnapshot,
   verifyManagedWorktreeExactSnapshot,
 } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeRunEndCleanup,
@@ -249,7 +250,11 @@ export async function removeSettledManagedWorktree(
     if (
       (await checkHead()) !== head ||
       (snapshot &&
-        (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !== head)
+        (await git.require(
+          record.repoRoot,
+          ["rev-parse", worktreeSnapshotBase(snapshotRef!, snapshot)],
+          gitOptions,
+        )) !== head)
     ) {
       throw new Error(
         "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
@@ -376,6 +381,7 @@ export async function removeSettledManagedWorktree(
         }
         throw error;
       }
+      timing?.recordRecovery(snapshotRef);
       return {
         removed: true,
         ...(snapshotRef ? { snapshotRef } : {}),

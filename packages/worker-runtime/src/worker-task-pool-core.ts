@@ -191,8 +191,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     serviceNativeWorkerPass(this.host, this.slots);
     this.expireTasks();
     this.retirement.service();
-    const tasks = [...this.ownedTasks];
-    for (const task of tasks) {
+    for (const task of Array.from(this.ownedTasks)) {
       task.owner?.closing?.service();
     }
     this.dispatch();
@@ -281,6 +280,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.slots,
       this.resourceClosures,
       (slot) => this.ownedSettlement.retire(slot),
+      runInWorkerPoolContext,
       key,
       this.ownerOptions,
       this.host.observeResourceReply,

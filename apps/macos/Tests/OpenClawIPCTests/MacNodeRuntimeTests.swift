@@ -423,15 +423,15 @@ struct MacNodeRuntimeTests {
         (
             "Error: unknown Claude session catalog parameter: extra",
             "INVALID_REQUEST: unknown Claude session parameter: extra"),
-        ("Error: transcript cursor is invalid", "INVALID_REQUEST: transcript cursor is invalid"),
+        ("Error: chat history cursor is invalid", "INVALID_REQUEST: chat history cursor is invalid"),
         (
             "Error: EACCES: permission denied, open /private/example",
             "UNAVAILABLE: Claude session catalog is unavailable"),
         (
-            "Error: Claude transcript changed while it was being read",
+            "Error: Claude chat history changed while it was being read",
             "UNAVAILABLE: Claude session catalog is unavailable"),
         (
-            "Error: Claude transcript page exceeded the safe scan limit",
+            "Error: Claude chat history page exceeded the safe scan limit",
             "UNAVAILABLE: Claude session item exceeded the size limit"),
     ])
     func `Claude worker failures keep native errors`(message: String, expected: String) async {

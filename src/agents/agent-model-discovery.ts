@@ -23,6 +23,7 @@ type DiscoverModelsOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  excludeGeneratedProviderIds?: readonly string[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
@@ -56,6 +57,7 @@ function prepareModelRegistryOptions(options?: DiscoverModelsOptions) {
       ? { modelsJsonContents: options.modelsJsonContents }
       : {}),
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
+    excludeGeneratedProviderIds: options?.excludeGeneratedProviderIds,
     staticProviderConfigs: options?.staticProviderConfigs,
   };
 }

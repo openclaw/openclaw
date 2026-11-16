@@ -61,7 +61,7 @@ export function registerOneShotExecScopeCleanup(
     // before their local artifacts or the invocation state can be released.
     const settled = await Promise.allSettled([cleanupScope(), waitForExecScope(scopeKey)]);
     // The run ends here, so everything it left running keeps running without OpenClaw.
-    const handedOff = [...services, ...forgetReleasedProcesses(scopeKey)];
+    const handedOff = [...services, ...(await forgetReleasedProcesses(scopeKey))];
     if (handedOff.length > 0) {
       process.stderr.write(
         `[openclaw] Left running after this run (OpenClaw no longer tracks them; stop with kill <pid>):\n${handedOff

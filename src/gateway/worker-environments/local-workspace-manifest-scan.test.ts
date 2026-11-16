@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -341,7 +341,9 @@ it.each([
     if (result.kind !== "replace") {
       throw new Error("Missing prepared repair");
     }
-    const mutation = deserialize(inflateRawSync(result.update.mutation)) as LocalWorkspaceMutation;
+    const mutation = deserialize(
+      zstdDecompressSync(result.update.mutation),
+    ) as LocalWorkspaceMutation;
     expect(mutation).toEqual({
       kind: "update",
       revision: 7,

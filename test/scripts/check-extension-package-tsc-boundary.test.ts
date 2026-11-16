@@ -27,6 +27,7 @@ import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempRoots = createTempDirTracker();
 let receipts: FixtureReceiptChannel;
@@ -176,8 +177,11 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
   })) {
     write(file, source);
   }
-  // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
-  write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
+  // Observe the real checker's preparation request; compilation and receipts remain native.
+  write(
+    "scripts/prepare-extension-package-boundary-artifacts.mts",
+    `console.log("preparation request: " + (process.argv.find(arg => arg.startsWith("--extensions=")) ?? "full"));\n`,
+  );
   for (const file of [
     "check-extension-package-tsc-boundary.mts",
     "compile-extension-boundary.mts",
@@ -192,6 +196,7 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     "scripts/lib",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
+    "src/infra/directory-walk.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
     "src/plugins/package-entrypoints.ts",
     ...resolveNativeDeclarationFixtureSources(),
@@ -204,7 +209,20 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.symlinkSync(path.resolve(file), path.join(root, file));
   }
-  const run = () =>
+  const git = fixtureGit(root, "Boundary fixture", "fixture@example.invalid", true);
+  git("init", "-q");
+  git("add", "extensions");
+  const commitManifests = () => {
+    git("add", "extensions/demo/package.json", "extensions/larger/package.json");
+    git("commit", "-qm", "fixture");
+    return git("rev-parse", "HEAD");
+  };
+  const fullBase = commitManifests();
+  write("extensions/larger/package.json", '{"name":"@openclaw/larger","version":"1.0.0"}');
+  const subsetBase = commitManifests();
+  write("extensions/demo/package.json", JSON.stringify({ ...demoPackage, version: "1.0.0" }));
+  commitManifests();
+  const run = (base = fullBase) =>
     spawnSync(
       process.execPath,
       ["scripts/check-extension-package-tsc-boundary.mts", "--mode=compile"],
@@ -212,12 +230,37 @@ it("compiles packaged roots and invalidates them when exports or inherited paths
         cwd: root,
         encoding: "utf8",
         timeout: 20_000,
-        env: { ...process.env, OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "1" },
+        env: {
+          ...process.env,
+          OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY: "1",
+          GITHUB_EVENT_NAME: "pull_request",
+          OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
+          OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: "",
+          GITHUB_STEP_SUMMARY: "",
+        },
       },
     );
+  expectCompile(
+    run(subsetBase),
+    0,
+    "1 selected, 1 skipped",
+    'preparation request: --extensions=["demo"]',
+    "compiled plugins: 1",
+  );
   const cold = run();
   expect(cold.error, cold.stderr).toBeUndefined();
-  expectCompile(cold, 0, "compiled plugins: 2");
+  expectCompile(
+    cold,
+    0,
+    "compiled plugins: 2",
+    "2 selected, 0 skipped",
+    "preparation request: full",
+  );
+  for (const id of ["demo", "larger"]) {
+    expect(cold.stdout).toContain(
+      `| ${id} | selected | PR changes extensions/${id}/package.json |`,
+    );
+  }
   expect(cold.stdout.indexOf("] larger")).toBeLessThan(cold.stdout.indexOf("] demo"));
   const receipt = JSON.parse(
     fs.readFileSync(

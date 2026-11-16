@@ -33,7 +33,7 @@ it.each(["error", "data"] as const)(
       message: `PRIVATE PROMPT ${"x".repeat(6000)}`,
     };
     const output = createOpenAIResponsesAssistantOutput(model);
-    configureAiTransportHost({ ...initialHost, logWarn });
+    configureAiTransportHost({ ...initialHost, isLogEnabled: () => true, logWarn });
     assignTransportErrorDetails(
       output,
       Object.assign(new Error(body.message), {

@@ -123,7 +123,9 @@ it("keeps card chrome through import recovery and retains the current resolved r
   await vi.waitFor(() => expect(load).toHaveBeenCalled());
   const placeholder = root.container.querySelector<HTMLButtonElement>(".chat-tool-row[aria-busy]")!;
   expect(placeholder.disabled).toBe(true);
-  expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Exec");
+  expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+    "Run echo before",
+  );
   expect(placeholder.querySelector(".chat-tool-disclosure__content")).not.toBeNull();
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
   await waitForSolid(() =>

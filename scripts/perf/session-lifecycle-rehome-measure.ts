@@ -180,7 +180,7 @@ db.prepare = (sql: string) => {
   }
   return nativePrepare(sql);
 };
-function run(arm: "base" | "candidate", restore = true) {
+async function run(arm: "base" | "candidate", restore = true) {
   hold = 0;
   heldCtes = 0;
   const stop = startSqliteStatementTiming();
@@ -235,7 +235,7 @@ function run(arm: "base" | "candidate", restore = true) {
       throw error;
     }
   } finally {
-    admission.finish();
+    await admission.finish();
   }
   return stop().summarize();
 }
@@ -255,7 +255,7 @@ async function measure(arm: "base" | "candidate", label: string, allocations = f
   const holds: number[] = [];
   const ctes: number[] = [];
   for (let i = 0; i < iterations; i++) {
-    run(arm);
+    await run(arm);
     holds.push(hold);
     ctes.push(heldCtes);
   }
@@ -277,7 +277,7 @@ async function measure(arm: "base" | "candidate", label: string, allocations = f
 }
 try {
   for (const arm of ["base", "candidate"] as const) {
-    run(arm);
+    await run(arm);
     assert(cteSql, "Capture the actual owner query");
     record({
       phase: "explain",
@@ -310,7 +310,7 @@ try {
     }
   }
   assert.equal(digest(), initialDigest);
-  record({ phase: "committed", statementTiming: run("candidate", false), hold, heldCtes });
+  record({ phase: "committed", statementTiming: await run("candidate", false), hold, heldCtes });
   const stopSecond = startSqliteStatementTiming();
   const secondPlan = prepareSessionDeletionInDatabase(database, {
     operation: "entry",

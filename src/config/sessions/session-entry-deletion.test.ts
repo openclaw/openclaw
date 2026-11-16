@@ -247,7 +247,7 @@ it.each([false, true])(
     } finally {
       port1.close();
       port2.close();
-      workerAdmission.finish();
+      await workerAdmission.finish();
       statements.unsubscribe(observe);
     }
     expect(scans).toEqual(changed ? [false, true] : [false]);

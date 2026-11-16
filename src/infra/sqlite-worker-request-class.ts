@@ -217,6 +217,7 @@ const coreCommands = new Set([
   "preflight",
   "prepare",
   "prepareRun",
+  "probe",
   "prune",
   "publishClosedTurn",
   "put",

@@ -582,8 +582,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
-        // Completion wakes need the backgrounding below, so this precedes any wake.
-        run.session.originRunId = defaults?.runId;
+        run.session.startedByRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
@@ -692,8 +691,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
+                session: run.session,
               })
             : {
                 content: [

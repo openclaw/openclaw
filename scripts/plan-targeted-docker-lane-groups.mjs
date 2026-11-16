@@ -18,10 +18,16 @@ import {
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
 // The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
 const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
-// Candidate checks 37729815008 queued these behind the expanded upgrade matrix:
-// restart-auth took 27m27s, plugin-update 25m38s, and root-managed upgrade 15m34s.
-// Admit their existing groups first, without changing grouping or runner capacity.
-const LONG_LANE_ORDER = ["update-restart-auth", "plugin-update", "root-managed-vps-upgrade"];
+// Candidate checks 43754432638 (attempt 1) found first-hop upgrades and
+// legacy-state scenarios among the longest jobs. Admit these groups early;
+// leave every other group in its original order.
+const LONG_LANE_ORDER = [
+  "update-first-hop-compat",
+  "update-restart-auth",
+  "plugin-update",
+  "legacy-operator-state",
+  "root-managed-vps-upgrade",
+];
 
 function splitTokens(raw) {
   return [
@@ -84,7 +90,7 @@ export function planTargetedDockerLaneGroups({
   baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
   assertSupportedUpgradeSurvivorBaselineSpec(predecessor);
   const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
-  // The same run's September scenario jobs took 14-16 minutes at the median,
+  // Earlier candidate checks 37729815008 had September scenarios at 14-16 minutes median,
   // versus about 10 minutes for June/August. Start recent pinned cohorts first;
   // unresolved tags retain their caller order until baseline resolution pins them.
   if (
@@ -259,8 +265,13 @@ export function planTargetedDockerLaneGroups({
   if (hasExpandedSurvivorScenarios) {
     const priority = (group) =>
       Math.min(
-        ...splitTokens(group.docker_lanes).map((lane) => {
-          const index = LONG_LANE_ORDER.indexOf(lane);
+        ...splitTokens(
+          `${group.docker_lanes} ${group.published_upgrade_survivor_scenarios ?? ""}`,
+        ).map((lane) => {
+          const family = lane.startsWith("update-first-hop-compat-")
+            ? "update-first-hop-compat"
+            : lane;
+          const index = LONG_LANE_ORDER.indexOf(family);
           return index < 0 ? LONG_LANE_ORDER.length : index;
         }),
       );

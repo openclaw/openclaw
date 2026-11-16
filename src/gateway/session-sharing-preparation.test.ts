@@ -14,12 +14,14 @@ import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-en
 import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
+import * as workerResources from "../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import * as worker from "../infra/sqlite-worker-store.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -154,6 +156,58 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
+it("joins an already-opening first-use creator before capturing its registry witness", async ({
+  state,
+  harness,
+  signal,
+  task,
+}) => {
+  const { cfg, storePath } = harness;
+  expect(fs.existsSync(storePath)).toBe(false);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const open = worker.openAgentDatabaseSqliteWorkerStore;
+  vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return open(...args);
+  });
+  const opening = prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  let facts: ReturnType<typeof harness.prepareMissing> | undefined;
+  try {
+    await withinTest(entered.promise, signal);
+    facts = harness.prepareMissing();
+    void facts.catch(() => {});
+    release.resolve();
+    const acquired = await facts.catch((error: unknown) => {
+      const outer = error instanceof Error ? error : undefined;
+      const cause = outer?.cause instanceof Error ? outer.cause : undefined;
+      Object.assign(task.meta, {
+        registryFailureProvenance: {
+          outer: outer?.name === "SessionMutationFactsUnavailableError",
+          cause: cause?.name === "AgentDatabaseRegistryChangedError",
+          owner: outer?.stack?.includes("session-sharing-preparation.ts") === true,
+          registry: cause?.stack?.includes("openclaw-agent-db-registry-listing.ts") === true,
+        },
+      });
+      throw error;
+    });
+    using prepared = releasing(acquired);
+    expect(prepared.readCurrent(cfg).target).toBeNull();
+    expect(fs.existsSync(storePath)).toBe(true);
+  } finally {
+    release.resolve();
+    await opening;
+    await facts?.then(
+      (prepared) => prepared.release(),
+      () => {},
+    );
+  }
+});
+
 it("discovers sharing facts after an already-opening writer publishes registration", async ({
   state,
   harness,
@@ -185,6 +239,65 @@ it("discovers sharing facts after an already-opening writer publishes registrati
   } finally {
     release.resolve();
     await opening;
+  }
+});
+
+it("qualifies a cold registration that begins after inventory preparation", async ({
+  state,
+  harness,
+  signal,
+  task,
+}) => {
+  const { cfg, storePath } = harness;
+  harness.write({ sessionId: "late-cold-writer", updatedAt: 1 });
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  await prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: state.env }).read();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const discover = workerResources.prepareSessionStoreCandidatesInWorker;
+  vi.spyOn(workerResources, "prepareSessionStoreCandidatesInWorker").mockImplementationOnce(
+    async (...args) => {
+      const result = await discover(...args);
+      entered.resolve();
+      await release.promise;
+      return result;
+    },
+  );
+  const pending = harness.prepare();
+  void pending.catch(() => {});
+  let opening: ReturnType<typeof prepareOpenClawAgentDatabaseExecution> | undefined;
+  try {
+    await withinTest(entered.promise, signal);
+    opening = prepareOpenClawAgentDatabaseExecution(
+      { agentId: "main", path: storePath, env: state.env },
+      () => {},
+    );
+    await opening;
+    release.resolve();
+    const acquired = await pending.catch((error: unknown) => {
+      const outer = error instanceof Error ? error : undefined;
+      const cause = outer?.cause instanceof Error ? outer.cause : undefined;
+      Object.assign(task.meta, {
+        registryFailureProvenance: {
+          outer: outer?.name === "SessionMutationFactsUnavailableError",
+          cause: cause?.name === "AgentDatabaseRegistryChangedError",
+          owner: outer?.stack?.includes("session-sharing-preparation.ts") === true,
+          registry: cause?.stack?.includes("openclaw-agent-db-registry-listing.ts") === true,
+        },
+      });
+      throw error;
+    });
+    using prepared = releasing(acquired);
+    expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("late-cold-writer");
+  } finally {
+    release.resolve();
+    await opening;
+    await pending.then(
+      (prepared) => prepared.release(),
+      () => {},
+    );
   }
 });
 
@@ -372,31 +485,64 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["main", "other"])(
-  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
-  async (agentId, { harness }) => {
-    const { cfg, sessionKey } = harness;
-    harness.write(restrictedEntry("acquiring-topology", "original"));
-    const read = entryReads.readSessionEntriesFromStoreInWorker;
-    let published = false;
+it.for([
+  ["per-agent", "main"],
+  ["per-agent", "other"],
+  ["shared", "main"],
+  ["shared", "ops"],
+  ["shared", "other"],
+] as const)(
+  "qualifies %s acquisition when %s becomes ready",
+  async ([kind, readyAgentId], { state, signal }) => {
+    const storePath =
+      kind === "per-agent"
+        ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+        : state.statePath("shared-acquisition.sqlite");
+    const agentId = kind === "shared" ? "ops" : "main";
+    if (kind === "shared") {
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
+    }
+    const cfg = {
+      agents: { entries: { main: {}, ops: {}, other: {} } },
+      ...(kind === "shared" ? { session: { store: storePath } } : {}),
+    };
+    const harness = sharingHarness(cfg, `agent:${agentId}:acquiring`, storePath, agentId);
+    harness.write(restrictedEntry("acquiring", "first"));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
     vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
       async (...args) => {
-        const result = await read(...args);
-        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
-          published = true;
-          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        const result = await readEntries(...args);
+        if (args[0].projection === "full" && args[0].includeAuthorization) {
+          entered.resolve();
+          await release.promise;
         }
         return result;
       },
     );
     const pending = harness.prepare();
-    if (agentId === "main") {
-      await expect(pending).rejects.toThrow(unavailableMessage);
-    } else {
-      using prepared = releasing(await pending);
-      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    void pending.catch(() => {});
+    try {
+      await withinTest(entered.promise, signal);
+      sessionChanges.emit({ all: true, scope: { agentId: readyAgentId, topology: true } });
+      release.resolve();
+      if (readyAgentId === "other") {
+        using prepared = releasing(await pending);
+        const facts = prepared.readCurrent(cfg);
+        expect(facts.target.entry.sessionId).toBe("acquiring");
+        expect(facts.target.agentId).toBe(agentId);
+        expect(facts.sourceAgentId).toBe("main");
+      } else {
+        await expect(pending).rejects.toThrow(unavailableMessage);
+      }
+    } finally {
+      release.resolve();
+      await pending.then(
+        (prepared) => prepared.release(),
+        () => {},
+      );
     }
-    expect(published).toBe(true);
   },
 );
 

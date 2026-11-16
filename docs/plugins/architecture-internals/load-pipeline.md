@@ -306,7 +306,11 @@ actual write begins.
 Registered services, hooks, tools, session MCP overlays, generated skill-link
 publication, and activation state remain runtime-owned.
 An active registry pins its chosen artifact binding so source and built modules
-cannot split its registrations. Native ESM module lifetime still follows Node's
+cannot split its registrations. Before draining a replaced plugin, reload awaits
+rollback-source capture through the existing host-local source owner. Filesystem
+copying is asynchronous so foreground work can continue; captured paths, native
+references, and frozen aliases retain their existing ownership. Source custody
+and recovery forks keep their synchronous contract. Native ESM module lifetime still follows Node's
 module loader. Manifest-derived questions such as "which plugin owns this
 provider?" use the metadata snapshot without executing plugin code. The persisted
 installed index belongs to management and startup; it is not a freshness signal

@@ -37,14 +37,14 @@ import {
 } from "./local-workspace-manifest-tree.js";
 import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
-  LocalWorkspaceBaselineDocument,
   LocalWorkspaceCheckpointReceipt,
-  LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+  LocalWorkspaceManifestInput,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
 } from "./local-workspace-store.types.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -53,39 +53,6 @@ import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
 } from "./workspace-path-exclusions.js";
-
-export type LocalWorkspaceManifestAction =
-  | {
-      kind: "scan" | "probe";
-      target: "canonical" | "projection";
-      canonicalRoot: string;
-      capture?: LocalWorkspaceCapture;
-    }
-  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
-  | { kind: "materialize" }
-  | { kind: "convert" }
-  | { kind: "repair"; canonicalRoot: string }
-  | {
-      kind: "prepare";
-      manifest: LocalWorkspaceManifestMutation;
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    }
-  | (LocalWorkspaceBaselineDocument & {
-      kind: "replace";
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    });
-
-export type LocalWorkspaceManifestCheckpoint = Omit<
-  LocalWorkspaceManifestScan,
-  "observation" | "preparations"
->;
-
-export type LocalWorkspaceManifestInput = {
-  id: string;
-  revision: number;
-  action: LocalWorkspaceManifestAction;
-  knownTreeRoot?: string;
-};
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(

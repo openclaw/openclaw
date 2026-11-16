@@ -492,7 +492,10 @@ export async function handleOpenResponsesHttpRequest(
           mapped.status,
           createFailedResponse(
             {
-              code: incompleteTurnText === undefined ? mapped.error.type : "incomplete_turn",
+              code:
+                incompleteTurnText === undefined
+                  ? (mapped.error.code ?? mapped.error.type)
+                  : "incomplete_turn",
               message: mapped.error.message,
             },
             result === undefined ? undefined : extractUsageFromResult(result),
@@ -650,7 +653,7 @@ export async function handleOpenResponsesHttpRequest(
         type: "response.failed",
         response: createFailedResponse(
           {
-            code: incompleteTurnText === undefined ? error.type : "incomplete_turn",
+            code: incompleteTurnText === undefined ? (error.code ?? error.type) : "incomplete_turn",
             message: error.message,
           },
           result === undefined ? undefined : extractUsageFromResult(result),

@@ -160,6 +160,12 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
    * CLI loopback grant). Replaces the scope derived from `agentId` and `skillsSnapshot`.
    */
   execSkillScope?: ExecSkillScope;
+  /**
+   * Host-resolved lifetime of this turn's tool policy, supplied only by host tool construction.
+   * "conversation" means the turn adds no narrowing the session would not re-derive on its next
+   * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
+   */
+  toolPolicyScope?: "conversation" | "turn";
 };
 
 export type PluginCodingToolsOptions = Omit<

@@ -16,6 +16,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -120,14 +121,13 @@ export function resolveOperatorRoleSelection(
   const login = githubLogin?.toLowerCase();
   const assignments = roles.assignments?.byGithubLogin;
   if (login && assignments) {
-    for (const configuredLogin of Object.keys(assignments)) {
-      if (
-        configuredLogin.trim().toLowerCase() === login &&
-        // SAFETY: Object.keys enumerates the validated string-valued assignment map.
-        Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
-      ) {
-        return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
-      }
+    // Config validation rejects duplicate normalized logins; exact keys need no roster scan.
+    const key = Object.hasOwn(assignments, login)
+      ? login
+      : Object.keys(assignments).find((candidate) => candidate.trim().toLowerCase() === login);
+    const role = key === undefined ? undefined : assignments[key];
+    if (role && Object.hasOwn(roles.definitions, role)) {
+      return { effectiveRole: role, roleSource: "githubLogin" };
     }
   }
   return { effectiveRole: roles.default, roleSource: "default" };
@@ -194,11 +194,23 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
+  creation:
+    | {
+        actor?: SessionCreatedActor;
+        openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+      }
+    | undefined,
 ): "required" | undefined {
+  const principal = creation?.openclawIdPrincipal;
+  if (principal?.kind === "member") {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new OpenClawIdPrincipalChangedError();
+    }
+    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
   const actor = creation?.actor;
   return actor?.type === "human" &&
     actor.id &&

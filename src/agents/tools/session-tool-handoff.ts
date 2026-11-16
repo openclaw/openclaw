@@ -285,8 +285,6 @@ export async function handoffSessionTool(
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
                     source: "tool_handoff",
-                    // A yielded subagent task resumes as itself only from its own run's handoff.
-                    sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
                     ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),

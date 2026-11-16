@@ -77,7 +77,6 @@ import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -643,7 +642,6 @@ export function* assembleOpenClawCodingTools(
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };

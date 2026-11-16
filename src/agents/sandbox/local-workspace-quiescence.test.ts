@@ -132,7 +132,7 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   expect(commands("pause")).toHaveLength(0);
   expect(mocks.pauseLog).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(
-      /^Local workspace unpause: reason=reconcile durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
+      /^Local workspace unpause: reason=reconcile scope=240baed8f6807bd3 durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
     ),
     { engine: "docker", runtime: "container" },
   );
@@ -178,7 +178,7 @@ it("reports cumulative frozen phases including engine resume, before receipt cle
     await control.resume();
     await control.resume();
     expect(mocks.pauseLog).toHaveBeenLastCalledWith(
-      'Local workspace unpause: reason=reconcile durationMs=194399 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeInspect":29900,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
+      'Local workspace unpause: reason=reconcile scope=240baed8f6807bd3 durationMs=194399 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeInspect":29900,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
       { engine: "docker", runtime: "container" },
     );
     expect(mocks.pauseLog).toHaveBeenCalledTimes(2);
@@ -205,10 +205,13 @@ it("persists exact container and browser custody before pausing and resumes only
   const { resume } = await quiesce({ reason: "checkpoint" });
   expect(mocks.pauseLog.mock.calls).toEqual([
     [
-      "Local workspace pause: reason=checkpoint count=1",
+      "Local workspace pause: reason=checkpoint scope=240baed8f6807bd3 count=1",
       { engine: "docker", runtime: "container" },
     ],
-    ["Local workspace pause: reason=checkpoint count=2", { engine: "docker", runtime: "browser" }],
+    [
+      "Local workspace pause: reason=checkpoint scope=240baed8f6807bd3 count=2",
+      { engine: "docker", runtime: "browser" },
+    ],
   ]);
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();

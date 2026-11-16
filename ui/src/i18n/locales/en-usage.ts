@@ -18,7 +18,7 @@ const enUsage = {
       instance: "Current instance",
       instanceHint: "Show only the active session id for each logical session.",
       family: "Historical lineage",
-      familyHint: "Roll up known rotated transcript-backed session ids.",
+      familyHint: "Include earlier chats saved for each session.",
       familyIncluded: "Historical lineage includes {count} session instances.",
     },
     filters: {

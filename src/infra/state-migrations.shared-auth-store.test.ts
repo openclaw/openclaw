@@ -377,7 +377,7 @@ describe("shared auth relocation lifecycle", () => {
     await stateDb.closeOpenClawStateDatabaseAsync();
     const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     const { sourcePath } = state;
-    const reader = prepareAgentAuthProfileRowsRead({
+    const reader = await prepareAgentAuthProfileRowsRead({
       databasePath: sourcePath,
       agentId: "main",
       env: state.env,

@@ -97,7 +97,9 @@ const webMedia = (fileName: string, contentType: string, bytes: string) => ({
   fileName,
   contentType,
 });
-const mp3Media = webMedia("reply.mp3", "audio/mpeg", "remote-mp3");
+const oggPage = (segment: string) => `OggS${"\0".repeat(22)}\x01${segment}`.padEnd(58, "\0");
+const vorbisMedia = webMedia("reply.ogg", "audio/ogg", oggPage("\x1e\x01vorbis"));
+const oggOpus = Buffer.from(oggPage("\x13OpusHead"));
 const uploadData = () => fileCreateMock.mock.calls[0]![0].data;
 const messageData = () => messageCreateMock.mock.calls[0]![0].data;
 const resourceRequest = (callIndex: number) => messageResourceGetMock.mock.calls[callIndex]![0];
@@ -183,7 +185,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "msg_reply" } });
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
-    transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
+    transcodeAudioMock.mockResolvedValue(oggOpus);
     runFfprobeMock.mockResolvedValue("1.234\n");
     runFfmpegMock.mockImplementation(async (args) => {
       await fs.writeFile(args.at(-1)!, videoCover);
@@ -262,7 +264,7 @@ describe("sendMediaFeishu msg_type routing", () => {
   it("omits audio duration when probing fails", async () => {
     runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
 
-    await sendMedia({ mediaBuffer: Buffer.from("opus"), fileName: "reply.ogg" });
+    await sendMedia({ mediaBuffer: oggOpus, fileName: "reply.ogg" });
 
     expect(transcodeAudioMock).not.toHaveBeenCalled();
     expect(uploadData()).not.toHaveProperty("duration");
@@ -285,32 +287,30 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(imageCreateMock.mock.calls[0]![0].data.image).toEqual(videoCover);
   });
 
-  it.each(["transcodes", "falls back"])("%s voice-intent mp3", async (outcome) => {
+  it.each(["transcodes", "falls back"])("%s voice-intent Ogg Vorbis", async (outcome) => {
     const degraded = outcome === "falls back";
-    loadWebMediaMock.mockResolvedValueOnce(mp3Media);
+    loadWebMediaMock.mockResolvedValueOnce(vorbisMedia);
     if (degraded) {
       transcodeAudioMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
     }
     const result = await sendMedia({
-      mediaUrl: "https://example.com/reply.mp3",
+      mediaUrl: "https://example.com/reply.ogg",
       audioAsVoice: true,
     });
     expect(uploadData()).toMatchObject({
       file_type: degraded ? "stream" : "opus",
-      file_name: degraded ? "reply.mp3" : "voice.ogg",
+      file_name: degraded ? "reply.ogg" : "voice.ogg",
     });
-    expect(uploadData().file).toEqual(Buffer.from(degraded ? "remote-mp3" : "opus-output"));
+    expect(uploadData().file).toEqual(degraded ? vorbisMedia.buffer : oggOpus);
     expect(messageData().msg_type).toBe(degraded ? "file" : "audio");
     expect(result.voiceIntentDegradedToFile).toBe(degraded ? true : undefined);
-    if (!degraded) {
-      expect(transcodeAudioMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          audioBuffer: mp3Media.buffer,
-          inputFileName: mp3Media.fileName,
-          maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-        }),
-      );
-    }
+    expect(transcodeAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audioBuffer: vorbisMedia.buffer,
+        inputFileName: "reply.ogg",
+        maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+      }),
+    );
   });
 
   it("routes video into a topic reply", async () => {

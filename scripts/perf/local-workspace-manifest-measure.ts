@@ -40,8 +40,8 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { serialize } from "node:v8";
-import type { LocalWorkspaceManifestAction } from "../../src/gateway/worker-environments/local-workspace-manifest-scan.js";
 import type { LocalWorkspaceStore } from "../../src/gateway/worker-environments/local-workspace-store.js";
+import type { LocalWorkspaceManifestAction } from "../../src/gateway/worker-environments/local-workspace-store.types.js";
 import type { WorkerWorkspaceManifest } from "../../src/gateway/worker-environments/workspace-manifest.js";
 
 const [mode, scratchArgument, label, actionName, instrument, callsArgument] = process.argv.slice(2);

@@ -62,13 +62,11 @@ export async function restoreSessionTurnColdTranscript(
               target: scope,
               acceptSourceValidation: (validation) =>
                 acceptSessionSourceValidation(source, validation),
-              readMetadata: async () =>
-                (
-                  await owner.readColdMetadata({
-                    sessionId: scope.sessionId,
-                    env: scope.env ?? process.env,
-                  })
-                ).archive,
+              readMetadata: () =>
+                owner.readColdMetadata({
+                  sessionId: scope.sessionId,
+                  env: scope.env ?? process.env,
+                }),
             },
             guard,
           );

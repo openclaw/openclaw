@@ -141,7 +141,12 @@ test.for(["new database", "interrupted empty database"])(
       const result = await withinTest(creating, signal);
       // A second unadmitted path would defer dispatch even without joining schema birth.
       expect(observed.candidates).toEqual([
-        { path: configuredDatabasePath, physicalPath: databasePath },
+        {
+          path: configuredDatabasePath,
+          physicalPath: databasePath,
+          identity: undefined,
+          scope: undefined,
+        },
       ]);
       expect(result).toMatchObject({ ok: true, payload: { key, sessionId: expect.any(String) } });
       expect(observed.dispatched, "Discovery must wait for the canonical agent schema").toBe(0);
