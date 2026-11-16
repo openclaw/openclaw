@@ -158,12 +158,12 @@ suite.define(() => {
             "*",
           );
         });
-        await sidebar.locator("[data-rail-more]").click();
+        // Leave the dashboard for Usage, one of the rail's default pins, and come back.
         await sidebar
-          .locator(".sidebar-pages-menu")
-          .getByRole("link", { name: "Sessions", exact: true })
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"] a')
+          .first()
           .click();
-        await page.waitForURL(`${suite.server.baseUrl}sessions`);
+        await page.waitForURL(`${suite.server.baseUrl}usage`);
         await sidebar.locator('[data-navigation-view="sessions"]').click();
         await pinned.click();
         await frame.waitFor();
