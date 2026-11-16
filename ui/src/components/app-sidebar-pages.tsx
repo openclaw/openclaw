@@ -80,6 +80,7 @@ export function SidebarPagesMenu(props: {
       props.host,
       parseSidebarEntry(entry.key)!,
       () => zone().pluginTabs,
+      true,
     );
     return (
       <div class="sidebar-pages__entry">
@@ -151,6 +152,7 @@ export function SidebarPluginSection(props: { host: AppSidebarRenderHost }): JSX
               props.host,
               parseSidebarEntry(key)!,
               () => zone().pluginTabs,
+              false,
             )}
             <PinToggle host={props.host} entry={key} />
           </div>
@@ -164,6 +166,8 @@ function renderAppSidebarPageEntry(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   pluginTabs: () => ReadonlyMap<string, GatewayControlUiPluginTab>,
+  // The pages menu lists a section's parent alone, so the parent stands for its children too.
+  section: boolean,
 ): JSX.Element {
   if (entry.type === "person" || entry.type === "session") {
     return undefined;
@@ -181,6 +185,7 @@ function renderAppSidebarPageEntry(
             prop:kind={"navigation"}
             prop:navigationKey={entry.key}
             prop:navigationChildren={false}
+            prop:navigationSection={section}
             prop:navigationMenus={host.sidebarMenus}
           />
         }
