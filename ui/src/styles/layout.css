@@ -2307,8 +2307,10 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
-/* Automations section: New automation, then grouped rows with a byline. */
-.sidebar-automations {
+/* Automations section: New automation, then grouped rows with a byline. Portals reads its
+   rows the same way, without groups. */
+.sidebar-automations,
+.sidebar-portals {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -2322,14 +2324,16 @@ div.shell.shell--onboarding {
 }
 
 /* Rows start where the group chevron does: a title in the text color over a quieter byline. */
-.sidebar-automations__row {
+.sidebar-automations__row,
+.sidebar-portals__row {
   align-items: center;
   gap: 8px;
   height: auto;
   padding: 6px 8px 6px calc(var(--sidebar-inset) + 2px);
 }
 
-.sidebar-automations__copy {
+.sidebar-automations__copy,
+.sidebar-portals__copy {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -2338,19 +2342,23 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-automations__name,
-.sidebar-automations__byline {
+.sidebar-automations__byline,
+.sidebar-portals__name,
+.sidebar-portals__byline {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sidebar-automations__name {
+.sidebar-automations__name,
+.sidebar-portals__name {
   color: var(--text);
   font-size: 13px;
   line-height: 18px;
 }
 
-.sidebar-automations__byline {
+.sidebar-automations__byline,
+.sidebar-portals__byline {
   color: color-mix(in srgb, var(--muted) 80%, transparent);
   font-size: 12px;
   line-height: 16px;

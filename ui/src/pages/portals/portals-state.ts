@@ -515,6 +515,19 @@ export function createPortals(
       state.selectedPortalId = portal.id;
       ensurePortalProbe(portal, true);
     },
+    /** Opens a portal by id from the Portals sidebar or address; before the list arrives, the
+        list keeps it open when it holds it. */
+    openPortal(portalId: string) {
+      const portal = state.portals.find((entry) => entry.id === portalId);
+      if (portal) {
+        if (portal.id !== state.selectedPortalId) {
+          state.selectedPortalId = portal.id;
+          ensurePortalProbe(portal, true);
+        }
+      } else if (!state.loaded) {
+        state.selectedPortalId = portalId;
+      }
+    },
     async closePortal(portal: PortalSummary) {
       if (!state.canClosePortal || state.closingPortalId) {
         return;

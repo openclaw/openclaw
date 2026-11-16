@@ -5,7 +5,7 @@ import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
 /** Sections whose sidebar lists their items, so their landing page waits for one to open. */
-export type ListingSection = "automations" | "dashboards";
+export type ListingSection = "automations" | "dashboards" | "portals";
 
 export type SectionLocation = { route: RouteId; options: ApplicationNavigationOptions };
 
