@@ -53,8 +53,9 @@ const installList = (
 ) => installMockGateway(page, { ...options, methodResponses: { [listMethod]: response } });
 const setList = (gateway: MockGatewayControls, response: unknown) =>
   gateway.setMethodResponse(listMethod, dashboardResponse(response));
-const getDashboardRequests = async (gateway: MockGatewayControls) =>
-  (await gateway.getRequests(listMethod)).filter(isDashboardRequest);
+// The gallery's query; the Dashboards sidebar keeps its own list of active dashboards.
+const getDashboardRequests = (gateway: MockGatewayControls) =>
+  gateway.getRequests(listMethod, { hasBoard: true, archived: "all" });
 async function resumeGateway(gateway: MockGatewayControls) {
   await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
   await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
@@ -106,7 +107,7 @@ suite.define(() => {
       await page.clock.install();
       await pauseVirtualClock(page);
       const before = await getDashboardRequests(gateway);
-      await gateway.deferNext(listMethod, { hasBoard: true });
+      await gateway.deferNext(listMethod, { hasBoard: true, archived: "all" });
       await gateway.emitGatewayEvent("sessions.changed", changedSession(key, 2));
       await page.clock.runFor(5_001);
       await expect
