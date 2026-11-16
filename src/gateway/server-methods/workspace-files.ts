@@ -15,7 +15,10 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { BROWSER_IMAGE_MIME_TYPES } from "../../shared/browser-image-mime-types.js";
 import { isWorkspaceScratchPath, SCRATCH_EXPIRED_MESSAGE } from "../../shared/scratch-expiry.js";
 import { foldSearchCase } from "../../shared/search-case.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
+import {
+  WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
+  WORKSPACE_PREVIEW_MAX_BYTES,
+} from "../workspace-file-limits.js";
 import { resolveSessionFileReadTarget, type SessionFileReadBoundary } from "./session-file-read.js";
 import {
   decodeUtf8Strict,
@@ -47,6 +50,20 @@ const MAX_SEARCH_VISITED_ENTRIES = 5_000;
 // Matches file-type's documented default buffer sample while keeping metadata
 // classification independent from the 256 KiB inline-content cap.
 const MIME_SNIFF_PREFIX_BYTES = 4_100;
+// Mirrors IMAGE_EXTENSIONS in agents-workspace.ts so oversized images can be
+// inlined up to the image preview cap instead of falling back to a 4 KiB
+// prefix sniff that cannot render.
+const IMAGE_PREVIEW_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".webp",
+]);
 const DETECTED_TEXT_MIME_TYPES = new Set([
   "application/rtf",
   "application/xml",
@@ -213,9 +230,17 @@ async function toSessionFileEntry(
   if (!opts.includeContent) {
     return entry;
   }
-  const inline = stat.size <= WORKSPACE_PREVIEW_MAX_BYTES;
+  // Images may be inlined up to the image preview cap; everything else stays
+  // under the generic text preview cap.
+  const previewCap = IMAGE_PREVIEW_EXTENSIONS.has(path.extname(browserPath).toLowerCase())
+    ? WORKSPACE_IMAGE_PREVIEW_MAX_BYTES
+    : WORKSPACE_PREVIEW_MAX_BYTES;
+  const inline = stat.size <= previewCap;
   const read = inline
-    ? await readWorkspaceFile(readRoot, browserPath, { assertCurrent: opts.assertCurrent })
+    ? await readWorkspaceFile(readRoot, browserPath, {
+        maxBytes: previewCap,
+        assertCurrent: opts.assertCurrent,
+      })
     : await readWorkspaceFilePrefix(readRoot, browserPath, MIME_SNIFF_PREFIX_BYTES);
   if (!read) {
     return { ...base, missing: true };
