@@ -1,3 +1,4 @@
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
@@ -242,19 +243,22 @@ export function createRequesterWakeSettlement(params: {
               batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
               rearmGeneration,
             });
-            await recordGatewaySessionRunFailure({
-              target: {
-                sessionKey: requester.requesterSessionKey,
-                agentId: requester.requesterAgentId,
-                storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
-              },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
-              error,
-              notice,
-              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
-            });
+            // The notice goes to the requester chat as it is now; a deleted requester gets none.
+            const chat = {
+              sessionKey: requester.requesterSessionKey,
+              agentId: requester.requesterAgentId,
+              storePath: requester.requesterStorePath,
+            };
+            const current = await readSessionEntryReadOnlyInWorker(chat);
+            if (current?.sessionId) {
+              await recordGatewaySessionRunFailure({
+                target: { ...chat, sessionId: current.sessionId },
+                runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
+                error,
+                notice,
+                assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
+              });
+            }
           }
         }
         for (const retire of retireInputs) {
