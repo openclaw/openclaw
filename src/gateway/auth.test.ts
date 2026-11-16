@@ -1109,6 +1109,39 @@ it.each([undefined, "https://linked-claw.example.test"])(
   },
 );
 
+// OpenClaw ID tunnel nodes use peer-key admission on the non-UI WebSocket
+// surface. Ambient Serve user identity must remain disallowed on that surface.
+it("preserves OpenClaw ID tunnel node admission on non-UI WebSockets", async () => {
+  const peerKey = `iroh:${"ab".repeat(32)}`;
+  const principal = { kind: "node" as const, peerKey };
+  setOpenClawIdTunnelPrincipalResolver(async () => principal);
+  const req = request({ host: "linked-claw.example.test" });
+  markGatewayIngressTransport(req, { kind: "openclaw-id-tunnel", peerKey, clientIp: "fd69::1" });
+  const options = {
+    auth: {
+      mode: "trusted-proxy" as const,
+      allowTailscale: true,
+      trustedProxy: { userHeader: "x-user", allowLoopback: true },
+    },
+    connectAuth: null,
+    req,
+    trustedProxies: ["127.0.0.1"],
+  };
+  try {
+    await expect(authorizeWsGatewayConnect(options)).resolves.toMatchObject({
+      ok: true,
+      method: "trusted-proxy",
+      openclawId: principal,
+    });
+    await expect(authorizeHttpGatewayConnect(options)).resolves.toMatchObject({
+      ok: false,
+      reason: "openclaw_id_node_role_required",
+    });
+  } finally {
+    setOpenClawIdTunnelPrincipalResolver(undefined);
+  }
+});
+
 it("allows owner ingress with definitions alone but refuses it with a named-role default", () => {
   const cfg: OpenClawConfig = {
     gateway: {
