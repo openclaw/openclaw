@@ -1,5 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../src/agents/tool-display-call.js";
 import { isToolResultContentType } from "../../../../src/chat/tool-content.js";
 import {
   messageSubagentCompletions,
@@ -76,7 +79,9 @@ export function projectSubagentCompletions(
           ? retained
           : readCollectedSubagentCompletions({
               details: card.details,
-              content: [{ type: "text", text: card.outputText ?? "" }],
+              content: [
+                { type: "text", text: unwrapToolResultTextForDisplay(card.outputText ?? "") },
+              ],
             });
         if (!completions.length) {
           continue;

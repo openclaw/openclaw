@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
 // Current and shipped dispatcher names. Kept local: tool-search-types pulls session types,
@@ -36,4 +37,19 @@ export function unwrapToolCallForDisplay<Name extends string | undefined>(call: 
     name: id.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/u)?.[1] ?? id,
     args: prototype === Object.prototype || prototype === null ? innerArgs : {},
   };
+}
+
+/** A dispatcher result wraps the called tool's result; present that inner output. */
+export function unwrapToolResultTextForDisplay(text: string): string {
+  const parsed = text.trimStart().startsWith("{") ? safeParseJsonRecord(text) : undefined;
+  const content = asOptionalRecord(parsed?.result)?.content;
+  if (!isRecord(parsed?.tool) || !Array.isArray(content)) {
+    return text;
+  }
+  return content
+    .flatMap((block) => {
+      const item = asOptionalRecord(block);
+      return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+    })
+    .join("\n");
 }

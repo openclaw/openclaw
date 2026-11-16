@@ -1,7 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
-import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../src/agents/tool-display-call.js";
 import type { SubagentCompletion } from "../../../../src/shared/subagent-completion.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard, ToolCardOutcome } from "../../lib/chat/chat-types.ts";
@@ -64,7 +67,10 @@ type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText" | "r
  */
 // Collector details contain only routing metadata; their complete receipt stays in text.
 function readReceipt(card: LaunchCard) {
-  return { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+  return {
+    ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    ...asRecord(card.details),
+  };
 }
 
 function rosterName(row: GatewaySessionRow | undefined) {

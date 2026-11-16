@@ -429,16 +429,49 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("names a subagent roster listing by its lifecycle action", async () => {
-    const groups = buildItems({
-      messages: [
-        createAssistantMessage([createToolCall("roster", "subagents", { action: "list" })]),
-        createToolResultMessage("roster", "subagents", '{"status":"ok","action":"list"}'),
-      ],
-    }).filter((item) => item.kind === "group");
-    await renderToolGroups(groups, {});
-    expect(elementText(".chat-tool-msg-summary")?.trim()).toBe("Listed subagents");
-  });
+  it.each([false, true])(
+    "names subagent lifecycle rows through tool search dispatch: %s",
+    async (dispatched) => {
+      // Tool search wraps both the call and its result; rows present the called tool.
+      const call = (id: string, name: string, args: unknown) =>
+        dispatched
+          ? createToolCall(id, "dispatch_action", { id: `openclaw:core:${name}`, args })
+          : createToolCall(id, name, args);
+      const result = (id: string, name: string, output: unknown) =>
+        createToolResultMessage(
+          id,
+          dispatched ? "dispatch_action" : name,
+          JSON.stringify(
+            dispatched
+              ? {
+                  tool: { id: name },
+                  result: { content: [{ type: "text", text: JSON.stringify(output) }] },
+                }
+              : output,
+          ),
+        );
+      const groups = buildItems({
+        messages: [
+          createAssistantMessage([
+            call("spawn", "sessions_spawn", { label: "Worker01", task: "Review." }),
+            call("roster", "subagents", { action: "list" }),
+          ]),
+          result("spawn", "sessions_spawn", {
+            status: "accepted",
+            runId: "run-1",
+            childSessionKey: "agent:main:subagent:worker-1",
+          }),
+          result("roster", "subagents", { status: "ok", action: "list" }),
+        ],
+      }).filter((item) => item.kind === "group");
+      await renderToolGroups(groups, {});
+      expect(
+        [...harness.view.querySelectorAll(".chat-tool-msg-summary")].map((row) =>
+          row.textContent?.replace(/\s+/g, " ").trim(),
+        ),
+      ).toEqual(["Launched Worker01", "Listed subagents"]);
+    },
+  );
 
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
