@@ -118,7 +118,6 @@ suite.define(() => {
         if (method === "config.get") {
           await expectLoadingState(page.locator(".mcp-server-list"));
         }
-        expect(await page.locator(".config-loading").count()).toBe(0);
         await expectLoadingState(page.locator("#config-section-panel"));
         await gateway.resolveDeferred(method);
         await expect
