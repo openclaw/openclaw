@@ -1,4 +1,4 @@
-import type { SidebarZoneEntry } from "../app-navigation.ts";
+import type { SidebarNavigationView, SidebarZoneEntry } from "../app-navigation.ts";
 import {
   resolveCurrentSelfUser,
   type AuthenticatedUser,
@@ -21,7 +21,7 @@ export type SidebarPresenceScope = {
 };
 
 type SidebarPresenceHost = {
-  navigationView: "sessions" | "online" | "automations" | "customize" | "plugin";
+  navigationView: SidebarNavigationView;
   contextualSidebar?: ContextualSidebar;
   sessionDataContext?: { gateway: { snapshot: { selfUser?: AuthenticatedUser | null } } };
   sessionData: { presenceInstanceId?: string; presencePayload: PresencePayload | undefined };

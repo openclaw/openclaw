@@ -55,6 +55,17 @@ export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
   "openclaw-id-access/access",
 ]);
 
+/** Every view the sidebar beside the rail can show; its boot snapshot saves each of them. */
+export const SIDEBAR_NAVIGATION_VIEWS = [
+  "dashboards",
+  "automations",
+  "customize",
+  "sessions",
+  "online",
+  "plugin",
+] as const;
+export type SidebarNavigationView = (typeof SIDEBAR_NAVIGATION_VIEWS)[number];
+
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,

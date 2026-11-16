@@ -6,6 +6,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { SidebarNavigationView } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -47,7 +48,7 @@ export interface SessionDataInputs {
   readonly connected: boolean;
   readonly navigationVisible: boolean;
   readonly navigationCollapsed: boolean;
-  readonly navigationView: "sessions" | "online" | "automations" | "customize" | "plugin";
+  readonly navigationView: SidebarNavigationView;
   readonly contextualSidebar?: ContextualSidebar;
   readonly sidebarAgentsMode: "chip" | "roster";
   shouldPublishSessionData(): boolean;
