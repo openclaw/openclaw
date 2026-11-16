@@ -112,6 +112,7 @@ describe("renderUsage", () => {
 
   it("keeps selected providers usable without claiming an unknown inventory is empty", () => {
     const props = createUsageProps();
+    const onQueryDraftChange = (props.callbacks.filters.onQueryDraftChange = vi.fn());
     props.filters.queryDraft = "provider:openai";
     const { container, setData } = mountReactiveUsage(props);
     document.body.appendChild(container);
@@ -141,6 +142,18 @@ describe("renderUsage", () => {
     expect(search.value).toBe("anthropic");
     expect(surface.querySelector('[aria-label="anthropic"]')).not.toBeNull();
     expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    search.focus();
+    const confirm = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(confirm, "keyCode", { value: 229 });
+    search.dispatchEvent(confirm);
+    expect(confirm.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(search);
+    expect(onQueryDraftChange).not.toHaveBeenCalled();
+    search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onQueryDraftChange).toHaveBeenCalledExactlyOnceWith(
+      "provider:openai provider:anthropic ",
+    );
   });
 
   it("keeps an IME-composed Enter from applying the usage query", () => {
@@ -312,15 +325,11 @@ describe("renderUsage", () => {
     try {
       expect(container.querySelector(".usage-filter-menu__query input")).toBeNull();
       const { dropdown, surface, trigger } = openProviderFilter(container);
-      const first = [...dropdown.querySelectorAll('[role="menuitemcheckbox"]')].find(
-        (item) => item.getAttribute("aria-label") === "clear",
-      )!;
+      const first = dropdown.querySelector('[aria-label="clear"]')!;
       expect(trigger.getAttribute("aria-label")).toBe("Provider");
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
-        const option = [
-          ...dropdown.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]'),
-        ].find((item) => item.getAttribute("aria-label") === provider)!;
+        const option = dropdown.querySelector<HTMLButtonElement>(`[aria-label="${provider}"]`)!;
         option.click();
         await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
         expect(trigger.textContent).toContain(provider === "clear" ? "clear" : "2");
@@ -330,9 +339,7 @@ describe("renderUsage", () => {
         expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
-      const mainTrigger = container.querySelector<HTMLButtonElement>(
-        ".usage-filter-menu__trigger",
-      )!;
+      const mainTrigger = container.querySelector<HTMLButtonElement>('[aria-label="Filters"]')!;
       mainTrigger.click();
       await waitForSolid(() => expect(mainTrigger.getAttribute("aria-expanded")).toBe("false"));
       expect(first.isConnected).toBe(true);

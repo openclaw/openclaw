@@ -288,6 +288,16 @@ async function buildSnapshotBatch(
           pluginGeneration: prepared.pluginGeneration,
           assertCurrent: assertBuildCurrent,
           registries: configuredModelRegistries,
+          ownedCatalogProviders: new Map(
+            groupCandidates.map((candidate) => [
+              candidate.input,
+              [
+                ...(candidate.inventoryOwner?.catalogInventory?.acquiredProviderIds ??
+                  candidate.inventoryOwner?.catalogInventory?.providers.keys() ??
+                  []),
+              ].toSorted(),
+            ]),
+          ),
         });
         runtimeRegistryCount += batch.registryCount;
         registryMs += performance.now() - startedAt;

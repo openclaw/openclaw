@@ -1,15 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "openclaw/plugin-sdk/llm";
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  onTestFinished as registerTestCleanup,
-  type TestContext,
-  vi,
-} from "vitest";
+import { afterEach, describe, expect, it, type TestContext, vi } from "vitest";
 import {
   makeAssistantMessage,
   model as agentLoopModel,
@@ -18,14 +10,9 @@ import {
 import {
   getInternalBeforeRequest,
   setInternalBeforeRequest,
-  setInternalBeforeToolBatch,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { AgentToolResultMiddleware } from "../plugins/agent-tool-result-middleware-types.js";
-import { capturePluginRegistration } from "../plugins/captured-registration.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -51,7 +38,6 @@ import {
 } from "./code-mode.test-support.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
-import { createToolLoopBatchAdmission } from "./embedded-agent-runner/run/tool-loop-recovery.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
@@ -324,57 +310,6 @@ describe("Code Mode agent-loop error recovery", () => {
     },
   );
 
-  it.each(["unchanged", "tool", "middleware", "unmatched middleware"])(
-    "bounds repeated bridge failures independently of telemetry (error change=%s)",
-    async (errorChange) => {
-      let calls = 0;
-      const middleware = vi.fn<AgentToolResultMiddleware>(({ result }) => {
-        result.content.push({ type: "text", text: `failure ${calls}` });
-      });
-      const registry = createEmptyPluginRegistry();
-      if (errorChange.includes("middleware")) {
-        const captured = capturePluginRegistration({
-          register(api) {
-            api.registerAgentToolResultMiddleware(middleware, {
-              runtimes: ["openclaw"],
-              matcher: [errorChange === "middleware" ? "exec" : "read"],
-            });
-          },
-        });
-        registry.agentToolResultMiddlewares.push(...captured.agentToolResultMiddlewares);
-      }
-      setActivePluginRegistry(registry);
-      registerTestCleanup(() => clearActivePluginRegistry());
-      const failing = tool("failing_action", async () => {
-        calls++;
-        throw new Error(errorChange === "tool" ? `failure ${calls}` : "same failure");
-      });
-      const { agent } = await runCodeModeAgent({
-        embeddedSession: true,
-        hiddenTools: [failing],
-        programs: Array.from({ length: 4 }, () => "return await failing_action({});"),
-        configureAgent(activeAgent) {
-          setInternalBeforeToolBatch(
-            activeAgent,
-            createToolLoopBatchAdmission({ loopDetection: { enabled: false } }),
-          );
-        },
-      });
-      const changesError = errorChange === "tool" || errorChange === "middleware";
-      expect(middleware).toHaveBeenCalledTimes(errorChange === "middleware" ? 4 : 0);
-      expect(calls).toBe(changesError ? 4 : 3);
-      if (changesError) {
-        expectRecovered(agent);
-      } else {
-        expect(agent.state.messages.at(-1)).toMatchObject({
-          role: "assistant",
-          stopReason: "error",
-          errorCode: "openclaw_repeated_tool_error",
-          content: [{ type: "text", text: expect.stringContaining("exec call failed 3 times") }],
-        });
-      }
-    },
-  );
   it.each([
     { name: "omitted title", metadata: {}, accepted: true },
     { name: "authored title", metadata: { title: "Record the fixture effect" }, accepted: true },

@@ -529,6 +529,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   assertCurrent?: (input: PreparedModelRuntimeInput) => void;
   registries?: PreparedConfiguredModelRegistries;
+  ownedCatalogProviders?: ReadonlyMap<PreparedModelRuntimeInput, readonly string[]>;
 }) {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
@@ -545,6 +546,8 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   for (const facts of params.agentFacts) {
     await nextTurn();
     params.assertCurrent?.(facts.input);
+    // A live inventory owns retention across account changes; saved rows only seed cold owners.
+    const excludeGeneratedProviderIds = params.ownedCatalogProviders?.get(facts.input) ?? [];
     const { contents: modelsJsonContents } = await captureModelsJsonSource(facts.input.agentDir);
     // Signed-in providers browse known manifest rows until their account listing publishes. Scope
     // by current credentials: config reloads (API-key sign-in rewrites auth.profiles) leave
@@ -571,6 +574,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       credentials: facts.credentials,
       modelsJsonContents,
       pluginCatalogs,
+      excludeGeneratedProviderIds,
       staticProviderConfigs,
     });
     const candidates = registriesBySource.get(key) ?? [];
@@ -600,6 +604,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
           includePluginCatalogs: true,
           modelsJsonContents,
           pluginCatalogs,
+          excludeGeneratedProviderIds,
           staticProviderConfigs,
           pluginMetadataSnapshot,
           ...(facts.input.workspaceDir ? { workspaceDir: facts.input.workspaceDir } : {}),

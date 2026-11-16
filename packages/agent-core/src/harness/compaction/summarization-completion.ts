@@ -33,7 +33,6 @@ import {
   SUMMARIZATION_SYSTEM_PROMPT,
 } from "./summarization-prompts.js";
 import {
-  type BoundedConversation,
   extractSummaryText,
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversationWithinBudget,
@@ -60,14 +59,8 @@ const MIN_SUMMARY_INPUT_CHARS = 4_000;
  */
 const MAX_OVERFLOW_SHRINKS = 2;
 
-/** A worker-owned, sanitized transcript snapshot that renders only the requested budget. */
-export interface SummarizationConversationSource {
-  readonly length: number;
-  serialize(maxChars: number): Promise<BoundedConversation>;
-}
-
 export interface SummarizationCompletionParams {
-  messages: AgentMessage[] | SummarizationConversationSource;
+  messages: AgentMessage[];
   prompt: string;
   customInstructions?: string;
   previousSummary?: string;
@@ -134,18 +127,11 @@ export async function runSummarizationCompletion(
   if (fullBudget < 0) {
     return budgetError();
   }
-  const input = Array.isArray(params.messages) ? convertToLlm(params.messages) : params.messages;
+  const llmMessages = convertToLlm(params.messages);
   let conversationBudget = fullBudget;
   let response;
   for (let shrink = 0; ; shrink += 1) {
-    const conversation = Array.isArray(input)
-      ? serializeConversationWithinBudget(input, conversationBudget)
-      : await input.serialize(conversationBudget);
-    // Worker reads can yield while this request is cancelled. Never issue provider
-    // work with the delayed artifact after its caller has stopped.
-    if (signal?.aborted) {
-      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
-    }
+    const conversation = serializeConversationWithinBudget(llmMessages, conversationBudget);
     const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
     // A history that fits is sent unchanged; only a sample needs the minimum room.
     if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {

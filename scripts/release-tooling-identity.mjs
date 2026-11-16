@@ -125,12 +125,12 @@ export function resolveReleaseToolingIdentity({
   if (qualificationAdmission !== undefined) {
     if (
       !isRecord(qualificationAdmission) ||
-      candidateSha !== sha ||
+      !SHA_PATTERN.test(candidateSha) ||
       requested.ref !== ref ||
       requested.fullRef !== fullRef ||
       requested.sha !== sha
     ) {
-      fail("candidate qualification must bind the exact executing C=Q identity");
+      fail("candidate qualification must bind valid C and the exact executing Q identity");
     }
     return requested;
   }

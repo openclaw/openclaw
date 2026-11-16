@@ -1,12 +1,10 @@
-/** Best-effort iPad hint, including its desktop-mode identity; not a capability probe. */
-export function isIpadBrowserPlatform(): boolean {
-  const nav = globalThis.navigator;
-  return /iPad/u.test(nav.userAgent) || (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
-}
-
 /** Best-effort iOS hint, including iPad's desktop-mode identity; not a capability probe. */
 export function isIosBrowserPlatform(): boolean {
-  return isIpadBrowserPlatform() || /iPhone|iPod/u.test(globalThis.navigator.userAgent);
+  const nav = globalThis.navigator;
+  return (
+    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
+    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1)
+  );
 }
 
 /**

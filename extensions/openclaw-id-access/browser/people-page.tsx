@@ -15,7 +15,15 @@ import {
 } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
-import { createInvite, decideInvite, removeMember } from "./invites.js";
+import { roleText } from "./i18n.js";
+import { InviteForm } from "./invite-form.js";
+import {
+  createInvite,
+  decideInvite,
+  removeMember,
+  changeMemberRole,
+  RoleClassificationChangedError,
+} from "./invites.js";
 import { NodeSection } from "./node-section.js";
 import { createNodeInvite, decideNodeInvite, removeNode } from "./nodes.js";
 import { signMembershipChange, thisOwnerDevice } from "./owner-signing.js";
@@ -25,16 +33,11 @@ import {
   type PeopleErrorAction,
   type PeopleOperationError,
 } from "./people-error.js";
-import { memberName, removalNote } from "./people-format.js";
+import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
+import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
-import {
-  InviteForm,
-  Members,
-  PendingRequests,
-  OperationError,
-  type RemovedMemberNotice,
-} from "./people-sections.js";
+import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
 
 // Canonical device fingerprints stay available in the request's details disclosure.
@@ -60,6 +63,10 @@ function sessionTitleFrom(host: ControlUiHost) {
     const row = host.sessions.rows.find((candidate) => candidate.key === key);
     return row?.derivedTitle || row?.displayName || row?.label || undefined;
   };
+}
+
+function memberRole(status: StatusResult): string {
+  return status.connection?.kind === "member" ? status.connection.role : "";
 }
 
 /** The Access page for one Control UI host. */
@@ -177,6 +184,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       if (!disposed) {
         motion.update(() => setError({ target, ...peopleError(failure, kind, host.redact) }));
       }
+      if (failure instanceof RoleClassificationChangedError) {
+        throw failure;
+      }
       return undefined;
     } finally {
       actionsInFlight.delete(operation);
@@ -233,6 +243,16 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     });
   };
 
+  const changeRole = async (
+    member: Member,
+    role: MemberRole,
+    confirmedAdmin: boolean,
+  ): Promise<boolean> =>
+    (await run(`member:${member.accountId}`, async (link) => {
+      await changeMemberRole(host.request, link, member.accountId, role, confirmedAdmin);
+      return true;
+    })) === true;
+
   const canManage = () =>
     Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
 
@@ -269,10 +289,19 @@ export function PeoplePage(props: { host: ControlUiHost }) {
               <Show
                 when={current().owner}
                 fallback={
-                  <p class="ocid-access__empty">
-                    Only the owner can see who has access. Open this page from an approved owner
-                    browser.
-                  </p>
+                  <div>
+                    <Show when={current().connection?.kind === "member"}>
+                      <p class="ocid-access__hint">
+                        {roleText(host.locale, "yourRole", {
+                          role: roleName(memberRole(current())),
+                        })}
+                      </p>
+                    </Show>
+                    <p class="ocid-access__empty">
+                      Only the owner can see who has access. Open this page from an approved owner
+                      browser.
+                    </p>
+                  </div>
                 }
               >
                 <section class="ocid-access__group" aria-labelledby="ocid-access-people">
@@ -281,16 +310,25 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </h2>
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
+                      link={current().link}
                       motion={motion}
                       components={host.components}
+                      roles={current().link.roles ?? []}
                       disabled={!canManage() || latest(creatingInvite)}
                       busy={latest(creatingInvite)}
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
                       existingProfiles={current().link.existingProfiles ?? []}
-                      onCreate={(email, role: MemberRole, existingProfileId) =>
+                      onCreate={(email, role: MemberRole, confirmedAdmin, existingProfileId) =>
                         run("invite", (link) =>
-                          createInvite(host.request, link, email, role, existingProfileId),
+                          createInvite(
+                            host.request,
+                            link,
+                            email,
+                            role,
+                            confirmedAdmin,
+                            existingProfileId,
+                          ),
                         )
                       }
                     />
@@ -318,6 +356,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   <Members
                     motion={motion}
                     members={current().link.members ?? []}
+                    components={host.components}
+                    roles={current().link.roles ?? []}
+                    onChangeRole={changeRole}
                     error={latest(error)}
                     notice={latest(notice)}
                     readOnly={!latest(ownDevicePub)}

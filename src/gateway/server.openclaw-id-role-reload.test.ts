@@ -5,6 +5,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import {
   formatIrohEndpointKey,
   randomBytes,
+  signStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
@@ -16,6 +17,8 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -81,7 +84,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
         await claw.sign({
           op: "add",
           account_id: "role-member",
-          role: "guest",
+          role: "viewer",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -129,16 +132,18 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       scopes: ["operator.admin"],
     };
     await apply(config);
-    const connectMember = async () => {
+    const connectMember = async (memberDeviceToken?: string) => {
       const closed = createDeferredCore<number>();
       let hello: HelloOk | undefined;
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         origin: memberOrigin,
+        deviceToken: memberDeviceToken,
+        timeoutMs: 6000,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
         platform: "web",
-        scopes: ["operator.admin", "operator.pairing"],
+        scopes: ["operator.admin"],
         onHelloOk: (value) => {
           hello = value;
         },
@@ -150,14 +155,61 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       clients.push(client);
       return { client, hello, closed };
     };
+    const firstViewer = await connectMember();
+    expect(firstViewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    const memberPairing = (await listDevicePairing()).paired.find(
+      (device) => device.tokens?.operator?.token === firstViewer.hello?.auth.deviceToken,
+    )!;
+    expect(memberPairing.approvedScopes).toEqual(["operator.sessions.read"]);
+    // The real owner RPC accepts a device signature; a member cannot sign this change.
+    const changeRole = async (role: string) => {
+      const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
+      const statement = await signStatement(
+        "MembershipChange",
+        {
+          claw_id: claw.clawId,
+          seq: link.seq + 1,
+          target: { op: "set_role", account_id: "role-member", role },
+          issued_at: Math.floor(Date.now() / 1000),
+        },
+        claw.device,
+      );
+      await reconnect.request("openclawId.authority", { action: "submit", statement });
+    };
+    await changeRole("guest");
+    expect(await withinTest(firstViewer.closed.promise, signal)).toBe(1008);
+    await firstViewer.client.stopAndWait();
     const member = await connectMember();
+    expect(member.hello?.auth.scopes).toEqual(["operator.admin"]);
     expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
-    expect(member.hello?.auth.scopes).toContain("operator.admin");
     await member.client.request("device.pair.list", {});
+    expect((await listDevicePairing()).pending).toEqual([]);
+    const oldAdminToken = member.hello?.auth.deviceToken;
+    expect(oldAdminToken).toBeTruthy();
+    await changeRole("viewer");
+    expect(await withinTest(member.closed.promise, signal)).toBe(1008);
+    await member.client.stopAndWait();
+    expect(
+      await verifyDeviceToken({
+        deviceId: memberPairing.deviceId,
+        token: oldAdminToken!,
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).toMatchObject({ ok: false });
+    const reassigned = await connectMember(oldAdminToken);
+    expect(reassigned.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    await reassigned.client.request("sessions.list", {});
+    await expect(reassigned.client.request("device.pair.list", {})).rejects.toThrow();
+    await changeRole("guest");
+    expect(await withinTest(reassigned.closed.promise, signal)).toBe(1008);
+    await reassigned.client.stopAndWait();
+    const restored = await connectMember();
+    expect(restored.hello?.auth.roleAllowsAdmin).toBe(true);
     config.gateway!.roles!.definitions.guest = MEMBER_ROLE_PRESETS.viewer;
     await apply(config);
-    expect(await withinTest(member.closed.promise, signal)).toBe(4001);
-    await member.client.stopAndWait();
+    expect(await withinTest(restored.closed.promise, signal)).toBe(4001);
+    await restored.client.stopAndWait();
     const viewer = await connectMember();
     expect(viewer.hello?.auth.roleAllowsAdmin).toBe(false);
     expect(viewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);

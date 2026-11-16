@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { serialize } from "node:v8";
-import { deflateRaw, deflateRawSync } from "node:zlib";
+import { constants, deflateRawSync, zstdCompress } from "node:zlib";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
@@ -14,6 +15,7 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
@@ -22,7 +24,10 @@ import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
-import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
+import {
+  localWorkspaceFingerprintPatch,
+  readLocalWorkspaceCommit,
+} from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
@@ -36,7 +41,62 @@ import type {
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
-const compressMutation = promisify(deflateRaw);
+const compressMutation = promisify(zstdCompress);
+const log = createSubsystemLogger("agents/worktrees");
+let nextOversizedMutationLogAt = 0;
+
+function warnOversizedMutation(
+  mutation: LocalWorkspaceMutation,
+  serializedBytes: number,
+  wireBytes: number,
+) {
+  if (serializedBytes <= 1024 * 1024 || Date.now() < nextOversizedMutationLogAt) {
+    return;
+  }
+  nextOversizedMutationLogAt = Date.now() + 60_000;
+  const patch: Record<string, unknown> =
+    mutation.kind === "create" ? mutation.row : mutation.kind === "update" ? mutation.patch : {};
+  const bytes = (value: unknown) =>
+    typeof value === "string"
+      ? Buffer.byteLength(value)
+      : value instanceof Uint8Array
+        ? value.byteLength
+        : typeof value === "number"
+          ? 8
+          : 0;
+  const fields = Object.fromEntries(
+    Object.entries(patch).map(([key, value]) => [key, bytes(value)]),
+  );
+  // Inspect only the rate-limited diagnostic sample; never serialize the payload again.
+  const document = (raw: unknown): Record<string, unknown> => {
+    if (typeof raw === "string") {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (isRecord(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Diagnostics must not change mutation or recovery behavior.
+      }
+    }
+    return {};
+  };
+  const journal = document(patch.journal_json);
+  const checkpoint = document(patch.checkpoint_json);
+  const fingerprints =
+    mutation.kind === "update" && mutation.manifest?.fingerprints
+      ? mutation.manifest.fingerprints
+      : isRecord(checkpoint.fingerprints)
+        ? checkpoint.fingerprints
+        : {};
+  const blobs = [fingerprints.blob, fingerprints.oppositeBlob].filter(
+    (value) => typeof value === "string",
+  );
+  const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
+  log.warn(
+    `Local workspace oversized mutation: kind=${mutation.kind} serializedBytes=${serializedBytes} wireBytes=${wireBytes} fieldBytes=${JSON.stringify(fields)} manifestFingerprintCount=${blobs.length} manifestFingerprintBytes=${blobs.reduce((sum, blob) => sum + bytes(blob), 0)} journalBaseEntries=${count(journal.baseEntries)} journalAppliedEntries=${count(journal.appliedEntries)} journalBaseDirectories=${count(journal.baseDirectories)} journalAppliedDirectories=${count(journal.appliedDirectories)} journalBaseTreeBytes=${bytes(journal.baseTree)}`,
+  );
+}
 
 export async function hasLocalWorkspaceProjection(id: string, env?: NodeJS.ProcessEnv) {
   const reply = await executeExistingOpenClawStateRead(
@@ -206,13 +266,19 @@ export function withLocalWorkspaceStore<T>(
                   assertCurrent();
                   if (mutation.kind === "update" && mutation.manifest) {
                     // Checkpoints also carry recovery documents; the writer only publishes roots.
-                    const { previousRoot, resultingRoot, treeRoot, fingerprints } =
-                      mutation.manifest;
+                    const {
+                      previousRoot,
+                      resultingRoot,
+                      treeRoot,
+                      fingerprints,
+                      fingerprintsFromCheckpoint,
+                    } = mutation.manifest;
                     mutation.manifest = {
                       previousRoot,
                       resultingRoot,
                       treeRoot,
                       fingerprints,
+                      fingerprintsFromCheckpoint,
                       records: [],
                       removed: [],
                     };
@@ -242,25 +308,59 @@ export function withLocalWorkspaceStore<T>(
                       };
                     }
                   }
+                  if (
+                    !(wireMutation instanceof Uint8Array) &&
+                    wireMutation.kind === "update" &&
+                    wireMutation.manifest?.fingerprintsFromCheckpoint
+                  ) {
+                    wireMutation = {
+                      ...wireMutation,
+                      manifest: { ...wireMutation.manifest, fingerprints: undefined },
+                    };
+                  }
+                  // Commit receipts and acknowledgement reuse the same decoded fingerprint bytes.
                   let pending:
                     | {
                         mutation: LocalWorkspaceMutation;
                         previous: LocalWorkspaceProjection | undefined;
                       }
-                    | undefined = { mutation, previous: row };
+                    | undefined = {
+                    mutation:
+                      mutation.kind === "update" && mutation.manifest?.fingerprints
+                        ? {
+                            ...mutation,
+                            patch: {
+                              ...mutation.patch,
+                              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
+                            },
+                          }
+                        : mutation,
+                    previous: row,
+                  };
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
-                  // Compress large inventories to fit the broker's existing queue budget.
+                  // Reconcile checkpoints can retain MB of inputs below the broker queue limit.
+                  const diagnosticMutation =
+                    wireMutation instanceof Uint8Array ? mutation : wireMutation;
+                  let serializedBytes = preparedMutation?.byteLength ?? 0;
                   if (!preparedMutation) {
                     const serialized = serialize(wireMutation);
+                    serializedBytes = serialized.byteLength;
                     const compressed =
-                      serialized.byteLength > 32 * 1024 * 1024
-                        ? await compressMutation(serialized)
+                      serialized.byteLength > 1024 * 1024
+                        ? await compressMutation(serialized, {
+                            params: { [constants.ZSTD_c_compressionLevel]: 1 },
+                          })
                         : undefined;
                     if (compressed && compressed.byteLength < serialized.byteLength) {
                       wireMutation = compressed;
                     }
                   }
+                  warnOversizedMutation(
+                    diagnosticMutation,
+                    serializedBytes,
+                    wireMutation instanceof Uint8Array ? wireMutation.byteLength : serializedBytes,
+                  );
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const assertWrite = () => {

@@ -106,14 +106,18 @@ so speaker labels are not shown in chat.
 The bundled `elevenlabs` plugin registers Scribe v2 Realtime for Voice Call and
 Google Meet agent-mode streaming transcription.
 
-| Setting         | Config path                                                               | Default                                           |
-| --------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
-| API key         | `plugins.entries.voice-call.config.streaming.providers.elevenlabs.apiKey` | Falls back to `ELEVENLABS_API_KEY` / `XI_API_KEY` |
-| Model           | `...elevenlabs.modelId`                                                   | `scribe_v2_realtime`                              |
-| Audio format    | `...elevenlabs.audioFormat`                                               | `ulaw_8000`                                       |
-| Sample rate     | `...elevenlabs.sampleRate`                                                | `8000`                                            |
-| Commit strategy | `...elevenlabs.commitStrategy`                                            | `vad`                                             |
-| Language        | `...elevenlabs.languageCode`                                              | (unset)                                           |
+| Setting         | Config path                                                               | Default                                                                                   |
+| --------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| API key         | `plugins.entries.voice-call.config.streaming.providers.elevenlabs.apiKey` | Falls back to `ELEVENLABS_API_KEY` / `XI_API_KEY`, then a saved `elevenlabs` auth profile |
+| Model           | `...elevenlabs.modelId`                                                   | `scribe_v2_realtime`                                                                      |
+| Audio format    | `...elevenlabs.audioFormat`                                               | `ulaw_8000`                                                                               |
+| Sample rate     | `...elevenlabs.sampleRate`                                                | `8000`                                                                                    |
+| Commit strategy | `...elevenlabs.commitStrategy`                                            | `vad`                                                                                     |
+| Language        | `...elevenlabs.languageCode`                                              | (unset)                                                                                   |
+
+The saved auth profile is used only when ElevenLabs is the named provider, for example
+`streaming.provider: "elevenlabs"`. Automatic selection counts only the config and
+environment keys.
 
 ```json5
 {

@@ -485,7 +485,10 @@ export function createLocalWorkspaceCheckpointAcceptance(params: {
               journal_pack: null,
             };
             if (params.checkpoint) {
-              await params.update(patch, params.checkpoint);
+              await params.update(patch, {
+                ...params.checkpoint,
+                fingerprintsFromCheckpoint: params.checkpoint.fingerprints ? true : undefined,
+              });
             } else {
               await params.replaceBaseline(params.rawManifest, params.manifestRef, patch);
             }

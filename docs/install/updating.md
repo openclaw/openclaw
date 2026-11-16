@@ -53,6 +53,44 @@ backup.
 
 ## Update implementation contract
 
+A newer Doctor recognizes retained update captures whose state directory used
+an older Windows short-path spelling. Scope comparison resolves the recorded
+state directory and configuration parent without changing sealed capture bytes
+or following the final configuration entry. A different selected state directory
+or configuration entry remains rejected.
+
+On Gateway startup, an older supported SQLite schema is upgraded by copy and
+swap: Doctor runs on a private copy, then a durable plan publishes the changed
+files. Chain failure retains the generic rebuild and pins the previous files;
+invalid upgraded config still refuses publication. No live file is replaced or
+removed unless the upgrade copied it. If Doctor creates a template over an
+uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The copy excludes managed worktrees, configured agent workspaces, nested mounts
+and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
+Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
+migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
+exec approvals, audit logs, config, and installed extensions remain available.
+SQLite files above 64 MiB are copied only when their schema needs upgrading or
+they are the shared state database; smaller ancillary stores remain available for
+legacy imports. SQLite and retained WAL/journal content use byte copies, with
+NOCOW directories on btrfs, so the new database does not share extents with its
+preserved original. Committed WAL is recovered in the private copy.
+
+Before copying, startup checks free space against the selected file bytes plus
+an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
+that budget because a filesystem can decline reflinking. Insufficient space
+reports the exact required, available, and missing bytes. Copies of at least
+256 MiB log their byte count, file count, elapsed time, and throughput.
+
+Replaced files remain as `<file>.pre-<version>`. Startup prunes older unpinned
+generations only for files it owns. It leaves retired startup-migration backups,
+SQLite `.bak` files, and media-persistence recovery images in place, reporting
+file counts and bytes within the inspected copy scope. These are operator or
+Doctor retention decisions: deleting large shared clones during startup can
+stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
+or prune their contents.
+
 Offline Doctor prepares no extra inspection image when its existing maintenance
 owner proves custody and the database has no WAL frames or rollback journal.
 These drained SQLite families use immutable reads. Retained WAL, journals, and
@@ -1569,7 +1607,11 @@ to another volume. Database snapshots use its physical directory so the backup's
 parent-directory durability check can complete. The installed updater must
 contain this fix; a newer candidate cannot repair an older updater's capture.
 
-The canary uses a temporary loopback Gateway port and suppresses background
+Current updaters do not boot a candidate canary before activation; they load
+the candidate's recovery runtime and prove Doctor and Gateway startup after
+activation, with rollback (see [How updates run](/cli/update/how-updates-run#validation-and-activation)).
+Older installed updaters still run the canary described here against this
+version. The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
 Doctor and policy checks use the copied deployment settings, so an accepted

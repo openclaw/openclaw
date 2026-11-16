@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -208,6 +209,7 @@ export async function quiesceLocalWorkspace(params: {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.quiesce.registry",
   );
+  const scope = createHash("sha256").update(params.workspaceDir).digest("hex").slice(0, 16);
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -350,10 +352,13 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
-      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
-        engine: engine.id,
-        runtime: runtime.kind,
-      });
+      log.info(
+        `Local workspace pause: reason=${reason} scope=${scope} count=${++pauseCounts[reason]}`,
+        {
+          engine: engine.id,
+          runtime: runtime.kind,
+        },
+      );
     }
     phaseObservers.add(observePhase);
     releases.push(async () => {
@@ -417,7 +422,7 @@ export async function quiesceLocalWorkspace(params: {
         }
         // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
         log.info(
-          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
+          `Local workspace unpause: reason=${reason} scope=${scope} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
           { engine: engine.id, runtime: runtime.kind },
         );
       }

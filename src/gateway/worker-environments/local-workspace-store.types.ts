@@ -60,6 +60,8 @@ export type LocalWorkspaceManifestMutation = {
   replace?: boolean;
   treeRoot?: string;
   previousTreeRoot?: string | null;
+  /** Acceptance reuses fingerprints from the revision-checked durable checkpoint. */
+  fingerprintsFromCheckpoint?: true;
   fingerprints?: { target: "canonical" | "projection"; blob: string; oppositeBlob?: string };
 };
 export type LocalWorkspaceMutation =

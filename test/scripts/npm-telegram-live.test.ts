@@ -545,6 +545,11 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+if (args[0] === 'run' && process.env.CHECK_WRITABLE_PREFIX === '1') {
+  const mount = args.find(arg => arg.endsWith(':/npm-global'));
+  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
+  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
 `,
   );
@@ -570,6 +575,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
     : [];
   return { root, candidate, result, runs };
 }
+
+it("makes the disposable npm prefix writable to the container user", () => {
+  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+  expect(result.status, result.stderr).toBe(0);
+});
 
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
