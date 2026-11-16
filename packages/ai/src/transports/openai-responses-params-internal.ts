@@ -110,7 +110,6 @@ export function buildOpenAIResponsesParams(
   const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayResponsesItemIds,
-    authProfileId: options?.authProfileId,
     mutableInput: Boolean(options?.onPayload),
     sessionId: options?.sessionId,
     replayMode,
