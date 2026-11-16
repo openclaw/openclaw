@@ -78,7 +78,6 @@ export async function prepareChildRuntimeViability(params?: {
   let available = !(runtime.execPath === execPath && runtime.failure);
   if (available) {
     try {
-      await fs.access(execPath, constants.X_OK);
       const probe = await probeChildRuntimeExecutable(execPath);
       const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
       available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
@@ -274,10 +273,13 @@ export async function prepareChildRuntimeFailure(
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
-  if (loaderFailure.test(params.stderr ?? "")) {
+  if (
+    loaderFailure.test(params.stderr ?? "") ||
+    (params.error && !(await prepareChildRuntimeViability({ execPath })).publish().available)
+  ) {
     return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
-  if (!needsRuntimeProbe(params)) {
+  if (params.error || !needsRuntimeProbe(params)) {
     return undefined;
   }
   // IPC can fail before stderr arrives. Worker-only crashes must not disable healthy Node.
