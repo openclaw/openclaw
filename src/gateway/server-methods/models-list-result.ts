@@ -455,26 +455,21 @@ export async function prepareModelsListResult({
           });
           preparedEntry = {
             ...buildPublicModelProjection(publicEntry, { includeDetails }),
-            ...(manualSelectionAllowed
-              ? {
-                  manualSelectionAllowed: manualSelectionAllowed({
-                    provider: entry.provider,
-                    model: entry.id,
-                  }),
-                }
-              : {}),
-            ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
+            ...(manualSelectionAllowed && {
+              manualSelectionAllowed: manualSelectionAllowed({
+                provider: entry.provider,
+                model: entry.id,
+              }),
+            }),
+            ...(configuredEntry?.tags.size && { tags: [...configuredEntry.tags] }),
             agentRuntime,
             ...thinkingProfile,
-            ...(fastModeState.source === "default"
-              ? {}
-              : { effectiveFastMode: fastModeState.mode }),
-            ...(capabilityProvider && apiKeyProviders.has(capabilityProvider)
-              ? {
-                  apiKeySupported: apiKeyProviders.get(capabilityProvider) === true,
-                }
-              : {}),
-            ...(view === "provider-config" && entry.input?.length ? { input: entry.input } : {}),
+            ...(fastModeState.source !== "default" && { effectiveFastMode: fastModeState.mode }),
+            ...(capabilityProvider &&
+              apiKeyProviders.has(capabilityProvider) && {
+                apiKeySupported: apiKeyProviders.get(capabilityProvider) === true,
+              }),
+            ...(view === "provider-config" && entry.input?.length && { input: entry.input }),
           };
           const entries = prepared.get(entry) ?? new Map<string, StatedRuntimeModelChoice>();
           entries.set(runtimeKey, preparedEntry);
@@ -517,39 +512,35 @@ export async function prepareModelsListResult({
             : undefined;
         const choice: ModelChoice = {
           ...preparedEntry,
-          ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
-          ...(speedPolicy.supportsServiceTierRecovery === true
-            ? { supportsServiceTierRecovery: true }
-            : {}),
-          ...(serviceTiers === undefined ? {} : { serviceTiers }),
-          ...(view === "provider-config"
-            ? {}
-            : projectModelCatalogAccessPrograms({
-                config: cfg,
-                agentId,
-                snapshot: projectionSnapshot,
-                entry,
-                evaluation,
-                runtimeId,
-                isCurrent: projectionIsCurrent,
-              })),
-          ...(serviceTierObservations?.length
-            ? {
-                serviceTierObservation: serviceTierObservations.at(-1),
-                serviceTierObservations: serviceTierObservations.toSorted((a, b) =>
-                  a.requestedTier.localeCompare(b.requestedTier),
-                ),
-              }
-            : {}),
-          ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
-          ...(projectedAvailability === false && evaluation.unavailableReason
-            ? {
-                unavailableReason: evaluation.unavailableReason,
-                ...(evaluation.unavailableUntil !== undefined
-                  ? { unavailableUntil: evaluation.unavailableUntil }
-                  : {}),
-              }
-            : {}),
+          ...(supportsFastMode !== undefined && { supportsFastMode }),
+          ...(speedPolicy.supportsServiceTierRecovery === true && {
+            supportsServiceTierRecovery: true,
+          }),
+          ...(serviceTiers !== undefined && { serviceTiers }),
+          ...(view !== "provider-config" &&
+            projectModelCatalogAccessPrograms({
+              config: cfg,
+              agentId,
+              snapshot: projectionSnapshot,
+              entry,
+              evaluation,
+              runtimeId,
+              isCurrent: projectionIsCurrent,
+            })),
+          ...(serviceTierObservations?.length && {
+            serviceTierObservation: serviceTierObservations.at(-1),
+            serviceTierObservations: serviceTierObservations.toSorted((a, b) =>
+              a.requestedTier.localeCompare(b.requestedTier),
+            ),
+          }),
+          ...(projectedAvailability !== undefined && { available: projectedAvailability }),
+          ...(projectedAvailability === false &&
+            evaluation.unavailableReason && {
+              unavailableReason: evaluation.unavailableReason,
+              ...(evaluation.unavailableUntil !== undefined && {
+                unavailableUntil: evaluation.unavailableUntil,
+              }),
+            }),
         };
         return retainModelChoiceAccountPin(choice, decisions.hasPinnedAccount(entry));
       };
@@ -692,26 +683,35 @@ export async function prepareModelsListResult({
         const currentCatalog = readCatalog();
         const keyOf = createModelCatalogIdentityKeyResolver();
         const recommendationRank = createModelPickerRecommendationRank(cfg);
+        const models: ModelChoice[] = [];
+        const twinRows: { row: ModelChoice; twin?: CliRuntimeTwinRoute }[] | undefined =
+          twinRoutes.size > 0 ? [] : undefined;
+        for (const entry of currentCatalog) {
+          if (!matchesProvider(entry)) {
+            continue;
+          }
+          const key = keyOf(entry);
+          const evaluation = evaluations.get(key);
+          if (!evaluation) {
+            throw new Error("Model catalog publication omitted prepared auth evaluation");
+          }
+          const runtimeChoices = runtimeChoiceReaders.get(key)?.();
+          const projected = projectPublic(entry, evaluation);
+          if (runtimeChoices?.length) {
+            projected.runtimeChoices = runtimeChoices;
+          }
+          if (recommendationRank(entry) !== undefined) {
+            projected.recommended = true;
+          }
+          // Most catalogs have no CLI twins and need no intermediate row wrappers.
+          if (twinRows) {
+            twinRows.push({ row: projected, twin: twinRoutes.get(key) });
+          } else {
+            models.push(projected);
+          }
+        }
         return {
-          models: omitCliRuntimeAliasTwins(
-            currentCatalog.filter(matchesProvider).map((entry) => {
-              const key = keyOf(entry);
-              const evaluation = evaluations.get(key);
-              if (!evaluation) {
-                throw new Error("Model catalog publication omitted prepared auth evaluation");
-              }
-              const runtimeChoices = runtimeChoiceReaders.get(key)?.();
-              const projected = projectPublic(entry, evaluation);
-              if (runtimeChoices?.length) {
-                projected.runtimeChoices = runtimeChoices;
-              }
-              if (recommendationRank(entry) !== undefined) {
-                projected.recommended = true;
-              }
-              return { row: projected, twin: twinRoutes.get(key) };
-            }),
-            selectionPolicies,
-          ),
+          models: twinRows ? omitCliRuntimeAliasTwins(twinRows, selectionPolicies) : models,
           ...readOutcomeProjection(),
         };
       },

@@ -81,12 +81,12 @@ async function installAccountCatalog(
   return accountCatalog;
 }
 
-function preparePublic(context: ReturnType<typeof createModelsListTestContext>) {
+function preparePublic(context: ReturnType<typeof createModelsListTestContext>, provider?: string) {
   mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return prepareModelsListResult({
     source: { kind: "gateway", context },
     agentId: "main",
-    params: { view: "all", preparedOnly: true, includeDefaultModels: false },
+    params: { view: "all", preparedOnly: true, includeDefaultModels: false, provider },
   });
 }
 
@@ -117,7 +117,8 @@ it.each(["profile", "direct"] as const)(
     const accountCatalog = await installAccountCatalog(context, () => true, true);
     const first = await preparePublic(context);
     const read = (result = first) => readModel(result, model.id);
-    expect(read()).toMatchObject({
+    const initialRow = expectDefined(read(), "initial model projection");
+    expect(initialRow).toMatchObject({
       available: true,
       serviceTiers: advertisedTiers,
     });
@@ -141,6 +142,9 @@ it.each(["profile", "direct"] as const)(
     const observations = [priority, ultrafast];
     observe(ultrafast);
     observe(priority);
+    expect(read()).not.toBe(initialRow);
+    expect(initialRow).not.toHaveProperty("serviceTierObservation");
+    expect(initialRow).not.toHaveProperty("serviceTierObservations");
     for (const projection of [first, await preparePublic(context)]) {
       expect(read(projection)).toMatchObject({
         serviceTiers: advertisedTiers,
@@ -351,6 +355,11 @@ it("publishes provider tier restrictions through the model catalog projection", 
   });
   const result = await preparePublic(context);
   const models = result.read().models;
+  expect(models.map((row) => row.id)).toEqual(ids);
+  for (const provider of ["openai", "anthropic"]) {
+    const filtered = await preparePublic(context, provider);
+    expect(filtered.read().models.map((row) => row.id)).toEqual(provider === "openai" ? ids : []);
+  }
   for (const [index, supportsFastMode, serviceTiers] of [
     [0, true, ["default", "priority"]],
     [1, false, ["default"]],
