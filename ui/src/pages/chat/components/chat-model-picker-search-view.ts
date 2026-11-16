@@ -43,7 +43,7 @@ export function createChatModelSearchView(
   const scope = createMemo(() => ({ active: read().activeProvider, providers: read().providers }), {
     equals: (a, b) => a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
   });
-  // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+  // Closing and selection reset provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
     selected?: string;
@@ -101,13 +101,12 @@ export function createChatModelSearchView(
     },
   );
   const selectable = createMemo(() => matches().filter(({ row }) => !row.disabled));
-  // Keep a surviving choice on refresh; a removed choice adopts the current fallback.
+  // Browsing providers is neutral; typing or arrow navigation establishes a highlight.
   const [highlighted, highlight] = createSignal<string | undefined>((previous) => {
     const rows = selectable();
     return (
       rows.find(({ row }) => row.key === previous)?.row.key ??
-      (query().trim() ? undefined : rows.find(({ row }) => row.selected)?.row.key) ??
-      rows[0]?.row.key
+      (query().trim() ? rows[0]?.row.key : undefined)
     );
   });
   // A highlight move changes only its old and new rows, including offscreen choices.
@@ -157,6 +156,12 @@ export function createChatModelSearchView(
     toggleProvider(provider: string) {
       updateDisclosure((draft) => {
         draft.selected = provider;
+      });
+    },
+    resetProvider() {
+      const current = scope();
+      updateDisclosure((draft) => {
+        draft.selected = current.active ?? current.providers[0];
       });
     },
     expandMore(provider: string, event: MouseEvent) {
@@ -219,34 +224,17 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
     }
     return;
   }
-  const index = rows.findIndex(({ row }) => row.key === view.highlighted());
+  const highlighted = view.highlighted();
+  const index = rows.findIndex(({ row }) =>
+    highlighted === undefined ? row.selected : row.key === highlighted,
+  );
   const offset = event.key === "ArrowDown" ? 1 : rows.length - 1;
-  const next = rows[index < 0 ? 0 : (index + offset) % rows.length];
+  const next =
+    rows[
+      index < 0 ? (event.key === "ArrowDown" ? 0 : rows.length - 1) : (index + offset) % rows.length
+    ];
   if (next) {
     view.highlight(next.row.key);
     view.reveal(next.row.key);
   }
-}
-
-/** A disappearing refresh control can return focus; catalog presentation is already derived. */
-export function restoreChatModelRefreshFocus(details: Element | undefined): void {
-  if (!(details instanceof HTMLDetailsElement) || !details.open) {
-    return;
-  }
-  const state = chatModelSearchState(details);
-  const active = details.ownerDocument.activeElement;
-  if (!state || !active?.closest("[data-chat-model-refresh]") || !details.contains(active)) {
-    return;
-  }
-  queueMicrotask(() => {
-    if (
-      !active.isConnected &&
-      details.isConnected &&
-      details.open &&
-      details.ownerDocument.activeElement === details.ownerDocument.body
-    ) {
-      const target = state.input && !state.input.disabled ? state.input : state.summary;
-      target?.focus({ preventScroll: true });
-    }
-  });
 }

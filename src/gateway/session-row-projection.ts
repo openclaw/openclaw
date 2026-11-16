@@ -193,12 +193,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       if (previous.generation !== row.generation) {
         transcriptUpdates.remove(records.identity(row));
       }
-      indexSessionRow(previous, indexes, true);
     }
     rows.set(records.identity(row), row);
     recents.update(row);
     rowFacts.track(row, row.unresolvedDatabaseFacts);
-    indexSessionRow(row, indexes);
+    indexSessionRow(row, indexes, false, previous);
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );

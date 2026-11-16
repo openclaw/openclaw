@@ -30,10 +30,14 @@ export function ChatModelAccountSectionView(
         trigger={
           <>
             <span class="chat-controls__account-selection">
-              {props.options.find((option) => option.value === props.currentValue)?.label ??
-                props.selectedIdentity}
+              {props.selectionKind === "automatic"
+                ? t("chat.modelAccounts.automaticTrigger")
+                : (props.options.find((option) => option.value === props.currentValue)?.label ??
+                  props.selectedIdentity)}
             </span>
-            <Icon name="chevronDown" />
+            <Show when={!props.disabled}>
+              <Icon name="chevronDown" />
+            </Show>
           </>
         }
       >

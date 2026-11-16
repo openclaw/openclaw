@@ -13,6 +13,10 @@ const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
 export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
 export const MODEL_CHAT_UNSUPPORTED_TEXT = "This model doesn't support chat; pick another model.";
+/** A listed model failed its chat request; see `isListedModelChatRejection`. */
+export const MODEL_CHAT_REJECTED_CODE = "model_chat_rejected";
+export const MODEL_CHAT_REJECTED_TEXT =
+  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account. Choose another model.";
 /** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
 export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
 /** The host refused another warm CLI process because its free memory is low. */

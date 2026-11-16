@@ -96,7 +96,7 @@ describe("host-owned update notices", () => {
               `Update failed ${description} (restart-unhealthy).`,
               `Next: ${advice}`,
             ].join("\n")
-          : `${headline}\nFor details, open Settings → Updates in the Control UI or run \`openclaw update status\` in your terminal.`,
+          : `${headline}\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
       ),
     ]);
     expect(getUpdateRun(initial.runId)).toMatchObject({
@@ -173,7 +173,7 @@ describe("host-owned update notices", () => {
           : kind === "kept-serving"
             ? "⚠️ OpenClaw couldn't finish updating.\nThe current version (2026.10.4) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nNext: Retry openclaw update."
             : terminal
-              ? "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal."
+              ? "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."
               : "🔁 Checking that OpenClaw is ready…";
       expect(
         await appendAssistantMessageToSessionTranscript({

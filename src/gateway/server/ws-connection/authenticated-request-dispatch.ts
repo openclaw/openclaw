@@ -184,8 +184,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       invalidateGatewayPolicyClient(client, {
         reason: "remote-control-ui-ingress-closed",
         code: 4001,
-        message: "remote Control UI ingress closed",
-        close: () => close(4001, "remote Control UI ingress closed"),
+        message: "remote web app ingress closed",
+        close: () => close(4001, "remote web app ingress closed"),
       });
       return false;
     };

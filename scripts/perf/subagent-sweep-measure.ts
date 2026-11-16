@@ -4,6 +4,11 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/subagent-sweep-measure.ts
  *   --operation notification-retirement --runs 10000 --operations 3000 --yield-ms 0
  * Run baseline and candidate in alternating order with separate state/output paths.
+ * Residual eligible-history backlog (settled history without obligations is already indexed out):
+ * --workload obligations --runs 20000 --operations 100 --yield-ms 0
+ * Use --allocation for a separate sampled allocation pass. longestTurn reports
+ * setImmediate heartbeat gaps during each pass, including host scheduling delay.
+ * --timer --observe-stalls includes timer admission and an active stall observer.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -33,9 +38,12 @@ const { values } = parseArgs({
     "start-at": { type: "string", default: "0" },
     "gc-log": { type: "string" },
     output: { type: "string" },
+    allocation: { type: "boolean", default: false },
+    timer: { type: "boolean", default: false },
+    "observe-stalls": { type: "boolean", default: false },
   },
 });
-const integer = (name: keyof typeof values, min: number) =>
+const integer = (name: "operations" | "runs" | "yield-ms" | "start-at", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
 const runCount = integer("runs", 10);
@@ -44,7 +52,7 @@ const startAt = integer("start-at", 0);
 const workload = values.workload;
 const operation = values.operation;
 assert.ok(operation === "sweep" || operation === "notification-retirement");
-assert.ok(workload === "settled" || workload === "mixed", "--workload must be settled or mixed");
+assert.ok(workload === "settled" || workload === "mixed" || workload === "obligations");
 assert.ok(global.gc, "Run with --expose-gc");
 const stateDir = values["state-dir"]
   ? path.resolve(values["state-dir"])
@@ -52,15 +60,12 @@ const stateDir = values["state-dir"]
 if (values["state-dir"]) {
   mkdirSync(stateDir, { mode: 0o700 });
 }
-for (const directory of ["home", "tmp"]) {
-  mkdirSync(path.join(stateDir, directory));
-}
+mkdirSync(path.join(stateDir, "home"));
 const configPath = path.join(stateDir, "openclaw.json");
 writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
 process.env = {
   ...createGatewayBenchEnv(path.join(stateDir, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: stateDir,
-  TMPDIR: path.join(stateDir, "tmp"),
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
 // Identify the main isolate before source imports can start a worker.
@@ -74,6 +79,9 @@ const [memory, { createSubagentRegistrySweeper }, agentRuns] = await Promise.all
   import("../../src/infra/agent-run-registry.js"),
 ]);
 const { subagentRuns, immutableSubagentRun } = memory;
+const { createMainThreadStallMonitor } = await import("../../src/infra/main-thread-stall.js");
+const stalls = values["observe-stalls"] ? createMainThreadStallMonitor() : undefined;
+stalls?.setEventLoopSampling(true);
 const unexpected = () => {
   throw new Error("The idle sweep attempted a lifecycle, storage, or external effect");
 };
@@ -114,7 +122,7 @@ const retirementOptions = { runs: subagentRuns, resumedRuns: new Set<object>() }
 const sweepOnce =
   operation === "notification-retirement"
     ? () => suspendReplacedStoreNotifications(retirementOptions)
-    : () => sweeper.sweepOnce();
+    : () => (values.timer ? sweeper.runTick() : sweeper.sweepOnce());
 
 const composition = { settled: 0, running: 0, pendingDelivery: 0, futureArchive: 0 };
 const claims = new Map<string, string | undefined>();
@@ -165,6 +173,10 @@ function makeRun(index: number): SubagentRunRecord {
     entry.archiveAtMs = Number.MAX_SAFE_INTEGER;
   } else {
     composition.settled++;
+  }
+  if (workload === "obligations") {
+    // Delivered history can still be the requester's complete-batch witness.
+    entry.requesterTurnRunId = "synthetic-requester-turn";
   }
   return immutableSubagentRun(entry);
 }
@@ -234,12 +246,15 @@ try {
     await delay(startAt - Date.now());
   }
   const latency: number[] = [];
+  const longestTurn: number[] = [];
   observer.observe({ entryTypes: ["gc"] });
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 32_768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  if (values.allocation) {
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 32_768,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
   const before = process.memoryUsage();
   const hostLoadBefore = os.loadavg();
   const cpu = process.cpuUsage();
@@ -249,8 +264,23 @@ try {
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
     const started = performance.now();
-    await sweepOnce();
-    latency.push(performance.now() - started);
+    let sliceStarted = started;
+    let longest = 0;
+    const sampleTurn = () => {
+      const at = performance.now();
+      longest = Math.max(longest, at - sliceStarted);
+      sliceStarted = at;
+      heartbeat = setImmediate(sampleTurn);
+    };
+    let heartbeat = setImmediate(sampleTurn);
+    try {
+      await sweepOnce();
+    } finally {
+      clearImmediate(heartbeat);
+    }
+    const finished = performance.now();
+    longestTurn.push(Math.max(longest, finished - sliceStarted));
+    latency.push(finished - started);
     await (yieldMs ? delay(yieldMs) : nextTurn());
   }
   measuredEnd = performance.now();
@@ -262,10 +292,44 @@ try {
   await nextTurn();
   recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
-  const { profile } = await inspector.post("HeapProfiler.stopSampling");
+  const profile = values.allocation
+    ? (await inspector.post("HeapProfiler.stopSampling")).profile
+    : undefined;
   assertUnchanged();
   assert.equal(lifecycleSweeps, operation === "sweep" ? operations + 100 : 0);
-  writeFileSync(profilePath, JSON.stringify(profile));
+  // Count one separate pass; coverage instrumentation never enters timing/allocation samples.
+  await inspector.post("Profiler.enable");
+  await inspector.post("Profiler.startPreciseCoverage", { callCount: true, detailed: false });
+  await sweepOnce();
+  const coverage = await inspector.post("Profiler.takePreciseCoverage");
+  await inspector.post("Profiler.stopPreciseCoverage");
+  await inspector.post("Profiler.disable");
+  assertUnchanged();
+  const stepNames = new Set([
+    "getRecordedSubagentChildAuthority",
+    "settleSubagentCompletionReservation",
+    "blockSubagentCompletionDelivery",
+    "reconcileRetiredSubagentCancellation",
+    "settleUnreachableYieldedSubagentRun",
+    "reconcileDurableSubagentKillIntent",
+    "reconcileProvisionalSubagentKill",
+    "freezeSessionIdentity",
+    "mutateCleanup",
+  ]);
+  const stepCalls = Object.fromEntries([...stepNames].map((name) => [name, 0]));
+  for (const script of coverage.result) {
+    if (!script.url.includes("/subagents/")) {
+      continue;
+    }
+    for (const fn of script.functions) {
+      if (stepNames.has(fn.functionName)) {
+        stepCalls[fn.functionName] = (stepCalls[fn.functionName] ?? 0) + (fn.ranges[0]?.count ?? 0);
+      }
+    }
+  }
+  if (profile) {
+    writeFileSync(profilePath, JSON.stringify(profile));
+  }
   const gc = (kind?: number) =>
     summarizeDurationDistribution(
       collections
@@ -281,6 +345,8 @@ try {
     node: process.version,
     operation,
     workload,
+    timer: values.timer,
+    observeStalls: values["observe-stalls"],
     runCount,
     composition,
     operations,
@@ -294,7 +360,10 @@ try {
     unchangedRecordsSha256: hash("sha256", expectedJson, "hex"),
     lifecycleSweeps,
     externalEffects: 0,
-    allocation: allocation(profile),
+    stepCalls,
+    eligibleRunsPerSweep: [...memory.getSubagentSweepRuns(subagentRuns, Date.now())].length,
+    allocation: profile ? allocation(profile) : null,
+    longestTurn: summarizeDurationDistribution(longestTurn),
     profiledSweepLatency: summarizeDurationDistribution(latency),
     elapsedMs: measuredEnd - measuredStart,
     cpuMs: (usedCpu.user + usedCpu.system) / 1000,
@@ -324,6 +393,7 @@ try {
   }
   writeSync(1, output);
 } finally {
+  stalls?.stop();
   observer.disconnect();
   loop.disable();
   inspector.disconnect();

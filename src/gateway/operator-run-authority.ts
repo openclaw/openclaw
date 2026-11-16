@@ -258,7 +258,7 @@ export function captureChannelOperatorRunAuthority(input: {
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
       githubLogin: params.githubLogin ?? null,
-      ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+      ...(membershipPolicy ? { policy: resolveRole(params.getRuntimeConfig()) } : {}),
     }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
@@ -482,11 +482,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const assertSourceCurrent = composeSessionSourceAssertion(
     sourceAuthorities.map((authority) =>
-      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
-        authority?.signal?.throwIfAborted();
-        assertSource();
-        authority?.signal?.throwIfAborted();
-      }),
+      composeSessionSourceAssertion(
+        [authority?.assertCurrent],
+        (assertSource) => {
+          authority?.signal?.throwIfAborted();
+          assertSource();
+          authority?.signal?.throwIfAborted();
+        },
+        { synchronousCheck: true },
+      ),
     ),
     (assertSources) => {
       if (revoked || references === 0) {
@@ -522,18 +526,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
         );
       }
     },
+    { synchronousCheck: true },
   );
-  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    try {
-      assertSource();
-      assertRoleCurrent();
-    } catch (error) {
-      if (!isOperatorAuthorityUnavailable(error)) {
-        revoked = true;
+  const assertCurrent = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      try {
+        assertSource();
+        assertRoleCurrent();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoked = true;
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+    { synchronousCheck: true },
+  );
   const releaseHold = () => {
     let released = false;
     return () => {
@@ -685,7 +694,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),
-        ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+        ...(membershipPolicy ? { policy: resolveCurrentRole() } : {}),
       }),
       source: source.token,
       invocation: params.invocationAuthority,

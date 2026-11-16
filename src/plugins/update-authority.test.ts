@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -504,9 +503,9 @@ describe("plugin update authority", () => {
         const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
         for (const revoke of [true, false]) {
           await withUpdater(state, true, async (fence) => {
-            const unlink = fsSync.unlinkSync.bind(fsSync);
-            const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
-              unlink(file);
+            const unlink = fs.unlink.bind(fs);
+            const removal = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+              await unlink(file);
               if (String(file) === peerLink && revoke) {
                 releaseUpdateCommandPreflightForHandoff(fence);
               }

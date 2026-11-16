@@ -53,12 +53,38 @@ function accountSection(onSelect = vi.fn(), open = false) {
   };
 }
 
+it.each(
+  [3, 9, 10].flatMap((count) => [false, true].map((recommended) => ({ count, recommended }))),
+)(
+  "shows short provider lists without disclosure (count=$count, recommended=$recommended)",
+  async ({ count, recommended }) => {
+    const { container } = mountPicker({
+      open: true,
+      selectedModelValue: "fixture/model-0",
+      modelOptions: [
+        ...Array.from({ length: count }, (_, index) =>
+          option("fixture", "model-" + index, { recommended: recommended && index === 0 }),
+        ),
+        ...Array.from({ length: 20 }, (_, index) => option("other", "model-" + index)),
+      ],
+    });
+    await waitForMenu(container);
+    expect(Boolean(control(container, "more-toggle"))).toBe(count >= 10);
+    if (count < 10) {
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(count);
+    }
+  },
+);
+
 it("forgets disclosure for removed providers", async () => {
   const params = pickerProps({
     open: true,
     modelOptions: [
       option("selected", "current"),
       option("other", "lead", { recommended: true }),
+      ...Array.from({ length: 8 }, (_, index) =>
+        option("other", "recommended-" + index, { recommended: true }),
+      ),
       option("other", "rest"),
     ],
     selectedModelValue: "selected/current",
@@ -139,6 +165,9 @@ it.each([false, true])(
     const { container } = mountPicker({
       modelOptions: [
         option("fixture", "lead", { recommended: true }),
+        ...Array.from({ length: 8 }, (_, index) =>
+          option("fixture", "recommended-" + index, { recommended: true }),
+        ),
         option("fixture", "rest", { disabled: restDisabled }),
         option("other", "model"),
       ],
@@ -238,7 +267,7 @@ it("keeps search live while targets load, then ranks model, target, and account 
     container.querySelector(
       '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
     ),
-  ).not.toBeNull();
+  ).toBeNull();
   search.focus();
   searchFor(search, "needle");
   const model = control(container, "option", "fixture/model")!;
@@ -275,11 +304,8 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(findMenuShortcut(details, "4")).toBeUndefined();
   expect(model.hasAttribute("data-chat-model-highlighted")).toBe(true);
   expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
-  expect(
-    model
-      .querySelector("[data-chat-model-shortcut]")
-      ?.getAttribute("data-chat-model-shortcut-number"),
-  ).toBe("1");
+  expect(model.getAttribute("aria-keyshortcuts")).toBe("1");
+  expect(model.querySelector("kbd")).toBeNull();
   keydown(search, "ArrowDown");
   const target = ranked()[2]!;
   expect(search.getAttribute("aria-activedescendant")).toBe(target.id);

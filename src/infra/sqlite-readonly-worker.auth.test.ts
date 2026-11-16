@@ -45,7 +45,8 @@ import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn) };
+  return { ...mocked, default: mocked };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -116,7 +117,7 @@ it.skipIf(skipBroker)(
       ]);
       expect(brokerSpawn).toHaveBeenCalledTimes(1);
       expect(spawn).not.toHaveBeenCalled();
-      publication = watchAuthProfileNativeCommits(source);
+      publication = watchAuthProfileNativeCommits(source, readAuthProfileDatabaseIdentity(source));
       pendingRefresh = runInDetachedAsyncContext(refreshAuthProfileFileState);
       await scope.close();
       expect(brokerSpawn.mock.results[0]?.value.exitCode).toBeNull();

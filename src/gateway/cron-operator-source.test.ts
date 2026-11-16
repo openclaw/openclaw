@@ -12,7 +12,7 @@ function restore(signal?: AbortSignal) {
     target: {
       agentId: "main",
       sessionKey: "agent:main:dashboard:continuation",
-      entry: { sessionId: "session", lifecycleRevision: "1" },
+      sessionId: "session",
     },
     signal,
     deliveryAttemptFence: null,

@@ -387,6 +387,83 @@ native forward recovery. Do not remove the journal or install only the library.
 The approved shell, library and both helper files form one adoption closure even
 when only the library changes in this fix.
 
+### Adopt a controller after journal retirement
+
+When the canonical `journal/activation.json` is absent and the installed closure
+has a completed adoption gate, use `steady-successor` through the staged reviewed
+library. This is ordinary controller adoption after recovery or a later accepted
+deployment. It does not require the old incident's candidate, native backup,
+configuration or database identities to remain current. An existing activation
+journal still requires its recovery owner; this action never retires a journal.
+
+Under the existing exclusive FD9 deployment lock, construct the request:
+
+- `version: 1` and a fresh UUIDv4 `operation`.
+- `source`: the exact descriptor in the completed gate's intent `original` field
+  (its archived journal, not the absent canonical path).
+- `oldClosure` and `replacement`: the four installed and staged file descriptors,
+  in the existing shell/library/suspension/startup-profile order.
+- `historical`: exact `gate` and `complete` file descriptors of the current
+  completed adoption. The installed closure must match that completion.
+- `steady.process`: current `{pid,generation,release,runtime,uid,port}`, using
+  the same native serving-process binding described above.
+- `steady.pointers`: `current` and `previous` symlink identities as
+  `{path,sha,device,inode}`. An absent `previous` is `null`.
+
+All file descriptors use `{path,device,inode,sha256}`. Do not include
+`nativeRecovery` or `retirement`. Run the three library commands under that same
+lock and existing private operator environment:
+
+```sh
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  steady-successor "$ROOT" @stdin < "$STAGED/request.json" > "$STAGED/binding.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  apply "$ROOT" @stdin < "$STAGED/binding.json" > "$STAGED/adopted.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  context "$ROOT" @stdin < "$STAGED/binding.json"
+```
+
+The existing adoption owner archives the predecessor gate and all four old
+files, records old/new hashes and publication inodes, and fences incomplete
+closures. Preserve the request, binding, staging inodes and archives after an
+interruption; replay the same commands rather than reinstalling files or deleting
+the gate. It rechecks journal absence, live process and pointers during adoption.
+Once completed, ordinary controller entry checks closure integrity rather than
+pinning future deployments to that process. A subsequent approved deployment
+uses the installed shell normally, and a later controller adoption can use
+`steady-successor` again.
+
+The deployment lock's device/inode binds an in-flight adoption or bootstrap,
+not completed history. After a reboot recreates `/run`, ordinary entry still
+requires the current canonical, exclusively held FD9 file with its expected
+owner and safe mode, and verifies the completed closure and archived evidence.
+It does not require the adoption-time tmpfs inode. An unfinished adoption,
+including a closed bootstrap without completed adoption, remains fenced after
+an inode change; its owner must reconcile recovery. Do not replace the lock,
+rewrite its recorded identity, or delete gates to force replay.
+
+Older installed controllers report `controller adoption lock inode changed`
+even for completed gates after reboot. With no activation journal, recover using
+the `steady-successor` request and three commands above from a **staged fixed
+library**, with all four staged files from the same reviewed, merged commit.
+The installed buggy library cannot load its own historical gate to recover.
+Read fresh installed/staged descriptors, the completed gate and original archive,
+and the current process and pointer identities under the current FD9 lock;
+never reuse the prior boot's request. Preserve the existing operator environment.
+The old operation's `context` is not a successor dry run: it also checks that
+operation's original live source/process, which may have legitimately changed.
+There is no read-only `steady-successor` inspection action; `steady-successor`
+publishes intent and the gate, and `apply` installs the closure. Neither belongs
+in a read-only diagnosis. After completing adoption, `context` with the new
+binding verifies it without performing a deployment.
+
+The absent journal is the canonical owner's ordinary-admission fact, not a
+reconstructed receipt for the historical recovery. The prior immutable intent,
+original journal archive and completion remain evidence of their own operation.
+Adoption does not restart, deploy, migrate state or enable a timer. The native
+forward-recovery path has already retired its journal; do not run `--recover`
+merely to adopt a newer controller.
+
 ## Qualification still required
 
 `retained-repair-native-config.test.mjs` exercises reviewed-config preparation,

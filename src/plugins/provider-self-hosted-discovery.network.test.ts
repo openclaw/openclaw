@@ -8,10 +8,15 @@ import { PROVIDER_RUNTIME_TEST_MODEL } from "./provider-runtime.test-support.js"
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const lookupMock = vi.hoisted(() => vi.fn<() => Promise<LookupAddress[]>>());
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: lookupMock,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const baseUrl = "http://local-provider.example:8081/v1";
 const model = {

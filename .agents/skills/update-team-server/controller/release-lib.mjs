@@ -688,7 +688,11 @@ function makeDirectoriesOwnerWritable(root) {
   }
 }
 
-function atomicJson(pathname, value, { noReplace = false, mode = 0o600, group } = {}) {
+function atomicJson(pathname, value, options) {
+  atomicBytes(pathname, Buffer.from(`${JSON.stringify(value)}\n`), options);
+}
+
+function atomicBytes(pathname, bytes, { noReplace = false, mode = 0o600, owner = -1, group = -1 } = {}) {
   const temporary = `${pathname}.next.${randomUUID()}`;
   const descriptor = openSync(
     temporary,
@@ -696,8 +700,8 @@ function atomicJson(pathname, value, { noReplace = false, mode = 0o600, group } 
     0o600,
   );
   try {
-    writeFileSync(descriptor, `${JSON.stringify(value)}\n`);
-    if (group !== undefined) fchownSync(descriptor, -1, group);
+    writeFileSync(descriptor, bytes);
+    if (owner !== -1 || group !== -1) fchownSync(descriptor, owner, group);
     if (mode !== 0o600) fchmodSync(descriptor, mode);
     fsyncSync(descriptor);
   } finally {
@@ -1560,6 +1564,18 @@ function validJournal(record) {
           basename(dirname(record.nativeUpdate.backupRoot)).slice(`update-${record.candidate.sha}-`.length)) ||
         basename(dirname(dirname(record.nativeUpdate.backupRoot))) !== ".openclaw-update")
       reject("native update backup location is invalid");
+  }
+  if (record.configContract) {
+    const contract = record.configContract;
+    suspensionObject(contract, ["plan", "status", "currentSha256"], "config contract migration");
+    validMigrationDescriptor(contract.plan, "name", "config contract plan");
+    if (record.topology !== "system" || record.nativeUpdate || record.runtimeChange ||
+        record.predecessor.sha === record.candidate.sha ||
+        !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions) ||
+        !/^config-contract-[a-f\d-]{36}\.json$/.test(contract.plan.name) ||
+        !["prepared", "applied", "restoring", "restored"].includes(contract.status) ||
+        !/^[a-f\d]{64}$/.test(contract.currentSha256))
+      reject("config contract migration is not a same-schema ordinary activation");
   }
   if (Object.hasOwn(record, "originalWitness")) {
     validMigrationDescriptor(record.originalWitness, "name", "original session witness");
@@ -2429,6 +2445,7 @@ function candidateConfigAccept(pathname, root, expectedPaths, binding, runtimeUi
   if (!isDeepStrictEqual(snapshot(), receipt)) reject("startup config acceptance changed before publication");
   const record = structuredClone(receipt.original.record);
   record.protectedPaths[0] = { path: receipt.config.path, device: receipt.config.device, inode: receipt.config.inode };
+  if (record.configContract) record.configContract.currentSha256 = receipt.config.sha256;
   validJournal(record);
   atomicJson(pathname, record);
   if (!isDeepStrictEqual(ownedJournal(pathname), record)) reject("startup config journal publication changed");
@@ -2436,7 +2453,10 @@ function candidateConfigAccept(pathname, root, expectedPaths, binding, runtimeUi
 }
 
 function policy(pathname) {
-  const config = jsonFile(pathname);
+  return configPolicy(jsonFile(pathname));
+}
+
+function configPolicy(config) {
   const server = config.plugins?.entries?.codex?.config?.appServer;
   const { policy: expected, modelAgent } = operatorProfile();
   if (
@@ -2467,6 +2487,105 @@ function policy(pathname) {
     model,
     fallbacks,
   };
+}
+
+function configContractPrepare(root, release, configPath, databasePath, projection) {
+  const namespace = migrationNamespace(root), candidate = basename(release);
+  if (release !== join(root, "releases", candidate) || !shaPattern.test(candidate) ||
+      lstatSync(namespace.pathname, { throwIfNoEntry: false }))
+    reject("config contract preparation requires a sealed candidate before activation");
+  const entry = lstatSync(configPath);
+  const original = migrationFile(configPath, entry.uid, { mode: 0o600, group: entry.gid });
+  if (projection.configPath !== configPath || projection.originalSha256 !== original.descriptor.sha256 ||
+      !Array.isArray(projection.changedPaths) || projection.changedPaths.some(key => typeof key !== "string") ||
+      !projection.config || typeof projection.config !== "object" || Array.isArray(projection.config))
+    reject("candidate config projection does not bind the authored input");
+  const before = migrationJson(original.bytes);
+  if (isDeepStrictEqual(before, projection.config)) return null;
+  if (!projection.changedPaths.length) reject("candidate config projection omitted changed keys");
+  const next = `${JSON.stringify(projection.config, null, 2)}\n`;
+  const plan = { version: 1, kind: "candidate-config-contract", candidate,
+    original: original.descriptor, originalBytes: original.bytes.toString("utf8"),
+    nextBytes: next, nextSha256: createHash("sha256").update(next).digest("hex"),
+    runtimeUid: entry.uid, runtimeGid: entry.gid, database: identity(databasePath),
+    originalPolicy: configPolicy(before), nextPolicy: configPolicy(projection.config),
+    changedPaths: projection.changedPaths };
+  const name = `config-contract-${randomUUID()}.json`, path = join(namespace.directory, name);
+  const bytes = Buffer.from(`${JSON.stringify(plan)}\n`);
+  migrationWriteExclusive(path, bytes, 0o600);
+  const { device, inode } = identity(path);
+  return { name, device, inode,
+    sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
+function configContractPlan(root, descriptor, record) {
+  const namespace = migrationNamespace(root), { name, ...expected } = descriptor;
+  const path = join(namespace.directory, name);
+  const file = migrationFile(path, namespace.owner, { mode: 0o600 });
+  if (!isDeepStrictEqual(file.descriptor, { path, ...expected })) reject("config contract plan changed");
+  const plan = migrationJson(file.bytes);
+  if (plan.version !== 1 || plan.kind !== "candidate-config-contract" ||
+      plan.candidate !== record.candidate.sha || plan.original.path !== record.protectedPaths[0].path ||
+      !isDeepStrictEqual(plan.database, record.protectedPaths[1]))
+    reject("config contract plan belongs to another activation");
+  return plan;
+}
+
+// The shell owns stopped-writer admission. This owner records intent before each
+// rename, so recovery can settle either side without guessing or rerunning Doctor.
+function configContractTransition(action, root) {
+  const { pathname } = migrationNamespace(root), record = ownedJournal(pathname);
+  if (!record.configContract) return null;
+  const before = JSON.stringify(record);
+  const contract = record.configContract, plan = configContractPlan(root, contract.plan, record);
+  if (!isDeepStrictEqual(identity(plan.database.path), plan.database)) reject("config migration refuses a replaced store");
+  let current = migrationFile(plan.original.path, plan.runtimeUid, { mode: 0o600, group: plan.runtimeGid });
+  if (current.descriptor.device !== plan.original.device) reject("config migration changed filesystem");
+  const original = current.descriptor.sha256 === plan.original.sha256;
+  const projected = current.descriptor.sha256 === plan.nextSha256;
+  const bound = current.descriptor.sha256 === contract.currentSha256 &&
+    isDeepStrictEqual(identity(plan.original.path), record.protectedPaths[0]);
+  if (contract.status === "prepared") {
+    if (projected) contract.status = "applied";
+    else if (!original || !bound) reject("prepared config changed before migration");
+  } else if (contract.status === "restoring") {
+    if (original) contract.status = "restored";
+    else if (!bound) reject("config changed during migration rollback");
+  } else if (!bound) reject("config changed after migration");
+  const { sha256: observedHash, ...observedIdentity } = current.descriptor;
+  contract.currentSha256 = observedHash;
+  record.protectedPaths[0] = observedIdentity;
+  if (action === "apply") {
+    if (record.phase !== "B_PREVIOUS_PUBLISHED" || !["prepared", "applied"].includes(contract.status))
+      reject("config migration requires the prepared stopped activation");
+    if (contract.status === "prepared") {
+      atomicBytes(plan.original.path, Buffer.from(plan.nextBytes), { owner: plan.runtimeUid, group: plan.runtimeGid });
+      contract.status = "applied";
+      current = { descriptor: { ...identity(plan.original.path), sha256: plan.nextSha256 } };
+    }
+  } else if (action === "restore") {
+    if (contract.status === "prepared") contract.status = "restored";
+    if (contract.status !== "restored") {
+      contract.status = "restoring";
+      atomicJson(pathname, record);
+      atomicBytes(plan.original.path, Buffer.from(plan.originalBytes), { owner: plan.runtimeUid, group: plan.runtimeGid });
+      contract.status = "restored";
+      current = { descriptor: { ...identity(plan.original.path), sha256: plan.original.sha256 } };
+    }
+  } else if (action !== "reconcile") reject("unknown config contract transition");
+  const { sha256, ...currentIdentity } = current.descriptor;
+  contract.currentSha256 = sha256;
+  record.protectedPaths[0] = currentIdentity;
+  if (contract.status === "applied") {
+    const receipt = join(dirname(pathname), contract.plan.name.replace(/\.json$/, ".applied.json"));
+    if (!lstatSync(receipt, { throwIfNoEntry: false }))
+      atomicJson(receipt, { version: 1, kind: "candidate-config-contract-applied", candidate: plan.candidate,
+        plan: contract.plan, original: plan.original, config: current.descriptor,
+        changedPaths: plan.changedPaths }, { noReplace: true });
+  }
+  if (JSON.stringify(record) !== before) atomicJson(pathname, record);
+  return { protectedPaths: record.protectedPaths,
+    policy: ["applied", "restoring"].includes(contract.status) ? plan.nextPolicy : plan.originalPolicy };
 }
 
 function databaseRead(pathname, callback) {
@@ -6523,7 +6642,7 @@ function retainedBootstrapGate(paths, expected) {
   retainedAdoptionChecked(value.intent.path, value.intent);
   return file;
 }
-function retainedBootstrapLoad(root, operation, request) {
+function retainedBootstrapLoad(root, operation, request, completed = false) {
   const paths = retainedBootstrapPaths(retainedAdoptionLocations(root, operation));
   const file = retainedAdoptionChecked(paths.prefix + ".intent.json");
   const intent = migrationJson(file.bytes);
@@ -6532,7 +6651,7 @@ function retainedBootstrapLoad(root, operation, request) {
       intent.request.operation !== operation || (request && !isDeepStrictEqual(intent.request, request)))
     reject("controller bootstrap request changed");
   retainedAdoptionRequest(root, intent.request);
-  if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller bootstrap lock inode changed");
+  if (!isDeepStrictEqual(intent.lock, retainedRepairLock()) && !completed) reject("controller bootstrap lock inode changed");
   retainedBootstrapGate(paths, { operation, intent: file.descriptor });
   if (intent.original.path !== paths.prefix + ".original.json") reject("controller bootstrap original path changed");
   const original = retainedAdoptionChecked(intent.original.path, intent.original);
@@ -6772,6 +6891,22 @@ function retainedAdoptionProtocolCheck(files) {
 // This is evidence for the same retired source, not permission to retire another
 // journal or to interrupt the incumbent. Every publication rechecks live custody.
 function retainedAdoptionSource(paths, request, expected) {
+  if (request.steady) {
+    if (lstatSync(paths.pathname, { throwIfNoEntry: false }))
+      reject("steady controller adoption requires no activation journal");
+    const root = dirname(paths.directory);
+    retainedRepairObserveLive(root, request.steady.process);
+    for (const name of ["current", "previous"]) {
+      const pointer = name === "previous" && !lstatSync(join(root, name), { throwIfNoEntry: false })
+        ? null : retainedRepairPointer(root, name);
+      if (!isDeepStrictEqual(pointer, request.steady.pointers[name]) ||
+          (name === "current" && join(root, "releases", pointer.sha) !== request.steady.process.release))
+        reject("steady controller adoption release pointers changed");
+    }
+    // The completed predecessor owns this immutable archive. Its retired incident
+    // is provenance, never a requirement on today's Gateway, config or databases.
+    return retainedAdoptionChecked(request.source.path, request.source);
+  }
   if (!request.retirement) {
     const source = retainedAdoptionLegacy(paths, request.source, request.nativeRecovery);
     if (expected && !isDeepStrictEqual(source.nativeConfig, expected.nativeConfig))
@@ -6863,16 +6998,21 @@ function retainedAdoptionSource(paths, request, expected) {
   return original;
 }
 
-function retainedAdoptionRequest(root, input, historical = false) {
-  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : []), ...(Object.hasOwn(input, "nativeRecovery") && !input.retirement ? ["nativeRecovery"] : [])], "controller adoption request");
+function retainedAdoptionRequest(root, input, historical = false, steady = false) {
+  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(steady ? ["historical", "steady"] : historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : []), ...(!steady && Object.hasOwn(input, "nativeRecovery") && !input.retirement ? ["nativeRecovery"] : [])], "controller adoption request");
   if (input.version !== 1 || !Array.isArray(input.oldClosure) || input.oldClosure.length !== 4 ||
       !Array.isArray(input.replacement) || input.replacement.length !== 4)
     reject("controller adoption request must bind all four old and approved new files");
   const paths = retainedAdoptionLocations(root, input.operation);
-  if (historical) {
+  if (historical || steady) {
     suspensionObject(input.historical, ["gate", "complete"], "controller adoption historical approval");
     for (const descriptor of Object.values(input.historical)) validMigrationDescriptor(descriptor, "path", "historical adoption artifact");
     if (input.historical.gate.path !== paths.gate) reject("controller adoption historical gate is not canonical");
+  }
+  if (steady) {
+    validMigrationDescriptor(input.source, "path", "completed controller source archive");
+    suspensionObject(input.steady, ["process", "pointers"], "steady controller adoption");
+    suspensionObject(input.steady.pointers, ["current", "previous"], "steady controller pointers");
   }
   for (let index = 0; index < 4; index++) {
     validMigrationDescriptor(input.oldClosure[index], "path", "old controller file");
@@ -6906,7 +7046,7 @@ function retainedAdoptionRunner(request, completedClosure, archived) {
     if (!(fromArchive && archive.sha256 === request.replacement[1].sha256 && isDeepStrictEqual(file.descriptor, archive)))
       reject("controller adoption must run the exact approved replacement library");
 }
-function retainedAdoptionLoad(root, input) {
+function retainedAdoptionLoad(root, input, completed = false) {
   suspensionObject(input, ["operation", "intentSha256"], "controller adoption binding");
   if (!/^[a-f0-9]{64}$/.test(input.intentSha256)) reject("controller adoption intent hash is invalid");
   const paths = retainedAdoptionLocations(root, input.operation);
@@ -6916,8 +7056,8 @@ function retainedAdoptionLoad(root, input) {
   suspensionObject(intent, ["version", "kind", "protocol", "request", "lock", "metadata", "original", "backups", "replacements", ...(Object.hasOwn(intent, "nativeConfig") ? ["nativeConfig"] : []), ...(Object.hasOwn(intent, "bootstrap") ? ["bootstrap"] : []), ...(Object.hasOwn(intent, "predecessor") ? ["predecessor"] : [])], "controller adoption intent");
   if (intent.version !== 1 || intent.kind !== "retained-controller-adoption" || intent.protocol !== retainedAdoptionProtocol || intent.request.operation !== input.operation)
     reject("controller adoption intent has the wrong owner");
-  retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"));
-  if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller adoption lock inode changed");
+  retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"), Object.hasOwn(intent.request, "steady"));
+  if (!isDeepStrictEqual(intent.lock, retainedRepairLock()) && !completed) reject("controller adoption lock inode changed");
   if (!isDeepStrictEqual(intent.metadata, paths.destinations.map((path, index) => ({
     path, mode: index === 0 ? 0o755 : 0o644, uid: paths.owner, gid: rootGroup(),
   })))) reject("controller adoption ownership or mode policy changed");
@@ -6938,7 +7078,7 @@ function retainedAdoptionLoad(root, input) {
   }
   let bootstrap;
   if (Object.hasOwn(intent, "bootstrap")) {
-    bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, intent.request));
+    bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, intent.request, completed));
     if (!isDeepStrictEqual(bootstrap.closed.descriptor, intent.bootstrap) ||
         bootstrap.original.descriptor.sha256 !== original.descriptor.sha256)
       reject("controller adoption bootstrap predecessor changed");
@@ -7138,16 +7278,18 @@ function retainedAdoptionPredecessor(root, paths, predecessor, request) {
   // never grants current admission or claims that its retired files remain installed.
   const completed = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 }, false);
   if (!isDeepStrictEqual(completed.complete.descriptor, predecessor.complete) ||
-      (request.historical ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
+      (request.steady ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
+        !isDeepStrictEqual(request.source, completed.intent.original) || !isDeepStrictEqual(completed.value.closure, request.oldClosure) :
+        request.historical ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
         isDeepStrictEqual(completed.intent.request.source, request.source) :
         !retainedAdoptionSourceMatches(paths, completed.intent.request.source, request) ||
         !isDeepStrictEqual(completed.value.closure, request.oldClosure)))
     reject("controller adoption completed predecessor differs from the approved incumbent");
   return completed;
 }
-function retainedAdoptionPrepare(root, input, historical = false) {
+function retainedAdoptionPrepare(root, input, historical = false, steady = false) {
   const lock = retainedRepairLock();
-  const paths = retainedAdoptionRequest(root, input, historical);
+  const paths = retainedAdoptionRequest(root, input, historical, steady);
   const gate = lstatSync(paths.gate, { throwIfNoEntry: false }) ? retainedAdoptionGate(paths) : undefined;
   if (gate?.value.operation === input.operation) {
     const binding = { operation: input.operation, intentSha256: gate.value.intent.sha256 };
@@ -7164,6 +7306,9 @@ function retainedAdoptionPrepare(root, input, historical = false) {
   if (historical && (!previous || !isDeepStrictEqual(input.historical, { gate: gate.file.descriptor, complete: previous.complete.descriptor }) ||
       isDeepStrictEqual(previous.intent.request.source, input.source)))
     reject("historical adoption requires the exact completed gate of a different incident");
+  if (steady && (!previous || !isDeepStrictEqual(input.historical, { gate: gate.file.descriptor, complete: previous.complete.descriptor }) ||
+      !isDeepStrictEqual(input.source, previous.intent.original)))
+    reject("steady controller adoption requires the exact completed predecessor and archived source");
   if (input.retirement && !previous) reject("retired incident adoption requires a completed predecessor");
   const bootstrapGate = retainedBootstrapPaths(paths).gate;
   let bootstrap;
@@ -7171,7 +7316,7 @@ function retainedAdoptionPrepare(root, input, historical = false) {
     bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, input), true);
   retainedAdoptionRunner(input, undefined, bootstrap?.intent.replacements[1]);
   const source = retainedAdoptionSource(paths, input);
-  if (previous && !historical && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
+  if (previous && !historical && !steady && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
     reject("controller adoption predecessor source changed");
   const old = bootstrap ? bootstrap.backups : retainedAdoptionReadClosure(paths);
   if (!bootstrap && !isDeepStrictEqual(old.map(file => file.descriptor), input.oldClosure)) reject("controller adoption old closure changed");
@@ -7280,7 +7425,8 @@ function retainedAdoptionApply(root, binding) {
   return retainedAdoptionContext(root, binding);
 }
 function retainedAdoptionCompletion(root, binding, current = true) {
-  const context = retainedAdoptionLoad(root, binding);
+  // Completed evidence outlives /run across boots; only active publication pins its inode.
+  const context = retainedAdoptionLoad(root, binding, true);
   if (current) retainedAdoptionGate(context.paths, context.file.descriptor);
   const file = retainedAdoptionChecked(context.paths.prefix + ".complete.json");
   const value = migrationJson(file.bytes);
@@ -7347,9 +7493,10 @@ function retainedControllerAdoption(action, root, input) {
     case "bootstrap": return retainedBootstrap(root, input);
     case "prepare": return retainedAdoptionPrepare(root, input);
     case "historical-successor": return retainedAdoptionPrepare(root, input, true);
+    case "steady-successor": return retainedAdoptionPrepare(root, input, false, true);
     case "apply": return retainedAdoptionApply(root, input);
     case "context": return retainedAdoptionContext(root, input);
-    default: reject("controller adoption only implements bootstrap, prepare, historical-successor, apply and context");
+    default: reject("controller adoption only implements bootstrap, prepare, historical-successor, steady-successor, apply and context");
   }
 }
 
@@ -7663,7 +7810,7 @@ try {
   let result;
   switch (command) {
     case "retained-controller-adoption":
-      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|historical-successor|apply|context ROOT INPUT");
+      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|historical-successor|steady-successor|apply|context ROOT INPUT");
       result = JSON.stringify(retainedControllerAdoption(args[0], args[1], jsonArgument(args[2])));
       break;
     case "controller-adoption-gate":
@@ -8329,6 +8476,15 @@ try {
       result = candidateConfigAccept(args[0], args[1], jsonArgument(args[2]),
         { pid: integer(args[3], "candidate PID"), generation: args[4] }, integer(args[5], "config runtime owner"), jsonArgument(args[6]));
       break;
+    case "config-contract":
+      if (args[0] === "prepare") {
+        if (args.length !== 6 || args[5] !== "@stdin") reject("usage: config-contract prepare ROOT RELEASE CONFIG DATABASE @stdin");
+        result = JSON.stringify(configContractPrepare(args[1], args[2], args[3], args[4], migrationJson(migrationReadBytes(0, migrationJsonLimit))));
+      } else {
+        if (args.length !== 2) reject("usage: config-contract apply|reconcile|restore ROOT");
+        result = JSON.stringify(configContractTransition(args[0], args[1]));
+      }
+      break;
     case "retained-repair-acceptance":
       if (args.length !== 3) reject("usage: retained-repair-acceptance prepare|check|receipt ROOT JOURNAL_DESCRIPTOR");
       result = JSON.stringify(retainedRepairAcceptance(args[0], args[1], jsonArgument(args[2])));
@@ -8454,6 +8610,7 @@ try {
         witnessInput,
         runtimeTarget,
         nativeBackupRoot,
+        configPlan,
       ] = args;
       if (lstatSync(pathname, { throwIfNoEntry: false })) {
 
@@ -8494,6 +8651,18 @@ try {
         ...(runtimeTarget ? { runtimeChange: jsonArgument(runtimeTarget) } : {}),
         ...(nativeBackupRoot ? { nativeUpdate: { backupRoot: nativeBackupRoot } } : {}),
       });
+      if (configPlan && configPlan !== "null") {
+        const descriptor = jsonArgument(configPlan);
+        validMigrationDescriptor(descriptor, "name", "config contract plan");
+        if (!/^config-contract-[a-f\d-]{36}\.json$/.test(descriptor.name)) reject("config contract plan name is invalid");
+        const plan = configContractPlan(dirname(dirname(pathname)), descriptor, record);
+        const original = migrationFile(plan.original.path, plan.runtimeUid, { mode: 0o600, group: plan.runtimeGid });
+        if (!isDeepStrictEqual(original.descriptor, plan.original) ||
+            !isDeepStrictEqual(identity(plan.original.path), record.protectedPaths[0]))
+          reject("config contract input changed before activation");
+        record.configContract = { plan: descriptor, status: "prepared", currentSha256: plan.original.sha256 };
+        validJournal(record);
+      }
       if (topology === "system") {
         if (witnessInput !== "@stdin") reject("ordinary activation requires the original session witness on stdin");
         const namespace = migrationNamespace(dirname(dirname(pathname)));

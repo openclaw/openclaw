@@ -183,6 +183,8 @@ export async function resolveModelAsync(
       readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
+    // Typed-only veto (#184996). Accepted edge: a main/nightly catalog saved under #198288 can refuse a
+    // listed model until the first restart after upgrading; releases never saved that value.
     assertModelSupportsChat(captured?.inference?.chat ?? declared?.inference?.chat, normalizedRef);
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;

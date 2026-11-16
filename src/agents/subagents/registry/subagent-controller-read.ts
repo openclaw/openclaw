@@ -124,6 +124,7 @@ async function prepareControllerFacts(
             sessionKey,
             sessionId: entry?.sessionId ?? null,
             lifecycleRevision: entry?.lifecycleRevision ?? null,
+            exactTranscript: true,
           });
           try {
             // Both leases overlap the original reader; closing/reopening cannot adopt a source.

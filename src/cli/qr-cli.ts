@@ -18,6 +18,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 
 type QrCliOptions = {
@@ -81,10 +82,10 @@ export function registerQrCli(program: Command) {
     .action(async (opts: QrCliOptions) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (opts.token && opts.password) {
-          throw new Error("Use either --token or --password, not both.");
+          throwExpectedCliError("Use either --token or --password, not both.");
         }
         if (opts.limited && opts.voiceNode) {
-          throw new Error("Use either --limited or --voice-node, not both.");
+          throwExpectedCliError("Use either --limited or --voice-node, not both.");
         }
 
         const token = trimToUndefined(opts.token) ?? "";
@@ -98,7 +99,7 @@ export function registerQrCli(program: Command) {
           const hasRemoteUrl = Boolean(trimToUndefined(remoteUrl));
           const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
           if (!hasRemoteUrl && !hasTailscaleServe) {
-            throw new Error(
+            throwExpectedCliError(
               "qr --remote requires gateway.remote.url (or gateway.tailscale.mode=serve/funnel).",
             );
           }
@@ -183,7 +184,7 @@ export function registerQrCli(program: Command) {
         });
 
         if (!resolved.ok) {
-          throw new Error(resolved.error);
+          throwExpectedCliError(resolved.error);
         }
 
         const setupCode = encodePairingSetupCode(resolved.payload);

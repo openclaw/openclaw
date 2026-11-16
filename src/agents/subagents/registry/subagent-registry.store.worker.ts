@@ -84,7 +84,10 @@ export const subagentRegistryOperations = {
     try {
       context.write((writer) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds, {
+          reason: input.removalReason ?? "owner_released",
+          terminalRows: input.terminalRows,
+        });
         const { notices } = recordSessionStateEventsInDatabase(writer.db, terminalEvents);
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {

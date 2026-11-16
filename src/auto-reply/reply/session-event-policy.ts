@@ -16,6 +16,7 @@ import { getRuntimeConfigCapture } from "../../config/runtime-config-capture-sta
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { intersectSessionToolOverrides } from "../../config/sessions/session-tool-overrides.js";
+import { SessionWorkStartChangedError } from "../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -76,7 +77,9 @@ export function captureSessionEventConfigPolicy(
       if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
-        throw new Error("Session event configuration changed; inspect the run before retrying");
+        throw new SessionWorkStartChangedError(
+          "Session event configuration changed; inspect the run before retrying",
+        );
       }
       checkedConfig = current;
       checkedPublication = currentPublication;
@@ -162,6 +165,11 @@ export function captureSessionEventConfigRelevance(
         mcp,
         channels: channelConfig,
         logging: _logging,
+        diagnostics: _diagnostics,
+        ui: _ui,
+        telemetry: _telemetry,
+        update: _update,
+        session,
         meta: _meta,
         // Plugin reloads own their admitted turns: they hand over at a step boundary or
         // stay pinned to the admitted generation (src/agents/plugin-turn-handover.ts).
@@ -171,6 +179,8 @@ export function captureSessionEventConfigRelevance(
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      // Housekeeping does not alter the admitted target, permissions, or tools.
+      session: { ...session, maintenance: undefined },
       // OpenClaw's MCP owner revokes exact servers; native runtimes can retain raw config.
       mcp: runtimeOwnsMcpServers ? { ...mcp, servers: undefined } : mcp,
       models: selection
@@ -225,8 +235,10 @@ export function captureSessionEventConfigRelevance(
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
       if (
-        tokens?.[0] === "logging" ||
-        tokens?.[0] === "plugins" ||
+        ["logging", "diagnostics", "ui", "telemetry", "update", "plugins"].some(
+          (key) => tokens?.[0] === key,
+        ) ||
+        (tokens?.[0] === "session" && tokens[1] === "maintenance") ||
         (runtimeOwnsMcpServers && tokens?.[0] === "mcp" && tokens[1] === "servers")
       ) {
         return false;
