@@ -1,5 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
@@ -456,16 +455,10 @@ describe("new session draft route ownership", () => {
 it.each(["Couldn’t transcribe your voice.", "Transcription provider unavailable"])(
   "retains an earlier recording's error while the next microphone connects: %s",
   async (errorMessage) => {
-    const original = NewSessionPageOwner.prototype.composerOptions;
-    const observed = vi.fn(function (
-      this: NewSessionPageOwner,
-      ...args: Parameters<typeof original>
-    ) {
-      return original.apply(this, args);
-    });
-    vi.spyOn(NewSessionPageOwner.prototype, "composerOptions").mockImplementation(observed);
+    const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
     await mount(routeData("research"));
-    const owner = expectDefined(observed.mock.contexts[0], "New Session owner");
+    const owner = observed.mock.contexts[0];
+    assert.instanceOf(owner, NewSessionPageOwner);
     const capture = new ComposerDictationOwner({
       client: null,
       connected: false,
