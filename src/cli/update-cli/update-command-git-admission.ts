@@ -1,16 +1,11 @@
 import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 
 export async function admitSourceUpdateArtifacts(
   root: string,
   run: UpdateCommandOptions["run"],
 ): Promise<boolean> {
-  // A release installation builds in its own worktrees; no checkout artifacts are written.
-  if (readPackageReleaseSlotSync(root)) {
-    return false;
-  }
   try {
     const prepared = await inspectSourceUpdateArtifacts(root);
     if (prepared.lock && !run) {

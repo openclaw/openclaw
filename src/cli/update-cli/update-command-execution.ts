@@ -589,12 +589,13 @@ export async function executeMutableUpdate(
           : runPackageInstallUpdate(packageUpdate),
       );
     } else {
-      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
+      const gitRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+      // Releases build in their own worktrees; the checkout's artifacts are never written.
+      const prepared = !params.gitRelease && (await admitSourceUpdateArtifacts(gitRoot, opts.run));
       assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,
-        sourceRuntimePrepared,
+        sourceRuntimePrepared: prepared,
         switchToGit: params.switchToGit,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
