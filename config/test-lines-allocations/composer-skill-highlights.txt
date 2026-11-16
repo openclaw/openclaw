@@ -1,2 +1,2 @@
-# PR 199688: retain red/green coverage for native undo, incremental token/Markdown boundaries, canonical-parser parity, and literal-dollar lazy loading requested in the performance qualification.
-38
+# PR 199688: retain red/green coverage for native undo, incremental token/Markdown boundaries, canonical-parser parity, literal-dollar lazy loading, and hosted-review identity/catalog invalidation defects.
+69

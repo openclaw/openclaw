@@ -1,8 +1,9 @@
-import { StateField } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import { createIconElement } from "../../../components/markdown-icon.ts";
 import {
   readComposerSkillReferences,
+  subscribeSlashCommands,
   type ComposerSkillReference,
 } from "../../../lib/chat/skill-references.ts";
 import { composerAtomicEditing } from "./composer-editor-atomic.ts";
@@ -51,9 +52,15 @@ function decorations(value: string, editingAt?: number) {
   };
 }
 
+const skillCatalogChanged = StateEffect.define<number | undefined>();
+
 const skillDecorations = StateField.define<ReturnType<typeof decorations>>({
   create: (state) => decorations(state.doc.toString()),
   update(value, transaction) {
+    const refreshed = transaction.effects.find((effect) => effect.is(skillCatalogChanged));
+    if (refreshed) {
+      return decorations(transaction.newDoc.toString(), refreshed.value ?? value.editing?.end);
+    }
     if (!transaction.docChanged) {
       const editing = value.editing;
       const head = transaction.newSelection.main.head;
@@ -166,6 +173,16 @@ const skillTheme = EditorView.theme({
 export function composerSkillExtension(input: HTMLTextAreaElement) {
   return [
     skillDecorations,
+    ViewPlugin.define((view) => ({
+      // Catalog replacement is an explicit invalidation, not per-key polling.
+      destroy: subscribeSlashCommands(() => {
+        view.dispatch({
+          effects: skillCatalogChanged.of(
+            view.composing ? view.state.selection.main.head : undefined,
+          ),
+        });
+      }),
+    })),
     composerAtomicEditing(
       (state) => state.field(skillDecorations, false)?.ranges ?? Decoration.none,
       // The skill protocol permits text immediately before $, but not inside its name.

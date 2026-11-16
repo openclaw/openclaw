@@ -182,7 +182,7 @@ it.each([false, true])(
   },
 );
 
-it("uses canonical skill identity before normalized names or display aliases", async () => {
+it("uses canonical skill identity before normalized command names, never display labels", async () => {
   const f = fixture("");
   replaceSlashCommands(
     [
@@ -206,6 +206,37 @@ it("uses canonical skill identity before normalized names or display aliases", a
     )
     .toEqual(["Hyphen skill", "Underscore skill"]);
   expect(f.input.value).toBe("$foo-bar $foo_bar ");
+  expect(readComposerSkillReferences("$Hyphen-skill $Underscore-skill")).toEqual([]);
+});
+
+it("reconciles unchanged native and rich drafts when the catalog arrives, renames or removes a skill", async () => {
+  const f = fixture("Use $later now");
+  const catalog = (label: string) => [
+    {
+      key: "later",
+      name: "later",
+      description: "Skill",
+      source: "skill" as const,
+      skillReferenceable: true,
+      skillDisplayName: label,
+    },
+  ];
+  // Let the initial unknown-reference admission finish before catalog arrival.
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
+  expect(readComposerEditor(f.input)).toBeUndefined();
+  replaceSlashCommands(catalog("First label"));
+  await expect.poll(() => f.chip()?.textContent).toBe("First label");
+  const view = f.view();
+  selectComposerInput(f.input, 0, 3);
+  replaceSlashCommands(catalog("Renamed label"));
+  await expect.poll(() => f.chip()?.textContent).toBe("Renamed label");
+  replaceSlashCommands([]);
+  await expect.poll(f.chip).toBeNull();
+  expect(f.view()).toBe(view);
+  expect(f.input.value).toBe("Use $later now");
+  expect([f.input.selectionStart, f.input.selectionEnd]).toEqual([0, 3]);
 });
 
 it("maps unaffected skills and invalidates token, escape, command and code changes", async () => {
