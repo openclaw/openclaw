@@ -14,6 +14,7 @@ import {
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { createModelCatalogSnapshotView } from "./model-catalog-view.js";
+import type { ModelFallbackResultClassifier } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -74,10 +75,13 @@ export async function runUtilityCompletion(
   params: Parameters<typeof runIsolatedCompletion>[0] & {
     useUtilityModel?: boolean;
     onAttempt?: (attempt: UtilityCompletionAttempt) => void;
+    classifyResult?: ModelFallbackResultClassifier<
+      Awaited<ReturnType<typeof runIsolatedCompletion>>
+    >;
   },
   run?: typeof runIsolatedCompletion,
 ) {
-  const { onAttempt, ...request } = params;
+  const { onAttempt, classifyResult, ...request } = params;
   const complete = run ?? (await import("./isolated-completion.js")).runIsolatedCompletion;
   const attempt = (candidate: Parameters<typeof runIsolatedCompletion>[0]) => {
     onAttempt?.(candidate);
@@ -113,6 +117,7 @@ export async function runUtilityCompletion(
         : undefined,
     // Isolated completion already owns credential selection and profile rotation.
     skipAuthProfileRuntime: true,
+    classifyResult,
     run: (provider, model, options) =>
       attempt({
         ...request,

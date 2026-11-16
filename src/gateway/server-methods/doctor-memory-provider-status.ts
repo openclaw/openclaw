@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
-import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
+import type { MemoryHealth } from "../../plugins/memory-provider-runtime-types.js";
 import { getActiveMemoryProviderCore } from "../../plugins/memory-runtime.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";

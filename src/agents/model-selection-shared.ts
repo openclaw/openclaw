@@ -26,7 +26,7 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { configuredModelCatalogEntry } from "./model-catalog-entry.js";
-import { findModelCatalogEntry } from "./model-catalog-lookup.js";
+import { findModelCatalogEntry, findModelInCatalog } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
@@ -953,25 +953,27 @@ function buildAllowedModelSetFromPrepared(
     if (!parsed) {
       return;
     }
+    const entry = { provider: parsed.provider, id: parsed.model };
+    const uncataloged =
+      !catalogIdentities.has(resolveModelCatalogIdentityKey(entry)) &&
+      !findModelInCatalog(catalog, parsed.provider, parsed.model);
+    // A ref to a known chat:false row (a Decision model) is not a chat choice. Only refs that
+    // no catalog knows get a synthetic chat entry below.
+    if (uncataloged && findModelInCatalog(inventory, parsed.provider, parsed.model)) {
+      return;
+    }
     const key = modelKey(parsed.provider, parsed.model);
     allowedKeys.add(key);
     exactAllowedIdentities.add(addAllowedCatalogRef(parsed));
-    const syntheticKey = modelCatalogEntryKey({ provider: parsed.provider, id: parsed.model });
+    const syntheticKey = modelCatalogEntryKey(entry);
 
-    if (
-      !catalogIdentities.has(
-        resolveModelCatalogIdentityKey({ provider: parsed.provider, id: parsed.model }),
-      ) &&
-      !findModelCatalogEntry(catalog, { provider: parsed.provider, modelId: parsed.model }) &&
-      !syntheticCatalogEntries.has(syntheticKey)
-    ) {
+    if (uncataloged && !syntheticCatalogEntries.has(syntheticKey)) {
       // Config can allow a model before it appears in live provider catalogs.
       // Synthetic entries keep UI/model switchers aligned with that allowlist.
       const alias = metadata.aliasByKey.get(key);
       syntheticCatalogEntries.set(syntheticKey, {
-        id: parsed.model,
+        ...entry,
         name: parsed.model,
-        provider: parsed.provider,
         ...(alias ? { alias } : {}),
       });
     }

@@ -466,7 +466,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
   } finally {
     statements.mockRestore();
     dispatch.mockRestore();
-    admission.finish();
+    await admission.finish();
     if (reader.isTransaction) {
       reader.exec("ROLLBACK");
     }
@@ -663,9 +663,7 @@ it.runIf(process.platform !== "win32")(
       await periodicWork;
       expect(database.walMaintenance.health).toMatchObject({
         state: "error",
-        error: expect.stringContaining(
-          "SQLite database file identity changed before existing-only open",
-        ),
+        error: "SQLite Worker path no longer matches its borrowed native owner",
       });
       expect(observations).toEqual(["error"]);
       expect(sqliteBytes(database.path)).toEqual(replacementBytes);

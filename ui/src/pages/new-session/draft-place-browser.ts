@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -33,7 +34,7 @@ export type BrowserProjectRegistration = Readonly<{
 }>;
 
 type DraftPickerKind = "where" | "project" | "checkout";
-export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
+export type ProjectBrowserFocus = Partial<Record<"browse" | "path" | "search", HTMLElement>>;
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -237,6 +238,11 @@ export class DraftPlaceBrowser {
 
   get projectId(): string {
     return this.projectSelection?.kind === "local" ? this.projectSelection.id : "";
+  }
+
+  /** Remote and pasted repositories open through operator.write projectGitUrl. */
+  get canOpenRemoteProjects(): boolean {
+    return hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null);
   }
 
   get remoteProject(): DraftRemoteProject | null {
@@ -598,9 +604,13 @@ export class DraftPlaceBrowser {
       }
       const active = this.callbacks.activeElement();
       const target = this.projectFocus[kind];
+      // The root view's search field focuses itself on arrival; that is not the user moving on.
       if (
         target?.isConnected &&
-        (!active || active === origin || active === active.ownerDocument.body)
+        (!active ||
+          active === origin ||
+          active === active.ownerDocument.body ||
+          active === this.projectFocus.search)
       ) {
         target.focus({ preventScroll: true });
       }

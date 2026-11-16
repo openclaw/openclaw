@@ -264,7 +264,7 @@ it.each(["before-disable", "after-disable"] as const)(
       expect(service.stop).not.toHaveBeenCalled();
       expect(String(failure)).toMatch(
         interruption === "before-disable"
-          ? /requester-revoked/
+          ? /interrupted/
           : /Scheduled Task disable failed: disable failed after commit/,
       );
     }),

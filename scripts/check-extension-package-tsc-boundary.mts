@@ -515,7 +515,6 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
           emit: false,
         }),
       ];
-      before.signature(config, args, []);
       const recordPath = resolveBoundaryTsStampPath(extensionId);
       mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
@@ -696,7 +695,8 @@ async function runBoundaryCheck(argv: string[]) {
         summary,
         await runCompileCheck(
           selection.selected.map((row) => row.package),
-          selection.mode === "affected",
+          // A complete inventory uses full preparation, not per-consumer graph discovery.
+          selection.mode === "affected" && selection.selected.length < optInExtensionIds.length,
         ),
       );
     }

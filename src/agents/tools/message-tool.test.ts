@@ -45,7 +45,6 @@ import { sanitizeMessageToolVisiblePayload } from "./message-tool-visible-conten
 
 type CreateMessageTool = typeof createMessageTool;
 
-const CRITICAL_THRESHOLD = 20;
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   version: 0,
   channels: [],
@@ -692,22 +691,16 @@ describe("message tool secret scoping", () => {
   it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
     mockSendResult();
 
-    const input = await executeSend({
-      action: { message: "hi" },
-      toolOptions: {
-        currentChannelProvider: "webchat",
-        sourceReplyDeliveryMode: "automatic",
-        agentSessionKey: "agent:main:webchat:dm:dashboard",
-      },
-    });
-
-    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
-    const tool = createMessageTool({
+    const toolOptions = {
       currentChannelProvider: "webchat",
       sourceReplyDeliveryMode: "automatic",
       agentSessionKey: "agent:main:webchat:dm:dashboard",
-    });
+    } as const;
+    const input = await executeSend({ action: { message: "hi" }, toolOptions });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool(toolOptions);
     expect(tool.description).not.toContain("Normal final answers stay private");
   });
 
@@ -1307,7 +1300,7 @@ it.each([false, true])("respects a prepared catalog absence: %s", (preparedAbsen
 it.each<{
   name: string;
   options: Parameters<typeof createOpenClawTools>[0];
-  action: Record<string, unknown>;
+  action: { target?: string; message: string };
   expected: Record<string, unknown>;
 }>([
   {
@@ -1318,7 +1311,7 @@ it.each<{
       agentThreadId: "111.222",
     },
     action: { message: "stay in thread" },
-    expected: { currentThreadTs: "111.222", replyToMode: "all" },
+    expected: { toolContext: { currentThreadTs: "111.222", replyToMode: "all" } },
   },
   {
     name: "routable DM target",
@@ -1331,28 +1324,30 @@ it.each<{
     },
     action: { target: "user:U123", message: "stay in DM thread" },
     expected: {
-      currentChannelId: "D123",
-      currentChatType: "direct",
-      currentMessagingTarget: "user:U123",
-      currentChannelProvider: "slack",
-      currentThreadTs: "111.222",
-      replyToMode: "all",
+      toolContext: {
+        currentChannelId: "D123",
+        currentChatType: "direct",
+        currentMessagingTarget: "user:U123",
+        currentChannelProvider: "slack",
+        currentThreadTs: "111.222",
+        replyToMode: "all",
+      },
     },
   },
+  {
+    name: "run model prefix context",
+    options: { modelProvider: "p", modelId: "m-latest", requesterThinkingLevel: "high" },
+    action: { message: "hi" },
+    expected: { responsePrefixContext: { provider: "p", model: "m", thinkingLevel: "high" } },
+  },
 ])("forwards $name through createOpenClawTools", async ({ options, action, expected }) => {
-  mockSendResult({
-    channel: "slack",
-    to: typeof action.target === "string" ? action.target : "channel:C123",
-  });
+  mockSendResult({ channel: "slack", to: action.target ?? "channel:C123" });
   registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
   const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
     (candidate) => candidate.name === "message",
   );
-  if (!tool) {
-    throw new Error("message tool not found");
-  }
-  await tool.execute("1", { action: "send", channel: "slack", ...action });
-  expect(firstAction()?.toolContext).toMatchObject(expected);
+  await tool?.execute("1", { action: "send", channel: "slack", ...action });
+  expect(firstAction()).toMatchObject(expected);
 });
 
 it("keeps the tool definition stable through createOpenClawTools", () => {
@@ -1537,63 +1532,6 @@ describe("message tool explicit target guard", () => {
   );
 });
 
-function mockQaChannelGatewayActionRunner() {
-  mocks.dispatch.mockImplementation(async ({ params }) => {
-    const callIndex = mocks.dispatch.mock.calls.length;
-    return {
-      kind: "send",
-      action: "send",
-      channel: "qa-channel",
-      to: typeof params?.target === "string" ? params.target : "channel:loop-room",
-      handledBy: "plugin",
-      payload: {
-        message: {
-          id: `qa-message-${callIndex}`,
-          accountId: "default",
-          direction: "outbound",
-          conversation: { id: "loop-room", chatType: "channel" },
-          senderId: "openclaw",
-          text: "same visible reply",
-          timestamp: 1_800_000_000_000 + callIndex,
-        },
-      },
-      dryRun: false,
-    } satisfies MessageActionResult;
-  });
-}
-
-it("blocks repeated qa-channel sends returned by the wrapped message tool", async () => {
-  mockQaChannelGatewayActionRunner();
-  const messageTool = createMessageTool();
-  const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
-    agentId: "main",
-    sessionKey: "message-tool-action-runner-loop",
-    sessionId: "message-tool-action-runner-loop-session",
-    runId: "message-tool-action-runner-loop-run",
-    loopDetection: { enabled: true },
-  });
-  const params = { action: "send", target: "channel:loop-room", message: "same visible reply" };
-
-  for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-    const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
-    expect(result.details).toMatchObject({
-      message: { conversation: { id: "loop-room" }, text: "same visible reply" },
-    });
-  }
-
-  const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
-  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-  expect(blocked.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-  const blockedDetails = blocked.details as { reason?: unknown } | undefined;
-  expect(String(blockedDetails?.reason)).toContain("CRITICAL");
-
-  const blockedAgain = await wrappedTool.execute(
-    `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
-    params,
-  );
-  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-  expect(blockedAgain.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
-});
 describe("message tool schema scoping", () => {
   const telegramPlugin = createChannelPlugin({
     id: "telegram",

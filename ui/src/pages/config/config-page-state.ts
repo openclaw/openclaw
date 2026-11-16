@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   normalizeCatalogOpenTarget,
   normalizeTextScale,
@@ -29,7 +29,6 @@ import {
 } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigRead,
-  currentDisplayConfig,
   currentDisplayRuntimeConfig,
 } from "../../lib/config/config-state-model.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
@@ -66,6 +65,7 @@ import {
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
+import { visibleConfigSchema } from "./view-schema.tsx";
 import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -81,6 +81,7 @@ export function createConfigPage(
 ) {
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
+  const applicationConfig = projectOwner(context.config, (owner) => owner.current);
   const lobsterdex = projectSource(subscribeLobsterdex, {
     read: getLobsterdex,
     subscribe: (subscribe, notify) => subscribe(notify),
@@ -92,6 +93,13 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
+  const rawSchema = createMemo(() => {
+    revision();
+    return context.runtimeConfig.state.configSchema;
+  });
+  const openclawIdEnabled = createMemo(() => applicationConfig.read().openclawIdEnabled === true);
+  // Refreshing config values must not rebuild the unchanged schema's presentation tree.
+  const schema = createMemo(() => visibleConfigSchema(rawSchema(), openclawIdEnabled()));
   const invalidate = () => {
     publish((value) => value + 1);
     onSettled(afterCommit);
@@ -249,9 +257,7 @@ export function createConfigPage(
     }
     targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
-    if (pageId === "appearance" && isAppearanceDataTarget(targetBlockId)) {
-      appearanceDataRequested = true;
-    }
+    appearanceDataRequested ||= pageId === "appearance" && isAppearanceDataTarget(targetBlockId);
     synchronize();
     invalidate();
     routeListeners.publish();
@@ -322,12 +328,10 @@ export function createConfigPage(
   }
 
   function requestAppearanceData() {
-    if (pageId !== "appearance" || appearanceDataRequested) {
-      return;
+    if (pageId === "appearance" && !appearanceDataRequested) {
+      appearanceDataRequested = true;
+      refresh();
     }
-    appearanceDataRequested = true;
-    synchronize();
-    invalidate();
   }
 
   function requestAppearanceImport() {
@@ -422,7 +426,12 @@ export function createConfigPage(
       issues: configState.configIssues,
       loading: configState.configLoading,
       configLoaded: configState.configSnapshot !== null,
-      appearanceDisplayReady: currentDisplayConfig(configState) !== null,
+      configReadAccess: !context.gateway.snapshot.hello
+        ? ("pending" as const)
+        : hasOperatorReadAccess(context.gateway.snapshot.hello.auth)
+          ? ("available" as const)
+          : ("denied" as const),
+      appearanceDataRequested,
       onAppearanceDataNeeded: requestAppearanceData,
       configRecoveryError: configState.configRecoveryError,
       configRead: currentConfigRead(configState)?.completion.promise ?? null,
@@ -433,7 +442,7 @@ export function createConfigPage(
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
-      schema: configState.configSchema,
+      schema: schema(),
       schemaLoading: configState.configSchemaLoading,
       schemaRead: runtimeConfig.schemaRead,
       onRetrySchema: () => void runtimeConfig.refreshSchema(),

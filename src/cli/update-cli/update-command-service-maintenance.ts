@@ -8,10 +8,7 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../../daemon/service-inspection-error.js";
-import {
-  resolveManagedServiceNodeRunner,
-  resolveManagedServiceStartupRuntime,
-} from "../../daemon/service-layout.js";
+import { resolveManagedServiceNodeRunner } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -237,6 +234,23 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
     }
   };
+  // Repair restarts only the stops an update recorded; a killed updater has nothing else to say.
+  const recordUpdateGatewayStop = (startedAtMs: number | undefined) => {
+    if (!updateRun) {
+      return;
+    }
+    try {
+      recordUpdateRunStep(
+        updateRun.runId,
+        { step: "service-stop", status: "completed", startedAtMs, endedAtMs: Date.now() },
+        updateRun,
+      );
+    } catch {
+      (params.warn ?? defaultRuntime.error)(
+        "Could not record the Gateway stop in update history; update repair may not restart it.",
+      );
+    }
+  };
   const prepareSystemdMaintenance = async (state: GatewayServiceState, stopping: boolean) => {
     const { prepareSystemdGatewayMaintenance } =
       await import("../../daemon/systemd-maintenance.js");
@@ -407,9 +421,6 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched."
           : "Gateway restart skipped: no Gateway service or listener is running.",
     };
-  }
-  if (params.phase === "inspect" && serviceUpdateVerdict.kind === "owned") {
-    params.onOwnedStartupRuntime?.(resolveManagedServiceStartupRuntime(serviceState));
   }
   const operatorRestartWarning =
     process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"
@@ -640,7 +651,10 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
           : {}),
         // Native stop may unload the service before a later port check fails.
-        onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
+        onMutation: () => {
+          recordUpdateGatewayStop(stoppedAtMs);
+          params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs });
+        },
       });
     };
     if (process.platform === "linux") {

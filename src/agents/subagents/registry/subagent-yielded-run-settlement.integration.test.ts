@@ -1,11 +1,16 @@
-// Real registry, SQLite and sweeper proof that a yielded run no continuation can reach settles.
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentRegistryFixture } from "./subagent-registry-live.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import { appendTranscriptMessage } from "../../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
+import * as gatewayCall from "../../../gateway/call.js";
+import { emitAgentEventIfCurrent, onAgentEvent } from "../../../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -24,11 +29,14 @@ import {
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import {
+  claimSubagentYield,
   registerSubagentRun,
+  resetSubagentRegistryForTests,
   startQueuedSubagentRun,
   testing,
 } from "./subagent-registry.test-helpers.js";
@@ -201,6 +209,128 @@ describe("yielded run settlement", () => {
     expect((await waitSurface(runId)).completed).toMatchObject([expected]);
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   };
+
+  it.each(
+    (["done", "missing", "live", "live-notice", "descendants-lost"] as const).flatMap(
+      (requesterState) =>
+        [false, true].map((expectsCompletionMessage) => ({
+          requesterState,
+          expectsCompletionMessage,
+        })),
+    ),
+  )(
+    "settles a restored yield only when its continuation is gone ($requesterState, completion=$expectsCompletionMessage)",
+    async ({ requesterState, expectsCompletionMessage }) => {
+      const live = requesterState === "live" || requesterState === "live-notice";
+      const continuable = live || requesterState === "done";
+      const runId = "restored-message-wait";
+      const childSessionKey = `agent:main:subagent:${runId}`;
+      const requesterSessionKey = "agent:main:message-wait-requester";
+      const sessionId = "message-wait-session";
+      const lifecycleRevision = "message-wait-incarnation";
+      const child = { agentId: "main", sessionKey: childSessionKey };
+      await upsertSessionEntryCore(child, {
+        sessionId,
+        updatedAt: T0,
+        lifecycleRevision,
+        lifecycleRunId: runId,
+        activeWriterRunId: runId,
+        startedAt: T0 - MINUTE_MS,
+        endedAt: T0,
+      });
+      if (requesterState !== "missing") {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: requesterSessionKey },
+          {
+            sessionId: "message-wait-requester-session",
+            updatedAt: T0,
+            ...(requesterState === "done" ? { status: "done" as const } : {}),
+          },
+        );
+      }
+      const gatewayContextResolver = getGatewayContextResolver(fixture.gatewayRuntime);
+      await registerSubagentRun({
+        runId,
+        childSessionKey,
+        childAgentId: "main",
+        sessionEntry: { sessionId, lifecycleRevision },
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterDisplayKey: "message-wait-requester",
+        task: "Wait for a continuation from the requester",
+        cleanup: continuable ? "delete" : "keep",
+        expectsCompletionMessage,
+        gatewayContextResolver,
+      });
+      expect(subagentRuns.get(runId)?.execution.status).toBe("running");
+      await fixture.settle();
+      await claimSubagentYield({
+        runId,
+        sessionKey: childSessionKey,
+        agentId: "main",
+        waitForMessage: true,
+        hasPendingWork: () => false,
+      });
+      await mutateSubagentRuns([runId], (rows) => {
+        const paused = { ...rows.get(runId)! };
+        if (requesterState === "descendants-lost") {
+          delete paused.waitForMessage;
+        }
+        markSubagentRunPausedAfterYield({ entry: paused, endedAt: T0 });
+        return { value: undefined, postimages: new Map([[runId, paused]]) };
+      });
+      // Restore rows without reviving old execution or completion authority.
+      await resetSubagentRegistryForTests({ persist: false });
+      if (live) {
+        const events = await vi.importActual<typeof import("../../../infra/agent-events.js")>(
+          "../../../infra/agent-events.js",
+        );
+        vi.mocked(onAgentEvent).mockImplementation(events.onAgentEvent);
+      }
+      await fixture.activateGatewayRuntime();
+      // Let cleanup succeed so an unintended deletion stays visible.
+      getGatewayContextResolver(fixture.gatewayRuntime)!()!.localEmbedded = true;
+      const gatewayRequest = vi.spyOn(gatewayCall, "callGateway").mockResolvedValue({ ok: true });
+      const restored = subagentRuns.get(runId)!;
+      expect(restored.waitForMessage).toBe(
+        requesterState === "descendants-lost" ? undefined : true,
+      );
+      expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+      if (live) {
+        expect(
+          emitAgentEventIfCurrent({
+            runId: "unrelated-requester-turn",
+            sessionKey: requesterSessionKey,
+            stream: "lifecycle",
+            data:
+              requesterState === "live-notice"
+                ? { phase: "end", stopReason: "end_turn" }
+                : { phase: "error", executionStarted: false, error: "Queued input rejected" },
+          }),
+        ).toBe(true);
+        await fixture.settle();
+      }
+      await sweep();
+      const result = persisted(runId);
+      const session = loadSessionEntry(child);
+      expect(session?.activeWriterRunId).toBe(runId);
+      if (continuable) {
+        expect(gatewayRequest).not.toHaveBeenCalled();
+        expect(result?.archiveAtMs).toBeUndefined();
+        expect(result?.pauseReason).toBe("sessions_yield");
+        expect(result?.execution.outcome).toBeUndefined();
+        expect(session?.lifecycleRunId).toBe(runId);
+      } else {
+        expect(result?.pauseReason).toBeUndefined();
+        expect(result?.execution.outcome).toMatchObject({
+          status: "error",
+          error: expect.stringMatching(/requester/i),
+        });
+        expect(session?.lifecycleRunId).toBeUndefined();
+        expect(session?.status).toBe("failed");
+      }
+    },
+  );
 
   it("reads the yielded turn rather than unrelated later turns beyond the recent-message window", async () => {
     await settleCollector({ status: "ok" }, [YIELDED_REPLY, 65]);

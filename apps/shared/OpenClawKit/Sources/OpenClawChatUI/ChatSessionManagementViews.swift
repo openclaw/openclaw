@@ -631,6 +631,7 @@ public struct ChatNewSessionOptionsPopover: View {
                 Toggle(isOn: self.$usesWorktree) {
                     Text("Separate working copy")
                         .font(OpenClawChatTypography.formControl.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .toggleStyle(.switch)
                 .disabled(self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgent?

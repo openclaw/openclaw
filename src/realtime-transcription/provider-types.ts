@@ -6,6 +6,8 @@ export type RealtimeTranscriptionProviderConfig = Record<string, unknown>;
 
 /** Callback hooks emitted by realtime transcription sessions. */
 export type RealtimeTranscriptionSessionCallbacks = {
+  /** Synchronous live-authority check; failure requires aborting without finalization. */
+  assertCurrent?: () => void;
   onPartial?: (partial: string) => void;
   onTranscript?: (transcript: string) => void;
   onSpeechStart?: () => void;

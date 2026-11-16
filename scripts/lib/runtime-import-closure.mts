@@ -19,6 +19,10 @@ type ImportReference = {
   specifier: string;
   resolutionMode?: "import" | "require";
 };
+type ResolvedImportReference = ImportReference & {
+  resolvedFileName: string | undefined;
+  isExternalLibraryImport: boolean;
+};
 type RuntimeImportGraphOptions = {
   includeDynamicImports?: boolean;
   includeCommonJs?: boolean;
@@ -222,6 +226,7 @@ export function createRuntimeImportGraph(
     throw error;
   }
   let { project, snapshot } = session;
+  const dependencies = new Map<string, readonly ResolvedImportReference[]>();
   const close = () => {
     session.close();
     parser.close();
@@ -230,6 +235,10 @@ export function createRuntimeImportGraph(
     compilerOptions: project.parsedCommandLine.options,
     dependencies(file: string) {
       const absolute = resolve(root, file);
+      const cached = dependencies.get(absolute);
+      if (cached) {
+        return cached;
+      }
       if (!sourceImports && isDeclaration(absolute)) {
         return [];
       }
@@ -249,17 +258,22 @@ export function createRuntimeImportGraph(
         snapshot.dispose();
         snapshot = updated;
         project = nextProject;
+        dependencies.clear();
         source = project.program.getSourceFile(absolute);
       }
       if (!source) {
         throw new Error(`Native TypeScript did not load runtime source ${absolute}`);
       }
       const selected = references.get(absolute) ?? [];
+      if (selected.length === 0) {
+        dependencies.set(absolute, []);
+        return [];
+      }
       const imports = source.statements.filter(ts.isImportDeclaration);
       const symbols = project.checker.getSymbolAtLocation(
         imports.map((node) => node.moduleSpecifier),
       );
-      return selected.map((reference, index) => {
+      const resolved = selected.map((reference, index) => {
         const declaration = symbols[index]?.declarations.find(
           (candidate) => candidate.kind === ts.SyntaxKind.SourceFile,
         );
@@ -272,6 +286,8 @@ export function createRuntimeImportGraph(
             : false,
         });
       });
+      dependencies.set(absolute, resolved);
+      return resolved;
     },
     collect(entries: readonly string[], { validatePackages = false } = {}): string[] {
       const closure = new Set(entries.map((file) => file.split(sep).join("/")));

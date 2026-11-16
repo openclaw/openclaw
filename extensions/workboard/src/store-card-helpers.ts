@@ -316,6 +316,18 @@ export function assertCanMutateClaimedCard(
   if (!scope) {
     return;
   }
+  // A retry keeps the agent (claim owner) and often the session, so only the run id tells a
+  // superseded attempt that finished late apart from the card's current one.
+  const runId = normalizeOptionalString(scope.runId);
+  if (
+    runId &&
+    runId !== card.runId &&
+    card.metadata?.attempts?.some((attempt) => attempt.runId === runId)
+  ) {
+    throw new Error(
+      `run ${runId} was superseded by a retry of this card; it can no longer change the card. Report its result in your reply instead.`,
+    );
+  }
   const claim = card.metadata?.claim;
   if (!claim) {
     return;

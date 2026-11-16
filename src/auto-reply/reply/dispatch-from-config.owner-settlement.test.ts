@@ -60,7 +60,7 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { bindReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
+let listActiveSessionRunKeys: typeof import("../../sessions/session-controller.queries.js").listActiveSessionRunKeys;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -103,8 +103,7 @@ function blockCompletion(options: InternalGetReplyOptions | undefined) {
 
 beforeAll(async () => {
   await globalBeforeAll0();
-  ({ listActiveReplyRunSessionKeys } =
-    await import("../../sessions/session-controller.queries.js"));
+  ({ listActiveSessionRunKeys } = await import("../../sessions/session-controller.queries.js"));
   ({ runAfterReplyOperationClear } = await import("../../sessions/session-controller.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   const { testing } = await import("../../sessions/session-controller.test-support.js");
@@ -775,7 +774,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             releaseSessionControllerClaim(successorClaim);
             await successorClaim.settlement.promise;
           }
-          expect(listActiveReplyRunSessionKeys()).toEqual([]);
+          expect(listActiveSessionRunKeys()).toEqual([]);
         }
       },
     );

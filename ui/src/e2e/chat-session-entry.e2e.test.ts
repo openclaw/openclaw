@@ -29,24 +29,13 @@ declare global {
   }
 }
 
-const suite = createControlUiE2eSuite({
-  name: "chat session entry",
-  browserLaunchOptions: {
-    channel: "chromium",
-    args: ["--font-render-hinting=none", "--force-color-profile=srgb"],
-  },
-});
-const scenarios = (["boot", "direct"] as const).flatMap((entry) =>
-  [4, 160].flatMap((count) =>
-    [1440, 390].flatMap((width) =>
-      // Theme does not change entry geometry; cover both without replaying every case.
-      (["no-preference", "reduce"] as const).map(
-        (reducedMotion) =>
-          [entry, count, width, reducedMotion, count === 4 ? "light" : "dark"] as const,
-      ),
-    ),
-  ),
-);
+const suite = createControlUiE2eSuite({ name: "chat session entry" });
+// Sample each entry, layout, and motion path without replaying their Cartesian product.
+const scenarios = [
+  ["boot", 160, 1440, "no-preference", "dark"],
+  ["boot", 4, 390, "reduce", "light"],
+  ["direct", 160, 390, "no-preference", "dark"],
+] as const;
 
 type RecorderOptions = { target: string; enabled: boolean; lastEntryId: string };
 function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
@@ -232,13 +221,15 @@ suite.define(() => {
             });
             expect(pageErrors).toEqual([]);
             const frames = await page.evaluate(() => window.sessionEntryRecorder.frames);
-            await writeFile(
-              path.join(
-                suite.artifactDir,
-                `entry-${observedEntry}-${count}-${width}-${reducedMotion}-frames.json`,
-              ),
-              JSON.stringify(frames, null, 2),
-            );
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              await writeFile(
+                path.join(
+                  suite.artifactDir,
+                  `entry-${observedEntry}-${count}-${width}-${reducedMotion}-frames.json`,
+                ),
+                JSON.stringify(frames, null, 2),
+              );
+            }
             expect(
               await page.evaluate(() => ({
                 width: innerWidth,

@@ -6,9 +6,8 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runExec, spawnCommand } from "../../process/exec.js";
+import { runExec } from "../../process/exec.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   getSessionRepositoryWorkspaceStore,
@@ -41,23 +40,28 @@ import {
   workspaceResultGitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS,
 } from "./workspace-result-git.js";
-import { repositoryHistoryNote, workerHistoryNotAdopted } from "./workspace-result-history.js";
 import {
-  WorkerWorkspaceGitHistorySchema,
-  type StagedWorkerArtifactInventory,
+  repositoryHistoryNote,
+  workerHistoryNotAdopted,
+  withRepositoryCheckpointHistory,
+  REPOSITORY_HISTORY_MESSAGE as MARKER,
+} from "./workspace-result-history.js";
+import type {
+  StagedWorkerArtifactInventory,
+  StagedWorkerWorkspaceResult,
 } from "./workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
   preparedWorkerWorkspaceResultRef,
   withStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
+  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
 // Preserve the checkpoint owner's existing public payload type import path.
 export type { SessionRepositoryCheckpointPayload } from "./session-repository-checkpoints.types.js";
-
-const MARKER = "OpenClaw repository Git delta\n";
 
 type CheckpointOwner = { workspaceId: string; store?: SessionRepositoryWorkspaceStore };
 type CheckpointSource = CheckpointOwner & { checkpointRef?: string };
@@ -137,131 +141,99 @@ export async function withSessionRepositoryCheckpoint<T>(
   params: CheckpointSource & { requireGitHistory?: boolean },
   use: (snapshot: SessionRepositoryCheckpointPayload) => Promise<T>,
 ): Promise<T> {
+  return withRepositoryCheckpoint(params, withStagedWorkerWorkspaceManifest, use);
+}
+
+export async function withSessionRepositoryPublicationCheckpoint<T>(
+  params: CheckpointSource,
+  use: (
+    snapshot: StagedWorkerWorkspaceResult &
+      RepositoryGitHistory & {
+        publicationStagingRoot?: string;
+        publicationDigest?: string;
+      },
+  ) => Promise<T>,
+): Promise<T> {
+  return withRepositoryCheckpoint(
+    params,
+    async (source, consume) =>
+      consume(await readStagedWorkerWorkspaceResult(source.root, source.stagedResultRef)),
+    use,
+  );
+}
+
+async function withRepositoryCheckpoint<
+  Snapshot extends {
+    base: { baseCommit: string | null };
+    current: { baseCommit: string | null };
+    baseManifestRef: string;
+    currentManifestRef: string;
+  },
+  T,
+>(
+  params: CheckpointSource & { requireGitHistory?: boolean },
+  materialize: <Result>(
+    source: { root: string; stagedResultRef: string },
+    use: (snapshot: Snapshot) => Promise<Result>,
+  ) => Promise<Result>,
+  use: (
+    snapshot: Snapshot &
+      RepositoryGitHistory & { publicationStagingRoot?: string; publicationDigest?: string },
+  ) => Promise<T>,
+): Promise<T> {
   const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
-  return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (files) => {
+  return await materialize({ root, stagedResultRef: ref }, async (files) => {
     const historyReadInput = { root, checkpointRef: ref, baseCommit: assertBase(workspace, files) };
-    let directory: string | undefined;
-    let retained: RepositoryGitHistory;
-    try {
-      try {
-        const parents = (
-          await git(historyReadInput.root, [
-            "rev-list",
-            "--parents",
-            "-n",
-            "1",
-            historyReadInput.checkpointRef,
-          ])
-        ).split(" ");
-        if (parents.length === 1) {
-          retained = {
-            gitHistoryNote: workerHistoryNotAdopted("checkpoint has no retained Git history"),
-          };
-        } else {
-          const parent = parents[1]!;
-          const message = await git(historyReadInput.root, ["show", "-s", "--format=%B", parent]);
-          if (!message.startsWith(MARKER)) {
-            throw new Error("repository Git history metadata is missing");
-          }
-          const record: unknown = JSON.parse(message.slice(MARKER.length));
-          if (!isRecord(record)) {
-            throw new Error("repository Git history metadata is invalid");
-          }
-          const retainedGitHistory =
-            record.gitHistory === undefined
-              ? undefined
-              : WorkerWorkspaceGitHistorySchema.parse(record.gitHistory);
-          if (retainedGitHistory && retainedGitHistory.baseCommit !== historyReadInput.baseCommit) {
-            throw new Error("repository Git history base changed");
-          }
-          retained = { gitHistory: retainedGitHistory };
-          if (typeof record.gitHistoryNote === "string") {
-            retained = { gitHistory: retainedGitHistory, gitHistoryNote: record.gitHistoryNote };
-          } else if (
-            retainedGitHistory &&
-            retainedGitHistory.headCommit !== retainedGitHistory.baseCommit
-          ) {
-            const object = `${parent}:history.pack`;
-            const size = Number(await git(historyReadInput.root, ["cat-file", "-s", object]));
-            if (!Number.isSafeInteger(size) || size > MAX_WORKSPACE_RESULT_GIT_PACK_BYTES) {
-              throw new Error("retained Git pack exceeds its byte limit");
-            }
-            directory = await fs.mkdtemp(
-              path.join(resolvePreferredOpenClawTmpDir(), "repository-history-"),
-            );
-            const gitPackPath = path.join(directory, "history.pack");
-            await spawnCommand(
-              workspaceResultGitCommand(historyReadInput.root, ["cat-file", "blob", object]),
-              {
-                stdout: { file: gitPackPath },
-                executionTimeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
-              },
-            );
-            retained = { gitHistory: retainedGitHistory, gitPackPath };
-          }
+    return await withRepositoryCheckpointHistory(
+      { ...historyReadInput, requireGitHistory: params.requireGitHistory },
+      async (history) => {
+        const snapshot = { ...files, ...history };
+        assertBase(workspace, snapshot);
+        if (
+          ref === workspace.checkpointRef &&
+          snapshot.currentManifestRef !== workspace.manifestHash
+        ) {
+          throw new Error("Repository checkpoint differs from its accepted manifest");
         }
-      } catch (error) {
-        retained = { gitHistoryNote: workerHistoryNotAdopted(boundedWorkerError(error)) };
-      }
-      if (
-        params.requireGitHistory &&
-        repositoryHistoryNote(historyReadInput.baseCommit, retained)
-      ) {
-        throw new Error(
-          "Repository checkpoint requires complete Git history; retry the disk export",
-        );
-      }
-      const history = retained;
-      const snapshot = { ...files, ...history };
-      assertBase(workspace, snapshot);
-      if (
-        ref === workspace.checkpointRef &&
-        snapshot.currentManifestRef !== workspace.manifestHash
-      ) {
-        throw new Error("Repository checkpoint differs from its accepted manifest");
-      }
-      let useStarted = false;
-      try {
-        const companion = publicationRef(ref);
-        if (!(await readWorkspaceResultRefObjects(root, [companion])).get(companion)) {
-          useStarted = true;
+        let useStarted = false;
+        try {
+          const companion = publicationRef(ref);
+          if (!(await readWorkspaceResultRefObjects(root, [companion])).get(companion)) {
+            useStarted = true;
+            return await use(snapshot);
+          }
+          return await withStagedWorkerWorkspaceResult(
+            { root, stagedResultRef: companion },
+            async (publication) => {
+              const binding = await publicationBinding(
+                publication.stagingRoot,
+                snapshot.currentManifestRef,
+              );
+              if (binding.snapshot.baseCommit !== workspace.baseCommit) {
+                throw new Error("Repository publication checkpoint base changed");
+              }
+              useStarted = true;
+              return await use({
+                ...snapshot,
+                publicationStagingRoot: publication.stagingRoot,
+                publicationDigest: binding.publicationDigest,
+              });
+            },
+          );
+        } catch (error) {
+          // Optional publication corruption cannot discard verified recovery bytes.
+          // Once the consumer starts, its failures and effects must propagate unchanged.
+          if (useStarted) {
+            throw error;
+          }
+          workspaceLog.warn(
+            `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
+          );
           return await use(snapshot);
         }
-        return await withStagedWorkerWorkspaceResult(
-          { root, stagedResultRef: companion },
-          async (publication) => {
-            const binding = await publicationBinding(
-              publication.stagingRoot,
-              snapshot.currentManifestRef,
-            );
-            if (binding.snapshot.baseCommit !== workspace.baseCommit) {
-              throw new Error("Repository publication checkpoint base changed");
-            }
-            useStarted = true;
-            return await use({
-              ...snapshot,
-              publicationStagingRoot: publication.stagingRoot,
-              publicationDigest: binding.publicationDigest,
-            });
-          },
-        );
-      } catch (error) {
-        // Optional publication corruption cannot discard verified recovery bytes.
-        // Once the consumer starts, its failures and effects must propagate unchanged.
-        if (useStarted) {
-          throw error;
-        }
-        workspaceLog.warn(
-          `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
-        );
-        return await use(snapshot);
-      }
-    } finally {
-      if (directory) {
-        await fs.rm(directory, { recursive: true, force: true });
-      }
-    }
+      },
+    );
   });
 }
 

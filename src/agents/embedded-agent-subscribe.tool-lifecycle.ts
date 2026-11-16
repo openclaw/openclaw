@@ -22,6 +22,7 @@ type EmbeddedToolLifecycleParams<T> = {
   toolName: string;
   toolCallId: string;
   parentToolCallId?: string;
+  toolUsageId?: string;
   args: unknown;
   replaySafe?: boolean;
   hideFromChannelProgress?: boolean;
@@ -62,7 +63,13 @@ export function createEmbeddedToolLifecycleRunner(
       };
       const readSanitizedResult = prepareToolResult(result);
       recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
-      const terminal = await prepareToolExecutionEnd(ctx, endEvent, readSanitizedResult);
+      const terminal = await prepareToolExecutionEnd(
+        ctx,
+        endEvent,
+        readSanitizedResult,
+        // Nested callers must never inherit the identity of a same-name direct tool.
+        toolParams.toolUsageId ?? null,
+      );
       const accepted = await toolParams.onTerminal?.({
         result,
         readSanitizedResult,

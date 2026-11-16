@@ -37,8 +37,5 @@ export {
 } from "./session-controller.barriers.js";
 export { bindSessionControllerSourceTurnId } from "./session-controller.source-turn.js";
 export { markReplyOperationGlobalLaneWaitProgress } from "./session-controller.lifecycle-runtime.js";
-export {
-  waitForReplyRunFollowupAdmission,
-  waitForSessionRunIdle,
-} from "./session-controller.wait.js";
+export { waitForSessionRunIdle } from "./session-controller.wait.js";
 export { stopReplyOperationForRestart } from "./session-controller.stop-runtime.js";

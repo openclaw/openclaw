@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it } from "vitest";
@@ -87,6 +88,25 @@ it("logs.tail masks complete stored batches while preserving JSON records and by
     }
     const next = await readTail({ cursor: tail.cursor });
     expect(next.lines).toEqual([]);
+  }
+});
+
+it("logs.tail returns redacted JSON without running scalar redaction on the Gateway thread", async () => {
+  const stored = `${record("request complete", { password: "synthetic-password" })}\n`;
+  await fs.writeFile(file, stored);
+  const measurements: unknown[] = [];
+  const redaction = channel("openclaw.redaction");
+  const capture = (value: unknown) => measurements.push(value);
+  redaction.subscribe(capture);
+  try {
+    const response = await readTail({ limit: 500, maxBytes: 250_000 }, stored);
+    expect(JSON.parse(response.lines[0]!)).toEqual({
+      message: "request complete",
+      password: "***",
+    });
+    expect(measurements).not.toContainEqual(expect.objectContaining({ operation: "log-record" }));
+  } finally {
+    redaction.unsubscribe(capture);
   }
 });
 

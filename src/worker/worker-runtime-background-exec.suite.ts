@@ -7,7 +7,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   WorkerLiveEventParams,
   WorkerTranscriptCommitParams,
@@ -41,6 +41,7 @@ import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.
 import { NodeWorkerTurnStore } from "../node-host/node-worker-turn-store.js";
 import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
@@ -81,6 +82,20 @@ export function registerWorkerBackgroundExecLifecycleTests({
   sessionId: SESSION_ID,
   inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
 }: WorkerCrashFixture) {
+  let transcriptListenersBefore = 0;
+  const transcriptListenerCount = () => {
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    return listeners instanceof Set ? listeners.size : 0;
+  };
+  beforeEach(() => {
+    transcriptListenersBefore = transcriptListenerCount();
+  });
+  afterEach(() => {
+    expect.soft(transcriptListenerCount()).toBe(transcriptListenersBefore);
+  });
+
   it
     .runIf(process.platform === "linux" || process.platform === "darwin")
     .for(["worker", "anchor", "node-host", "environment-stop"] as const)(

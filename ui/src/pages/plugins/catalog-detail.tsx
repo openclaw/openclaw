@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading, Show } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import {
   SettingsEmpty,
@@ -16,8 +17,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginContentCapabilities,
@@ -208,19 +209,23 @@ export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.
       <Loading on={resultId() ?? receipt()} fallback={<CatalogDetailLoading />}>
         <Errored
           fallback={(error, reset) => (
-            <div class="callout danger oc-banner oc-banner-error" role="alert">
-              <span>{formatUiExternalText(formatUiError(error()))}</span>
-              <button
-                type="button"
-                class="btn btn--sm"
-                onClick={() => {
-                  props.onRetry();
-                  reset();
-                }}
-              >
-                {t("pluginsPage.tryAgain")}
-              </button>
-            </div>
+            <InlineAlert
+              tone="danger"
+              action={
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  onClick={() => {
+                    props.onRetry();
+                    reset();
+                  }}
+                >
+                  {t("pluginsPage.tryAgain")}
+                </button>
+              }
+            >
+              {formatUiExternalText(formatUiError(error()))}
+            </InlineAlert>
           )}
         >
           {read()}

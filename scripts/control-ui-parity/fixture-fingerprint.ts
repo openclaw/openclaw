@@ -1,9 +1,9 @@
 import path from "node:path";
-import type { ControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { hash } from "./report.ts";
 
 export function fingerprintFixtures(
-  scenarios: readonly ControlUiMockGatewayScenario[],
+  scenarios: readonly NativeControlUiMockGatewayScenario[],
   repository: string,
 ): string {
   return hash(

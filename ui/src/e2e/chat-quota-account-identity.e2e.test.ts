@@ -121,7 +121,6 @@ suite.define(() => {
         await ring.focus();
         await page.keyboard.press("Enter");
         const panel = page.locator(".context-usage__popover");
-        await panel.waitFor({ state: "visible" });
         const expectedAccount = baseline
           ? scenario.reverse
             ? accounts[1]
@@ -135,6 +134,7 @@ suite.define(() => {
         if (unknown) {
           expect(await panel.locator(".context-usage__account").count()).toBe(0);
         } else {
+          await panel.locator(".context-usage__limit-value").waitFor({ state: "visible" });
           expect(await panel.locator(".context-usage__limit-value").allTextContents()).toContain(
             `${expectedAccount.percent}%`,
           );
@@ -187,7 +187,7 @@ suite.define(() => {
           await page.locator(".context-usage summary").click();
           const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
           await picker.locator("[data-chat-model-select]").click();
-          const expected = baseline ? "First account plan" : "Subscription";
+          const expected = baseline ? "First account plan" : "Selected account";
           await expect.poll(() => picker.textContent()).toContain(expected);
           if (!baseline) {
             expect(await picker.textContent()).not.toContain("First account plan");

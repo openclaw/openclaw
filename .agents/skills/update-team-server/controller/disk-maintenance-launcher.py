@@ -103,6 +103,15 @@ def run_and_join(runtime, cli, body, *, stop_signal, status_context=None, report
     if status_context is not None:
         environment["INVOCATION_ID"] = status_context[0]
         environment["OPENCLAW_MAINTENANCE_STARTED_AT_MS"] = str(status_context[1])
+    interpreter = ["/bin/bash", "--noprofile", "--norc"]
+    if body.name == "openclaw-health-check":
+        # Acceptance receipts stay private; pass only the selected release's age
+        # input while the launcher still owns the deployment lock.
+        receipt = ROOT / "verified" / cli.parent.name
+        if receipt.read_text() != cli.parent.name + "\n":
+            raise RuntimeError("current release acceptance receipt is invalid")
+        environment["OPENCLAW_MAINTENANCE_VERIFIED_AT_MS"] = str(receipt.stat().st_mtime_ns // 1_000_000)
+        interpreter = ["/usr/bin/python3", "-I"]
     arguments = ["--report-only", *report] if report is not None else [str(cli)]
     groups = os.getgrouplist(runtime.pw_name, runtime.pw_gid)
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, HANDLED_SIGNALS)
@@ -119,7 +128,7 @@ def run_and_join(runtime, cli, body, *, stop_signal, status_context=None, report
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
         primary = subprocess.Popen(
-            ["/bin/bash", "--noprofile", "--norc", str(body), *arguments],
+            [*interpreter, str(body), *arguments],
             cwd=cli.parent if body.name == "openclaw-health-check" else home,
             env=environment,
             user=runtime.pw_uid,

@@ -205,7 +205,12 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
     return undefined;
   }
   const assembled = await runWithHarnessSourceFence(params, async () => {
-    const assembly = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+    const assembly = await assembleHarnessContextEngineWithinSourceScope(
+      params,
+      contextEngine,
+      tokenBudget,
+    );
     const bounded = boundContextEngineAssembly(
       assembly.result,
       params.contextEngineHostSupport?.id === "codex-app-server" &&
@@ -213,7 +218,7 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
         !contextEngine.info.ownsCompaction
         ? undefined
         : resolveContextEngineTranscriptByteLimit(contextEngine),
-      resolveAssemblyHistoryTokenBudget(params),
+      tokenBudget,
       undefined,
       params.clearsTurnScopedSystemUpdates,
     );
@@ -254,9 +259,9 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
 async function assembleHarnessContextEngineWithinSourceScope(
   params: HarnessContextEngineAssemblyParams,
   contextEngine: ContextEngine,
+  tokenBudget: number | undefined,
   inputMessages = params.messages,
 ) {
-  const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
   const maxOutputTokens = params.promptBudget
     ? Math.max(0, Math.floor(params.promptBudget.reserveTokens))
     : params.maxOutputTokens;
@@ -345,6 +350,7 @@ export async function prepareHarnessContextEnginePrompt(
   }
   let snapshot: ContextEngineAssemblySnapshot | undefined;
   const prepared = await runWithHarnessSourceFence(params, async () => {
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
     // Windowing and replay hooks can leave orphaned results before assembly.
     const pipelineMessages = params.repairToolUseResultPairing
       ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
@@ -361,7 +367,7 @@ export async function prepareHarnessContextEnginePrompt(
             : assembled.messages,
         },
         resolveContextEngineTranscriptByteLimit(contextEngine),
-        resolveAssemblyHistoryTokenBudget(params),
+        tokenBudget,
         undefined,
         params.clearsTurnScopedSystemUpdates,
       );
@@ -370,6 +376,7 @@ export async function prepareHarnessContextEnginePrompt(
       const assembled = await assembleHarnessContextEngineWithinSourceScope(
         params,
         contextEngine,
+        tokenBudget,
         pipelineMessages,
       );
       bounded = prepareAssembly(assembled.result);
@@ -495,6 +502,9 @@ export async function finalizeHarnessContextEngineTurn(
                 provider: params.providerId,
                 modelId: params.modelId,
               }) ?? params.tokenBudget,
+            ...(params.runtimeContext?.promptCache
+              ? { promptCache: params.runtimeContext.promptCache }
+              : {}),
           },
         });
       }

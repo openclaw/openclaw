@@ -38,7 +38,7 @@ export function createSessionRowProjectionRevisions(
       selection = undefined;
     }
   };
-  const publishSelection = (row?: Row, removed = false) => {
+  const publishSelection = (row?: Row, removed = false, factsChanged = true) => {
     if (!row || removed) {
       taskPublication = undefined;
     }
@@ -52,7 +52,9 @@ export function createSessionRowProjectionRevisions(
           id: identity(row),
           key: row.key,
           agentId: row.agentId,
+          storePath: row.storeTarget.storePath,
           row: removed ? undefined : selectionRow(row),
+          factsChanged,
           ...(changeScope === undefined ? {} : { scope: changeScope }),
         }
       : { kind: "reset" };
@@ -174,10 +176,15 @@ export function createSessionRowProjectionRevisions(
         previous.generation !== row.generation ||
         previous.hasBoard !== row.hasBoard ||
         previous.entry !== row.entry;
-      invalidate(changed);
+      const factsChanged =
+        changed &&
+        (!previous ||
+          selectionRow(previous)?.selectionFactsRevision !==
+            selectionRow(row)?.selectionFactsRevision);
+      invalidate(factsChanged);
       publishFacts(row);
       if (changed) {
-        publishSelection(row);
+        publishSelection(row, false, factsChanged);
       }
     },
   };

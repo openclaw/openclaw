@@ -3,6 +3,7 @@ import { assert, expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -197,7 +198,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page
           .locator(".native-embed-header")
-          .getByText("Reconnecting…", { exact: true })
+          .getByText("Reconnecting", { exact: true })
           .waitFor();
         await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
         await waitForControlUiRoute(page, { routeId: "appearance" });
@@ -245,6 +246,7 @@ suite.define(() => {
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         await page.goto(new URL("settings", suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { routeId: "settings" });
+        await waitForControlUiGatewayReady(page);
         const list = page.locator(".settings-embed-list");
         await list.locator('a[href="/settings/device"]').waitFor();
         expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);

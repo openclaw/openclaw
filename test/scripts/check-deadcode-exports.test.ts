@@ -218,6 +218,12 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ];
     expectEntries(scriptRootWorkspace.entry, sourceTestConsumers);
     expectEntries(scriptRootWorkspace.project, sourceTestConsumers);
+    const bootstrapConsumers = [
+      "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+      "src/gateway/worker-environments/node-bootstrap-runtime-chunks.ts!",
+    ];
+    expectEntries(scriptRootWorkspace.entry, bootstrapConsumers);
+    expectEntries(scriptRootWorkspace.project, bootstrapConsumers);
     expect(scriptRootWorkspace.entry).not.toContain("src/**/*.test.ts!");
     expect(
       scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
@@ -239,6 +245,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
         "test/vitest.codex-worker-authority.config.ts",
+        "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
       ],
     });
   });
@@ -267,6 +274,31 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
+  });
+
+  it("models the workflow planner without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers.yml;
+    const compiled = compile(source, file);
+    expect(compiled).toContain('"../../scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(compiled).toContain("planner.resolvePluginPrereleaseExtensionRuntimes");
+    const withoutConsumer = replaceFixture(
+      source,
+      `            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
+            }`,
+      "",
+    );
+    const remaining = compile(withoutConsumer, file);
+    expect(remaining).not.toContain("resolvePluginPrereleaseExtensionRuntimes");
+    expect(remaining).toContain("planner.assertPluginPrereleaseTestPlanComplete");
+    expect(
+      compile(
+        replaceFixture(source, 'targetPlanPath("plugin-prerelease-test-plan")', '"other"'),
+        file,
+      ),
+    ).not.toContain("plugin-prerelease-test-plan.mts");
   });
 
   it("models named Solid lazy consumers without retaining a deleted loader", () => {
@@ -570,16 +602,17 @@ const unrelatedArgs = [
     expect(compiled).not.toContain("prepareTtsRequest as");
   });
 
-  it("models telemetry only through live source imports", () => {
+  it("models named consumers only through live source imports", () => {
     const compile = createDynamicConsumerCompiler();
     for (const [relative, name] of [
       ["scripts/perf/transcript-broadcast-measure.ts", "installTeamStressTelemetryIpc"],
       ["test/scripts/team-shape-stress.test.ts", "startTeamStressTelemetry"],
+      ["scripts/perf/update-doctor-generation-measure.ts", "readUpdatePhysicalDatabaseGenerations"],
     ] as const) {
       const file = path.resolve(relative);
       const source = fs.readFileSync(file, "utf8");
       expect(compile()).toContain(`${name} as __dynamic`);
-      const removed = replaceFixture(source, name, "");
+      const removed = replaceFixture(source, name, "otherConsumer");
       expect(compile(new Map([[file, removed]]))).not.toContain(`${name} as __dynamic`);
     }
   });
@@ -690,12 +723,14 @@ function other(lineageCompletion: typeof lineageWriter) {
     const wrapper = fs.readFileSync(wrapperPath, "utf8");
     const expected = [
       "claimCreatedAnchor",
-      "collectUnusedDependencyCaches",
       "dependencyCacheRoot",
       "holdDependencyCache",
       "publishDependencyCache",
+      "stageDependencyCache",
+      "sweepDependencyCaches",
       "privateDependencyDonor",
       "withDependencyCacheLock",
+      "recoverDependencyCache",
     ];
     const compileWithSources = createDynamicConsumerCompiler();
     const compile = (source: string) => {
@@ -715,7 +750,7 @@ function other(lineageCompletion: typeof lineageWriter) {
       expected.filter((name) => name !== "dependencyCacheRoot"),
     );
     for (const disconnected of [
-      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs" <<', '"" <<'),
       replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
       replaceFixture(wrapper, "const { claimCreatedAnchor,", "// const { claimCreatedAnchor,"),
       replaceFixture(
@@ -724,7 +759,35 @@ function other(lineageCompletion: typeof lineageWriter) {
         '  # node --input-type=module - "$1"',
       ),
     ]) {
-      expect(compile(disconnected)).toEqual([]);
+      expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);
+    }
+    for (const disconnected of [
+      replaceFixture(
+        wrapper,
+        'node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        'node --input-type=module - ""',
+      ),
+      replaceFixture(wrapper, "pathToFileURL(process.argv[2])", "pathToFileURL(process.argv[3])"),
+      replaceFixture(
+        wrapper,
+        "const { recoverDependencyCache }",
+        "// const { recoverDependencyCache }",
+      ),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        '  # node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+      ),
+      replaceFixture(
+        wrapper,
+        'import { pathToFileURL } from "node:url";',
+        '// import { pathToFileURL } from "node:url";',
+      ),
+      replaceFixture(wrapper, "<<'EOF_CACHE_RECOVERY'", "<<'EOF_OTHER'"),
+    ]) {
+      expect(compile(disconnected)).toEqual(
+        expected.filter((name) => name !== "recoverDependencyCache"),
+      );
     }
   });
 

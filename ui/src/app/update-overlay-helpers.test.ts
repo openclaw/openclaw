@@ -271,7 +271,7 @@ describe("update status localization", () => {
               name: "install",
               log: {
                 exitCode: 1,
-                stderrTail: "Progress: resolved 1\nENOSPC: no space left on device, write",
+                stderrTail: `Progress: resolved 1\nENOSPC: no space left on device, write ${"x".repeat(140)}🦞`,
               },
             },
           ],
@@ -279,7 +279,7 @@ describe("update status localization", () => {
       })?.banner,
     ).toEqual({
       tone: "danger",
-      text: "Couldn’t complete install: ENOSPC: no space left on device, write. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+      text: `Couldn’t complete install: ENOSPC: no space left on device, write ${"x".repeat(140)}. Couldn’t install dependencies. Fix the install error and retry. If Ask OpenClaw is unavailable, run \`openclaw triage\` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.`,
     });
   });
 

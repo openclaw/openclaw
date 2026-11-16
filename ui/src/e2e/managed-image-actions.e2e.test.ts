@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -22,16 +22,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await page.clock.install();
-    await page.route(`**${controlUiBasePath}/chat`, async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({
-        response,
-        headers: {
-          ...response.headers(),
-          "content-security-policy": buildControlUiCspHeader(),
-        },
-      });
-    });
+    await page.route(`**${controlUiBasePath}/chat`, (route) => fulfillWithControlUiCsp(route));
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const imageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;

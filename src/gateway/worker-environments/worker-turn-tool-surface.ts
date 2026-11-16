@@ -6,7 +6,6 @@ import {
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
 import { hasBeforeToolCallPolicy } from "../../agents/agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../../agents/agent-tools.js";
 import { isGatewayToolAllowedWithoutAction } from "../../agents/gateway-tool-policy.js";
 import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -48,12 +47,7 @@ export function retainWorkerTurnTools(
 ): AnyAgentTool[] {
   const canPlace =
     options.localMcpNodeId &&
-    options.runPrepared(
-      () =>
-        !hasBeforeToolCallPolicy() &&
-        !hasGlobalHooks("after_tool_call") &&
-        !resolveToolLoopDetectionConfig({ cfg: options.config, agentId: options.agentId })?.enabled,
-    );
+    options.runPrepared(() => !hasBeforeToolCallPolicy() && !hasGlobalHooks("after_tool_call"));
   return tools.map((tool) => {
     const retained = copyAgentToolMetadata(tool, {
       ...tool,

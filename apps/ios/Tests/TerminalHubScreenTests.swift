@@ -222,9 +222,9 @@ struct TerminalHubScreenTests {
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { request in .init(id: request.id, ok: true) })
-        model.setOperatorConnected(true)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         defer {
-            model.setOperatorConnected(false)
+            model.apply(.dropped, to: .operator, route: nil)
             Task { await model.operatorSession.disconnect() }
         }
         let currentRoute = await model.operatorSession.currentRoute()
@@ -280,10 +280,10 @@ struct TerminalHubScreenTests {
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
         #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 2)
-        model.setOperatorConnected(false)
+        model.apply(.dropped, to: .operator, route: nil)
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "denied")
-        model.setOperatorConnected(true)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         #expect(try await webView.callAsyncJavaScript(
             challenge, arguments: [:], in: nil, contentWorld: .page) as? String == "effect-observed")
         #expect(server.requests.filter { $0.target == "/native-auth-effect" }.count == 3)
@@ -431,6 +431,60 @@ struct TerminalHubScreenTests {
         #expect(coordinator.navigationDecision(to: alternatePortURL, isMainFrame: true) == .cancel)
         #expect(coordinator.navigationDecision(to: embeddedURL, isMainFrame: false) == .allow)
         #expect(coordinator.navigationDecision(to: unknownFrameURL, isMainFrame: nil) == .cancel)
+    }
+
+    @Test func `embedded Control UI opens documentation outside the authenticated web view`() throws {
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: controlURL, tls: nil, usesNativeEmbed: true)
+        for path in ["plugins/manage-plugins", "tools/skills", "tools/skill-workshop"] {
+            let docsURL = try #require(URL(string: "https://docs.openclaw.ai/\(path)"))
+            for target: Bool? in [nil, true] {
+                #expect(coordinator.externalNavigationURL(
+                    to: docsURL, sourceURL: controlURL, sourceIsMainFrame: true,
+                    targetIsMainFrame: target, navigationType: .linkActivated) == docsURL)
+                #expect(coordinator.navigationDecision(to: docsURL, isMainFrame: target) == .cancel)
+            }
+        }
+    }
+
+    @Test func `external links cannot bypass frame scheme or document scope restrictions`() throws {
+        let controlURL = try #require(URL(string: "https://gateway.example.com/control"))
+        let docsURL = try #require(URL(string: "https://docs.openclaw.ai/tools/skills"))
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: controlURL, tls: nil, usesNativeEmbed: true)
+        let rejected: [(URL?, URL?, Bool, Bool?, WKNavigationType)] = [
+            (docsURL, controlURL, true, nil, .other),
+            (docsURL, controlURL, false, nil, .linkActivated),
+            (docsURL, controlURL, true, false, .linkActivated),
+            (docsURL, docsURL, true, nil, .linkActivated),
+            (docsURL, nil, true, nil, .linkActivated),
+            (nil, controlURL, true, nil, .linkActivated),
+            (controlURL, controlURL, true, nil, .linkActivated),
+            (URL(string: "javascript:alert(1)"), controlURL, true, nil, .linkActivated),
+            (URL(string: "file:///private/example"), controlURL, true, nil, .linkActivated),
+            (URL(string: "openclaw://connect"), controlURL, true, nil, .linkActivated),
+            (URL(string: "https://user:password@docs.openclaw.ai/"), controlURL, true, nil, .linkActivated),
+        ]
+        for (destination, source, sourceMain, targetMain, type) in rejected {
+            #expect(coordinator.externalNavigationURL(
+                to: destination, sourceURL: source, sourceIsMainFrame: sourceMain,
+                targetIsMainFrame: targetMain, navigationType: type) == nil)
+        }
+        for restricted in [
+            AuthenticatedControlUIWebViewCoordinator(url: controlURL, tls: nil),
+            AuthenticatedControlUIWebViewCoordinator(
+                url: controlURL, tls: nil, allowedMainFramePathPrefix: "/control", usesNativeEmbed: true),
+        ] {
+            #expect(restricted.externalNavigationURL(
+                to: docsURL, sourceURL: controlURL, sourceIsMainFrame: true,
+                targetIsMainFrame: nil, navigationType: .linkActivated) == nil)
+        }
+        let localURL = URL(fileURLWithPath: "/example.html")
+        let local = AuthenticatedControlUIWebViewCoordinator(url: localURL, tls: nil, usesNativeEmbed: true)
+        #expect(local.externalNavigationURL(
+            to: docsURL, sourceURL: localURL, sourceIsMainFrame: true,
+            targetIsMainFrame: nil, navigationType: .linkActivated) == nil)
     }
 
     @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {

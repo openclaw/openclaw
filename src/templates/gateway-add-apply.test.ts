@@ -4,6 +4,7 @@ import type {
   TemplateLifecyclePlanResult,
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
 import type { ClawHubTemplateTrust, withResolvedClawHubSource } from "./clawhub-source.js";
 import {
@@ -19,11 +20,14 @@ const mocks = vi.hoisted(() => ({
   lease: vi.fn(),
   pluginLease: vi.fn(),
   policyReader: vi.fn(),
+  readPolicy: vi.fn(),
   build: vi.fn(),
   project: vi.fn(),
   plansMatch: vi.fn(),
   consent: vi.fn(),
   apply: vi.fn(),
+  retain: vi.fn(),
+  fail: vi.fn(),
   persist: vi.fn(),
   owned: vi.fn(),
   configuredAccess: vi.fn(),
@@ -40,6 +44,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 vi.mock("../config/io.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
   withCurrentConfigPolicyReader: mocks.policyReader,
+  readCurrentConfigForPolicyCheckAsync: mocks.readPolicy,
 }));
 // mock-isolation: The reviewed plan is a fixture so apply drift can be tested independently.
 vi.mock("./gateway-add-plan.js", () => ({
@@ -55,15 +60,7 @@ vi.mock("./gateway-disclosure.js", () => ({
 // mock-isolation: Consent decisions are varied without invoking installer prompts.
 vi.mock("./gateway-plugin-consent.js", () => ({ bindTemplatePluginInstallConsent: mocks.consent }));
 // mock-isolation: The real Add mutates shared state; these tests observe handoff decisions.
-vi.mock("./add-stateless.js", () => ({
-  stageTemplateAddHostRequirementsStateless: async (plan: unknown, options: unknown) => ({
-    kind: "ready",
-    stageAgent: async () => ({
-      kind: "ready",
-      finish: async () => await mocks.apply(plan, options),
-    }),
-  }),
-}));
+vi.mock("./add-stateless.js", () => ({ applyTemplateAddPlanStateless: mocks.apply }));
 
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
 const source = {
@@ -81,7 +78,11 @@ const trust: ClawHubTemplateTrust = {
   },
 };
 const plan = {
-  agent: { finalId: "workflow-operator", config: { id: "workflow-operator" } },
+  agent: {
+    finalId: "workflow-operator",
+    workspace: "/tmp/workspace-workflow-operator",
+    config: { id: "workflow-operator" },
+  },
   blockers: [],
   actions: [],
   planIntegrity: "sha256:canonical",
@@ -120,6 +121,7 @@ const projected: TemplateLifecyclePlanResult = {
 };
 const skillReview = {
   actionId: "skill:@community/triage",
+  source: "clawhub" as const,
   ref: "@community/triage",
   version: "1.0.0",
   integrity: "sha256:artifact",
@@ -144,6 +146,7 @@ function applyInput(overrides: Partial<ApplyInput> = {}) {
 const applyReviewed = () => applyTemplateAddForGateway(applyInput());
 
 function usePolicy(getCurrentConfig: () => OpenClawConfig) {
+  mocks.readPolicy.mockImplementation(async () => getCurrentConfig());
   mocks.policyReader.mockImplementation(
     async (_options: unknown, run: (get: typeof getCurrentConfig) => Promise<unknown>) =>
       run(getCurrentConfig),
@@ -200,7 +203,13 @@ beforeEach(() => {
   mocks.project.mockReturnValue(projected);
   mocks.plansMatch.mockReturnValue(true);
   mocks.configuredAccess.mockReturnValue(reviewedAccess);
-  mocks.apply.mockResolvedValue({ agent: { finalId: "workflow-operator" }, status: "complete" });
+  mocks.apply.mockResolvedValue({
+    agent: plan.agent,
+    status: "complete",
+    packages: [],
+    mcpServers: [],
+    cronJobs: [],
+  });
 });
 
 describe("Gateway Template Add application", () => {
@@ -249,7 +258,13 @@ describe("Gateway Template Add application", () => {
     mocks.apply.mockImplementation(async (currentPlan: TemplateAddPlan) => {
       const agentId = currentPlan.agent.finalId;
       entries[agentId] = {};
-      return { agent: { finalId: agentId }, status: "complete" };
+      return {
+        agent: { finalId: agentId },
+        status: "complete",
+        packages: [],
+        mcpServers: [],
+        cronJobs: [],
+      };
     });
     const input = () =>
       applyInput({
@@ -285,6 +300,73 @@ describe("Gateway Template Add application", () => {
     expect(mocks.apply).toHaveBeenCalled();
   });
 
+  it("reports actual partial dependency and paused automation receipts, not proposed success", async () => {
+    mocks.apply.mockResolvedValueOnce({
+      agent: plan.agent,
+      status: "partial",
+      agentRetained: true,
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "@fixture/helper",
+          status: "complete",
+          relationship: "referenced",
+          origin: "pre-existing",
+        },
+      ],
+      mcpServers: [
+        {
+          name: "calendar",
+          status: "failed",
+          relationship: "managed",
+          origin: "template-introduced",
+        },
+      ],
+      cronJobs: [
+        {
+          manifestId: "daily",
+          schedulerJobId: "job-1",
+          status: "complete",
+          job: { automation: { enabled: false } },
+        },
+        { manifestId: "never-created", status: "failed", job: { automation: { enabled: true } } },
+      ],
+      error: { code: "setup_failed", message: "Calendar needs setup" },
+    });
+    expect(await applyReviewed()).toEqual({
+      agentId: "workflow-operator",
+      workspace: "/tmp/workspace-workflow-operator",
+      status: "partial",
+      agentRetained: true,
+      outcomes: {
+        packages: [
+          {
+            kind: "skill",
+            id: "@fixture/helper",
+            status: "complete",
+            relationship: "referenced",
+            origin: "pre-existing",
+          },
+        ],
+        mcpServers: [
+          {
+            name: "calendar",
+            status: "failed",
+            relationship: "managed",
+            origin: "template-introduced",
+          },
+        ],
+        automations: [
+          { declarationId: "daily", schedulerJobId: "job-1", status: "complete", enabled: false },
+          { declarationId: "never-created", status: "failed" },
+        ],
+      },
+      readiness: { ready: false, requirements: [] },
+      error: { code: "setup_failed", message: "Calendar needs setup" },
+    });
+  });
+
   it("uses the canonical worker installer only after a sealed plan and persisted source match", async () => {
     const input = applyInput();
     const result = await applyTemplateAddForGateway(input);
@@ -292,6 +374,8 @@ describe("Gateway Template Add application", () => {
     expect(result).toEqual({
       agentId: "workflow-operator",
       status: "complete",
+      workspace: "/tmp/workspace-workflow-operator",
+      outcomes: { packages: [], mcpServers: [], automations: [] },
       readiness: { ready: true, requirements: [] },
     });
     expect(input.getPlanningContext).toHaveBeenCalledTimes(3);
@@ -449,9 +533,9 @@ describe("Gateway Template Add application", () => {
     let onDisk = config;
     usePolicy(() => onDisk);
     mocks.apply.mockImplementation(
-      async (_plan: TemplateAddPlan, options: { getCurrentConfig: () => OpenClawConfig }) => {
+      async (_plan: TemplateAddPlan, options: StatelessTemplateAddOptions) => {
         onDisk = labsOff;
-        options.getCurrentConfig();
+        await options.prepareEffect?.();
       },
     );
 
@@ -541,6 +625,7 @@ describe("Gateway Template Add application", () => {
     const input = applyInput();
     const acknowledgement = {
       actionId: skillReview.actionId,
+      source: "clawhub" as const,
       ref: skillReview.ref,
       reviewToken: skillReview.reviewToken,
       acknowledgeRiskWarning: true as const,

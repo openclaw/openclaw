@@ -386,8 +386,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "non_transient");
         return false;
       }
-      // Bound replay-safe waits; the failover owner rotates credentials, tries
-      // configured models, or surfaces the existing error after exhaustion.
+      // Bound every rate-limit wait; replay safety still controls whether the
+      // caller may rotate credentials or models instead of surfacing the error.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&
@@ -396,14 +396,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
-        retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&
         retry.retryAfterMs > retryDelayCapMs
       ) {
         recordDecision("rejected", "retry_delay_exceeds_cap");
         log.warn(
-          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; failing over`,
+          `rate-limit retry floor ${retry.retryAfterMs === Infinity ? "exceeds representable time" : `${retry.retryAfterMs}ms`} exceeds retry.provider.maxRetryDelayMs=${retryDelayCapMs} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)}; ${retry.failoverEligible === false ? "ending replay-unsafe attempt" : "failing over"}`,
         );
         return false;
       }

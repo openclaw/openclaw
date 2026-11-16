@@ -31,6 +31,7 @@ import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/se
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyPayload } from "../types.js";
+import { registerAccessProgramNoticeCases } from "./agent-runner.runreplyagent.access-notice.cases.js";
 import type { FollowupRun } from "./queue.js";
 
 type CompactionFixture = {
@@ -58,6 +59,8 @@ export function registerReplyCompactionCases({
   tempDirs,
   state,
 }: CompactionFixture): void {
+  // Shares this fixture: Access notices ride the same final-payload path as compaction notices.
+  registerAccessProgramNoticeCases({ createMinimalRun, makeSessionFixture, state });
   registerAgentSessionLoopTestLifecycle();
   describe("runReplyAgent compaction ownership", () => {
     it.each([

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   generateMobileReleaseNotes,
@@ -260,6 +261,7 @@ describe("generated mobile store notes", () => {
       .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
+    expect(git(f.rootDir, "rev-parse", "--is-shallow-repository")).toBe("false");
     for (const index of [1, 2]) {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);
@@ -299,7 +301,7 @@ describe("generated mobile store notes", () => {
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow("different production baseline");
   });
 
-  it("keeps v2 phone and legacy Wear baselines and text separate", async () => {
+  it("keeps v2 phone and legacy Wear notes separate from shallow source", async () => {
     const f = fixture("android");
     const sourceRef = "refs/openclaw/mobile-releases/android/v2/2026.7.3/0/1/2026070449-2026070450";
     const wearBase = f.sourceSha;
@@ -315,9 +317,14 @@ describe("generated mobile store notes", () => {
       sourceRef,
     });
     savePlan(f);
+    const rootDir = temporary.make("mobile-notes-shallow-");
+    git(f.rootDir, "config", "uploadpack.allowFilter", "true");
+    git(f.rootDir, "clone", "--depth=1", pathToFileURL(f.rootDir).href, rootDir);
+    const options = { ...f, rootDir };
     accept(f.file);
     accept(wearFile, [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }]);
-    const saved = await generateMobileReleaseNotes(f);
+    const saved = await generateMobileReleaseNotes(options);
+    expect(git(rootDir, "rev-parse", "HEAD")).toBe(f.sourceSha);
     expect(requestInput(3).files).toContainEqual(expect.objectContaining({ file: wearFile }));
     expect(requestInput(3).files).not.toContainEqual(expect.objectContaining({ file: f.file }));
     for (const index of [2, 5]) {
@@ -340,12 +347,12 @@ describe("generated mobile store notes", () => {
       ["wear", "2026070352", wearBase, "- Clearer watch voice controls."],
     ]);
     vi.stubEnv("OPENAI_API_KEY", "");
-    expect(await generateMobileReleaseNotes(f)).toEqual(saved);
+    expect(await generateMobileReleaseNotes(options)).toEqual(saved);
     fs.rmSync(f.outputPath);
     vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
     f.plan.releaseNotesBaselines[0]!.build = "2026070450";
     savePlan(f);
-    await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+    await expect(generateMobileReleaseNotes(options)).rejects.toThrow(
       "does not match its recorded store identity",
     );
   });

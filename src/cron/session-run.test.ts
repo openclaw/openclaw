@@ -1,15 +1,14 @@
 import { StatementSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { createOperatorRecoveryAuthority } from "../agents/operator-recovery.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
+import { operatorRecoverySnapshotFixture } from "../gateway/server/client-fixtures.test-support.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -118,13 +117,10 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           agentId: "main",
           ...target,
           sourceRunId: "original-request",
-          snapshot: {
-            ...expectDefined(
-              createOperatorRecoveryAuthority("requester", "original-grant").recoverySnapshot,
-              "operator recovery fixture",
-            ),
+          snapshot: operatorRecoverySnapshotFixture("requester", "original-grant", {
+            sourceIngress: "control-ui",
             controlUiAdmin: true,
-          },
+          }),
         },
       },
     },
@@ -350,6 +346,47 @@ describe("scheduled session prompts", () => {
 });
 
 describe("scheduled session execution custody", () => {
+  it.each([
+    {
+      reason: "failed",
+      errorReason: "server_error",
+      expected: { kind: "reason", reason: "server_error" },
+    },
+    {
+      reason: "failed",
+      errorReason: "auth_permanent",
+      expected: { kind: "reason", reason: "auth_permanent" },
+    },
+    { reason: "cancelled", errorReason: "server_error", expected: { kind: "aborted" } },
+    { reason: "superseded", errorReason: "server_error", expected: { kind: "aborted" } },
+    {
+      reason: "hard_timeout",
+      errorReason: "server_error",
+      expected: { kind: "reason", reason: "timeout" },
+    },
+  ] as const)(
+    "preserves $reason precedence over provider $errorReason",
+    async ({ reason, errorReason, expected }) => {
+      fixture.restore.mockResolvedValue(restoredSource());
+      fixture.enqueue.mockReturnValue(
+        receipt(
+          Promise.resolve({
+            status: "failed",
+            executionStarted: true,
+            delivered: false,
+            error: "The AI service is having trouble.",
+            errorReason,
+            terminalOutcome: { reason, status: "error" },
+          }),
+        ),
+      );
+      await expect(runCronSessionTurn(input())).resolves.toMatchObject({
+        status: "error",
+        errorClassification: expected,
+      });
+    },
+  );
+
   it("times out adopted preparation without spending the setup budget in the queue", async () => {
     vi.useFakeTimers();
     const { terminal, enqueued } = captureSession(undefined, (options) => {

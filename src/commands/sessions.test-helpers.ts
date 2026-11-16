@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { drainSessionDiskBudgetWorkers } from "../config/sessions/disk-budget-runtime.js";
@@ -10,6 +9,7 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { resolveTestTempRoot } from "../test-utils/env.js";
 import type { sessionsCommand } from "./sessions.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -55,7 +55,7 @@ export async function writeStore(
   prefix = "sessions",
   options: { agentId?: string } = {},
 ): Promise<string> {
-  const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  const storeDir = fs.mkdtempSync(path.join(resolveTestTempRoot(), `${prefix}-`));
   const storePath = path.join(storeDir, "sessions.json");
   const agentId = options.agentId ?? "main";
   const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;

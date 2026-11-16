@@ -7,7 +7,7 @@ import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { formatDocsHelp } from "../help-format.js";
-import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { exitCliAfterOutput, requestOneShotSettledExitWatchdog } from "../one-shot-exit.js";
 import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { installCliDoctorSignalExitHandlers } from "../signal-exit-barrier.js";
 import type { ProgramContext } from "./context.js";
@@ -108,6 +108,7 @@ export function registerMaintenanceCommands(
     .action(async (opts, command) => {
       if (hasCliProcessScope()) {
         installCliDoctorSignalExitHandlers();
+        requestOneShotSettledExitWatchdog();
       }
       if (
         typeof opts.stateSqlite === "string" &&
@@ -257,6 +258,7 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
+              watchExitAfterComplete: hasCliProcessScope(),
               ...(modelReplacements.length ? { modelReplacements } : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
@@ -317,6 +319,10 @@ export function registerMaintenanceCommands(
     )
     .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
+      // Triage runs Doctor's inspections; a closed terminal must still remove their copies.
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
       }
@@ -334,21 +340,17 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      return await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const { triageCommand } = await import("../../commands/triage.js");
-          await triageCommand(defaultRuntime, {
-            json: opts.json === true,
-            noExport: opts.export === false,
-            run: opts.run === true,
-            ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
-            ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
-            ...(agent ? { agent } : {}),
-          });
-        },
-        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
-      );
+      return await runCommandWithRuntime(defaultRuntime, async () => {
+        const { triageCommand } = await import("../../commands/triage.js");
+        await triageCommand(defaultRuntime, {
+          json: opts.json === true,
+          noExport: opts.export === false,
+          run: opts.run === true,
+          ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
+          ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
+          ...(agent ? { agent } : {}),
+        });
+      });
     });
 
   program

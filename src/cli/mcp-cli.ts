@@ -1,8 +1,5 @@
 import path from "node:path";
-import {
-  asPositiveFiniteNumber,
-  parseStrictFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -33,9 +30,14 @@ import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
-import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
-import { probeMcpServers, resolveMcpProbeIssue } from "./mcp-cli-probe.js";
+import {
+  formatMcpProbeIssues,
+  probeMcpServers,
+  probeMcpServersOrFail,
+  resolveMcpProbeIssue,
+} from "./mcp-cli-probe.js";
+import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
 import {
   offlineMcpAction,
   setMcpServerOffline,
@@ -539,28 +541,6 @@ async function buildMcpStatusEntries(
   );
 }
 
-const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
-
-async function probeMcpServersOrFail(params: {
-  config: OpenClawConfig;
-  servers: Record<string, Record<string, unknown>>;
-  path: string;
-}): Promise<void> {
-  const probeServers = Object.fromEntries(
-    Object.entries(params.servers).map(([name, server]) => [
-      name,
-      asPositiveFiniteNumber(server.connectionTimeoutMs) !== undefined
-        ? server
-        : { ...server, connectionTimeoutMs: DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS },
-    ]),
-  );
-  const result = await probeMcpServers("openclaw-cli-mcp-probe", params.config, probeServers);
-  const probeIssue = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
-  if (probeIssue) {
-    fail(`${probeIssue}\nConfiguration was not saved.`);
-  }
-}
-
 const OPENCLAW_MCP_REGISTRY_SCOPE_NOTE =
   "Note: this command only shows OpenClaw-managed mcp.servers entries and does not include mcporter servers from config/mcporter.json.";
 
@@ -584,29 +564,19 @@ export function registerMcpCli(program: Command) {
     )
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .action(async (opts) => {
+      let serveOptions: ReturnType<typeof resolveMcpServeOptions>;
       try {
-        const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
-        const claudeChannelMode = normalizeLowercaseStringOrEmpty(
-          normalizeStringifiedOptionalString(opts.claudeChannelMode) ?? "auto",
-        );
-        if (
-          claudeChannelMode !== "auto" &&
-          claudeChannelMode !== "on" &&
-          claudeChannelMode !== "off"
-        ) {
-          throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
-        }
-        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
-        await serveOpenClawChannelMcp({
-          gatewayUrl: opts.url as string | undefined,
-          gatewayToken,
-          gatewayPassword,
-          claudeChannelMode,
-          verbose: Boolean(opts.verbose),
-        });
+        serveOptions = resolveMcpServeOptions(opts);
       } catch (err) {
+        fail(formatErrorMessage(err));
+      }
+      try {
+        const { serveOpenClawChannelMcp } = await import("../mcp/channel-server.js");
+        await serveOpenClawChannelMcp(serveOptions);
+      } catch (err) {
+        const reason = formatErrorMessage(err).replace(/\.+$/u, "");
         defaultRuntime.error(
-          terminalText`MCP server failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
+          terminalText`MCP server failed to start: ${reason}. Run ${formatCliCommand("openclaw gateway status --deep --require-rpc")} to inspect Gateway health.`,
         );
         exitCliAfterOutput(defaultRuntime, 1);
       }
@@ -760,9 +730,9 @@ export function registerMcpCli(program: Command) {
               defaultRuntime.log(terminalText`! cleanup: ${result.cleanupError}`);
             }
           }
-          const probeIssue = resolveMcpProbeIssue({ result, servers, path: loaded.path });
-          if (probeIssue) {
-            defaultRuntime.error(terminalText`${probeIssue}`);
+          const probeIssues = resolveMcpProbeIssue({ result, servers, path: loaded.path });
+          if (probeIssues.length > 0) {
+            defaultRuntime.error(formatMcpProbeIssues(probeIssues));
             if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
               exitCliAfterOutput(defaultRuntime, 1);
             }

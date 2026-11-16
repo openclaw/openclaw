@@ -28,7 +28,12 @@ import * as sessionEntryRead from "../../config/sessions/session-entry-read-runt
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
   isSystemEventTurnOwned,
@@ -282,12 +287,21 @@ describe("session event target custody", () => {
       env: captured.env,
     });
     setRuntimeConfigSnapshot({ ...cfg, session: { store: replacement.storePath } });
+    // A cron run admits the event only while its executor still owns the run.
+    const runScope = {
+      sessionKey: runKey,
+      sessionId: target.sessionId,
+      agentId: "main",
+      cronRunsByJobId: new Map([["nightly", { nextCheckEnabled: false }]]),
+    };
+    const claim = claimAgentRunContext("captured-cron-run", runScope, { trackOwner: true });
     const receipt = enqueueEvent("Process completed", {
       agentId: "main",
       sessionKey: runKey,
       source: "exec",
       expectedTarget: target,
     });
+    releaseAgentRunContext("captured-cron-run", claim);
     receipt.cancel();
     expect(await withinTest(receipt.settled, signal)).toMatchObject({ status: "cancelled" });
     await withinTest(joinContinuations(), signal);

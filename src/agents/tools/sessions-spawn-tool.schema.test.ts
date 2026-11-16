@@ -1,14 +1,18 @@
-import "./sessions-spawn-tool.mocks.test-support.js";
 import { expect, it } from "vitest";
-import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
+import { createSessionsSpawnToolSchema } from "./sessions-spawn-tool.schema.js";
 
-it("explains cwd-relative file-tool containment for external workspace edits", () => {
-  const tool = createSessionsSpawnTool({ config: {}, agentSessionKey: "agent:main:main" });
-  expect(tool.parameters).toMatchObject({
+it("distinguishes cwd binding from inherited roots in the advertised spawn contract", () => {
+  const schema = createSessionsSpawnToolSchema({
+    acpAvailable: false,
+    threadAvailable: false,
+    subagentThreadAvailable: false,
+    swarmEnabled: false,
+  });
+  expect(schema).toMatchObject({
     properties: {
       cwd: {
-        description: expect.stringContaining(
-          "Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace.",
+        description: expect.stringMatching(
+          /configuration-only.*cwd.*explicit restricted permission.*inherited recorded root.*Required roots.*sender.*sandbox/,
         ),
       },
     },

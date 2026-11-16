@@ -352,7 +352,7 @@ suite.define(() => {
         await expectCount(panel.locator(".chat-question-panel__source"), 0);
         await expectCount(
           page.getByRole("region", { name: "Chat", exact: true }).locator(composerSelector),
-          0,
+          1,
         );
       }
 
@@ -517,12 +517,13 @@ suite.define(() => {
   );
 
   defineQuestionFooterTests({
+    artifactDir: () => suite.artifactDir,
     openQuestionPage,
     questionRecord,
     questionSessionKey,
   });
 
-  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
+  it("keeps the composer through resolution and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -536,8 +537,8 @@ suite.define(() => {
     await expectCount(page.locator(".chat-thread openclaw-chat-question-panel"), 0);
     await expectCount(panel.getByText("1/1", { exact: true }), 1);
     await expectCount(panel.getByPlaceholder("Type your own answer here"), 1);
-    await expectCount(page.locator(".agent-chat__input"), 0);
-    await expectCount(page.locator(".agent-chat__composer-footer"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
+    await expectCount(page.locator(".agent-chat__composer-footer"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     await expect
@@ -569,7 +570,7 @@ suite.define(() => {
     await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
     await expectFocused(composer);
     await page.locator(".chat-question-panel__collapsed-button").click();
-    await expectCount(page.locator(".agent-chat__input"), 0);
+    await expectCount(page.locator(".agent-chat__input"), 1);
     await expectFocused(panel.locator(".chat-question-panel"));
 
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };

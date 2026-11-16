@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   type CompactNodeTestShard,
@@ -37,6 +37,10 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
+
+// CI runtime selection must not choose the timing policy of independent fixtures.
+beforeEach(() => vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME", undefined));
+afterEach(() => vi.unstubAllEnvs());
 
 function runtimeTiming(
   { configs, includePatterns }: Pick<RuntimePlacementTiming, "configs" | "includePatterns">,
@@ -335,6 +339,34 @@ describe("native singleton invocation timings", () => {
         }),
       ),
     ).timings.compactGroupSeconds.blacksmith;
+
+  it.each(["node", "bun-all"])("refits exact split plugin envelopes for %s", (runtime) => {
+    const timingKey = splitTimingGeneration({
+      configs: [config],
+      parentShardName: `changed-${shard}`,
+      stripes: [files],
+    }).timingKeys[0]!;
+    const text = invocationLog()
+      .replace(
+        encodeNodeTestGroups([descriptor]),
+        encodeNodeTestGroups([{ ...descriptor, timing_key: timingKey }]),
+      )
+      .replace(`[shard:${shard}] begin`, `[shard:${timingKey}] begin`)
+      .replace(`[shard:${shard}] end`, `[shard:${timingKey}] end`);
+    const withRuntime = (log: string) =>
+      runtime === "node"
+        ? log
+        : `2026-09-26T00:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all\n${log.replaceAll("[shard:", "[shard:bun:")}`;
+    const key = `${runtime === "node" ? "" : "bun-all:"}${extensionTimingKey(config, files)!}`;
+    expect(refit(withRuntime(text))[key]).toBe(34);
+    const mismatched = text.replace(
+      encodeNodeTestGroups([{ ...descriptor, timing_key: timingKey }]),
+      encodeNodeTestGroups([
+        { ...descriptor, includePatterns: files.slice(1), timing_key: timingKey },
+      ]),
+    );
+    expect(refit(withRuntime(mismatched))).toEqual({});
+  });
 
   it.each([
     { kind: "parallel", interleaved: false, receipts: [2] },
@@ -1025,6 +1057,65 @@ describe("CI test timing refit", () => {
     expect(result.contributingRunIds.blacksmith).toEqual([1, 2, 3]);
   });
 
+  it.each(["bun-all", "dual-all"])(
+    "isolates split %s legs from serial timing history",
+    (policy) => {
+      const descriptor = {
+        shard_name: "owner",
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        includePatterns: ["bun.test.ts", "node.test.ts"],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      };
+      const previous = compactBaseline({ [policy + ":owner"]: 70, [policy + ":retained"]: 80 });
+      previous.runtimePlacementTimings = {
+        ...previous.runtimePlacementTimings,
+        blacksmith: [
+          runtimeTiming(descriptor, 70, {
+            ...descriptor.env,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+          }),
+        ],
+      };
+      const logs = (["node", "bun"] as const).map((runtime) => {
+        const key =
+          runtime === "bun" ? "bun:owner" : policy === "bun-all" ? "node-subset:owner" : "owner";
+        return timingLog(
+          [
+            "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: " + policy,
+            "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+            "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: " +
+              encodeNodeTestGroups([descriptor]),
+            "2026-08-27T23:00:00Z [shard:" + key + "] begin",
+            "2026-08-27T23:00:01Z [shard:" +
+              key +
+              "] [test] preparing runtime runtime before Vitest workers",
+            "2026-08-27T23:00:20Z [shard:" + key + "] end (exit 0)",
+          ].join("\n"),
+          "blacksmith-4vcpu-ubuntu-2404",
+        );
+      });
+      const result = refitTestTimings(
+        [1, 2, 3].map((id) => timingRun(id, logs)),
+        previous,
+      );
+      expect(result.timings.compactGroupSeconds.blacksmith).toEqual({
+        ...previous.compactGroupSeconds.blacksmith,
+        [policy === "dual-all" ? "owner" : "bun-all:node:owner"]: 20,
+        [policy + ":bun:owner"]: 20,
+      });
+      expect(result.timings.runtimePlacementTimings.blacksmith).toEqual(
+        expect.arrayContaining([
+          ...previous.runtimePlacementTimings.blacksmith,
+          runtimeTiming(descriptor, 20, {
+            ...descriptor.env,
+            OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+            OPENCLAW_CI_TEST_RUNTIME: "bun",
+          }),
+        ]),
+      );
+    },
+  );
+
   it("keeps the partial Bun pass in dual validation out of complete Bun timing history", () => {
     const descriptor = {
       shard_name: "owner",
@@ -1065,6 +1156,7 @@ describe("CI test timing refit", () => {
     "failed runtime",
     "missing receipt",
     "partial Node selection",
+    "split runtime",
     "wrong workers",
   ])("retains packed release costs on %s", (fault) => {
     const fixture = packedReleaseFixture();
@@ -1088,6 +1180,8 @@ describe("CI test timing refit", () => {
         `[shard:${fixture.timingKeys[0]}]`,
         `[shard:node-subset:${fixture.timingKeys[0]}]`,
       );
+    } else if (fault === "split runtime") {
+      text = "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: node\n" + text;
     } else if (fault === "wrong workers") {
       text = text.replace("OPENCLAW_VITEST_MAX_WORKERS: 3", "OPENCLAW_VITEST_MAX_WORKERS: 1");
     }
@@ -1887,7 +1981,60 @@ describe("CI timing sampler provenance", () => {
     expect(result.contributingRunIds.toolingBlacksmith).toEqual([3, 4]);
   });
 
-  it.each(["release", "tooling"])(
+  it("collects successful jobs from failed PR workflows without pruning absent timings", () => {
+    const fixture = makeFixture({
+      baseline: {
+        ...retained,
+        toolingFileSeconds: { blacksmith: { unobserved: 90 }, github: {}, boat: {} },
+      },
+      toolingRuns: [
+        ...Array.from({ length: 100 }, (_, index) =>
+          samplerRun(100 + index, { event: "pull_request", conclusion: "cancelled" }),
+        ),
+        ...samplerRuns([3, 4], {
+          event: "pull_request",
+          conclusion: "failure",
+          run_attempt: 2,
+        }),
+      ],
+      jobs: [
+        ...pair().jobs,
+        ...[3, 4].flatMap((id) => [
+          samplerJob(id * 10 + 1, id, { log: samplerToolingLog(20) }),
+          samplerJob(id * 10 + 5, id, {
+            run_attempt: 2,
+            log: samplerToolingLog(60),
+          }),
+          samplerJob(id * 10 + 2, id, {
+            conclusion: "failure",
+            log: samplerToolingLog(900),
+          }),
+          samplerJob(id * 10 + 3, id, {
+            conclusion: "cancelled",
+            log: samplerToolingLog(900),
+          }),
+        ]),
+      ],
+    });
+    const result = invoke(fixture);
+    expect(readTimings(fixture).toolingFileSeconds).toEqual({
+      blacksmith: { unobserved: 90, [toolingFile]: 40 },
+      github: {},
+      boat: {},
+    });
+    expect(result.stdout).toContain("Independent PR tooling contributors: 2");
+    const requests = fixture.requestUrls();
+    const prPages = requests.filter((url) => url.includes("event=pull_request"));
+    expect(prPages).toHaveLength(2);
+    for (const url of prPages) {
+      expect(new URL(url, "https://api.github.com").searchParams.get("status")).toBe("completed");
+      expectWindow(url);
+    }
+    expect(requests.some((url) => /\/jobs\/(?:32|33|42|43)\/logs$/u.test(url))).toBe(false);
+    expect(requests.some((url) => /\/runs\/1\d\d\/attempts\//u.test(url))).toBe(false);
+  });
+
+  it.each(["release", "explicit tooling"])(
     "keeps failed %s workflows out of the sampling cohort",
     (source) => {
       const failed = samplerRun(9, {
@@ -1898,7 +2045,7 @@ describe("CI timing sampler provenance", () => {
         jobs: [...pair().jobs, samplerJob(91, 9)],
         ...(source === "release" ? { releaseRuns: [failed] } : { toolingRuns: [failed] }),
       });
-      reject(fixture, "conclusion", false);
+      reject(fixture, "conclusion", false, false, 2, source === "release" ? [] : [9]);
       expect(fixture.requestUrls().some((url) => url.includes("/runs/9/"))).toBe(false);
     },
   );
@@ -2089,6 +2236,43 @@ describe("CI timing sampler provenance", () => {
       expect(fixture.requestUrls().some((url) => url.includes("/workflows/openclaw-"))).toBe(false);
     },
   );
+
+  it("samples exact split extension job names across retry attempts", () => {
+    const log = (runtime: string) =>
+      [
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
+        "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME: " + runtime,
+        compactLog(40, (runtime === "bun" ? "bun:" : "") + "split-extension"),
+      ].join("\n");
+    const fixture = createSamplerFixture({
+      runs: samplerRuns([1, 2], { run_attempt: 2 }),
+      jobs: [1, 2].flatMap((id) => [
+        samplerJob(id * 10, id, {
+          name: "checks-node-changed-extensions-config-1 (node)",
+          log: log("node"),
+        }),
+        samplerJob(id * 10 + 1, id, {
+          name: "checks-node-changed-extensions-bundle-1 (bun)",
+          log: log("bun"),
+          run_attempt: 2,
+        }),
+        samplerJob(id * 10 + 2, id, {
+          name: "checks-node-changed-extensions-config-1 (bun) extra",
+          log: "not a timing log",
+        }),
+      ]),
+      baseline: compactBaseline({ "dual-all:split-extension": 100 }),
+    });
+    invoke(fixture);
+    expect(readTimings(fixture).compactGroupSeconds.blacksmith).toEqual({
+      "dual-all:split-extension": 100,
+      "split-extension": 40,
+      "dual-all:bun:split-extension": 40,
+    });
+    expect(fixture.requestUrls().filter((url) => /\/jobs\/(?:12|22)\/logs$/u.test(url))).toEqual(
+      [],
+    );
+  });
 
   it("deduplicates overlapping run and job pages without treating retries as extra runs", () => {
     const first = samplerRun(1);

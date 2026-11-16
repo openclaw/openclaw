@@ -159,22 +159,29 @@ describe("renderSkills", () => {
     }
   });
 
+  const secretRef = { source: "env", provider: "default", id: "KEY" };
   it.each([
     { editValue: "   ", disabled: true },
     { editValue: "  sk-test  ", disabled: false },
+    { editValue: "sk-test", disabled: true, apiKey: secretRef, text: "Set by a SecretRef." },
+    { editValue: "sk-test", disabled: true, error: "denied", text: "Couldn't read the config" },
   ])(
-    "only enables credential replacement for nonblank input: $editValue",
-    async ({ editValue, disabled }) => {
+    "only enables credential replacement for nonblank input over plaintext: %o",
+    async ({ editValue, disabled, apiKey, error, text }) => {
       const container = document.createElement("div");
       installDialogMethod("showModal", function () {
         expect(this.isConnected).toBe(true);
         this.setAttribute("open", "");
       });
       const onSaveKey = vi.fn();
+      const retry = vi.fn();
+      const config = { skills: { entries: { "repo-skill": { apiKey } } } };
+      const snapshot = error ? null : { config, parsed: config, valid: true };
 
       renderView(container, {
         detailKey: "repo-skill",
         edits: { "repo-skill": editValue },
+        apiKeyConfig: { snapshot: () => snapshot, error: () => error ?? null, retry },
         onSaveKey,
       });
       document.body.append(container);
@@ -189,13 +196,17 @@ describe("renderSkills", () => {
         "API key (OPENAI_API_KEY)",
       );
       expect(save?.disabled).toBe(disabled);
+      expect(input?.disabled).toBe(Boolean(text));
+      expect(`${input?.placeholder} ${container.textContent}`).toContain(text ?? "");
+      findButton(container, "Retry")?.click();
+      expect(retry).toHaveBeenCalledTimes(error ? 1 : 0);
 
       save?.click();
 
       if (disabled) {
         expect(onSaveKey).not.toHaveBeenCalled();
       } else {
-        expect(onSaveKey).toHaveBeenCalledWith("repo-skill");
+        expect(onSaveKey).toHaveBeenCalledWith("repo-skill", expect.any(Function));
       }
     },
   );
@@ -220,7 +231,9 @@ describe("renderSkills", () => {
     ]);
     const onDetailOpen = vi.fn();
     render({ report, onDetailOpen });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
     const groups = [...container.querySelectorAll<HTMLDetailsElement>("details.skills-group")];
     expect(groups).toHaveLength(3);
     expect(groups.every((group) => group.open)).toBe(true);
@@ -377,7 +390,9 @@ describe("renderSkills", () => {
     const report: SkillStatusReport = skillReport([passwordSkill, appleNotesSkill]);
 
     render({ report, statusFilter: "disabled", filter: "Cafe\u0301" });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
 
     expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 
@@ -700,6 +715,43 @@ describe("renderSkills", () => {
     expect(query("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
     expect(query(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(text()).toContain("AgentReceipt Local trust card.");
+  });
+
+  it("updates retained row status after filtering and verdict changes", async () => {
+    const { query, render } = createView();
+    const skill = createLinkedSkill();
+    const report = skillReport([skill]);
+    render({ report, clawhubVerdicts: verdicts() });
+    const row = query(".plugins-item");
+    const status = query(".skill-row-status");
+    render({ report, filter: skill.name, clawhubVerdicts: verdicts() });
+    expect(query(".plugins-item")).toBe(row);
+    expect(query(".skill-row-status")).toBe(status);
+
+    render({
+      report,
+      filter: skill.name,
+      clawhubVerdicts: verdicts(
+        verdict({
+          ok: false,
+          decision: "fail",
+          securityStatus: "suspicious",
+          reasons: ["security.suspicious"],
+        }),
+      ),
+    });
+    expect(query(".skill-row-status")).toBe(status);
+    expect(status?.getAttribute("aria-label")).toContain("Review · security.suspicious");
+
+    render({
+      report: skillReport([
+        { ...skill, eligible: false, missing: { ...skill.missing, bins: ["fixture-cli"] } },
+      ]),
+      filter: skill.name,
+      clawhubVerdicts: verdicts(),
+    });
+    expect(query(".skill-row-status")).toBe(status);
+    expect(status?.getAttribute("title")).toContain("Needs setup · bin:fixture-cli");
   });
 
   it("retains the toolbar and keyed rows across status reads", async () => {

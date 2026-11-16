@@ -336,11 +336,13 @@ export function MobileHostChrome(
     };
   });
   const ScrollFades = () => {
-    onSettled(() =>
-      props.view.mobileScrollFades?.connect((ports) =>
-        createMobileSheetScrollFadeConnection(ports, props.readShell()),
-      ),
-    );
+    onSettled(() => {
+      const shell = props.readShell();
+      const initialPresentation = props.view.visualPresentation;
+      return props.view.mobileScrollFades?.connect((ports) =>
+        createMobileSheetScrollFadeConnection(ports, shell, initialPresentation),
+      );
+    });
     return undefined;
   };
   return (

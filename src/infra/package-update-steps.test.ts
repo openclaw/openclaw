@@ -205,6 +205,21 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
   );
 
+  it("reports an interrupted step as the interruption, not a package failure", async () => {
+    const { globalRoot } = await npmPackage(base);
+    const interruption = new Error('Could not record update step "x": interrupted', {
+      cause: Object.assign(new Error("interrupted"), { code: "interrupted" }),
+    });
+    await expect(
+      runGlobalPackageUpdateSteps({
+        ...createNpmUpdateOptions(globalRoot, "openclaw@github:openclaw/openclaw#main"),
+        runStep: async () => {
+          throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+  });
+
   it.each([false, true])(
     "cleans a throwing npm pack unless cleanup is uncertain (%s)",
     async (uncertain) => {

@@ -76,7 +76,6 @@
   --card-foreground: #292339;
   --card-highlight: rgba(60, 45, 70, 0.02);
   --popover-foreground: #292339;
-  --session-hovercard-surface: var(--card);
 
   --text: #3e3857;
   --text-strong: #292339;

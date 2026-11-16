@@ -10,7 +10,7 @@ import {
   stageSessionPendingInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../../config/sessions/session-pending-input-snapshot.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
@@ -192,8 +192,8 @@ describe("registered chat read scope", () => {
         cancelled.finish("cancelled");
         interrupted.finish("interrupted");
         await interrupted.settled?.();
-        const retained = await readPendingInputSource(scope, "synthetic-page-2:user", true);
-        expect(retained?.snapshot.pending).toMatchObject({
+        const retained = await readPendingInputSnapshotForTest(scope, "synthetic-page-2:user");
+        expect(retained.pending).toMatchObject({
           state: "interrupted",
           message_json: JSON.stringify(interrupted.message),
         });
@@ -243,8 +243,8 @@ describe("registered chat read scope", () => {
           items: [{ id: cancelled.inputId, state: "cancelled" }],
         });
         expect(
-          (await readPendingInputSource(scope, "synthetic-page-2:user", true))?.snapshot.pending,
-        ).toEqual(retained?.snapshot.pending);
+          (await readPendingInputSnapshotForTest(scope, "synthetic-page-2:user")).pending,
+        ).toEqual(retained.pending);
         await upsertSessionEntryCore(scope, {
           sessionId: "replacement-physical-session",
           updatedAt: 2,

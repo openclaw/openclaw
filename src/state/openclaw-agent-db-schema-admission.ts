@@ -14,7 +14,7 @@ export function admitOpenClawAgentDatabaseSchema(
   db: DatabaseSync,
   options: { agentId: string; path: string },
 ): DatabaseSync | undefined {
-  // Quick migration coverage cannot satisfy the next runtime full-integrity gate.
+  // Quick migration coverage cannot publish full-integrity verification.
   if (
     db.location() &&
     readSqliteDatabaseIntegrityVerification(db) &&

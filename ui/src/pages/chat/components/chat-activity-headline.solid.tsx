@@ -133,7 +133,6 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
               ]}
             >
               {title()}
-              {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
             </span>
           )}
         </Show>

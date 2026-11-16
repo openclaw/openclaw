@@ -36,6 +36,7 @@ import {
   SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  clearHistoryNavigation,
   readActiveTranscriptStats as activeStats,
   readSessionTranscriptHistoryAnchorPage as anchorPage,
   readSessionTranscriptHistoryEventById as messageById,
@@ -368,15 +369,7 @@ describe("SQLite active transcript event projection", () => {
     ]);
     // An upgraded transcript keeps its original rows until a payload write.
     runOpenClawAgentWriteTransaction(
-      (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-        SET navigation_type = NULL, navigation_custom_type = NULL,
-            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-            navigation_last_custom_type = NULL, navigation_valid = 1
-        WHERE session_id = ?`)
-          .run(scope.sessionId);
-      },
+      (database) => clearHistoryNavigation(database, scope.sessionId),
       { agentId: scope.agentId, env: scope.env },
     );
     const page = resetWindow();

@@ -207,6 +207,7 @@ describe("buildAgentSystemPrompt", () => {
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
     ],
+    ["notes recorded setup completion", { bootstrapCompleted: true }, ["## Bootstrap Complete"]],
     [
       "includes bootstrap truncation notice in system prompt without raw diagnostics",
       {
@@ -380,7 +381,7 @@ describe("buildAgentSystemPrompt", () => {
       "keeps update and delegated controls distinct when both tools are present",
       { toolNames: ["openclaw", "gateway"] },
       [
-        "Config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
+        "For the Gateway hosting this session, config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
         "perform the work with `gateway`: update.run",
         "update.cleanup retires eligible recovery copies",
       ],
@@ -452,6 +453,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("sourceTool=template_add_setup");
+    expect(prompt).toContain("BOOTSTRAP.md last in that same turn");
     expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
     expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
   });

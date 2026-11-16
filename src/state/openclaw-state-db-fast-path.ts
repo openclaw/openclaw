@@ -15,7 +15,7 @@ import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import { readAgentDatabaseLeaseProvenance } from "./openclaw-agent-db-lease-provenance.js";
 import {
   getStateRuntimeSchemaAdmission,
@@ -54,6 +54,7 @@ export async function needsOpenClawStateDatabaseSchemaRepair(
     prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
       signal,
+      reuse: true,
     });
   } catch (error) {
     if (error instanceof SqliteSnapshotCleanupError) {

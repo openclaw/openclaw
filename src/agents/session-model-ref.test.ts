@@ -22,6 +22,17 @@ describe("resolveSessionModelRef", () => {
       "moonshotai/kimi-k2.5",
     ],
     ["current default", {}, "main", "anthropic", "claude-opus-4-6"],
+    [
+      "current default over an inherited snapshot",
+      {
+        providerOverride: "openrouter",
+        modelOverride: "moonshotai/kimi-k2.5",
+        modelOverrideSource: "default",
+      },
+      "main",
+      "anthropic",
+      "claude-opus-4-6",
+    ],
     ["legacy runtime identity", {}, undefined, "openai", "gpt-5.4"],
     [
       "model-only override",

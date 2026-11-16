@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
+import { createAgentDatabaseStartupObservation } from "../../state/agent-database-startup-observation.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
@@ -148,6 +152,7 @@ it.each(["work", "dashboard:incognito-work"])(
       const storePath = state.statePath("sessions.sqlite");
       const sessionKey = `agent:main:${key}`;
       const incognito = key.startsWith("dashboard:incognito-");
+      const memoryPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       const cfg = {
         agents: { defaults: {} },
         session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
@@ -177,6 +182,7 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(resolved).toMatchObject({
           sessionId: entry.sessionId,
           sessionKey,
+          storePath: incognito ? memoryPath : storePath,
           isNewSession: false,
           persistedThinking: "high",
           sessionEntry: { ...entry, lifecycleRevision: expect.any(String) },
@@ -184,11 +190,7 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);
-          expect(
-            fs.existsSync(
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            ),
-          ).toBe(false);
+          expect(fs.existsSync(resolved.storePath)).toBe(false);
         }
       } finally {
         list.mockRestore();
@@ -254,3 +256,83 @@ it("does not provision a missing incognito lookup or select a hidden run-owned e
     ).toBeUndefined();
   });
 });
+
+it.for(["key", "id"] as const)(
+  "waits for only the selected session's recovery before capturing its entry (%s)",
+  async (target, { signal }) => {
+    await withOpenClawTestState({ label: "command-session-recovery" }, async (state) => {
+      const storePath = state.statePath("sessions.sqlite");
+      const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+      const sessionKey = "agent:main:resuming";
+      const scope = { agentId: "main", storePath, sessionKey };
+      for (const key of ["resuming", "healthy"]) {
+        await sessionAccessor.replaceSessionEntry(
+          { ...scope, sessionKey: `agent:main:${key}` },
+          { sessionId: `${key}-id`, updatedAt: Date.now(), thinkingLevel: "low" },
+        );
+      }
+      const recovery = createDeferredCore();
+      const completion = createDeferredCore();
+      const entered = createDeferredCore();
+      const owner = createAgentDatabaseStartupObservation(new Map(), signal);
+      owner.registerInputRecovery("main", {
+        sessions: new Map([[sessionKey, recovery.promise]]),
+        completion: completion.promise,
+      });
+      const wait = owner.waitForAgentPreparation;
+      vi.spyOn(owner, "waitForAgentPreparation").mockImplementation((agentId, options) => {
+        const pending = wait(agentId, options);
+        if (options?.forInput && options.sessionKey === sessionKey) {
+          entered.resolve();
+        }
+        return pending;
+      });
+      await withAgentDatabasePreparationContext(
+        () => owner,
+        async () => {
+          const pending = resolveSession({
+            cfg,
+            agentId: "main",
+            signal,
+            ...(target === "key" ? { sessionKey } : { sessionId: "resuming-id" }),
+          });
+          try {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                entered.promise,
+                pending,
+                "session entry resolved before retained input admission",
+              ),
+              signal,
+            );
+            const healthy = await withinTest(
+              resolveSession({
+                cfg,
+                agentId: "main",
+                sessionId: "healthy-id",
+                signal,
+              }),
+              signal,
+            );
+            expect(healthy.sessionKey).toBe("agent:main:healthy");
+            await sessionAccessor.replaceSessionEntry(scope, {
+              sessionId: "resuming-id",
+              updatedAt: Date.now(),
+              thinkingLevel: "high",
+            });
+            recovery.resolve();
+            expect(await withinTest(pending, signal)).toMatchObject({
+              sessionKey,
+              persistedThinking: "high",
+              sessionEntry: { thinkingLevel: "high" },
+            });
+          } finally {
+            recovery.resolve();
+            completion.resolve();
+            await pending.catch(() => undefined);
+          }
+        },
+      );
+    });
+  },
+);
