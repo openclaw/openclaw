@@ -1,8 +1,9 @@
 .sidebar.sidebar--rail {
   flex-direction: row;
   overflow: visible;
-  /* The rail and the sidebar panel paint their own surfaces. */
-  background: transparent;
+  /* The rail's surface runs behind the sidebar panel. Imported palettes without a rail
+     surface keep the sidebar surface rather than showing the app artwork through the rail. */
+  background: var(--sidebar-rail-surface, var(--sidebar-bg));
 }
 
 /* Account identity remains recognizable while a cold profile photo resolves. */
