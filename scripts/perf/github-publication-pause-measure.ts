@@ -171,16 +171,18 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
   console.log("publication-pause: upstream history ready");
   const fetched: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
-  const snapshots: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
+  const snapshots: { durationMs: number; startedAtMs: number; processCpuAtStartMs: number; mainCpuAtStartMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
   const captureSnapshot = publicationGit.captureSettledGitHubPublicationWorkspaceSnapshot;
   using snapshotSpy = vi.spyOn(publicationGit, "captureSettledGitHubPublicationWorkspaceSnapshot");
   snapshotSpy.mockImplementation(async (...args) => {
     const started = performance.now();
+    const processCpuAtStart = process.cpuUsage();
+    const mainCpuAtStart = process.threadCpuUsage();
     const pausedAtStart = runtime.isPaused();
     try {
       return await captureSnapshot(...args);
     } finally {
-      snapshots.push({ durationMs: performance.now() - started, pausedAtStart, pausedAtEnd: runtime.isPaused() });
+      snapshots.push({ durationMs: performance.now() - started, startedAtMs: started, processCpuAtStartMs: (processCpuAtStart.user + processCpuAtStart.system) / 1000, mainCpuAtStartMs: (mainCpuAtStart.user + mainCpuAtStart.system) / 1000, pausedAtStart, pausedAtEnd: runtime.isPaused() });
     }
   });
   const pauses: { start: number; end?: number }[] = [];
@@ -302,7 +304,8 @@ it("measures immutable object acquisition beside a live guest", async () => {
     nativeImage: nativeImage ?? null, nativeEngine, filesystemType: filesystem.type, agentDatabaseBytes,
     heartbeatMaxGapMs: heartbeats.length ? heartbeats.reduce((longest, stamp, index) => Math.max(longest, index ? stamp - heartbeats[index - 1]! : 0), 0) : null,
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
-    ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
+    ownerMs, ownerStartedAtMs: started, processCpuAtOwnerStartMs: (cpu.user + cpu.system) / 1000, mainCpuAtOwnerStartMs: (threadCpu.user + threadCpu.system) / 1000,
+    processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
     heapBefore, heapAfter, mainAllocatedBytes, sampledAllocationBytes, fetched, snapshots, pauseMs, phaseMs,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
