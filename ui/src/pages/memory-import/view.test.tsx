@@ -297,6 +297,7 @@ describe("renderMemoryImport", () => {
     const result = container.querySelector(".memory-import__result--incomplete");
     expect(result?.getAttribute("role")).toBe("alert");
     expect(container.textContent).toContain("provider rescan failed");
+    expect(container.textContent).not.toContain(t("memoryImport.notFound"));
     expect(result?.textContent).toContain("Import incomplete");
     expect(result?.textContent).toContain("1 imported · 1 failed · 0 conflicts");
     expect(result?.textContent).toContain("report saved");

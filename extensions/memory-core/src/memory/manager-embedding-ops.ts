@@ -4,6 +4,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
+  type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -22,8 +23,6 @@ import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
 } from "../memory-workspace-lock.js";
-import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import {
@@ -42,7 +41,7 @@ import {
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { resolveChunkProvenance } from "./manager-index-preparation.js";
-import { readMemoryIndexSource } from "./manager-index-source.js";
+import { prepareSessionIndexSource, readMemoryIndexSource } from "./manager-index-source.js";
 import { memoryPublicationGroup } from "./manager-publication-transfer.js";
 import {
   resolveMemoryIndexProviderIdentities,
@@ -60,13 +59,9 @@ import type {
 } from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
+import { EMBEDDING_TIMEOUTS_MS, runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_TIMEOUTS_MS = {
-  query: { remote: 60_000, local: 5 * 60_000 },
-  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
-};
 const SOURCE_PUBLICATION_MAX_FILES = 8;
 const SOURCE_PUBLICATION_MAX_ROWS = 128;
 const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
@@ -87,11 +82,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     count: 0,
   };
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
-  private readonly activeProviderUses = new Map<EmbeddingProvider, Set<Promise<void>>>();
+  private readonly activeProviderUses = new Map<MemoryEmbeddingProvider, Set<Promise<void>>>();
   private syncProviderGenerationRelease: (() => void) | null = null;
   private syncProviderGenerationOwners = 0;
 
-  protected acquireProviderUse(provider: EmbeddingProvider): () => void {
+  protected acquireProviderUse(provider: MemoryEmbeddingProvider): () => void {
     const completion = createDeferred();
     const uses = this.activeProviderUses.get(provider) ?? new Set<Promise<void>>();
     uses.add(completion.promise);
@@ -107,7 +102,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     };
   }
 
-  protected async awaitProviderIdle(provider: EmbeddingProvider): Promise<void> {
+  protected async awaitProviderIdle(provider: MemoryEmbeddingProvider): Promise<void> {
     const uses = this.activeProviderUses.get(provider);
     if (uses) {
       await Promise.all(uses);
@@ -343,7 +338,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   private resolveEmbeddingTimeout(
     kind: "query" | "batch",
-    provider: EmbeddingProvider | null = this.provider,
+    provider: MemoryEmbeddingProvider | null = this.provider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined = this.providerRuntime,
   ): number {
     const defaults = EMBEDDING_TIMEOUTS_MS[kind];
@@ -357,8 +352,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   }
 
   protected async probeEmbeddingProvider(
-    provider: EmbeddingProvider,
+    provider: MemoryEmbeddingProvider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+    signal?: AbortSignal,
   ): Promise<void> {
     const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
     const deadlineControl = createMemorySearchDeadlineControl();
@@ -366,15 +362,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       await runEmbeddingOperationWithTimeout({
         timeoutMs,
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        signal,
         deadlineControl,
-        run: (signal) =>
+        run: (operationSignal) =>
           embedMemoryQuery(provider, "ping", this.settings, {
-            signal,
+            signal: operationSignal,
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
       });
     } catch (error) {
-      if (provider === this.provider) {
+      // An interrupted check says nothing about the provider's health.
+      if (provider === this.provider && !signal?.aborted) {
         this.markLocalEmbeddingProviderDegraded(error);
       }
       throw error;
@@ -384,7 +382,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected async embedQueryWithRetry(
     text: string,
     signal?: AbortSignal,
-    providerOverride?: EmbeddingProvider,
+    providerOverride?: MemoryEmbeddingProvider,
     providerRuntimeOverride?: MemoryEmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ): Promise<number[]> {
@@ -560,7 +558,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     retain = true,
   ): Promise<PreparedMemoryIndexEntry | null> {
     const kind = entry.kind;
-    const suppliedContent = entry.content;
     const prepare = async (): Promise<PreparedMemoryIndexEntry | null> => {
       if (kind === "multimodal") {
         const multimodalChunk: Awaited<
@@ -599,35 +596,35 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         };
       }
 
+      const settings = {
+        entry: { path: entry.path, mtimeMs: entry.mtimeMs },
+        chunking: this.settings.chunking,
+        provider:
+          generation?.kind === "semantic"
+            ? { id: generation.provider.id, maxInputTokens: generation.provider.maxInputTokens }
+            : undefined,
+        hardMaxInputTokens: EMBEDDING_BATCH_MAX_TOKENS,
+      };
+      if (source === "sessions" && entry.streamSessionExport) {
+        const prepared = await prepareSessionIndexSource(entry, settings, this.workspaceDir);
+        this.dirty ||= !prepared;
+        return prepared && { entry, source, chunks: prepared.chunks };
+      }
       const read = await readMemoryIndexSource({
         absolutePath: entry.absPath,
         workspaceDir: this.workspaceDir,
         source,
-        suppliedContent,
         memoryFiles: this.memoryFiles,
       });
       if (!read) {
         this.dirty = true;
         return null;
       }
-      const cutoff = readSessionResetRecallCutoffMetadata(entry);
       const prepared = await prepareMemoryIndexInWorker({
-        entry: {
-          path: entry.path,
-          mtimeMs: entry.mtimeMs,
-          lineMap: entry.lineMap,
-          lineProvenance: entry.lineProvenance,
-        },
+        ...settings,
         source,
         content: read.content,
         pathClassification: read.pathClassification,
-        chunking: this.settings.chunking,
-        cutoffLine: cutoff.state === "valid" ? cutoff.cutoffLine : undefined,
-        provider:
-          generation?.kind === "semantic"
-            ? { id: generation.provider.id, maxInputTokens: generation.provider.maxInputTokens }
-            : undefined,
-        hardMaxInputTokens: EMBEDDING_BATCH_MAX_TOKENS,
       });
       return {
         entry:
@@ -637,7 +634,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
     };
     const preparedEntry =
-      source === "sessions" && kind !== "multimodal" && typeof suppliedContent === "string"
+      source === "sessions" && kind !== "multimodal" && entry.streamSessionExport
         ? await withMemoryWorkspacePreparation(this.workspaceDir, prepare)
         : await withMemoryWorkspaceLock(this.workspaceDir, prepare);
     if (!preparedEntry || !retain) {

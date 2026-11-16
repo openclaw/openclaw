@@ -1,11 +1,15 @@
 import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
+import {
+  getSession,
+  listExecSessionsForCancellation,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import {
   fullGatewayExec,
@@ -19,6 +23,7 @@ import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { requireGit } from "../agents/worktrees/git.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -32,6 +37,7 @@ import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-tr
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
@@ -41,8 +47,10 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { performSessionGitHubPreparation } from "./github-pr-workspace-preparation.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import * as availability from "./github-publication-availability.js";
 import * as baseRefresh from "./github-publication-base-refresh.js";
 import * as inspect from "./github-publication-inspect.js";
@@ -203,19 +211,21 @@ it("adopts one empty owner and keeps original message files separate from same-n
     );
     const process = createProcessTool({ scopeKey: target.sessionKey });
     try {
-      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow("background work");
+      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow(
+        `background exec ${background.sessionId} is still running`,
+      );
       expect(getSession(background.sessionId)?.exited).toBe(false);
       expect(loadSessionEntryReadOnly(target)?.worktree).toBeUndefined();
     } finally {
       await process.execute("stop-fixture", { action: "kill", sessionId: background.sessionId });
       await waitForExecScope(target.sessionKey);
-      acknowledgeInternalToolResult(
-        await process.execute("observe-fixture", {
-          action: "poll",
-          sessionId: background.sessionId,
-        }),
-      );
     }
+    // A requested stop that was never polled leaves no competing execution.
+    const stopped = listExecSessionsForCancellation().find(
+      (candidate) => candidate.id === background.sessionId,
+    );
+    expect(stopped).toMatchObject({ exited: true, backgrounded: true });
+    expect(stopped?.terminalPollObserved).not.toBe(true);
     const queued = reserveSessionControllerSource(target.sessionKey, {
       policy: { mode: "followup" },
       target: captureSessionTarget({
@@ -739,7 +749,7 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
   });
 });
 
-it("refuses another guest and lost access before binding, PR import and earlier file reads", async () => {
+it("admits registered PR-base source only for an authorized guest and rejects revocation before materialization or binding", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
@@ -784,109 +794,221 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       const guestClient = connect(guest);
       const otherClient = connect(other);
       const adminClient = connect(admin, ["operator.admin"]);
-      const target = {
-        agentId: "main",
-        sessionKey: "agent:main:adopt-authority",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      const sessionId = "adopt-authority";
-      await upsertSessionEntryCore(target, {
-        sessionId,
-        updatedAt: 1,
-        sessionRoot: state.workspaceDir,
-        createdActor: { type: "human", source: "profile", id: guest },
-      });
-      const manager = await SessionManager.openAsync({ ...target, sessionId }, state.workspaceDir);
-      const earlier = await manager.appendMessageAsync(makeUserMessage("Open notes.md", 1));
-      assert(earlier, "The earlier message must be persisted");
-      await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
-      const { resolveSandbox, integrate } = stubPullRequestPreparation(target.sessionKey);
-      const context = createPreparationContext(cfg);
-      const prepare = (client: GatewayClient) =>
-        preparePullRequest({
-          context,
-          sessionKey: target.sessionKey,
-          sessionId,
-          workspaceDir: state.workspaceDir,
-          client,
+      const repoRoot = path.join(state.root, "project");
+      await fs.mkdir(repoRoot);
+      await requireGit(repoRoot, ["init", "-b", "main"]);
+      await fs.writeFile(path.join(repoRoot, "source.txt"), "registered project contents\n");
+      await requireGit(repoRoot, ["add", "source.txt"]);
+      await requireGit(repoRoot, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "commit",
+        "-m",
+        "Project base",
+      ]);
+      const origin = "https://github.com/example/repo.git";
+      await requireGit(repoRoot, ["remote", "add", "origin", origin]);
+      // Keep the canonical GitHub identity while native default-base transport stays local.
+      const gitConfig = path.join(state.root, "transport.gitconfig");
+      await requireGit(repoRoot, [
+        "config",
+        "--file",
+        gitConfig,
+        `url.${pathToFileURL(repoRoot).href}.insteadOf`,
+        origin,
+      ]);
+      await withEnvAsync({ GIT_CONFIG_GLOBAL: gitConfig, GIT_ALLOW_PROTOCOL: "file" }, async () => {
+        const project = await registerProjectRegistry({ path: repoRoot });
+        const visibility = vi
+          .spyOn(gitHubPublicApi, "fetchGitHubJson")
+          .mockResolvedValue({ visibility: "private" });
+        const context = createPreparationContext(cfg);
+        const privateTarget = {
+          agentId: "main",
+          sessionKey: "agent:main:adopt-private-source",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        };
+        await upsertSessionEntryCore(privateTarget, {
+          sessionId: "adopt-private-source",
+          updatedAt: 1,
+          sessionRoot: state.workspaceDir,
+          createdActor: { type: "human", source: "profile", id: guest },
         });
-      const unbound = () => {
-        const entry = loadSessionEntryReadOnly(target);
-        expect(entry?.worktree).toBeUndefined();
-        expect(entry?.priorWorkspace).toBeUndefined();
-      };
-      const allocateWorkspace = allocation.prepareSessionWorktree;
-      const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
-      try {
-        // Another guest fails the publication requester; an admin passes it but is not the owner.
-        await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-        await expect(prepare(adminClient)).rejects.toThrow(
-          "Only the person who started this conversation",
+        const privateManager = await SessionManager.openAsync(
+          { ...privateTarget, sessionId: "adopt-private-source" },
+          state.workspaceDir,
         );
-        expect(allocate).not.toHaveBeenCalled();
-        unbound();
-
-        // Access lost after allocation is refused before the PR workspace is bound.
-        allocate.mockImplementationOnce(async (...args) => {
-          const allocated = await allocateWorkspace(...args);
-          await setGuestRole("revoked");
-          return allocated;
-        });
-        await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
-        expect(allocate).toHaveBeenCalledOnce();
-        unbound();
-        expect(
-          await managedWorktrees.findLiveByOwner("session", target.sessionKey),
-        ).toBeUndefined();
-        await setGuestRole("guest");
-
-        // Access lost after binding is refused before PR source import.
-        resolveSandbox.mockImplementationOnce(async (params) => {
-          await setGuestRole("revoked");
-          return {
-            ...createSandboxTestContext({
-              overrides: {
-                sessionKey: target.sessionKey,
-                workspaceDir: params.workspaceDir,
-                workspaceSource: "managed-worktree",
-              },
-            }),
-            [Symbol.dispose]() {},
-          } as never;
-        });
-        await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
-        expect(integrate).not.toHaveBeenCalled();
-        expect(loadSessionEntryReadOnly(target)?.worktree?.githubPullRequest).toBeUndefined();
-        await setGuestRole("guest");
-
-        expect(await prepare(guestClient)).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "prepared" }),
-        );
-        expect(integrate).toHaveBeenCalledOnce();
-        const readEarlier = (client: GatewayClient) =>
-          requestSessionFile(context, target.sessionKey, { messageEntryId: earlier }, client);
-        expect(await readEarlier(guestClient)).toMatchObject([
-          true,
-          { file: { content: "original notes\n" } },
-        ]);
-        // A viewing guest or an admin sees the current files, never the owner's originals.
-        const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
-        assert(worktree, "Preparation must bind the PR workspace");
-        await fs.writeFile(path.join(worktree.path, "notes.md"), "PR notes\n");
-        const refused = [false, undefined];
-        for (const client of [otherClient, adminClient]) {
-          expect(await requestSessionFile(context, target.sessionKey, {}, client)).toMatchObject([
-            true,
-            { file: { content: "PR notes\n" } },
-          ]);
-          expect((await readEarlier(client)).slice(0, 2)).toEqual(refused);
+        await privateManager.appendMessageAsync(makeUserMessage("Prepare my fork PR", 1));
+        stubPullRequestPreparation(privateTarget.sessionKey);
+        try {
+          await preparePullRequest({
+            context,
+            sessionKey: privateTarget.sessionKey,
+            sessionId: "adopt-private-source",
+            workspaceDir: state.workspaceDir,
+            client: guestClient,
+          });
+          const denied = loadSessionEntryReadOnly(privateTarget);
+          const empty = await managedWorktrees.findLiveByOwner("session", privateTarget.sessionKey);
+          assert(empty, "Inaccessible local projects retain the ordinary empty-source import path");
+          expect(denied?.projectId).toBeUndefined();
+          expect(empty.repoRoot).not.toBe(project.repoRoot);
+          expect(
+            await requireGit(empty.path, [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ]),
+          ).not.toBe(path.join(project.repoRoot, ".git"));
+          await expect(fs.readFile(path.join(empty.path, "source.txt"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          await expect(
+            fs.readFile(path.join(empty.repoRoot, ".git/objects/info/alternates")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          await removeOwnedWorktree(privateTarget.sessionKey);
         }
-        await setGuestRole("revoked");
-        expect((await readEarlier(guestClient)).slice(0, 2)).toEqual(refused);
-      } finally {
-        await removeOwnedWorktree(target.sessionKey);
-      }
+        visibility.mockResolvedValue({ visibility: "public" });
+        const target = {
+          agentId: "main",
+          sessionKey: "agent:main:adopt-authority",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        };
+        const sessionId = "adopt-authority";
+        await upsertSessionEntryCore(target, {
+          sessionId,
+          updatedAt: 1,
+          sessionRoot: state.workspaceDir,
+          createdActor: { type: "human", source: "profile", id: guest },
+        });
+        const manager = await SessionManager.openAsync(
+          { ...target, sessionId },
+          state.workspaceDir,
+        );
+        const earlier = await manager.appendMessageAsync(makeUserMessage("Open notes.md", 1));
+        assert(earlier, "The earlier message must be persisted");
+        await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
+        const { resolveSandbox, integrate } = stubPullRequestPreparation(target.sessionKey);
+        integrate.mockClear();
+        const prepare = (client: GatewayClient) =>
+          preparePullRequest({
+            context,
+            sessionKey: target.sessionKey,
+            sessionId,
+            workspaceDir: state.workspaceDir,
+            client,
+          });
+        const unbound = () => {
+          const entry = loadSessionEntryReadOnly(target);
+          expect(entry?.worktree).toBeUndefined();
+          expect(entry?.priorWorkspace).toBeUndefined();
+        };
+        const allocateWorkspace = allocation.prepareSessionWorktree;
+        const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
+        try {
+          // Another guest fails the publication requester; an admin passes it but is not the owner.
+          await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
+          await expect(prepare(adminClient)).rejects.toThrow(
+            "Only the person who started this conversation",
+          );
+          expect(allocate).not.toHaveBeenCalled();
+          unbound();
+
+          // A real role write while GitHub visibility is in flight revokes the source handoff.
+          visibility.mockImplementationOnce(async () => {
+            await setGuestRole("revoked");
+            return { visibility: "public" };
+          });
+          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
+          expect(allocate).not.toHaveBeenCalled();
+          unbound();
+          expect(
+            await managedWorktrees.findLiveByOwner("session", target.sessionKey),
+          ).toBeUndefined();
+          await setGuestRole("guest");
+
+          // Access lost after allocation is refused before the PR workspace is bound.
+          allocate.mockImplementationOnce(async (...args) => {
+            const allocated = await allocateWorkspace(...args);
+            assert(allocated.ok, "The authorized allocation must complete before revocation");
+            expect(allocated.value.worktree?.repoRoot).toBe(project.repoRoot);
+            await setGuestRole("revoked");
+            return allocated;
+          });
+          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
+          expect(allocate).toHaveBeenCalledOnce();
+          unbound();
+          expect(
+            await managedWorktrees.findLiveByOwner("session", target.sessionKey),
+          ).toBeUndefined();
+          await setGuestRole("guest");
+
+          // Access lost after binding is refused before PR source import.
+          resolveSandbox.mockImplementationOnce(async (params) => {
+            await setGuestRole("revoked");
+            return {
+              ...createSandboxTestContext({
+                overrides: {
+                  sessionKey: target.sessionKey,
+                  workspaceDir: params.workspaceDir,
+                  workspaceSource: "managed-worktree",
+                },
+              }),
+              [Symbol.dispose]() {},
+            } as never;
+          });
+          await expect(prepare(guestClient)).rejects.toThrow("no longer authorized");
+          expect(integrate).not.toHaveBeenCalled();
+          expect(loadSessionEntryReadOnly(target)?.worktree?.githubPullRequest).toBeUndefined();
+          await setGuestRole("guest");
+
+          expect(await prepare(guestClient)).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "prepared" }),
+          );
+          expect(integrate).toHaveBeenCalledOnce();
+          const readEarlier = (client: GatewayClient) =>
+            requestSessionFile(context, target.sessionKey, { messageEntryId: earlier }, client);
+          expect(await readEarlier(guestClient)).toMatchObject([
+            true,
+            { file: { content: "original notes\n" } },
+          ]);
+          // A viewing guest or an admin sees the current files, never the owner's originals.
+          const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
+          assert(worktree, "Preparation must bind the PR workspace");
+          expect(loadSessionEntryReadOnly(target)?.projectId).toBe(project.id);
+          expect(worktree.repoRoot).toBe(project.repoRoot);
+          expect(
+            await requireGit(worktree.path, [
+              "rev-parse",
+              "--path-format=absolute",
+              "--git-common-dir",
+            ]),
+          ).toBe(path.join(project.repoRoot, ".git"));
+          expect(await fs.readFile(path.join(worktree.path, "source.txt"), "utf8")).toBe(
+            "registered project contents\n",
+          );
+          expect(loadSessionEntryReadOnly(target)?.priorWorkspace?.fileRoot).toBe(
+            state.workspaceDir,
+          );
+          await fs.writeFile(path.join(worktree.path, "notes.md"), "PR notes\n");
+          const refused = [false, undefined];
+          for (const client of [otherClient, adminClient]) {
+            expect(await requestSessionFile(context, target.sessionKey, {}, client)).toMatchObject([
+              true,
+              { file: { content: "PR notes\n" } },
+            ]);
+            expect((await readEarlier(client)).slice(0, 2)).toEqual(refused);
+          }
+          await setGuestRole("revoked");
+          expect((await readEarlier(guestClient)).slice(0, 2)).toEqual(refused);
+        } finally {
+          await removeOwnedWorktree(target.sessionKey);
+        }
+      });
     },
   );
 });

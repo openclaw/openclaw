@@ -31,6 +31,12 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/file-log-main-thread-measure.mjs!",
+  "scripts/diagnostics/windows-link-service.mjs!",
+  "scripts/boat-release-runner.mjs!",
+  "scripts/build-iroh.mjs!",
+  // The macOS packager verifies the staged app before signing.
+  "scripts/lib/mac-runtime-portability.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
@@ -39,6 +45,13 @@ const repositoryScriptEntries = [
   "scripts/finalize-installed-runtime.mjs!",
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/exec-safe-bin-io-measure.mjs!",
+  "scripts/perf/usage-cost-source-measure.mjs!",
+  "scripts/perf/clickclack-account-snapshot.ts!",
+  "scripts/perf/clickclack-credential-read.ts!",
+  "scripts/perf/github-managed-profile-read.ts!",
+  "scripts/perf/github-managed-profile-write.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -46,12 +59,22 @@ const repositoryScriptEntries = [
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-ci-lint-plan.mts!",
+  "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
   "scripts/bench-duplicate-paragraphs.mts!",
   "scripts/bench-plugin-catalog.ts!",
   "scripts/bench-template-detail.mts!",
+  "scripts/bench-session-source-notifications.mjs!",
+  "scripts/bench-pr-dependency-cache.mjs!",
+  // scripts/pr injects this cache-lifetime preload through NODE_OPTIONS.
+  "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
+  // The Windows benchmark launches this observer with Node --import by exact path.
+  "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
+  "scripts/lib/agent-planner-statistics-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -70,8 +93,11 @@ const repositoryScriptEntries = [
   "scripts/perf/responses-policy-fingerprint-measure.ts!",
   "scripts/perf/cron-own-receipts-measure.mjs!",
   "scripts/perf/spawn-broker-shutdown-measure.ts!",
+  "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
@@ -185,6 +211,7 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Opt-in append benchmark CLI documented in its source header.
   "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
@@ -223,8 +250,6 @@ const repositoryScriptEntries = [
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
-  "scripts/bench-media-completion-gateway.mts!",
-  "scripts/bench-media-completion-wait.mts!",
   "scripts/bench-memory-keyword.mjs!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",
@@ -237,6 +262,9 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/workspace-snapshot-read-measure.ts!",
+  "scripts/perf/workspace-git-main-thread-measure.mjs!",
+  "scripts/perf/session-create-root-measure.mjs!",
   "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
@@ -266,6 +294,9 @@ const repositoryScriptEntries = [
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
   "scripts/test-macos-native.mts!",
+  // CI invokes the settings owner and its per-source producer by path.
+  "scripts/test-macos-mlx-settings.mts!",
+  "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",
@@ -375,6 +406,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery-observer.mjs!",
   "scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
@@ -418,6 +451,8 @@ const repositoryScriptEntries = [
   "scripts/generate-browser-inspect-script-swift.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
@@ -447,7 +482,6 @@ const repositoryScriptEntries = [
   // Existing explicit Linux proof driver imports the inactive capsule adapter.
   // Reachability for auditing is not registration or permission to execute it.
   "scripts/openclaw-release-clawhub-plan.ts!",
-  "scripts/openclaw-release-clawhub-runtime-state.ts!",
   // Protected preparation/button workflows invoke this coordinator by path.
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
@@ -532,6 +566,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
+  "skills/create-blobster/scripts/cli.mjs!",
   // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
   "skills/create-template/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
@@ -604,9 +640,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
@@ -693,6 +745,7 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-log.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
@@ -710,6 +763,7 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/logging/logger-file.worker.ts!",
   // Offline port foundations precede orchestration; remove with their first production callers.
   "src/infra/database-engine/port.worker.ts!",
   "src/snapshot/export-envelope.ts!",
@@ -872,6 +926,15 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // Inline-command benchmarks resolve Codex from each measured checkout's
+  // extensions/codex/package.json, never from the tooling root.
+  "@openai/codex",
+  // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
+  // dependency tree via createRequire(npmCli), never from the root workspace.
+  "@npmcli/arborist",
+  "@npmcli/config",
+  "cacache",
+  "pacote",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
@@ -1270,6 +1333,8 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // Workspace benchmarks inspect and synchronize native btrfs fixtures.
+        "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
@@ -1284,13 +1349,19 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // Native checkpoint measurements run their synthetic guest through the host engine.
+        "podman",
         "sleep",
         // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
         "sqlite3",
         "swiftlint",
+        // The Windows session-source benchmark terminates its own child process tree.
+        "taskkill.exe",
         "uptime",
         "xcrun",
       ],
+      // napi generates these optional platform artifacts; pnpm build:iroh builds only the host.
+      ignoreUnresolved: [/^\.\/iroh-node\.[a-z0-9-]+\.node$/, "./iroh-node.wasi.cjs"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       // Maintained commands select these opt-in Vitest configs outside
@@ -1302,6 +1373,7 @@ const config = {
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
           "test/vitest.codex-worker-authority.config.ts",
+          "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
         ],
       },
       project: [
@@ -1569,6 +1641,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",

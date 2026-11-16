@@ -9,7 +9,10 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
-import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
+import {
+  hasLegacyAuthProfileCredentialSource,
+  hasLegacyAuthProfileCredentialSourceAsync,
+} from "./legacy-source-diagnostic.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
@@ -97,48 +100,60 @@ export async function hasAnyAuthProfileStoreSourceAsync(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const localPath = agentDir ? resolveAuthProfileDatabasePath(agentDir) : undefined;
   const localDir = localPath ? path.dirname(localPath) : undefined;
-  if (
-    localDir &&
-    (hasRuntimeAuthProfileStoreSource(localDir, env) ||
-      hasLegacyAuthProfileCredentialSource(localDir, env))
-  ) {
+  if (localDir && hasRuntimeAuthProfileStoreSource(localDir, env)) {
     return true;
   }
   const context = captureOpenClawStateWorkerContext({ env });
+  const assertRootCurrent = () => {
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  const localLegacy = localDir && (await hasLegacyAuthProfileCredentialSourceAsync(localDir, env));
+  assertRootCurrent();
+  if (localLegacy) {
+    return true;
+  }
   const legacySharedPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
   const paths = [...new Set([legacySharedPath, ...(localPath ? [localPath] : [])])];
-  const cohortPath =
+  let cohortPath =
     reader &&
     path.resolve(resolveStateDir(reader.database.env)) === path.resolve(resolveStateDir(env))
       ? paths.find(
-          (databasePath) =>
-            path.resolve(databasePath) === path.resolve(reader.database.path) &&
-            resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)) ===
-              reader.database.agentId,
+          (databasePath) => path.resolve(databasePath) === path.resolve(reader.database.path),
         )
       : undefined;
-  // Capture both possible shared owners before the first read can yield.
+  if (
+    cohortPath &&
+    reader &&
+    resolveAuthProfileDatabaseOwnerId(path.dirname(cohortPath)) !== reader.database.agentId
+  ) {
+    cohortPath = undefined;
+  }
+  // Each possible shared owner captures revocation before filesystem preparation yields.
   const readers = new Map(
-    paths
-      .filter((databasePath) => databasePath !== cohortPath)
-      .map((databasePath) => [
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      ]),
+    await Promise.all(
+      paths
+        .filter((databasePath) => databasePath !== cohortPath)
+        .map(
+          async (databasePath) =>
+            [
+              databasePath,
+              await prepareAgentAuthProfileRowsRead({
+                databasePath,
+                env,
+              }),
+            ] as const,
+        ),
+    ),
   );
-  const usedReaders = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const usedReaders = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   let usedShared = false;
   let usedCohort = false;
   const hasSource = (rows: AuthProfileRowRead): boolean =>
     rows.store.status !== "missing" ||
     (rows.state.status === "readable" && Boolean(rows.state.raw));
   const assertCohortCurrent = () => {
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
+    assertRootCurrent();
     reader?.assertCurrent();
   };
   const readAgentSource = async (databasePath: string): Promise<boolean> => {
@@ -176,7 +191,7 @@ export async function hasAnyAuthProfileStoreSourceAsync(
     if (localPath === sharedPath) {
       return false;
     }
-    if (hasLegacyAuthProfileCredentialSource(undefined, env)) {
+    if (await hasLegacyAuthProfileCredentialSourceAsync(undefined, env)) {
       return true;
     }
     return ownership.location === "state-db"
@@ -194,8 +209,7 @@ export async function hasAnyAuthProfileStoreSourceAsync(
     assertCohortCurrent();
   }
   if (usedShared) {
-    context.maintenanceScope?.assertAdmission();
-    context.admission.assertCurrent();
+    assertRootCurrent();
   }
   return result;
 }
@@ -206,14 +220,13 @@ export async function hasLocalAuthProfileStoreSourceAsync(agentDir: string): Pro
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   if (
     hasRuntimeAuthProfileStoreSource(agentDir, env) ||
-    hasLegacyAuthProfileCredentialSource(agentDir, env)
+    (await hasLegacyAuthProfileCredentialSourceAsync(agentDir, env))
   ) {
     return true;
   }
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  const source = prepareAgentAuthProfileRowsRead({
+  const source = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
     env,
   });
   return withAuthProfileReaderCleanup(

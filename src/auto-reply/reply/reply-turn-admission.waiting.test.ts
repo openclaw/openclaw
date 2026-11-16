@@ -1,5 +1,8 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import {
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
@@ -87,7 +90,15 @@ describe("reply turn admission", () => {
 
   it.each(["visible", "queued_followup"] as const)("bounds only queued waits: %s", async (kind) => {
     active.setPhase("running");
-    const admitted = observe(admitBehind("waiting-session", { kind }));
+    const started = Date.now();
+    using _ = vi.spyOn(performance, "now").mockImplementation(() => Date.now() - started);
+    const log = { info: vi.fn() };
+    const diagnostics = startChatSendDiagnostics(log);
+    const admitted = observe(
+      withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        admitBehind("waiting-session", { kind }),
+      ),
+    );
     await vi.advanceTimersByTimeAsync(15_000);
     if (kind === "visible") {
       expect(admitted.isSettled()).toBe(false);
@@ -97,6 +108,10 @@ describe("reply turn admission", () => {
       expectSkipped(await admitted.pending);
       active.complete();
     }
+    diagnostics.finish();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("detail.reply.admission.active_run_wait=15000ms"),
+    );
   });
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {

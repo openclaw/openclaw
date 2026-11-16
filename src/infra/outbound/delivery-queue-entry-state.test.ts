@@ -246,32 +246,40 @@ describe("delivery queue entry state", () => {
         duringSend(input);
         expect(input).not.toHaveProperty("env");
       });
-      const cwd =
-        locator !== "default" ? vi.spyOn(process, "cwd").mockReturnValue(originalDirectory) : null;
-      const stateDir = {
-        default: undefined,
-        relative: "queue",
-        "home-relative": "  ~/queue  ",
-      }[locator];
-      await resumeDrain(
-        {
-          drainKey: `sdk-entry-${locator}-${callback}`,
-          ...(stateDir !== undefined ? { stateDir } : {}),
-          ...(callback === "custom" ? { deliver: custom } : {}),
-        },
-        () => {
-          expect(custom).not.toHaveBeenCalled();
-          expect(sendText).not.toHaveBeenCalled();
-          ambient(replacementDirectory);
-          vi.stubEnv("OPENCLAW_HOME", replacementDirectory);
-          cwd?.mockReturnValue(replacementDirectory);
-        },
-      );
-      expect([custom.mock.calls.length, sendText.mock.calls.length]).toEqual(
-        callback === "custom" ? [1, 0] : [0, 1],
-      );
-      expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
-      await expectMissing(otherState());
+      const originalCwd = process.cwd();
+      if (locator !== "default") {
+        process.chdir(originalDirectory);
+      }
+      try {
+        const stateDir = {
+          default: undefined,
+          relative: "queue",
+          "home-relative": "  ~/queue  ",
+        }[locator];
+        await resumeDrain(
+          {
+            drainKey: `sdk-entry-${locator}-${callback}`,
+            ...(stateDir !== undefined ? { stateDir } : {}),
+            ...(callback === "custom" ? { deliver: custom } : {}),
+          },
+          () => {
+            expect(custom).not.toHaveBeenCalled();
+            expect(sendText).not.toHaveBeenCalled();
+            ambient(replacementDirectory);
+            vi.stubEnv("OPENCLAW_HOME", replacementDirectory);
+            if (locator !== "default") {
+              process.chdir(replacementDirectory);
+            }
+          },
+        );
+        expect([custom.mock.calls.length, sendText.mock.calls.length]).toEqual(
+          callback === "custom" ? [1, 0] : [0, 1],
+        );
+        expect(await loadPendingDelivery(queueId, originalRoot, context)).toBeNull();
+        await expectMissing(otherState());
+      } finally {
+        process.chdir(originalCwd);
+      }
     },
   );
 

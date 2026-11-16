@@ -572,7 +572,14 @@ describe("personal avatar HTTP authentication", () => {
 
   it("fails closed for unbound device identities when profile roles are configured", async () => {
     const { token } = await pairDevice();
-    cfg = { gateway: { roles: { definitions: {} } } };
+    cfg = {
+      gateway: {
+        roles: {
+          default: "denied",
+          definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+        },
+      },
+    };
     expect((await request(token)).status).toBe(401);
     expect((await request("test-shared-secret")).status).toBe(200);
   });

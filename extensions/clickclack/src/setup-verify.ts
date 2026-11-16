@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/setup";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackAccountAsync } from "./accounts.js";
 import { ClickClackHttpError, createClickClackClient } from "./http-client.js";
 import { findClickClackWorkspace } from "./resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
@@ -40,7 +40,7 @@ export async function checkClickClackSetupConnection(params: {
   token?: string;
 }): Promise<ClickClackSetupConnectionResult> {
   try {
-    const account = resolveClickClackAccount({
+    const account = await resolveClickClackAccountAsync({
       cfg: params.cfg,
       accountId: params.accountId,
     });

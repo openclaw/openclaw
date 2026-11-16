@@ -108,7 +108,6 @@ type WorkerEnvironmentAccessOptions = {
   >["preparedRepositorySource"];
   readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
-  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -140,7 +139,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
-        `worker desktop ${operation} is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)`,
+        `worker desktop ${operation} is disabled; enable the Desktop lab under Settings -> Labs in the OpenClaw app (config: cloudWorkers.desktop)`,
       );
     }
     if (policy.signal.aborted) {
@@ -201,7 +200,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
-    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&
@@ -237,7 +235,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
-      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
@@ -545,10 +542,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     };
   };
 
-  const launchDesktopApp = async (request: {
-    environmentId: string;
-    app: "browser" | "terminal";
-  }): Promise<WorkerDesktopLaunchResult> => {
+  const launchDesktopApp = async (
+    request: { environmentId: string; app: "browser" | "terminal" },
+    authorize?: () => void,
+  ): Promise<WorkerDesktopLaunchResult> => {
     const stopping = options.isStopping();
     const policy = desktopPolicy;
     const assertPolicy = () => requireDesktopPolicy("launch", policy);
@@ -572,6 +569,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const { startup, launchEpoch } = await withLock(request.environmentId, async () => {
       const { app, record, leaseId } = requireLaunchable();
       const transport = desktopTransport(record, leaseId);
+      // Queued launches need current request authority; admitted launches may finish.
+      authorize?.();
       return {
         launchEpoch: record.ownerEpoch,
         startup:

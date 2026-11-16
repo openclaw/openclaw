@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as workspaceManifestWorker from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
-import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../infra/node-commands.js";
 import * as processExec from "../process/exec.js";
 import {
@@ -873,11 +873,17 @@ describe("prepared node workspace ownership", () => {
         });
       }
       if (lateChange === "apply failure") {
-        const applyDirectories = workspaceReconcile.applyWorkspaceDirectoryChanges;
-        vi.spyOn(workspaceReconcile, "applyWorkspaceDirectoryChanges").mockImplementation(
-          async (params) => {
-            await applyDirectories(params);
-            throw new Error("injected failure after patch application");
+        const compute = workspaceManifestWorker.runWorkspaceFilesystemComputation;
+        vi.spyOn(workspaceManifestWorker, "runWorkspaceFilesystemComputation").mockImplementation(
+          async (command, options) => {
+            const result = await compute(command, options);
+            if (command.type === "workspace.reconcile.apply") {
+              expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
+                "session overlay\n",
+              );
+              throw new Error("injected failure after patch application");
+            }
+            return result;
           },
         );
       }

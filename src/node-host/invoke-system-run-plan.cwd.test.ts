@@ -12,7 +12,7 @@ import {
 describe("node-host exec workdir whitespace preservation", () => {
   it.runIf(process.platform !== "win32")(
     "preserves leading/trailing whitespace in the cwd directory name",
-    () => {
+    async () => {
       const base = path.join(
         os.tmpdir(),
         `system-run-cwd-ws-${createHash("sha1").update("ws").digest("hex").slice(0, 8)}`,
@@ -22,7 +22,7 @@ describe("node-host exec workdir whitespace preservation", () => {
       fs.mkdirSync(dirWithSpace, { recursive: true });
       fs.mkdirSync(dirNoSpace, { recursive: true });
       try {
-        const prepared = buildSystemRunApprovalPlan(
+        const prepared = await buildSystemRunApprovalPlan(
           { command: ["/bin/echo", "hi"], cwd: dirWithSpace },
           false,
         );
@@ -41,7 +41,7 @@ describe("node-host exec workdir whitespace preservation", () => {
 
   it.runIf(process.platform !== "win32")(
     "pins relative executable from the whitespace-bearing cwd, not its sibling",
-    () => {
+    async () => {
       const base = path.join(
         os.tmpdir(),
         `system-run-cwd-ws-exec-${createHash("sha1").update("exec").digest("hex").slice(0, 8)}`,
@@ -55,7 +55,7 @@ describe("node-host exec workdir whitespace preservation", () => {
       fs.writeFileSync(toolWithSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       fs.writeFileSync(toolNoSpace, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       try {
-        const hardened = hardenApprovedExecutionPaths({
+        const hardened = await hardenApprovedExecutionPaths({
           approvedByAsk: true,
           argv: ["./tool", "arg"],
           shellCommand: null,

@@ -226,6 +226,63 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it.each(["parent", "yielded"] as const)(
+    "records exhausted retryable delivery as a visible terminal failure across reopen (%s)",
+    async (kind) => {
+      const input = armRequesterWake(records());
+      if (kind === "parent") {
+        input.subagent.completionTarget = "parent";
+      } else {
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
+      input.subagent.delivery = { status: "failed", disposition: "retryable" };
+      input.subagent.completionRequesterSessionId = "requester-session";
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "requester-session",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      persistOwner(input);
+      using driver = requesterWakeDriver([input]);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch(
+          [params.settledEntry],
+          params.settledEntry.requesterSettleWake?.rearmGeneration,
+          {
+            delivered: false,
+            path: "direct",
+            reason: "requester_timed_out",
+            disposition: "permanent_failure",
+            error: "worker task timed out",
+          },
+        );
+        return false;
+      });
+      await driver.run();
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(input.subagent.runId)!;
+      expect(restored.requesterSettleWake).toBeUndefined();
+      expect(restored.delivery).toMatchObject({
+        status: "failed",
+        disposition: "permanent_failure",
+      });
+      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
+        JSON.stringify(event).includes("The child result couldn't be delivered"),
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({
+        customType: "run-failed-before-reply",
+        display: true,
+      });
+    },
+  );
+
   it("settles lost operator authority without discarding child results or queuing a notice", async () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupCompletedAt = undefined;
@@ -407,29 +464,46 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it("replaces an in-progress completion receipt on requester settlement and clears pending payloads", async () => {
-    const input = armRequesterWake(records());
-    const receipt = input.subagent.delivery!;
-    receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
-    receipt.attemptCount = 2;
-    const before = structuredClone(receipt);
-    persistOwner(input);
-    using driver = requesterWakeDriver([input]);
-    driver.wake.mockImplementation(async (params) => {
-      await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
-      return true;
-    });
-    await driver.run();
-    expect(currentRun(input).delivery).not.toBe(receipt);
-    expect(currentRun(input).delivery?.status).toBe("delivered");
-    expect(currentRun(input).delivery?.payload).toBeUndefined();
-    expect(currentRun(input).delivery?.attemptCount).toBeUndefined();
-    expect(receipt).toEqual(before);
-    expect(currentRun(input).requesterSettleWake).toBeUndefined();
-    db.value = await reopenOwners();
-    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
-    expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toBeUndefined();
-  });
+  it.each([false, true])(
+    "records the settled completion outcome before retention or retirement (retire=%s)",
+    async (retire) => {
+      const input = armRequesterWake(records());
+      input.subagent.requesterSettleWake!.retireAfterSettle = retire;
+      const receipt = input.subagent.delivery!;
+      receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
+      receipt.attemptCount = 2;
+      const before = structuredClone(receipt);
+      persistOwner(input);
+      using driver = requesterWakeDriver([input]);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
+        return true;
+      });
+      await driver.run();
+      expect(receipt).toEqual(before);
+      db.value = await reopenOwners();
+      if (retire) {
+        expect(subagentRuns.has(input.subagent.runId)).toBe(false);
+        const removed = db.value.db
+          .prepare(
+            "SELECT payload_json FROM session_state_events WHERE kind = 'child_delivery_removed' AND run_id = ?",
+          )
+          .all(input.subagent.runId);
+        expect(removed).toHaveLength(1);
+        expect(JSON.parse(String(removed[0]!.payload_json))).toMatchObject({
+          outcome: "delivered",
+          reason: "requester_settled",
+          deliveredAt: expect.any(Number),
+        });
+      } else {
+        const restored = subagentRuns.get(input.subagent.runId)!;
+        expect(restored.delivery).toMatchObject({ status: "delivered" });
+        expect(restored.delivery?.payload).toBeUndefined();
+        expect(restored.delivery?.attemptCount).toBeUndefined();
+        expect(restored.requesterSettleWake).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     { change: "rearmed", delivered: true, cut: "rejected" },

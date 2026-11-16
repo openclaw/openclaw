@@ -9,7 +9,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../../config/sessions/session-pending-input-snapshot.test-support.js";
 import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -140,15 +140,14 @@ describe("chat.send persisted request identity", () => {
       expect(receipts.total).toBe(source === "transcript" ? 0 : 1);
       const retained =
         source === "input receipt"
-          ? await readPendingInputSource(
+          ? await readPendingInputSnapshotForTest(
               fixture.scope,
               `${fixture.params.idempotencyKey}:user`,
-              true,
             )
           : undefined;
       if (source === "input receipt") {
         expect(acceptedMessage).toBeDefined();
-        expect(retained?.snapshot).toMatchObject({
+        expect(retained).toMatchObject({
           current: true,
           pending: {
             run_id: fixture.params.idempotencyKey,
@@ -186,13 +185,12 @@ describe("chat.send persisted request identity", () => {
       if (retained) {
         expect(
           (
-            await readPendingInputSource(
+            await readPendingInputSnapshotForTest(
               fixture.scope,
               `${fixture.params.idempotencyKey}:user`,
-              true,
             )
-          )?.snapshot.pending,
-        ).toEqual(retained.snapshot.pending);
+          ).pending,
+        ).toEqual(retained.pending);
       }
 
       fixture.params.idempotencyKey = "fresh-browser-follow-up";

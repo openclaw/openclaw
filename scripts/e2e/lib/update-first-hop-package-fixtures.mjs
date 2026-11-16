@@ -368,6 +368,46 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
   };
 }
 
+/**
+ * A same-schema future fixture whose post-activation Doctor worker fails against
+ * `stateDir`. Rehearsal runs the `doctor` command on copied state, so only the
+ * Doctor that runs after activation fails, which must roll the activation back.
+ */
+export function packFailingDoctorUpdateFixture(
+  candidateTarball,
+  outputTarball,
+  stateDir,
+  sequence = 0,
+) {
+  return {
+    method: "candidate-failing-post-activation-doctor-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
+      const relative = "dist/infra/update-migrated-finalize.worker.js";
+      const worker = path.join(root, relative);
+      fs.writeFileSync(
+        worker,
+        `if (process.argv.includes("--doctor") && process.env.OPENCLAW_STATE_DIR === ${JSON.stringify(stateDir)}) { process.stderr.write("fixture: post-activation Doctor fails\\n"); process.exit(1); }\n${fs.readFileSync(worker, "utf8")}`,
+      );
+      const bytes = fs.readFileSync(worker);
+      updateFixtureContentInventory(resolveFixturePaths(root), (entries) =>
+        entries.map((entry) =>
+          entry.path === relative
+            ? createPackageDistContentInventoryEntry(
+                entry.path,
+                {
+                  bytes: bytes.byteLength,
+                  digest: createHash("sha256").update(bytes).digest("hex"),
+                },
+                fs.statSync(worker).mode,
+              )
+            : entry,
+        ),
+      );
+    }),
+  };
+}
+
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",

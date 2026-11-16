@@ -65,7 +65,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
   inspectionUrl?: string;
   sessionGeneration?: SessionDeliveryGeneration;
   transcriptRoute?: OutboundSessionRoute;
-  transcriptExpectedGeneration?: { sessionId: string; lifecycleRevision?: string };
   onTranscriptDiagnostic?: (message: string) => void;
   completion?: {
     job: CronJob;
@@ -159,7 +158,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
           payloads,
           session,
           transcriptRoute: params.transcriptRoute,
-          transcriptExpectedGeneration: params.transcriptExpectedGeneration,
           onTranscriptDiagnostic: params.onTranscriptDiagnostic,
           // Completion rows name the run that produced them; alerts have no run result.
           ...(params.completion

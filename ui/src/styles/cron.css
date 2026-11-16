@@ -188,11 +188,13 @@
   line-height: 1.45;
 }
 
-.cron-failure-details__cause {
+.cron-error-details pre,
+.cron-run-entry__error {
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.cron-failure-details__cause--preview {
+.cron-error--clamped {
   display: -webkit-box;
   overflow: hidden;
   -webkit-line-clamp: 2;
@@ -598,6 +600,11 @@
   overflow: auto;
   white-space: pre;
   tab-size: 2;
+}
+
+.cron-prompt-preview {
+  max-height: 240px;
+  overflow: auto;
 }
 
 .cron-payload-code:focus-visible {

@@ -15,7 +15,7 @@ export class SessionTranscriptSourceMessageTooLargeError extends Error {
   readonly code = "TRANSCRIPT_SOURCE_MESSAGE_TOO_LARGE";
 
   constructor() {
-    super(`Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`);
+    super(`Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`);
     this.name = "SessionTranscriptSourceMessageTooLargeError";
   }
 }

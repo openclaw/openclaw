@@ -12,8 +12,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js"
 import { expandProvider } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
-// A provider that judges the key it receives, like a real one: revoked keys get 401,
-// keys without model access get 403, an overloaded account gets 500, others answer.
 const STATUS_BY_KEY: Record<string, [number, string]> = {
   "sk-synthetic-revoked": [401, "Incorrect API key provided"],
   "sk-synthetic-noaccess": [403, "This key has no access to the requested model"],
@@ -134,14 +132,14 @@ suite.define(() => {
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         const row = await expandProvider(page, "fixture");
-        const replace = async (key: string) => {
+        const enterKey = async (key: string) => {
           const button = row.getByRole("button", { name: "Replace API key: Fixture", exact: true });
           if ((await button.count()) > 0) {
             await button.click();
           }
           await row.getByLabel("API key", { exact: true }).fill(key);
-          await row.getByRole("button", { name: "Save", exact: true }).click();
         };
+        const save = () => row.getByRole("button", { name: "Save", exact: true }).click();
 
         for (const [key, reason] of [
           ["sk-synthetic-revoked", /didn’t accept it\. Authentication failed\./u],
@@ -149,7 +147,9 @@ suite.define(() => {
           // A 5xx says nothing about the key, so it's reported as an unfinished check.
           ["sk-synthetic-servererror", /check didn’t finish\. The connection check failed\./u],
         ] as const) {
-          const { text, ms } = await saveAndRead(row, () => replace(key));
+          // Measure Save through its result, after opening and filling the form.
+          await enterKey(key);
+          const { text, ms } = await saveAndRead(row, save);
           expect(text, key).not.toMatch(/API key saved\.(?! but)/u);
           expect(text, key).toMatch(reason);
           expect(ms, key).toBeLessThan(2_000);
@@ -162,7 +162,8 @@ suite.define(() => {
           }
         }
 
-        const good = await saveAndRead(row, () => replace("sk-synthetic-good"));
+        await enterKey("sk-synthetic-good");
+        const good = await saveAndRead(row, save);
         expect(good.text).toContain("API key saved and verified.");
         expect(await row.getByLabel("API key", { exact: true }).count()).toBe(0);
 
@@ -172,10 +173,10 @@ suite.define(() => {
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
         await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
-        const added = await saveAndRead(form, async () => {
-          await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
-          await form.getByRole("button", { name: "Save provider", exact: true }).click();
-        });
+        await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
+        const added = await saveAndRead(form, () =>
+          form.getByRole("button", { name: "Save provider", exact: true }).click(),
+        );
         expect(added.text).toMatch(/Authentication failed/u);
         expect(await form.isVisible()).toBe(true);
         expect(await form.getByRole("textbox", { name: "API key" }).isEditable()).toBe(true);

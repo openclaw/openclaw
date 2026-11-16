@@ -106,6 +106,8 @@ it.each([
   async ({ platform, largeProcessListing, preload, expectedPreload }) => {
     const allocatorConfig =
       "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,prof:true";
+    const longTmpDir = `/tmp/${"gateway-".repeat(10)}`;
+    vi.stubEnv("TMPDIR", longTmpDir);
     vi.stubEnv("MALLOC_CONF", allocatorConfig);
     vi.stubEnv("LD_PRELOAD", preload);
     if (largeProcessListing) {
@@ -127,6 +129,7 @@ it.each([
       kill: vi.fn(),
     });
     fixture.spawn.mockImplementation((_command, args: string[], options) => {
+      expect(options.env.TMPDIR).toBe(process.platform === "linux" ? "/tmp" : longTmpDir);
       expect(options.env).not.toHaveProperty("MALLOC_CONF");
       expect(options.env.LD_PRELOAD).toBe(expectedPreload);
       expect(args).toContain("--headless=new");
@@ -151,6 +154,7 @@ it.each([
       platform,
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
+    expect(process.env.TMPDIR).toBe(longTmpDir);
     expect(process.env.MALLOC_CONF).toBe(allocatorConfig);
     expect(process.env.LD_PRELOAD).toBe(preload);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });

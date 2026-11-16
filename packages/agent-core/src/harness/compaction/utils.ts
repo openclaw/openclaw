@@ -187,6 +187,9 @@ export function extractSummaryText(response: AssistantMessage): string | undefin
 }
 
 const TOOL_RESULT_MAX_CHARS = 2000;
+// Tool output fills most of a long history; when the summary input is sampled,
+// results older than the newest entries keep this much of their head and tail.
+const SAMPLED_TOOL_RESULT_MAX_CHARS = 500;
 const IMPORTANT_TOOL_RESULT_TAIL =
   /(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)/i;
 
@@ -374,19 +377,33 @@ export function findLatestCompactionUserMessage(
   );
 }
 
+const CREDENTIAL_PATTERNS = [
+  /\b(?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{16,}/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
+  /\b(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\b\s*[:=]\s*["']?[^\s"']{8,}/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+];
+
+/**
+ * Text quoted verbatim into compaction artifacts. Summaries are persisted and replayed
+ * on every later request, so credential shapes are redacted here, before any caller
+ * clips an excerpt that could leave a fragment. The transcript itself stays raw.
+ */
 export function extractCompactionMessageText(message: AgentMessage): string {
   const content = Reflect.get(message, "content");
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  return Array.isArray(content)
-    ? content
-        .flatMap((block) => {
-          const text = block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
-          return typeof text === "string" && text.trim() ? [text.trim()] : [];
-        })
-        .join("\n")
-    : "";
+  const text =
+    typeof content === "string"
+      ? content.trim()
+      : Array.isArray(content)
+        ? content
+            .flatMap((block) => {
+              const value =
+                block && typeof block === "object" ? Reflect.get(block, "text") : undefined;
+              return typeof value === "string" && value.trim() ? [value.trim()] : [];
+            })
+            .join("\n")
+        : "";
+  return CREDENTIAL_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[redacted]"), text);
 }
 
 /** Legacy producers cannot search past an independent input for a pending ask. */
@@ -460,11 +477,14 @@ function serializeConversationEntries(messages: Message[]): {
   entries: string[];
   /** Tool-result entries rendered with the call that produced them, for sampled input. */
   labeledResults: Map<number, string>;
+  /** The same entries with a shorter projection, for sampled entries older than the newest. */
+  shortResults: Map<number, string>;
   /** External-user entries, which carry the asks, decisions and corrections. */
   userEntries: number[];
 } {
   const parts: string[] = [];
   const labeledResults = new Map<number, string>();
+  const shortResults = new Map<number, string>();
   const userEntries: number[] = [];
   // Providers may repeat a call ID; each result claims the oldest unanswered call with it.
   const callLabels = createToolCallOccurrenceQueue<string>();
@@ -485,18 +505,22 @@ function serializeConversationEntries(messages: Message[]): {
       if (omissionText && omissionMessages++ === MAX_OMISSION_MESSAGES) {
         parts.push(OMISSION_OVERFLOW);
       }
-      const content = [
-        omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "",
-        msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
-      ]
-        .filter(Boolean)
-        .join("\n");
+      const omission = omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "";
+      const project = (maxChars: number) =>
+        [omission, msg.role === "toolResult" ? truncateForSummary(text, maxChars) : text]
+          .filter(Boolean)
+          .join("\n");
+      const content = project(TOOL_RESULT_MAX_CHARS);
       if (!content) {
         continue;
       }
       if (msg.role === "toolResult") {
         const label = callLabel ?? `${msg.toolName}(...)`;
         labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
+        shortResults.set(
+          parts.length,
+          `[Tool result of ${label}]: ${project(SAMPLED_TOOL_RESULT_MAX_CHARS)}`,
+        );
         parts.push(`[Tool result]: ${content}`);
       } else {
         if (isCompactionUserRequest(msg)) {
@@ -533,7 +557,7 @@ function serializeConversationEntries(messages: Message[]): {
     }
   }
 
-  return { entries: parts, labeledResults, userEntries };
+  return { entries: parts, labeledResults, shortResults, userEntries };
 }
 
 /**
@@ -609,7 +633,8 @@ export interface BoundedConversation {
  * the newest entries verbatim (half the budget); older user messages, which
  * carry the asks, decisions and corrections (a quarter, newest first, each up
  * to 2,000 characters); the oldest entries (a tenth); and eight evenly spaced
- * runs of what remains. Sampled entries are trimmed to 6,000 characters, every
+ * runs of what remains. Older tool results keep 500 characters of their head
+ * and tail instead of 2,000. Sampled entries are trimmed to 6,000 characters, every
  * gap is marked with its entry count, and each tool result names its call,
  * because sampling can separate the two. The transcript itself is not changed.
  */
@@ -684,6 +709,13 @@ export function serializeConversationWithinBudget(
       break;
     }
     tailStart = index;
+  }
+  // Shorter older results leave room for the user and assistant text the summary is built from.
+  for (const [index, text] of serialized.shortResults) {
+    if (index < tailStart) {
+      entries[index] = text;
+      weights[index] = estimateStringChars(text);
+    }
   }
 
   // Older user messages state what was asked, decided and corrected; a fact the

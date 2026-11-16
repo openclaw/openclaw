@@ -8,7 +8,14 @@ import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./all
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
-import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
+import {
+  commandError,
+  listGitWorktrees,
+  requireGit,
+  requireGitBuffer,
+  requireGitPath,
+  runGit,
+} from "./git.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
 import {
   createWorktreeRemovalClaimsGuard,
@@ -24,6 +31,7 @@ import { createRemovalRecoveryInventory } from "./removal-recovery-inventory.js"
 import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type { WorktreeWorkerAuthority } from "./types.js";
 
 const preserved = (reason: string) =>
@@ -61,7 +69,13 @@ async function recoverRemovalWithAllocation(params: {
   const record = await readRegistryWorktree(context, params.id);
   const assertRecordCurrent = accept(record);
   params.commitGuard?.();
-  if (!record || record.snapshotRef !== `refs/openclaw/snapshots/${params.id}`) {
+  if (
+    !record ||
+    ![
+      `refs/openclaw/snapshots/${params.id}`,
+      `refs/openclaw/snapshots/clean-v1/${params.id}`,
+    ].includes(record.snapshotRef ?? "")
+  ) {
     throw preserved("Recovery requires an ordinary removal snapshot");
   }
   const repository = await resolveRepository(record.repoRoot);
@@ -153,7 +167,7 @@ async function recoverRemovalWithAllocation(params: {
       if (branch.code !== 1) {
         const head = await requireGit(
           record.repoRoot,
-          ["rev-parse", `${params.snapshot}^`],
+          ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, params.snapshot)],
           options,
         );
         if (branch.code !== 0 || branch.stdout.trim() !== head) {
@@ -214,7 +228,11 @@ async function recoverRemovalWithAllocation(params: {
     if (await hasLocalWorkspaceProjection(record.id, params.env)) {
       throw preserved("Projected worktree recovery requires its original archive owner");
     }
-    const head = await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^`], options);
+    const head = await requireGit(
+      record.repoRoot,
+      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, params.snapshot)],
+      options,
+    );
     if (
       (await requireGit(record.repoRoot, ["rev-parse", `${head}^{tree}`], options)) !==
       (await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^{tree}`], options))
@@ -293,14 +311,14 @@ async function recoverRemovalWithAllocation(params: {
         ...options,
         env: { ...options.env, GIT_DIR: gitdir, GIT_INDEX_FILE: path.join(gitdir, "index") },
       };
-      const sharedIndex = await requireGit(
+      const sharedIndex = await requireGitPath(
         record.repoRoot,
         ["rev-parse", "--shared-index-path"],
         indexOptions,
       );
       const metadataNames = ["HEAD", "gitdir", "commondir", "index"];
       if (sharedIndex) {
-        const shared = path.resolve(record.repoRoot, normalizeGitPathForFilesystem(sharedIndex));
+        const shared = path.resolve(record.repoRoot, sharedIndex);
         if (
           path.dirname(shared) !== gitdir ||
           !/^sharedindex\.[a-f0-9]+$/u.test(path.basename(shared))

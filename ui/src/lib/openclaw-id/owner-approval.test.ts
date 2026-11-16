@@ -45,12 +45,27 @@ beforeEach(() => {
 });
 afterEach(() => {
   owner?.stop();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 // Emulates only remote mailbox I/O: the browser approver and both sides' cryptography are real.
-async function setup(refuse = false, invalid?: "sender" | "expired" | "commitment") {
+const macNode = {
+  peer_key: formatIrohEndpointKey(new Uint8Array(32).fill(9)),
+  description: {
+    display_name: "Mac",
+    platform: "macos",
+    commands: ["system.run"],
+    caps: ["screen"],
+  },
+};
+
+async function setup(
+  refuse = false,
+  invalid?: "sender" | "expired" | "commitment" | "node",
+  node?: typeof macNode,
+) {
   const root = await generateEd25519Signer();
   const d = await generateEd25519Signer();
   held.d = d;
@@ -88,6 +103,7 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
     device_pub: formatEd25519PublicKey(n.publicKey),
     peer_key: formatIrohEndpointKey(n.publicKey),
     label: "New browser",
+    ...(node ? { node } : {}),
   };
   const commit = await sasCommitment(ephN.publicKey, start);
   const sender = await fingerprint(start.device_pub);
@@ -109,6 +125,7 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
   });
   const first = message("start", {
     ...start,
+    ...(invalid === "node" ? { node: { ...macNode, peer_key: start.peer_key } } : {}),
     commit: invalid === "commitment" ? "00".repeat(32) : commit,
   });
   if (invalid === "sender") {
@@ -118,6 +135,7 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
     first.received_at = ts - 301;
   }
   const queue: MailboxMessage[] = [first];
+  let wake: (() => void) | undefined;
   let reads = 0;
   let shared: Uint8Array;
   let transcript: Uint8Array;
@@ -165,7 +183,10 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
       if (params.operation === "receive") {
         reads += 1;
         if (!queue.length) {
-          return new Promise(() => {});
+          // A long poll: answers only when new mail arrives.
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+          });
         }
         return { status: 200, body: JSON.stringify({ messages: queue.splice(0), cursor: "1" }) };
       }
@@ -193,7 +214,9 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
     }),
   };
   const client = mockClient as unknown as GatewayBrowserClient;
-  owner = createOwnerApproval(client, vi.fn());
+  const kitUsed = vi.fn();
+  const memberDeviceAdded = vi.fn();
+  owner = createOwnerApproval(client, vi.fn(), kitUsed, memberDeviceAdded);
   owner.start();
   if (invalid) {
     await vi.waitFor(() => expect(reads).toBeGreaterThanOrEqual(invalid === "commitment" ? 3 : 2));
@@ -207,6 +230,21 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
     operations,
     read: () => ({ submitted, handoff }),
     id: start.request_id,
+    kitUsed,
+    memberDeviceAdded,
+    notice: (
+      ref: string,
+      event: "kit_used" | "member_device_added" = "kit_used",
+      noticeClawId = clawId,
+    ) => {
+      queue.push({
+        ...message("start", {}),
+        claw_id: noticeClawId,
+        message_id: "78".repeat(16),
+        payload: { kind: "notice", event, ref },
+      });
+      wake?.();
+    },
   };
 }
 
@@ -241,7 +279,37 @@ describe("local original-D SAS approval", () => {
       expect(owner.read().requests).toEqual([]);
     },
   );
-  it.each(["sender", "expired", "commitment"] as const)(
+  it("approves an app's node in the same change, bound by the compared number", async () => {
+    const f = await setup(false, undefined, macNode);
+    expect(owner.read().requests[0]?.tools).toEqual({ commands: ["system.run"], caps: ["screen"] });
+    await owner.decide(f.id, true);
+    expect(f.operations).toEqual(["accept", "submit", "sealed"]);
+    expect(f.read().submitted?.body.target).toMatchObject({
+      op: "add_owner_device",
+      node: { ...macNode, label: "New browser" },
+    });
+  });
+  it("names the device in a kit-used notice", async () => {
+    const f = await setup();
+    f.notice("fp:local");
+    await vi.waitFor(() => expect(f.kitUsed).toHaveBeenCalledWith("local"));
+  });
+  it("surfaces member-device notices only for this claw without treating them as approvals", async () => {
+    const f = await setup();
+    f.notice("fp:other", "member_device_added", "ab".repeat(16));
+    f.notice("fp:member-peer", "member_device_added");
+    await vi.waitFor(() => expect(f.memberDeviceAdded).toHaveBeenCalledTimes(1));
+    expect(f.kitUsed).not.toHaveBeenCalled();
+    expect(f.operations).toEqual(["accept"]);
+    expect(owner.read().requests).toHaveLength(1);
+  });
+  it("approves a browser without a node", async () => {
+    const f = await setup();
+    expect(owner.read().requests[0]?.tools).toBeUndefined();
+    await owner.decide(f.id, true);
+    expect(f.read().submitted?.body.target).not.toHaveProperty("node");
+  });
+  it.each(["sender", "expired", "commitment", "node"] as const)(
     "never admits an invalid %s request",
     async (invalid) => {
       const f = await setup(false, invalid);
@@ -288,5 +356,25 @@ describe("local original-D SAS approval", () => {
     expect(f.operations).toEqual(["accept", "submit"]);
     expect(f.read().handoff).toBeUndefined();
     expect(owner.read().requests[0]?.error).toContain("seq conflict");
+    expect(owner.read().requests[0]?.uncertain).toBe(true);
+  });
+  it("publishes expiry while mailbox receive is pending and keeps only an inactive number", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-11-01T00:00:00.000Z"));
+    const expires = Date.now() + 300_000;
+    const f = await setup();
+    const code = owner.read().requests[0]?.code;
+    const changed = vi.fn();
+    owner.subscribe(changed);
+    await vi.advanceTimersByTimeAsync(expires - Date.now());
+    expect(changed).toHaveBeenCalled();
+    expect(owner.read().requests).toEqual([
+      expect.objectContaining({ id: f.id, label: "New browser", code, expired: true }),
+    ]);
+    await owner.decide(f.id, true);
+    await owner.decide(f.id, false);
+    expect(f.operations).toEqual(["accept"]);
+    owner.stop();
+    expect(owner.read().requests).toEqual([]);
   });
 });

@@ -1,3 +1,5 @@
+import { sql } from "kysely";
+import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,6 +21,7 @@ import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import {
   transcriptEventJsonSql,
+  transcriptEventNavigationSql,
   transcriptEventRunIdSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -154,6 +157,10 @@ export function readTranscriptMirrorFacts(
         }
         const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
         if (sourceRunId) {
+          const native = jsonNativeFieldsValid(
+            database.db,
+            transcriptEventNavigationSql(database.db, "event"),
+          );
           // UNION keeps each branch independently indexable; an OR here scans
           // the session. The input bounds long runs without truncating them.
           query = query.unionAll(
@@ -178,8 +185,17 @@ export function readTranscriptMirrorFacts(
                   ),
                 ),
               )
-              .where(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId)
-              .select((eb) => eb.val(1).as("is_source")),
+              // Rows native fields cannot decode are matched by their run ID in JavaScript.
+              .where((eb) =>
+                eb.or([
+                  eb(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId),
+                  eb.not(native),
+                ]),
+              )
+              .select(
+                /* kysely-allow-raw: 2 marks a source row whose run ID JavaScript must check. */
+                sql<number>`CASE WHEN ${native} THEN 1 ELSE 2 END`.as("is_source"),
+              ),
           );
         }
         const rows = executeSqliteQuerySync(
@@ -190,6 +206,12 @@ export function readTranscriptMirrorFacts(
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;
           if (row.is_source) {
+            if (
+              row.is_source === 2 &&
+              readSessionTranscriptRunId(readTranscriptEventMessage(event)) !== sourceRunId
+            ) {
+              continue;
+            }
             facts.sourceEvents?.push(event);
             continue;
           }

@@ -4,9 +4,11 @@ import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-a
 export function createSessionWorkerExecutionSource(
   assertCurrent: () => void,
   expiredMessage: string,
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"],
 ): AgentDatabaseRequestExecutionSource {
   return {
     assertCurrent,
+    readCustody,
     createAdmission(binding) {
       return () => ({
         nativeLocations: binding.nativeLocations,

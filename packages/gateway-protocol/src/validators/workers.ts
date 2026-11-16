@@ -182,6 +182,10 @@ export const validateDevicePairRemoveParams = createProtocolValidator(
   S.DevicePairRemoveParamsSchema,
   Checks.isDevicePairRemoveParams,
 );
+export const validateDevicePairCodeParams = createProtocolValidator(
+  S.DevicePairCodeParamsSchema,
+  Checks.isDevicePairCodeParams,
+);
 export const validateDevicePairSetupCodeParams = createProtocolValidator(
   S.DevicePairSetupCodeParamsSchema,
   Checks.isDevicePairSetupCodeParams,

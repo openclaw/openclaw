@@ -73,22 +73,27 @@ function sourceTypeFor(importerPath, packageJsons) {
   }
 }
 
-function resolvesCommonJs(importedPath, fileSet, packageJsons) {
+/** Resolve CommonJS imports using only the files admitted to the package. */
+export function resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) {
   const extensions = ["", ".js", ".json", ".node"];
-  const loadFile = (target) => extensions.some((extension) => fileSet.has(target + extension));
+  const loadFile = (target) =>
+    extensions.map((extension) => target + extension).find((file) => fileSet.has(file));
   const loadIndex = (directory) =>
     extensions
       .slice(1)
-      .some((extension) => fileSet.has(path.posix.join(directory, "index" + extension)));
-  if (!importedPath.endsWith("/") && loadFile(importedPath)) {
-    return true;
+      .map((extension) => path.posix.join(directory, "index" + extension))
+      .find((file) => fileSet.has(file));
+  const file = !importedPath.endsWith("/") && loadFile(importedPath);
+  if (file) {
+    return file;
   }
   const manifest = packageJsons.get(path.posix.join(importedPath, "package.json"));
   const main = manifest === undefined ? undefined : JSON.parse(manifest).main;
   if (typeof main === "string" && main) {
     const target = path.posix.join(importedPath, main);
-    if (loadFile(target) || loadIndex(target)) {
-      return true;
+    const entry = loadFile(target) ?? loadIndex(target);
+    if (entry) {
+      return entry;
     }
   }
   return loadIndex(importedPath);
@@ -102,8 +107,10 @@ function appendImportEdges(
   includeTypeScript,
   onStaticImport,
   onLiteralCall,
+  onImportOccurrence,
   controlUiImports,
 ) {
+  const occurrences = onImportOccurrence ? [] : undefined;
   function visit(node) {
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
@@ -119,6 +126,7 @@ function appendImportEdges(
     }
     let kind;
     let specifier;
+    let occurrenceKind;
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
@@ -126,6 +134,14 @@ function appendImportEdges(
       node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
+      if (node.source) {
+        occurrenceKind =
+          node.type === "ImportExpression"
+            ? "dynamic-import"
+            : node.type === "ImportDeclaration"
+              ? "static-import"
+              : "static-export";
+      }
       if (node.source?.type === "Literal" && typeof node.source.value === "string") {
         onStaticImport?.(node.source.value);
       }
@@ -135,6 +151,7 @@ function appendImportEdges(
       node.callee.name === "require"
     ) {
       kind = "require";
+      occurrenceKind = "require";
       specifier = literal(node.arguments[0]);
     } else if (
       node.type === "NewExpression" &&
@@ -153,9 +170,11 @@ function appendImportEdges(
         base.object.property.name === "meta"
       ) {
         kind = "import-meta-url";
+        occurrenceKind = "import-meta-url";
         specifier = literal(node.arguments[0]);
       }
     }
+    let packageEdge;
     if (
       specifier?.startsWith(".") &&
       (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier, includeTypeScript))
@@ -178,7 +197,18 @@ function appendImportEdges(
         importedPath === "dist/node_modules/@openclaw/proc-safe/dist/identity.js";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
+        packageEdge = importedPath;
       }
+    }
+    if (occurrenceKind && occurrences) {
+      occurrences.push({
+        importerPath,
+        kind: occurrenceKind,
+        start: node.start,
+        end: node.end,
+        ...(specifier === undefined ? {} : { specifier }),
+        ...(packageEdge === undefined ? {} : { importedPath: packageEdge }),
+      });
     }
     for (const key in node) {
       const value = node[key];
@@ -208,18 +238,26 @@ function appendImportEdges(
     );
   if (sourceType) {
     scan(sourceType);
-    return;
-  }
-  // Node detects ESM syntax in .js files without an explicit package type.
-  const start = imports.length;
-  try {
-    scan("script");
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) {
-      throw error;
+  } else {
+    // Node detects ESM syntax in .js files without an explicit package type.
+    const start = imports.length;
+    try {
+      scan("script");
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      imports.length = start;
+      if (occurrences) {
+        occurrences.length = 0;
+      }
+      scan("module");
     }
-    imports.length = start;
-    scan("module");
+  }
+  // Publish only the successful parse, preserving distinct static/dynamic uses
+  // of the same target. Existing packaging edges and callbacks stay unchanged.
+  for (const occurrence of occurrences ?? []) {
+    onImportOccurrence(occurrence);
   }
 }
 
@@ -235,7 +273,7 @@ export function collectPackageDistImportErrors(params) {
   for (const { importerPath, importedPath, kind } of imports) {
     const found =
       kind === "require"
-        ? resolvesCommonJs(importedPath, fileSet, packageJsons)
+        ? resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) !== undefined
         : fileSet.has(importedPath);
     if (!found) {
       errors.push(`${importerPath} imports missing ${importedPath}`);
@@ -290,6 +328,7 @@ export function collectPackageDistImports(params) {
       params.includeTypeScript,
       params.onStaticImport,
       params.onLiteralCall,
+      params.onImportOccurrence,
       controlUiImports,
     );
   }

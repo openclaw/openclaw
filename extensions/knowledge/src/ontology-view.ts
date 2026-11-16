@@ -1,10 +1,10 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { button, el } from "./page-dom.js";
 import { icon as glyph, type IconName } from "./ui-icons.js";
 
-type Ontology = FeatureOutput<typeof contract, "ontology"> & {
-  definitions: NonNullable<FeatureOutput<typeof contract, "ontology">["definitions"]>;
+type Ontology = FeatureOutput<FullOutputContract, "ontology"> & {
+  definitions: NonNullable<FeatureOutput<FullOutputContract, "ontology">["definitions"]>;
 };
 type Definition = Ontology["definitions"][number];
 type Category = { id: string; label: string; subtitle: string; icon: IconName };

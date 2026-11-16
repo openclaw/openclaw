@@ -12,6 +12,7 @@ import {
 } from "../bytes.js";
 import { hkdfSha256, randomBytes, sha256 } from "../crypto.js";
 import { canonicalize, type JsonValue } from "../jcs.js";
+import type { NodeDescription } from "../statements/types.js";
 
 /** Number of SAS digits shown on both screens (~2^-20 per attempt for an active attacker). */
 export const SAS_DIGITS = 6;
@@ -29,6 +30,12 @@ export type SasStart = {
   device_pub: string;
   peer_key: string;
   label: string;
+  /**
+   * A device that also runs as a node (an app) asks for its node in the same approval. The
+   * commitment and transcript cover it, so the compared code binds the node key and the surface
+   * the approver shows. Absent for a browser; then the commitment is unchanged.
+   */
+  node?: { peer_key: string; description: NodeDescription };
 };
 
 function subtle(): SubtleCrypto {

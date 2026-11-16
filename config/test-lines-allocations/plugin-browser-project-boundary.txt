@@ -1,2 +1,0 @@
-4
-# Preserve the intentional browser source roots in the DeepResearch package boundary contract.
