@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled, Show } from "solid-js";
 import type {
   SessionCatalog,
@@ -33,6 +32,7 @@ import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-rend
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasProviderBrandIcon } from "./provider-icon-data.ts";
+import { createSidebarSessionContextMenu } from "./sidebar-session-context-menu.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { ProviderBrandIcon } from "./solid/provider-icon.tsx";
@@ -149,14 +149,13 @@ function renderCatalogHostGroup(
       params.host.sidebarMenus.catalogMenu.open(catalogMenu(), x, y, trigger);
     const CatalogRow = () => {
       const controls: CatalogRowControls = {};
-      const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
-        event,
-      ) =>
+      const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
         handleContextMenuEvent(
           event,
           event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
           (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
         );
+      const sessionContextMenu = createSidebarSessionContextMenu(openMenuFromEvent);
       const marqueeLabel = (
         <Show
           when={JSON.stringify([label(), readSession().status, readSession().pullRequest])}
@@ -189,7 +188,8 @@ function renderCatalogHostGroup(
           data-catalog-session-key={identityKey()}
           data-session-row-action-count="1"
           role="listitem"
-          onContextMenu={openMenuFromEvent}
+          onPointerDown={() => sessionContextMenu.onPointerDown()}
+          onContextMenu={(event) => sessionContextMenu.onContextMenu(event)}
           onKeyDown={openMenuFromEvent}
         >
           <a
@@ -198,6 +198,7 @@ function renderCatalogHostGroup(
             class="sidebar-recent-session__link"
             aria-current={active() ? "page" : undefined}
             onClick={(event: MouseEvent) =>
+              !sessionContextMenu.onClick(event) &&
               handleNavigationClick(event, () => {
                 if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
                   openCatalogSessionInTerminal(

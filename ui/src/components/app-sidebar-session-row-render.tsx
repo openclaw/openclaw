@@ -31,6 +31,7 @@ import {
   sidebarSessionRowSubtitleParams,
 } from "./session-row-subtitle.ts";
 import { sameSidebarPresentation } from "./sidebar-projection-cache.ts";
+import { createSidebarSessionContextMenu } from "./sidebar-session-context-menu.ts";
 import type { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
@@ -136,9 +137,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
-  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
-    event,
-  ) => {
+  const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) => {
     if (event.target instanceof HTMLInputElement) {
       return;
     }
@@ -148,6 +147,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       }
     });
   };
+  const sessionContextMenu = createSidebarSessionContextMenu(openMenuFromEvent);
   const pinLabel = createMemo(() => {
     return t(personallyPinned() ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   });
@@ -270,7 +270,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           host().sessionOrganizer.sectionDrop(event, "pinned", undefined, session().key);
         }
       }}
-      onContextMenu={openMenuFromEvent}
+      onPointerDown={() => sessionContextMenu.onPointerDown()}
+      onContextMenu={(event) => {
+        if (!(event.target instanceof HTMLInputElement)) {
+          sessionContextMenu.onContextMenu(event);
+        }
+      }}
       onKeyDown={openMenuFromEvent}
     >
       <Link
@@ -282,7 +287,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
         aria-busy={session().titlePending ? "true" : undefined}
         onClick={(event: MouseEvent) => {
-          if (!rename()) {
+          if (!rename() && !sessionContextMenu.onClick(event)) {
             host().handleSessionRowClick(event, actionSession());
           }
         }}

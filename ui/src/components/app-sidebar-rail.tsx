@@ -39,6 +39,7 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { createSidebarSessionContextMenu } from "./sidebar-session-context-menu.ts";
 import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
@@ -499,6 +500,7 @@ function renderRailPin(
             aria-label={label()}
             aria-current={row().active ? "page" : undefined}
             onClick={(event) =>
+              !sessionContextMenu.onClick(event) &&
               handleNavigationClick(event, () => host.selectSession(row().key, undefined, row()))
             }
           >
@@ -537,6 +539,7 @@ function renderRailPin(
       );
     }
   };
+  const sessionContextMenu = createSidebarSessionContextMenu(openMenu);
   onSettled(() => () => {
     clearTimeout(press?.timer);
     if (host.sidebarMenus.railPins.get(serialized) === pin) {
@@ -566,7 +569,7 @@ function renderRailPin(
         tabindex={-1}
         title={host.sidebarMenus.railPinMenuPosition ? "" : label()}
         draggable={!host.sidebarSnapshot ? "true" : "false"}
-        onContextMenu={openMenu}
+        onContextMenu={(event) => sessionContextMenu.onContextMenu(event)}
         onKeyDown={openMenu}
         onFocusIn={(event) => {
           if (event.target instanceof HTMLElement && event.target.matches("a, button")) {
@@ -574,6 +577,7 @@ function renderRailPin(
           }
         }}
         onPointerDown={(event) => {
+          sessionContextMenu.onPointerDown();
           const target = event.target.closest<HTMLElement>("a, button");
           if (target && pin?.contains(target)) {
             trigger = target;
