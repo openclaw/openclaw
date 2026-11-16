@@ -79,34 +79,6 @@ export function writeSessionColdRecordsInTransaction(
   const eventRows: Parameters<typeof insertEvents>[0][number][] = [];
   const identityRows: DB["transcript_event_identities"][] = [];
   const activeRows: DB["session_transcript_active_events"][] = [];
-  const prepareIdentities = (count: number) =>
-    prepareSqliteQuerySync<typeof identityRows>(database.db, (parameter) =>
-      db.insertInto("transcript_event_identities").values(
-        Array.from({ length: count }, (_, index) => ({
-          session_id,
-          event_id: parameter((rows) => rows[index]!.event_id),
-          seq: parameter((rows) => rows[index]!.seq),
-          event_type: parameter((rows) => rows[index]!.event_type),
-          parent_id: parameter((rows) => rows[index]!.parent_id),
-          message_idempotency_key: parameter((rows) => rows[index]!.message_idempotency_key),
-          created_at: parameter((rows) => rows[index]!.created_at),
-        })),
-      ),
-    );
-  const prepareActive = (count: number) =>
-    prepareSqliteQuerySync<typeof activeRows>(database.db, (parameter) =>
-      db.insertInto("session_transcript_active_events").values(
-        Array.from({ length: count }, (_, index) => ({
-          session_id,
-          active_position: parameter((rows) => rows[index]!.active_position),
-          event_seq: parameter((rows) => rows[index]!.event_seq),
-          message_position: parameter((rows) => rows[index]!.message_position),
-          context_eligible: parameter((rows) => rows[index]!.context_eligible),
-        })),
-      ),
-    );
-  const identityInserts = new Map<number, ReturnType<typeof prepareIdentities>>();
-  const activeInserts = new Map<number, ReturnType<typeof prepareActive>>();
   let eventCharacters = 0;
   const flushRows = () => {
     if (eventRows.length) {
@@ -115,16 +87,17 @@ export function writeSessionColdRecordsInTransaction(
       eventCharacters = 0;
     }
     if (identityRows.length) {
-      const insert =
-        identityInserts.get(identityRows.length) ?? prepareIdentities(identityRows.length);
-      identityInserts.set(identityRows.length, insert);
-      insert(identityRows);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("transcript_event_identities").values(identityRows),
+      );
       identityRows.length = 0;
     }
     if (activeRows.length) {
-      const insert = activeInserts.get(activeRows.length) ?? prepareActive(activeRows.length);
-      activeInserts.set(activeRows.length, insert);
-      insert(activeRows);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("session_transcript_active_events").values(activeRows),
+      );
       activeRows.length = 0;
     }
   };
