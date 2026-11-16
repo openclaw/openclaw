@@ -114,7 +114,7 @@ function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
 // Floor so 100% only appears when every prompt token was a cache read.
 function CacheHitRate(props: { rate: number }) {
   return (
-    <div title={t("chat.composer.contextUsage.cacheHitRate")} data-chat-cache-hit-rate="true">
+    <div title={t("chat.composer.contextUsage.cacheHitRate")}>
       <dt>{t("chat.composer.contextUsage.cacheShort")}</dt>
       <dd>{(Math.floor(props.rate * 10_000) / 100).toFixed(2)}%</dd>
     </div>
@@ -193,8 +193,6 @@ export function ChatComposerContextPanel(
     { lazy: true },
   );
   const showRunCost = () => showCosts() && props.model?.cost !== null;
-  const runTokensTitle = (input: number | null, output: number | null) =>
-    `${t("chat.composer.contextUsage.inputShort")} ${formatStat(input)} · ${t("chat.composer.contextUsage.outputShort")} ${formatStat(output)}`;
   const costTitle = () => {
     const costs = providerCosts();
     return costs
@@ -263,7 +261,11 @@ export function ChatComposerContextPanel(
                 into the row tooltip; a plan-billed run keeps them, since it has no cost. */}
             <div
               class="context-usage__latest"
-              title={showRunCost() ? runTokensTitle(context().input, context().output) : undefined}
+              title={
+                showRunCost()
+                  ? `${t("chat.composer.contextUsage.inputShort")} ${formatStat(context().input)} · ${t("chat.composer.contextUsage.outputShort")} ${formatStat(context().output)}`
+                  : undefined
+              }
             >
               <span>{t("chat.composer.contextUsage.latestRun")}</span>
               <dl class="context-usage__stats">
