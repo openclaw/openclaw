@@ -1,4 +1,4 @@
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -10,16 +10,18 @@ export type ListingSection = "automations";
 export type SectionLocation = { route: RouteId; options: ApplicationNavigationOptions };
 
 // The page last opened from each section in this tab, per Gateway, so returning reopens it.
-const opened = new Map<
-  ListingSection,
-  { scope: ReturnType<typeof gatewayPresentationScope>; location: SectionLocation }
->();
+// It is a signal so a section's sidebar can mark the item its page has open.
+type OpenedEntry = {
+  scope: ReturnType<typeof gatewayPresentationScope>;
+  location: SectionLocation;
+};
+const [opened, setOpened] = createSignal<ReadonlyMap<ListingSection, OpenedEntry>>(new Map());
 
 export function sectionLocation(
   gateway: ApplicationGateway,
   section: ListingSection,
 ): SectionLocation | null {
-  const entry = opened.get(section);
+  const entry = opened().get(section);
   return entry?.scope === gatewayPresentationScope(gateway) ? entry.location : null;
 }
 
@@ -28,11 +30,24 @@ export function rememberSectionLocation(
   section: ListingSection,
   location: SectionLocation | null,
 ): void {
-  if (location) {
-    opened.set(section, { scope: gatewayPresentationScope(gateway), location });
-  } else {
-    opened.delete(section);
+  if (!location) {
+    forgetSectionLocation(section);
+    return;
   }
+  const scope = gatewayPresentationScope(gateway);
+  setOpened((current) => new Map(current).set(section, { scope, location }));
+}
+
+/** Choosing a section again starts it over, whichever Gateway it was opened on. */
+export function forgetSectionLocation(section: ListingSection): void {
+  setOpened((current) => {
+    if (!current.has(section)) {
+      return current;
+    }
+    const next = new Map(current);
+    next.delete(section);
+    return next;
+  });
 }
 
 // The shell reports which section's sidebar stands open beside the page, from its own route and

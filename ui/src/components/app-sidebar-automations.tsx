@@ -100,26 +100,24 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
   });
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
-  // The sidebar learns the route, not its query, so it keeps the job it last opened.
-  const [selected, setSelected] = createSignal(
-    new URLSearchParams(
-      window.location.search || sectionLocation(app.gateway, "automations")?.options.search,
-    ).get("job"),
-  );
+  // The automation the page has open, as the page records it for returning to Automations.
+  const openedJob = () =>
+    new URLSearchParams(sectionLocation(app.gateway, "automations")?.options.search ?? "").get(
+      "job",
+    );
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {
     const href = () => `${cronPath()}?job=${encodeURIComponent(row.job.id)}`;
-    const current = () => props.host.activeRouteId === "cron" && selected() === row.job.id;
+    const current = () => props.host.activeRouteId === "cron" && openedJob() === row.job.id;
     return (
       <a
         class={["nav-item sidebar-automations__row", { "nav-item--active": current() }]}
         href={href()}
         aria-current={current() ? "page" : undefined}
         onClick={(event) =>
-          handleNavigationClick(event, () => {
-            setSelected(row.job.id);
-            props.host.onNavigate?.("cron", { search: `?job=${encodeURIComponent(row.job.id)}` });
-          })
+          handleNavigationClick(event, () =>
+            props.host.onNavigate?.("cron", { search: `?job=${encodeURIComponent(row.job.id)}` }),
+          )
         }
       >
         <span class="sidebar-automations__copy">
@@ -168,10 +166,7 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         class="nav-item sidebar-automations__new"
         href={`${cronPath()}?new`}
         onClick={(event) =>
-          handleNavigationClick(event, () => {
-            setSelected(null);
-            props.host.onNavigate?.("cron", { search: "?new" });
-          })
+          handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
         }
       >
         <span class="nav-item__icon" aria-hidden="true">
