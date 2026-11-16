@@ -1,6 +1,9 @@
 // Plugin install plan tests cover install planning for local, registry, and bundled plugins.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveBundledInstallPlanForCatalogEntry,
   resolvePluginInstallSourcePlan,
@@ -8,6 +11,36 @@ import {
 import { resolveCatalogOfficialExternalNpmPackageTrust } from "../plugins/official-external-install-trust.js";
 
 describe("plugin install plan helpers", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "selects the local source a symlinked parent path names, not its lexical sibling",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-plan-"));
+      tempDirs.push(root);
+      fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "physical", "selected-sibling"));
+      fs.mkdirSync(path.join(root, "selected-sibling"));
+      fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"), "dir");
+
+      const plan = resolvePluginInstallSourcePlan({
+        raw: `${root}${path.sep}selected${path.sep}..${path.sep}selected-sibling`,
+        mode: "install",
+      });
+
+      // `selected/../selected-sibling` names `physical/selected-sibling` for the filesystem.
+      expect(plan).toMatchObject({
+        ok: true,
+        request: { source: "local", path: path.join(root, "physical", "selected-sibling") },
+      });
+    },
+  );
+
   it.each([" ClAwHuB:demo@ "])(
     "rejects the malformed explicit ClawHub selector %s before npm fallback",
     (raw) => {

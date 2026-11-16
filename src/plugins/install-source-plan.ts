@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
@@ -88,6 +90,21 @@ function sourcePlan(
   };
 }
 
+/**
+ * Resolve a local install spec through the filesystem, so a directory symlink
+ * followed by `..` names the source the operator selected instead of a
+ * lexically equal sibling. Missing paths keep the lexical result so the
+ * existing "Plugin path not found" diagnostic still names what was typed.
+ */
+function resolvePhysicalInstallPath(spec: string): string {
+  const expanded = expandHomePrefix(spec);
+  const parent = resolvePathPrefixSync(path.dirname(expanded));
+  if (parent.unresolvedSegments.includes("..")) {
+    return resolveUserPath(spec);
+  }
+  return path.join(parent.existingPath, ...parent.unresolvedSegments, path.basename(expanded));
+}
+
 export function resolvePluginInstallSourcePlan(params: {
   raw: string;
   mode: "install" | "update";
@@ -99,7 +116,7 @@ export function resolvePluginInstallSourcePlan(params: {
     return fileSpec;
   }
   const normalized = fileSpec?.path ?? params.raw;
-  const resolved = resolveUserPath(normalized);
+  const resolved = resolvePhysicalInstallPath(normalized);
   if (fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
     const bundled =
