@@ -1,2 +1,0 @@
-67
-# Count the weak storage used by normalization, tool cards, and settled row revisions.

@@ -1,3 +1,6 @@
+export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
+export const OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS = 500_000;
+
 // OpenAI model route membership shared by catalog and policy surfaces.
 
 export const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";

@@ -414,6 +414,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         desktop(),
         isPresented(),
         layoutElements(),
+        props.chat?.connected,
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );

@@ -6,7 +6,9 @@ self-hosted-runner:
     # GitHub's hosted Xcode labels are not yet in actionlint's built-in inventory.
     - xcode-27
     - xcode-27-xlarge
-    # Boat build qualification
+    # Boat CI backend
+    - boat
+    - boat-large
     - boat-xlarge
     # Blacksmith CI runners
     - blacksmith-2vcpu-ubuntu-2404
@@ -30,6 +32,9 @@ paths:
       # actionlint's built-in runner label allowlist lags Blacksmith additions.
       - 'label "blacksmith-16vcpu-[^"]+" is unknown\.'
   # GitHub Actions supports concurrency.queue, but actionlint does not yet model it.
+  .github/workflows/postgres-conformance-weekly.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/ios-store-release.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

@@ -291,8 +291,7 @@ export async function createStandaloneCodegenAdapter({
   const entries = new Set();
   for (const owner of programOwners) {
     const basename = path.basename(owner, ".ts");
-    const prefix =
-      basename === "workspace-path-exclusions" ? "workspace-manifest-" : `${basename}-`;
+    const prefix = `${basename}-`;
     const matches = candidates.filter(
       (entry) =>
         entry.startsWith(prefix) &&

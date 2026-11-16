@@ -98,7 +98,7 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
     direction: "claims" | (typeof railDirections)[number],
     offset: number,
   ) => {
-    const page = await feature.invoke("connections", {
+    const page = await feature.invoke("connections_detail", {
       id,
       view: "full",
       direction,
@@ -111,7 +111,14 @@ export async function recordPanels(ui: Page, view: RecordPanels) {
       throw new Error("Connections changed; reopen this page to refresh.");
     }
     snapshot = page.snapshot;
-    return page;
+    // view=full rows always carry a complete record summary.
+    return {
+      ...page,
+      connections: page.connections.filter(
+        (row): row is Extract<(typeof page.connections)[number], { record: unknown }> =>
+          "record" in row,
+      ),
+    };
   };
   async function moreClaims() {
     const page = await connectionsPage("claims", claimOffset ?? 0);

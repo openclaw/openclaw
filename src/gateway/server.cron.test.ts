@@ -991,7 +991,7 @@ describe("gateway server cron", () => {
   registerCronRepairCases(() => caseDir, startCronClient, sendCronAnnouncePayloadStrictMock);
 
   test.for(["success", "error"] as const)(
-    "keeps owner-topic repair pending through retries until the agent turn settles with %s",
+    "sends an owner-topic failure notice once while the same failure repeats (turn %s)",
     { timeout: 45_000 },
     async (outcome, { signal }) => {
       testState.cronEnabled = true;
@@ -1073,13 +1073,12 @@ describe("gateway server cron", () => {
           BodyForAgent: expect.stringContaining("Automation repair request from the scheduler"),
         });
 
-        // Dispatch acceptance is not repair completion: a retry while the turn is held
-        // cannot verify its changes or consume the incident's one escalation.
+        // The same failure while the owner turn works is not raised again.
         await run(jobId);
         const pending = await request("cron.get", { id: jobId });
         expect(pending.ok).toBe(true);
         expect(pending.payload).toMatchObject({
-          state: { lastFailureNotificationDeliveryStatus: "not-requested" },
+          state: { consecutiveErrors: 3, lastFailureNotificationDeliveryStatus: "not-requested" },
         });
         expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
         expect(gatewayReplyMock).toHaveBeenCalledOnce();
@@ -1087,18 +1086,12 @@ describe("gateway server cron", () => {
       } finally {
         finishRepairTurn.resolve();
       }
-      await vi.waitFor(async () => {
-        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
-        expect(repair?.settledAtMs).toEqual(expect.any(Number));
-      });
       expect(chatDelivery).not.toHaveBeenCalled();
       chatDelivery.mockRestore();
+      // The owner turn was the user's notice: the same failure stays quiet until its daily reminder.
       await run(jobId);
-      await vi.waitFor(() => expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce());
-      await run(jobId);
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+      expect(gatewayReplyMock).toHaveBeenCalledOnce();
     },
   );
 });

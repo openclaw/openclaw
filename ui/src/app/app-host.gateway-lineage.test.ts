@@ -349,8 +349,10 @@ describe("Control UI Gateway target lineage", () => {
     close(1, "remote refused");
 
     const { container } = await createGatewaySurface(gateway);
-    expect(container.innerHTML).toContain("<openclaw-app-shell");
-    expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
   });
 
   it("re-scopes credentials when the login draft changes Gateway", async () => {
@@ -381,8 +383,10 @@ describe("Control UI Gateway target lineage", () => {
     starting(1);
     await draw();
 
-    expect(container.innerHTML).toContain("<openclaw-app-shell");
-    expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    await vi.waitFor(() => {
+      expect(container.innerHTML).toContain("<openclaw-app-shell");
+      expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+    });
 
     hello(1);
     await draw();

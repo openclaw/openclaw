@@ -493,6 +493,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
                   text: value,
                   slug: slugify(kv?.key ?? value),
                   line,
+                  textLine: line,
                   ...(kv === undefined ? {} : { kv }),
                 },
               ],

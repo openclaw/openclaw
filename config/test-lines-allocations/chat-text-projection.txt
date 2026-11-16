@@ -1,0 +1,3 @@
+# Reducer-boundary regression: tool activity preserves output and receipts without
+# invalidating unchanged text; actual text arrival and clearing still publish.
+52

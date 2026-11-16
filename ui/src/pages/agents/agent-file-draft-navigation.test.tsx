@@ -95,7 +95,10 @@ it.each([
     },
   );
   const client = { request } as unknown as GatewayBrowserClient;
-  const connected = { ...snapshot(client), hello: gatewayHelloForMethods(["agents.files.set"]) };
+  const connected = {
+    ...snapshot(client),
+    hello: gatewayHelloForMethods(["agents.files.list", "agents.files.get", "agents.files.set"]),
+  };
   const currentGateway = gateway(connected);
   const baseContext = await ownedAgentsContext(currentGateway);
   const selection = baseContext.settingsAgentSelection;

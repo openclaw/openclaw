@@ -41,8 +41,10 @@ import {
   type SessionEntryPair,
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
-import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
-import { resolveProfileActivityViewerId } from "./session-profile-activity-policy.js";
+import {
+  mergeSessionListOwnerCounts,
+  retainCurrentSessionListPartitions,
+} from "./session-list-view-cache.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -59,7 +61,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { createSessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -84,20 +85,24 @@ export function selectSessionEntries(
     params.partitions &&
     params.retained &&
     !params.opts.includePeople &&
-    !params.opts.involvingProfileId &&
-    !params.opts.includeOwnerSessionCounts;
+    !params.opts.involvingProfileId;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     retainCurrentSessionListPartitions(params.retained!, params.partitions!);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
+    const countParts: SessionListFilteredEntries[] | undefined = params.opts
+      .includeOwnerSessionCounts
+      ? []
+      : undefined;
     let totalCount = 0;
     let hits = 0;
     let misses = 0;
     let activityExpiresAt = Infinity;
+    const archived = params.opts.archived ?? false;
     for (const partition of params.partitions!) {
-      if (!partition.entries.size) {
+      if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
         continue;
       }
       let part = params.retained!.get(partition.revision);
@@ -105,15 +110,7 @@ export function selectSessionEntries(
         misses++;
         part = filterSessionEntries({
           ...params,
-          entries(archived) {
-            const entries: SessionEntryPair[] = [];
-            partition.entries.forEach((pair) => {
-              if (matchesSessionArchiveFilter(pair[1], archived)) {
-                entries.push(pair);
-              }
-            });
-            return entries;
-          },
+          entries: () => Array.from(partition.entries.values()),
         });
         part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = sortAndLimitSessionEntries(
@@ -125,6 +122,7 @@ export function selectSessionEntries(
       } else {
         hits++;
       }
+      countParts?.push(part);
       pages.push(part.entries);
       ownerPages.push(part.ownerEntries);
       totalCount += part.totalCount;
@@ -139,6 +137,7 @@ export function selectSessionEntries(
       ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
+      ...(countParts ? mergeSessionListOwnerCounts(countParts) : {}),
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
     };
   } else {
@@ -476,11 +475,7 @@ export function prepareProjectedSessionList(params: {
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
-    profileActivityViewerId: resolveProfileActivityViewerId(
-      client,
-      presentation.sharing.policy?.scopes,
-      identity,
-    ),
+    viewerProfileId: identity,
     projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
     entryFilter:
       (client === undefined || !presentation.sharing.entryFilter) &&
@@ -591,10 +586,7 @@ export async function listProjectedSessions(params: {
               retained,
             }),
           );
-        const selection =
-          params.acceptsSerializedJson && exactKey === undefined
-            ? presentation.select(opts, select)
-            : select();
+        const selection = exactKey === undefined ? presentation.select(opts, select) : select();
         return {
           now,
           presentation,
@@ -691,6 +683,13 @@ export async function listProjectedSessions(params: {
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );
+          if (!params.acceptsSerializedJson) {
+            // Object readers own response containers and person counts, not the frozen selection.
+            result.owners = result.owners?.slice();
+            if (result.people) {
+              result.people = result.people.map((person) => ({ ...person }));
+            }
+          }
           if (client !== undefined) {
             result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
               callerScopes: client?.connect?.scopes ?? [],

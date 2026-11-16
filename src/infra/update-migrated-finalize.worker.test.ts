@@ -167,7 +167,7 @@ vi.mock("./update-run-ledger.js", () => ({
 vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
-const originalExitCode = process.exitCode;
+const originalExitCode = process.exitCode ?? 0;
 const originalRouting = loggingState.forceConsoleToStderr;
 const originalConsole = loggingState.rawConsole;
 const stdout: string[] = [];
@@ -216,6 +216,7 @@ function expectResultFile(
 }
 
 beforeEach(() => {
+  process.exitCode = originalExitCode;
   vi.resetModules();
   vi.clearAllMocks();
   fixture.stopService.mockReset().mockResolvedValue({ stopped: false });

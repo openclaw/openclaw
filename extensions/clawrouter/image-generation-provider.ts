@@ -25,6 +25,8 @@ import {
 } from "./image-model-catalog.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
+// ClawRouter's JSON Images API ingress cap includes base64 references and all options.
+const MAX_EDIT_REQUEST_BYTES = 8 * 1024 * 1024;
 
 export function buildClawRouterImageGenerationProvider(): ImageGenerationProvider {
   return {
@@ -35,9 +37,8 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
     models: [],
     capabilities: CLAWROUTER_IMAGE_CAPABILITIES,
     async generateImage(req) {
-      if (req.inputImages?.length) {
-        throw new Error("ClawRouter image editing is not supported.");
-      }
+      const inputImages = req.inputImages ?? [];
+      const mode = inputImages.length ? "edit" : "generate";
       if (!isSupportedClawRouterImageModel(req.model)) {
         throw new Error(
           "Unsupported ClawRouter image model; select a qualified flare/sunburst model from the image catalog.",
@@ -45,6 +46,29 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
       }
       if (!req.prompt.trim() || Array.from(req.prompt).length > 32_000) {
         throw new Error("ClawRouter image prompt must contain 1–32000 characters.");
+      }
+      if (inputImages.length > 16) {
+        throw new Error("ClawRouter image editing supports at most 16 reference images.");
+      }
+      if (inputImages.some((image) => image.buffer.byteLength > 4 * 1024 * 1024)) {
+        throw new Error("ClawRouter reference images must not exceed 4 MiB each.");
+      }
+      if (
+        inputImages.reduce(
+          (bytes, image) => bytes + 4 * Math.ceil(image.buffer.byteLength / 3),
+          0,
+        ) > MAX_EDIT_REQUEST_BYTES
+      ) {
+        throw new Error("ClawRouter image edit request exceeds the 8 MiB JSON size limit.");
+      }
+      for (const image of inputImages) {
+        const detected = sniffImageMimeType(image.buffer, "");
+        if (
+          !["image/png", "image/jpeg", "image/webp"].includes(detected.mimeType) ||
+          image.mimeType !== detected.mimeType
+        ) {
+          throw new Error("ClawRouter reference images must contain PNG, JPEG or WebP data.");
+        }
       }
       const requestedCount = req.count ?? 1;
       if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 10) {
@@ -62,13 +86,20 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
         )
       ) {
         throw new Error(
-          "Unsupported ClawRouter image option; edits, masks, variations and streaming are not supported.",
+          "Unsupported ClawRouter image option; masks, variations and streaming are not supported.",
         );
       }
       const body: Record<string, unknown> = {
         model: req.model,
         prompt: req.prompt,
         n: requestedCount,
+        ...(mode === "edit"
+          ? {
+              images: inputImages.map((image) => ({
+                image_url: "data:" + image.mimeType + ";base64," + image.buffer.toString("base64"),
+              })),
+            }
+          : {}),
       };
       const optional = {
         size: req.size,
@@ -83,6 +114,9 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
         if (value !== undefined) {
           body[key] = value;
         }
+      }
+      if (mode === "edit" && Buffer.byteLength(JSON.stringify(body)) > MAX_EDIT_REQUEST_BYTES) {
+        throw new Error("ClawRouter image edit request exceeds the 8 MiB JSON size limit.");
       }
       req.signal?.throwIfAborted();
       const deadline = createProviderOperationDeadline({
@@ -115,17 +149,21 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
         signal: req.signal,
         ssrfPolicy: req.ssrfPolicy,
       });
-      const selected = catalog.find((row) => row.model === req.model);
+      const selected = catalog.find((row) => row.model === req.model && row.modes?.includes(mode));
       if (!selected) {
         throw new Error(
-          "ClawRouter image model is not available in this key's current catalog; check the deployment, image grants and budget.",
+          "ClawRouter image " +
+            mode +
+            " is not available for this model in this key's current catalog; check the deployment, image grants and budget.",
         );
       }
       assertClawRouterImageLimits(req, selected.limits);
       req.signal?.throwIfAborted();
       const headers = new Headers(context.headers);
       headers.set("Content-Type", "application/json");
-      const url = context.baseUrl.replace(/\/+$/u, "") + "/images/generations";
+      const url =
+        context.baseUrl.replace(/\/+$/u, "") +
+        (mode === "edit" ? "/images/edits" : "/images/generations");
       const { response, release } = await postJsonRequest({
         url,
         headers,

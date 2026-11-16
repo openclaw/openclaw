@@ -395,7 +395,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
 
         // Keep repeated typing and reader positioning on the real editor with deterministic history.
-        // The final multiline turn extends below the viewport so the anchored-reply jump is observable.
+        // With the keyboard closed, keep the question and start of its answer in view.
         let anchoredPrompt = String(
             repeating: "Reader context keeps the question anchored as the reply arrives.\n",
             count: 9) + "Keep this reply anchored."
@@ -419,24 +419,73 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
+        let questionAndReplyStartVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let viewport = transcript.frame
+                return submitted.exists && response.exists &&
+                    submitted.frame.minY >= viewport.minY && submitted.frame.minY < viewport.midY &&
+                    response.frame.minY >= viewport.minY && response.frame.minY < viewport.maxY
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [questionAndReplyStartVisible], timeout: 5), .completed)
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "reader-reply-anchored")
-        jumpToLatest.tap()
-        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        let finalReply = app.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@ AND label CONTAINS %@",
-            "I can help with",
-            "Keep this reply anchored.")).firstMatch
-        XCTAssertTrue(finalReply.exists)
-        self.assertElementHasRenderedContent(finalReply, named: "reader reply after jumping to latest")
-        self.attachScreenshot(named: "reader-jumped-to-latest")
+        let finalReply = response
+        self.assertElementHasRenderedContent(submitted, named: "anchored question with keyboard closed")
+        self.assertElementHasRenderedContent(finalReply, named: "start of anchored reply")
+        self.attachScreenshot(named: "keyboard-closed-question-and-reply-start")
 
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
         self.attachScreenshot(named: "reader-manual-departure")
         jumpToLatest.tap()
         XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        XCTAssertTrue(finalReply.exists)
+        let replyVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                finalReply.exists && finalReply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [replyVisible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(finalReply, named: "reply after explicit Jump")
+        self.attachScreenshot(named: "reader-returned-to-latest")
+
+        // Target the actual system clock AX element without activating SpringBoard.
+        XCTAssertEqual(app.state, .runningForeground)
+        self.attachScreenshot(named: "reader-before-system-clock")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let clock = springboard.statusBars.staticTexts.firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.state, .runningForeground)
+        clock.tap()
+        guard app.state == .runningForeground else {
+            XCTFail("Status-bar input left the app; this is not native-navigation evidence")
+            return
+        }
+        self.attachScreenshot(named: "reader-after-status-bar-input")
+        let readerDepartedLatest = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                app.state == .runningForeground &&
+                    (!finalReply.exists || !finalReply.frame.intersects(transcript.frame))
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readerDepartedLatest], timeout: 5), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        self.assertElementHasRenderedContent(transcript, named: "transcript after status bar scroll")
+        self.attachScreenshot(named: "reader-status-bar-navigation")
+        jumpToLatest.tap()
+        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
+        self.assertLatestReplyVisible(finalReply, in: transcript)
+        self.attachScreenshot(named: "reader-latest-after-clock-jump")
+    }
+
+    private func assertLatestReplyVisible(_ reply: XCUIElement, in transcript: XCUIElement) {
+        let visible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                reply.exists && !reply.frame.isEmpty && reply.frame.intersects(transcript.frame)
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [visible], timeout: 5), .completed)
+        self.assertElementHasRenderedContent(reply, named: "latest reply after Jump")
     }
 
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
@@ -490,10 +539,10 @@ extension OpenClawSnapshotUITests {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for (command, expectedStatus, showsUnknown) in [
-            ("printf ready", "No result", true),
-            ("printf missing", "No result", true),
-            ("printf complete", "Finished", false),
+        for (command, expectedStatus) in [
+            ("printf ready", "Outcome unknown"),
+            ("printf missing", "No result"),
+            ("printf complete", "Finished"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
                 format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
@@ -501,7 +550,7 @@ extension OpenClawSnapshotUITests {
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
                 "The row must retain the prepared outcome for \(command)")
-            // Accessibility already announced unknown outcomes; pixels must preserve that cue too.
+            // Preserve visible uncertainty even when the row has no disclosure.
             let image = try XCTUnwrap(row.screenshot().image.cgImage)
             let recognition = VNRecognizeTextRequest()
             recognition.recognitionLevel = .accurate
@@ -510,11 +559,22 @@ extension OpenClawSnapshotUITests {
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
             XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
-            XCTAssertFalse(text.contains("outcome unknown"), "Step still uses the fallback title: \(text)")
+            XCTAssertEqual(
+                text.contains("outcome unknown"),
+                command == "printf ready",
+                "Wrong visible outcome cue: \(text)")
             XCTAssertEqual(
                 text.contains("no result"),
-                showsUnknown,
-                "Visible unknown-outcome cue is wrong for \(command): \(text)")
+                command == "printf missing",
+                "Wrong missing-output cue: \(text)")
+            XCTAssertFalse(text.contains("finished"), "Collapsed row has a status badge: \(text)")
+            if command == "printf ready" {
+                row.tap()
+                XCTAssertTrue(app.staticTexts["ready"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["Outcome unknown"].waitForExistence(timeout: 5))
+                self.attachScreenshot(named: "step-output-and-outcome")
+                row.tap()
+            }
         }
         self.attachScreenshot(named: "step-labels-expanded")
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
@@ -556,6 +616,43 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
+    func testIPadTranscriptStaysInsideComposerColumn() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "iPad reading-column proof only")
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for (orientation, name) in [
+            (UIDeviceOrientation.portrait, "portrait"),
+            (UIDeviceOrientation.landscapeLeft, "landscape"),
+        ] {
+            XCUIDevice.shared.orientation = orientation
+            self.launchApp(
+                for: Self.chatScreenshotTarget,
+                additionalArguments: ["--openclaw-long-chat-fixture"])
+            let app = try XCTUnwrap(self.app)
+            let composer = app.otherElements["chat-composer-surface"]
+            XCTAssertTrue(composer.waitForExistence(timeout: 8))
+            let transcript = try self.chatTranscript(in: app)
+            let assistant = app.otherElements["chat-assistant-message-body"].firstMatch
+            XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+            // Check the assistant container, not a short text leaf that fits even in a full-width row.
+            XCTAssertGreaterThanOrEqual(assistant.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(assistant.frame.maxX, composer.frame.maxX + 24)
+            self.assertElementHasRenderedContent(assistant, named: "iPad assistant column \(name)")
+            self.attachScreenshot(named: "ipad-assistant-column-\(name)")
+            let user = app.staticTexts["Prepare a detailed project review."]
+            for _ in 0..<4 where !user.exists || !user.frame.intersects(transcript.frame) {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(user.exists)
+            guard user.exists else { return }
+            XCTAssertTrue(user.frame.intersects(transcript.frame))
+            XCTAssertGreaterThanOrEqual(user.frame.minX, composer.frame.minX - 24)
+            XCTAssertLessThanOrEqual(user.frame.maxX, composer.frame.maxX + 24)
+            XCTAssertGreaterThanOrEqual(user.frame.maxX, composer.frame.maxX - 48)
+            self.assertElementHasRenderedContent(user, named: "iPad user column \(name)")
+            self.attachScreenshot(named: "ipad-user-column-\(name)")
+        }
+    }
+
     func testExistingSessionRestoresLatestOutput() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
         self.launchApp(
@@ -573,6 +670,38 @@ extension OpenClawSnapshotUITests {
         XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
+    func testSwitchingChatsOpensAtLatestMessage() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-switch-latest"),
+            additionalArguments: ["--openclaw-chat-switch-fixture", "--openclaw-slow-model-catalog-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_A_LATEST"].waitForExistence(timeout: 15))
+
+        // The transcript paints while the held model catalog keeps the chat's load running.
+        try self.selectSidebarDestination("Launch plan")
+        let latest = app.staticTexts["OPENCLAW_SWITCH_B_LATEST"]
+        let landedAtLatest = latest.waitForExistence(timeout: 2)
+        self.attachScreenshot(named: "chat-switch-latest")
+        XCTAssertTrue(landedAtLatest, "CHAT_SWITCH_LANDED_AWAY_FROM_LATEST")
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        let first = app.staticTexts["OPENCLAW_SWITCH_B_FIRST"]
+        XCTAssertFalse(first.exists && first.isHittable)
+        let transcript = app.collectionViews.firstMatch
+        XCTAssertTrue(transcript.waitForExistence(timeout: 3))
+        transcript.swipeDown()
+        transcript.swipeDown()
+        let jump = app.buttons["Jump to latest reply"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        jump.tap()
+        self.assertLatestReplyVisible(latest, in: transcript)
+        self.attachScreenshot(named: "chat-switch-jump-latest")
     }
 
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {
@@ -957,6 +1086,66 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(refreshedArtifacts.count, 2, "Relaunch must obtain fresh artifact access, not reuse a ticket")
         XCTAssertEqual(refreshedArtifacts.last?["artifactId"] as? String, artifacts.first?["artifactId"] as? String)
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
+    }
+
+    func testLiveGatewayPairAndSharePhoto() throws {
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    func testExistingGatewaySharesPhoto() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1")
+        // Do not reset onboarding or credentials: this also drives an installed upgrade.
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        try self.sharePhotoFromPhotos(returningTo: app)
+    }
+
+    private func sharePhotoFromPhotos(returningTo app: XCUIApplication) throws {
+        self.attachScreenshot(named: "share-app-paired")
+        let photos = try self.openOpenClawPhotoShareSheet()
+        let draft = photos.textViews["share-compose.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 15), "Share compose card missing")
+        XCTAssertTrue(photos.staticTexts["Preparing share…"].waitForNonExistence(timeout: 30))
+        let marker = ProcessInfo.processInfo.environment["OPENCLAW_IOS_SHARE_MARKER"] ?? "OPENCLAW_E2E_SHARE"
+        draft.tap()
+        draft.typeText("Describe this image. \(marker)")
+        let send = photos.buttons["share-compose.send"]
+        self.waitForEnabled(send)
+        let compose = XCTAttachment(screenshot: photos.screenshot())
+        compose.name = "share-photo-ready"
+        compose.lifetime = .keepAlways
+        self.add(compose)
+        send.tap()
+        XCTAssertTrue(draft.waitForNonExistence(timeout: 30), "Successful share must dismiss the compose card")
+        app.activate()
+        let delivered = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        XCTAssertTrue(delivered.waitForExistence(timeout: 30), "Shared message did not reach the app's chat")
+        self.attachScreenshot(named: "share-photo-delivered")
+        print("IOS_SHARE_CHECKPOINT delivered-without-companion-approval")
+    }
+
+    func testLiveGatewayWorkshopDocumentationOpensOutsideTheApp() throws {
+        // Run with an isolated Gateway and Safari as the default browser.
+        _ = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let app = self.relaunchConnectedLiveGatewayApp(initialTab: "chat", initialDestination: "skillWorkshop")
+        let learnMore = app.webViews.links["Learn more"].firstMatch
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 10), app.debugDescription)
+
+        let browser = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        defer {
+            browser.terminate()
+            app.activate()
+        }
+        learnMore.tap()
+        XCTAssertTrue(
+            browser.wait(for: .runningForeground, timeout: 10),
+            "The documentation link must leave the authenticated Settings WebView")
+        let background = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "state != %d", XCUIApplication.State.runningForeground.rawValue),
+            object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [background], timeout: 5), .completed)
+        app.activate()
+        XCTAssertTrue(learnMore.waitForExistence(timeout: 5), "Returning preserves the Workshop page")
     }
 
     func testLiveGatewayPairChatAndRelaunch() throws {

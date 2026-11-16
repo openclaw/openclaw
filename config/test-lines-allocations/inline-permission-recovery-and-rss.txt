@@ -1,0 +1,3 @@
+# Cold permission recovery through all three production renderers, current-request
+# retry ownership, deferred chunking, and complete custody-root RSS observation.
+127

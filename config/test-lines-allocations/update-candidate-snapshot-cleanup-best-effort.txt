@@ -1,2 +1,0 @@
-# Exact net regression growth: update candidate reads keep their result and log a failed private-copy removal, while strict snapshot callers still throw.
-35

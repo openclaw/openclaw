@@ -49,3 +49,51 @@ describe("account-specific provider plan labels", () => {
     },
   );
 });
+
+it.each([
+  [{ kind: "subscription", plan: "Max" }, "Max"],
+  [{ kind: "subscription" }, "Subscription"],
+  [{ kind: "api" }, "API"],
+  [{ kind: "native" }, "Native login"],
+] as const)("describes native billing without saved profiles: %j", (nativeAuth, label) => {
+  const provider: ModelAuthStatusProvider = {
+    provider: "claude-cli",
+    displayName: "Claude CLI",
+    status: "ok",
+    profiles: [],
+    nativeAuth,
+  };
+  expect(describeModelProviderAuth(provider)).toEqual({ kind: nativeAuth.kind, label });
+});
+
+it("does not hide native login because another provider's account is selected", () => {
+  expect(
+    describeModelProviderAuth(
+      {
+        provider: "claude-cli",
+        displayName: "Claude CLI",
+        status: "ok",
+        profiles: [],
+        nativeAuth: { kind: "native" },
+      },
+      { authProfileId: "unrelated:saved" },
+    ),
+  ).toEqual({ kind: "native", label: "Native login" });
+});
+
+it("uses native login even when the saved-profile rollup expects an absent OAuth profile", () => {
+  const provider: ModelAuthStatusProvider = {
+    provider: "claude-cli",
+    displayName: "Claude CLI",
+    status: "missing",
+    profiles: [],
+    nativeAuth: { kind: "subscription" },
+  };
+  expect(describeModelProviderAuth(provider)?.label).toBe("Subscription");
+  expect(
+    describeModelProviderAuth(provider, {
+      authProfileId: "anthropic:missing",
+      projection: "available-credentials",
+    })?.kind,
+  ).toBe("missing");
+});

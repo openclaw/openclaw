@@ -104,7 +104,7 @@ describe("chat transcript invalidation", () => {
 
   it.each(["ready", "delayed"])(
     "updates settled avatars when only the theme hat changes with a %s palette",
-    (palette) => {
+    async (palette) => {
       const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
       const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
         resolveAvatarHat(id, branding),
@@ -120,7 +120,7 @@ describe("chat transcript invalidation", () => {
       try {
         setCurrentThemeBranding(props.branding);
         rerender();
-        expect(find(container, ".identity-avatar--agent")).not.toBeNull();
+        await waitForSolid(() => expect(find(container, ".identity-avatar--agent")).not.toBeNull());
         expect(find(container, ".identity-avatar__hat")).toBeNull();
         props.branding = branding;
         setCurrentThemeBranding(branding);
@@ -233,6 +233,7 @@ describe("chat transcript invalidation", () => {
     let container: HTMLDivElement;
 
     beforeEach(() => {
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
       vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
       onOpenSidebar.mockClear();
       revokeObjectURL.mockClear();
@@ -269,7 +270,7 @@ describe("chat transcript invalidation", () => {
       await flushDeferredRowPrune();
     }
 
-    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+    it("places mixed user media above text and starts inline playback only on activation", async () => {
       await renderPreview();
       const bubble = find(container, ".chat-bubble--with-images");
       const gallery = bubble?.querySelector(":scope > .chat-message-images");
@@ -277,9 +278,11 @@ describe("chat transcript invalidation", () => {
       expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
       expect(find(container, "video, openclaw-chat-video-player")).toBeNull();
       gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      await waitForSolid(() =>
+        expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
       );
+      expect(find(container, ".chat-video-preview--active")).not.toBeNull();
+      expect(onOpenSidebar).not.toHaveBeenCalled();
     });
 
     it.each(["video", "image"])(
@@ -299,10 +302,11 @@ describe("chat transcript invalidation", () => {
         expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
           HTMLElement,
         );
-        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
-        expect(onOpenSidebar).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        required(container, '.chat-video-preview button[aria-label^="Play:"]').click();
+        await waitForSolid(() =>
+          expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
         );
+        expect(onOpenSidebar).not.toHaveBeenCalled();
       },
     );
 
@@ -338,7 +342,7 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
+  it("keeps explicit destinations stable as history, catalog rows, and sessions change", async () => {
     const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
     const original = {
       role: "assistant",
@@ -356,7 +360,7 @@ describe("chat transcript invalidation", () => {
       "https://github.com/other/project/issues/126",
     ];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
     for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
       const catalogMessage = pane.catalogItemMessage({
         id: type,
@@ -379,7 +383,7 @@ describe("chat transcript invalidation", () => {
     props.sessionKey = "agent:main:another-checkout";
     props.messages = [original];
     rerender();
-    expect(links()).toEqual(expected);
+    await waitForSolid(() => expect(links()).toEqual(expected));
   });
 
   it("does not renormalize projected historical messages", () => {

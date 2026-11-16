@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 
 // Current and shipped dispatcher names. Kept local: tool-search-types pulls session types,
@@ -7,6 +8,15 @@ const TOOL_CALL_DISPLAY_NAMES = new Set(["dispatch_action", "tool_call"]);
 /** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const GEMINI_OPENCLAW_MCP_TOOL_PREFIX = "mcp_openclaw_";
+
+/** Tool search dispatchers carry another tool's call; they are never the work itself. */
+export function isToolCallDispatcherName(name: string | undefined): boolean {
+  return TOOL_CALL_DISPLAY_NAMES.has(
+    stripOpenClawMcpToolPrefix(name ?? "")
+      .trim()
+      .toLowerCase(),
+  );
+}
 
 /** Strips the loopback MCP transport prefix so observers see gateway tool names. */
 export function stripOpenClawMcpToolPrefix(toolName: string): string {
@@ -36,4 +46,19 @@ export function unwrapToolCallForDisplay<Name extends string | undefined>(call: 
     name: id.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/u)?.[1] ?? id,
     args: prototype === Object.prototype || prototype === null ? innerArgs : {},
   };
+}
+
+/** A dispatcher result wraps the called tool's result; present that inner output. */
+export function unwrapToolResultTextForDisplay(text: string): string {
+  const parsed = text.trimStart().startsWith("{") ? safeParseJsonRecord(text) : undefined;
+  const content = asOptionalRecord(parsed?.result)?.content;
+  if (!isRecord(parsed?.tool) || !Array.isArray(content)) {
+    return text;
+  }
+  return content
+    .flatMap((block) => {
+      const item = asOptionalRecord(block);
+      return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+    })
+    .join("\n");
 }

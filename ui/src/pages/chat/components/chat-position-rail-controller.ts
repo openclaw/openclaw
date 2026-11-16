@@ -111,7 +111,7 @@ export function createPositionRail(props: PositionRailParams) {
       return;
     }
     // Native observers supply geometry; offset-only changes read it in the queued frame.
-    const height = scroller.clientHeight;
+    const height = scroller.checkVisibility() ? scroller.clientHeight : 0;
     viewportVisible = height > 0;
     if (!viewportVisible) {
       // Hidden rails retain their mounted window and scroll reserve until they return.
@@ -396,7 +396,8 @@ export function createPositionRail(props: PositionRailParams) {
     if (syncPositionRailVisibility(scrollElement, overflowing) && !overflowing) {
       // Guarded marker callbacks retain this object while the rail is hidden.
       Object.assign(interactionState, initialInteraction());
-      refreshWindow();
+      // A shrinking range can notify us from the transcript's render computation.
+      onSettled(refreshWindow);
     }
     const { state, scheduleLayout: needsLayout } = resolvePositionRailReaderViewport(
       reader,

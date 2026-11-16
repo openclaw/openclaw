@@ -8,7 +8,7 @@ import {
   observeAgentRunActivity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntries,
+  streamSessionEntries,
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -247,13 +247,13 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       const unindexed = corpusEntries.filter(
         (entry) => !indexedPaths.has(this.sessionPathForCorpusEntry(entry)),
       );
-      // Eligibility depends on rendered provenance; retain content for only one bounded group.
+      // Eligibility depends on rendered provenance; the summaries carry it without content.
       for (let start = 0; start < unindexed.length; start += SESSION_INSPECTION_BATCH_SIZE) {
         if (stopped()) {
           return [];
         }
         const batch = unindexed.slice(start, start + SESSION_INSPECTION_BATCH_SIZE);
-        const entries = await buildSessionEntries(
+        const entries = await streamSessionEntries(
           batch.map((entry) => ({
             absPath: entry.sessionFile,
             options: this.buildSessionEntryOptions(entry),

@@ -68,7 +68,7 @@ it("bridges list and read requests without undefined transport fields", async ()
   respond({ sessions: [session("--help")] });
   await expect(list()).resolves.toEqual(nodeError);
   respond({ threadId: "pi-remote", items: [{ type: "invalid", text: "bad" }] });
-  await expect(read()).rejects.toThrow("invalid transcript page");
+  await expect(read()).rejects.toThrow("invalid chat history page");
 
   invoke.mockClear();
   await expect(read("")).rejects.toThrow("cursor is invalid");

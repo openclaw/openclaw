@@ -21,7 +21,11 @@ import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  recordRequesterHandoff,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -40,6 +44,7 @@ import {
 import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
 import {
@@ -529,6 +534,7 @@ function planTerminalCompletion(
     };
   }
   entry.endedReason = completionReason;
+  entry.waitForMessage = undefined;
   if (entry.pauseReason !== undefined) {
     entry.pauseReason = undefined;
   }
@@ -617,6 +623,14 @@ function planTerminalCompletion(
       outcome: entry.execution.outcome,
       terminalReply: entry.completion?.terminalReply,
     };
+  }
+  if (
+    entry.completionTarget === "parent" &&
+    entry.delivery?.status === "pending" &&
+    !entry.delivery.requesterDelivery &&
+    isClaimedByLiveRequesterTurn(entry)
+  ) {
+    recordRequesterHandoff(entry, entry.requesterTurnRunId);
   }
   const mutated = !isDeepStrictEqual(currentEntry, entry);
   return {
