@@ -49,6 +49,36 @@ it("writes directory bundles with restrictive file permissions and byte inventor
   expect(fs.statSync(path.join(outputDir, "nested", "summary.md")).mode & 0o777).toBe(0o600);
 });
 
+it("releases the output directory when a bundle write fails partway", async () => {
+  const outputDir = path.join(tempDir, "bundle");
+  const files = [
+    jsonSupportBundleFile("manifest.json", { ok: true }),
+    textSupportBundleFile("nested/summary.md", "hello"),
+  ];
+  const realWriteFile = fsp.writeFile;
+  const failedWrite = vi
+    .spyOn(fsp, "writeFile")
+    .mockImplementation(async (target, data, options) => {
+      if (String(target).endsWith("summary.md")) {
+        await realWriteFile(target, String(data).slice(0, 3), options);
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      return realWriteFile(target, data, options);
+    });
+  try {
+    await expect(writeSupportBundleDirectory({ outputDir, files })).rejects.toMatchObject({
+      code: "ENOSPC",
+    });
+  } finally {
+    failedWrite.mockRestore();
+  }
+
+  expect(fs.readdirSync(tempDir)).toEqual([]);
+
+  await expect(writeSupportBundleDirectory({ outputDir, files })).resolves.toHaveLength(2);
+  expect(fs.readdirSync(outputDir).sort()).toEqual(["manifest.json", "nested"]);
+});
+
 it("rejects absolute and traversal bundle paths", async () => {
   expect(() => jsonSupportBundleFile("../escape.json", {})).toThrow(/Invalid bundle/u);
   expect(() => textSupportBundleFile("/tmp/escape.txt", "nope")).toThrow(/Invalid bundle/u);

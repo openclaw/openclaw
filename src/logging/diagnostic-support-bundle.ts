@@ -75,16 +75,27 @@ export async function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
 }) {
-  await fsp.mkdir(path.dirname(params.outputDir), { recursive: true, mode: 0o700 });
-  await fsp.mkdir(params.outputDir, { mode: 0o700 });
-  for (const file of params.files) {
-    const filePath = resolveSupportBundleFilePath(params.outputDir, file.path);
-    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    await fsp.writeFile(filePath, file.content, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
+  const outputDir = path.resolve(params.outputDir);
+  const parentDir = path.dirname(outputDir);
+  await fsp.mkdir(parentDir, { recursive: true, mode: 0o700 });
+  // Build in a private sibling generation and publish with one rename: a failed
+  // write must not leave a half-written bundle occupying the requested path.
+  const stagingDir = await fsp.mkdtemp(path.join(parentDir, ".openclaw-support-bundle-"));
+  try {
+    await fsp.chmod(stagingDir, 0o700);
+    for (const file of params.files) {
+      const filePath = resolveSupportBundleFilePath(stagingDir, file.path);
+      await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      await fsp.writeFile(filePath, file.content, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+    }
+    await fsp.rename(stagingDir, outputDir);
+  } catch (error) {
+    await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
   }
   return supportBundleContents(params.files);
 }
