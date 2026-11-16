@@ -109,6 +109,8 @@ import { callGateway } from "../gateway/call.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerAttachCli } from "./attach-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliFailureLines } from "./failure-output.js";
 
 const activeActions = new Set<Promise<void>>();
 function runAttach(...args: string[]) {
@@ -463,5 +465,24 @@ describe("openclaw attach (action)", () => {
   it("surfaces the positional/session conflict as an expected CLI error", async () => {
     const conflict = runAttach("main", "--session", "abc");
     await expect(conflict).rejects.toMatchObject({ name: "ExpectedCliError" });
+  });
+
+  // Regression (#200142): resolveSessionTarget guards run outside runCommandWithRuntime;
+  // without expected-error classification the root renderer hides the composed remedy.
+  it("surfaces the session URL/--url conflict remedy through the terminal renderer", async () => {
+    const error = await runAttach(
+      "https://gw.example/dashboard/main/abc123",
+      "--url",
+      "wss://other.example",
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    const lines = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error,
+      argv: ["node", "openclaw", "attach"],
+      env: {},
+    });
+    expect(lines).toEqual(["pass one target: use either the session URL or --url, not both"]);
   });
 });

@@ -5,6 +5,7 @@ import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ModelsAccountsOptions } from "../commands/models/accounts.js";
 import { inheritOptionFromParent } from "./command-options.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
@@ -583,7 +584,7 @@ export function registerModelsCli(program: Command) {
     )
     .action(async ({ deviceCode, ...opts }: ModelsAuthLoginOptions, command) => {
       if (deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {
-        throw new Error(
+        throwExpectedCliError(
           "--device-code cannot be combined with --method unless method is device-code.",
         );
       }

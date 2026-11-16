@@ -4,6 +4,8 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import { registerModelsCli } from "./models-cli.js";
 import { isModelsPlainMachineOutput } from "./models-output-mode.js";
 import { isCommandJsonOutputMode } from "./program/json-mode.js";
@@ -158,6 +160,30 @@ describe("models cli", () => {
       provider: "openai",
       method: "device-code",
     });
+  });
+
+  // Regression (#200142): the guard fires in the Commander action before
+  // runCommandWithRuntime, so only expected-error classification keeps the root
+  // renderer from collapsing the composed remedy into the generic doctor hint.
+  it("surfaces the --device-code/--method conflict remedy through the terminal renderer", async () => {
+    const error = await runModelsCommand("models auth login --device-code --method password").catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as Error).message).toBe(
+      "--device-code cannot be combined with --method unless method is device-code.",
+    );
+    const lines = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error,
+      argv: ["node", "openclaw", "models", "auth", "login"],
+      env: {},
+    });
+    expect(lines).toEqual([
+      "--device-code cannot be combined with --method unless method is device-code.",
+    ]);
+    expect(mocks.modelsAuthLoginCommand).not.toHaveBeenCalled();
   });
 
   it.each([
