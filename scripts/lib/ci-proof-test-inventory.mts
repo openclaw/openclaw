@@ -3133,6 +3133,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/infra/runtime-worker-url.test.ts",
   "src/infra/session-cost-usage-cache.worker.test.ts",
   "src/infra/session-cost-usage.archive-identity.test.ts",
+  "src/infra/session-cost-usage.test.ts",
   "src/infra/session-delivery-queue-runtime.test.ts",
   "src/infra/sqlite-readonly-inspection-operation.test.ts",
   "src/infra/sqlite-readonly-location.cancellation.test.ts",

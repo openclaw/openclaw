@@ -306,6 +306,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
   ["src/infra/state-migrations.test.ts", 27],
   ["src/infra/sqlite-snapshot.test.ts", 24],
+  ["src/infra/session-cost-usage.test.ts", 10],
   ["src/infra/state-migrations.audit-logs.test.ts", 7],
   // Serial case-cost sums from PR run 37678385185, rounded up. These process
   // suites were packed together at the default weight; imports/setup remain separate.
