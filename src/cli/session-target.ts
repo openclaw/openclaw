@@ -20,6 +20,7 @@ import {
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { parseSessionTargetInput, SessionTargetParseError } from "./session-ref.js";
 
 export type SessionTargetGateway = Pick<
@@ -150,7 +151,7 @@ export async function resolveSessionTarget(params: {
   const parsed = parseSessionTargetInput(params.raw);
   const targetUrl = parsed.kind === "url" ? `${parsed.origin}${parsed.basePath}` : undefined;
   if (targetUrl && params.gateway?.url) {
-    throw new Error("pass one target: use either the session URL or --url, not both");
+    throwExpectedCliError("pass one target: use either the session URL or --url, not both");
   }
   const gateway: SessionTargetGateway = {
     ...params.gateway,
@@ -210,7 +211,7 @@ export async function resolveSessionTarget(params: {
     }));
     const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
     const width = Math.max("SESSION".length, Math.min(40, nameWidth));
-    throw new Error(
+    return throwExpectedCliError(
       [
         "Session reference is ambiguous:",
         `${"SESSION".padEnd(width)}  ID PREFIX`,
@@ -219,5 +220,5 @@ export async function resolveSessionTarget(params: {
       ].join("\n"),
     );
   }
-  throw new Error(`No session found.\n${sessionsListHint(gateway.url)}`);
+  return throwExpectedCliError(`No session found.\n${sessionsListHint(gateway.url)}`);
 }

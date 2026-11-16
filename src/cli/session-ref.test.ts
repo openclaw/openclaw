@@ -9,6 +9,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: callGatewayMock };
 });
 
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   parseBareSessionInvocation,
   parseSessionTargetInput,
@@ -191,6 +192,11 @@ describe("session target resolution", () => {
   ])("rejects inconsistent resolved ownership %s/%s", async (key, agentId) => {
     callGatewayMock.mockResolvedValue({ ok: true, key, agentId });
 
+    // Internal-invariant failure, not an operator remedy; must stay a plain
+    // Error rather than an ExpectedCliError.
+    await expect(resolveSessionTarget({ raw: "agent:ops:main" })).rejects.not.toBeInstanceOf(
+      ExpectedCliError,
+    );
     await expect(resolveSessionTarget({ raw: "agent:ops:main" })).rejects.toThrow(
       "Gateway returned a session without a consistent agent identity",
     );
@@ -205,13 +211,13 @@ describe("session target resolution", () => {
     });
   });
 
-  it("rejects a second explicit URL", async () => {
-    await expect(
-      resolveSessionTarget({
-        raw: "https://gateway.example/dashboard/main/movies-a1166b81",
-        gateway: { url: "wss://other.example" },
-      }),
-    ).rejects.toThrow("pass one target");
+  it("rejects a second explicit URL as an expected CLI error", async () => {
+    const error = await resolveSessionTarget({
+      raw: "https://gateway.example/dashboard/main/movies-a1166b81",
+      gateway: { url: "wss://other.example" },
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as Error).message).toContain("pass one target");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -224,7 +230,11 @@ describe("session target resolution", () => {
       ].map(([key, displayName]) => ({ key, displayName })),
     });
 
-    await expect(resolveSessionTarget({ raw: "12345678" })).rejects.toThrow(
+    const error = await resolveSessionTarget({ raw: "12345678" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as Error).message).toMatch(
       /Alpha\s+123456780aaa4000[\s\S]*Beta\s+123456780bbb4000/u,
     );
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
@@ -236,6 +246,13 @@ describe("session target resolution", () => {
     const error = await resolveRemote().catch(String);
     expect(error).toContain("that gateway's Control UI (https://gateway.example)");
     expect(error).not.toContain("sessions list --url");
+  });
+
+  it("classifies a resolved-but-not-found session as an expected CLI error", async () => {
+    callGatewayMock.mockResolvedValue({ ok: false });
+    const error = await resolveRemote().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as Error).message).toContain("No session found");
   });
 
   it.each([
