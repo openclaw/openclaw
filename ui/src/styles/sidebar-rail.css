@@ -52,9 +52,12 @@
   --sidebar-panel-radius: calc(22px * var(--openclaw-corner-radius-scale));
   min-width: 0;
   overflow: hidden;
+  --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
   background: var(--sidebar-bg);
-  border: 1px solid color-mix(in srgb, var(--text) 4.5%, transparent);
-  border-inline-end: 0;
+  /* The hairline is drawn inside the panel so it moves nothing; the page side has none. */
+  box-shadow:
+    inset 1px 1px 0 var(--sidebar-panel-hairline),
+    inset 0 -1px 0 var(--sidebar-panel-hairline);
   border-start-start-radius: var(--sidebar-panel-radius);
   border-end-start-radius: var(--sidebar-panel-radius);
   corner-shape: superellipse(1.5);
