@@ -58,10 +58,7 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
 function decodeLinkHref(href: string): string {
   try {
     // "%25" stays encoded: "%2541" (a literal "%41") and "%41" ("A") are different targets.
-    const decoded = href
-      .split(/%25/i)
-      .map((part) => decodeURI(part))
-      .join("%25");
+    const decoded = decodeURI(href.replace(/%25/gi, "%2525"));
     // A decoded space or control would no longer read as one URL, so keep the suffix.
     return /[\s\p{Cc}]/u.test(decoded) ? href : decoded;
   } catch {
@@ -90,8 +87,9 @@ function renderSignalText(ir: MarkdownIR): SignalFormattedText {
         const preserveSuffixCase = /^https?:\/\//i.test(href);
         const comparableHref = href.replace(/^mailto:/, "");
         const normalizedLabel = normalize(label, preserveSuffixCase);
-        return [comparableHref, decodeLinkHref(comparableHref)].every(
-          (candidate) => normalize(candidate, preserveSuffixCase) !== normalizedLabel,
+        return (
+          normalize(comparableHref, preserveSuffixCase) !== normalizedLabel &&
+          normalize(decodeLinkHref(comparableHref), preserveSuffixCase) !== normalizedLabel
         );
       }),
     },
