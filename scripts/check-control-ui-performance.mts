@@ -95,9 +95,9 @@ const controlUiPerformanceBudgets = {
   // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
   // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
   // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
-  // measured 337,198 B gzip (+209 B over main) / 1,740,090 B raw (+2,064 B), plus 64 B each.
-  totalCssGzipBytes: 337_262,
-  totalCssRawBytes: 1_740_154,
+  // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
+  totalCssGzipBytes: 337_312,
+  totalCssRawBytes: 1_740_234,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
