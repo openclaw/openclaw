@@ -26,6 +26,7 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -44,6 +45,7 @@ import type {
   GatewayRequestFunction,
 } from "./call-options.js";
 import { ensureGatewaySupportsRequiredFeatures } from "./call-required-features.js";
+import { isReadOnlyGatewayCliCall } from "./cli-read-policy.js";
 import {
   ensureExplicitGatewayAuth,
   GatewayExplicitAuthRequiredError,
@@ -928,21 +930,32 @@ async function callGatewayWithScopeEscalation<T>(
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(
-  opts: CallGatewayCliOptions,
+  input: CallGatewayCliOptions,
 ): Promise<T> {
-  assertGatewayCliMessageContext(opts.method, opts.params);
-  if (Array.isArray(opts.scopes)) {
-    return await callGatewayWithScopes(opts, opts.scopes);
+  assertGatewayCliMessageContext(input.method, input.params);
+  // Only finite read calls borrow the command lifetime. Explicit signals and
+  // multi-request/stream owners keep their existing cancellation contracts.
+  const signal =
+    !input.signal &&
+    !input.onAccepted &&
+    !input.onSignalAbort &&
+    !input.onResponse &&
+    isReadOnlyGatewayCliCall(input.method, input.params)
+      ? getAsyncWorkSignal()
+      : undefined;
+  const opts = signal ? { ...input, signal } : input;
+  if (Array.isArray(input.scopes)) {
+    return await callGatewayWithScopes(opts, input.scopes);
   }
   const {
     CLI_DEFAULT_OPERATOR_SCOPES,
     isGatewayMethodClassified,
     resolveLeastPrivilegeOperatorScopesForMethod,
   } = await import("./method-scopes.js");
-  const scopes = isGatewayMethodClassified(opts.method)
-    ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
+  const scopes = isGatewayMethodClassified(input.method)
+    ? resolveLeastPrivilegeOperatorScopesForMethod(input.method, input.params)
     : CLI_DEFAULT_OPERATOR_SCOPES;
-  if (opts.method === "chat.abort" || opts.method === "sessions.abort") {
+  if (input.method === "chat.abort" || input.method === "sessions.abort") {
     return await callGatewayWithScopes(opts, scopes, true);
   }
   return await callGatewayWithScopeEscalation(opts, scopes);

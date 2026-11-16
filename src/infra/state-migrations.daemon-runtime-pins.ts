@@ -27,7 +27,7 @@ import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-context.js";
 
 function writeDaemonRuntimePinMigrationReceipt(
   db: DatabaseSync,

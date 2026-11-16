@@ -29,7 +29,7 @@ import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
-  EXEC_RETENTION_CAP_NOTE,
+  renderExecDroppedOutputNote,
   appendExecTimeoutRetryGuidance,
   describeExitWake,
   hasExitWake,
@@ -107,10 +107,6 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
-}
-
-function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
-  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -224,7 +220,7 @@ function finishedPollResult(
       : "[earlier output is omitted from this poll; omitted output is no longer available through action=log]\n\n"
     : "";
   const text = appendExecTimeoutRetryGuidance(
-    retentionCapNote(finished) +
+    renderExecDroppedOutputNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
       `\n\n${finishedSessionText(finished)}`,
@@ -478,7 +474,7 @@ export function createProcessTool(
             const delivery = prepareSessionPoll(scopedSession, pollScope);
             const { output: unreadOutput, outputDropped } = delivery;
             const output = unreadOutput.trim();
-            const aggregateOutputNote = retentionCapNote(scopedSession);
+            const aggregateOutputNote = renderExecDroppedOutputNote(scopedSession);
             const retainedOutputNote = outputDropped
               ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
               : "";
@@ -527,7 +523,7 @@ export function createProcessTool(
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
             const ended = record.exited && record.endedAt !== undefined;
             const text =
-              retentionCapNote(record) +
+              renderExecDroppedOutputNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
               (ended ? `\n\n${finishedSessionText(record)}` : "");
