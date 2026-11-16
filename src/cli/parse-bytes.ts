@@ -3,12 +3,16 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 const UNIT_MULTIPLIERS: Record<string, number> = {
   b: 1,
   kb: 1024,
+  kib: 1024,
   k: 1024,
   mb: 1024 ** 2,
+  mib: 1024 ** 2,
   m: 1024 ** 2,
   gb: 1024 ** 3,
+  gib: 1024 ** 3,
   g: 1024 ** 3,
   tb: 1024 ** 4,
+  tib: 1024 ** 4,
   t: 1024 ** 4,
 };
 
@@ -17,7 +21,7 @@ function invalidByteSize(raw: string, reason?: string): Error {
   const prefix = reason
     ? `Invalid byte size (${reason}): ${value}.`
     : `Invalid byte size: ${value}.`;
-  return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
+  return new Error(`${prefix} Use values like 512kb, 10MiB, 1gb, or 500.`);
 }
 
 export function parseByteSize(raw: string): number {
