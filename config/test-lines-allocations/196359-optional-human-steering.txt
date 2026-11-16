@@ -1,0 +1,4 @@
+# PR #196359: exact 50-line caller/controller regression for optional human steering.
+# Retains required-human and room/internal controls; no shared baseline increase.
+# Required by the original branch's global test-line ceiling; current policy allows 400.
+50
