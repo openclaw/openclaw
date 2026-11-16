@@ -128,6 +128,8 @@ export type ToolHandlerContext = {
   abortSignal?: AbortSignal;
   /** Consult tool policy in effect for this call when the consult starts. */
   toolPolicy?: RealtimeVoiceAgentConsultToolPolicy;
+  /** True after this call's keypad PIN was accepted; elevated consults use a call-scoped session. */
+  elevated?: boolean;
 };
 
 export type ProviderWebhookParseResult = {
