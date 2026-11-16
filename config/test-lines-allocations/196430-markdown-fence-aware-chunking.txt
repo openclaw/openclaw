@@ -1,2 +1,2 @@
 # Exact net test-line growth from PR #196430 (fence-aware Tlon outbound chunking) that left main over the ceiling.
-114
+112
