@@ -22,7 +22,7 @@ const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTrans
 // V8's default young generation lets each idle reader keep ~60 MiB of nursery.
 export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
   maxOldGenerationSizeMb: 512,
-  maxYoungGenerationSizeMb: 32,
+  maxYoungGenerationSizeMb: 16,
 };
 
 export function createSessionTranscriptHistoryPool(

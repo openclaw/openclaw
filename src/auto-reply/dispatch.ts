@@ -39,9 +39,11 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   type ReplyDispatchBeforeDeliver,
   type ReplyDispatcherOptions,
-  type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
-import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import type {
+  ReplyDispatcher,
+  ReplyDispatcherWithTypingOptions,
+} from "./reply/reply-dispatcher.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   resolveReplyOperationRunState,

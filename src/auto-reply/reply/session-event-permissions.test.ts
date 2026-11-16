@@ -168,6 +168,7 @@ async function enqueueGuardedCliWatchdog(params: {
       }),
     }),
     cancel: () => {},
+    release: async () => undefined,
     cancelScope: () => {},
   });
   try {
@@ -250,6 +251,7 @@ it.for([
   "retained-config-downgrade",
   "retained-channel-config-downgrade",
   "unrelated-agent-config",
+  "unrelated-session-maintenance",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -291,7 +293,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
-      const unrelatedConfig = change === "unrelated-agent-config";
+      const unrelatedConfig = change.startsWith("unrelated-");
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -339,7 +341,19 @@ it.for([
             if (unrelatedConfig) {
               setRuntimeConfigSnapshot({
                 ...config,
-                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+                ...(change === "unrelated-session-maintenance"
+                  ? {
+                      session: {
+                        ...config.session,
+                        maintenance: { coldStorage: { enabled: true } },
+                      },
+                    }
+                  : {
+                      agents: {
+                        ...config.agents,
+                        entries: { ...config.agents?.entries, other: {} },
+                      },
+                    }),
               });
             }
             const write = tools.find((tool) => tool.name === "write");

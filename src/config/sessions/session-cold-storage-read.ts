@@ -1,16 +1,14 @@
-import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 
 /** History callers retain their prepared physical target and read owner through restoration. */
 export type SessionColdReadPreparation = {
   target: ResolvedTranscriptReadScope;
   acceptSourceValidation?: (validation: SessionSourceValidation) => void;
-  readMetadata: (
-    phase: "initial" | "queued",
-  ) => Promise<Omit<SessionColdArchive, "archive_blob"> | undefined>;
+  readMetadata: (phase: "initial" | "queued") => Promise<SessionColdMetadataWorkerResult>;
 };
 
 /** Keep metadata and restored reads on the caller's already-retained history owner. */
@@ -19,9 +17,10 @@ export function readRestoredSessionTranscriptInWorker<T>(
     scope: SessionTranscriptReadScope;
     resolved: ResolvedTranscriptReadScope;
     owner: {
-      readColdMetadata(input: { sessionId: string; env: NodeJS.ProcessEnv }): Promise<{
-        archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
-      }>;
+      readColdMetadata(input: {
+        sessionId: string;
+        env: NodeJS.ProcessEnv;
+      }): Promise<SessionColdMetadataWorkerResult>;
     };
     assertCurrent: () => void;
   },
@@ -37,7 +36,7 @@ export function readRestoredSessionTranscriptInWorker<T>(
           env: source.scope.env ?? {},
         });
         source.assertCurrent();
-        return metadata.archive;
+        return metadata;
       },
     },
   });

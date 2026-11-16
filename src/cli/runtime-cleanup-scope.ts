@@ -4,6 +4,7 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { closePostgresPool } from "../infra/postgres-sync/pool-state.js";
 import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -75,7 +76,7 @@ export async function withCliCommandCleanup<T>(
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   const scheduler = new GatewayScheduler();
   sdkResourceHost.bindScheduler(scheduler);
   pluginResources.adopt({ release: () => sdkResourceHost.close() });

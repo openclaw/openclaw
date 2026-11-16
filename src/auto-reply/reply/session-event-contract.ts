@@ -9,6 +9,7 @@ import type {
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunPayload,
 } from "../../agents/embedded-agent-runner/result.types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ResolvedToolPromptFinalizer } from "../../agents/resolved-tool-prompt.types.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -19,6 +20,7 @@ import type {
   CronRunTelemetry,
   CronStoredJob,
 } from "../../cron/types.js";
+import type { AgentEventPayload } from "../../infra/agent-events.js";
 import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
 import type {
   SourceDeliveryOutcome,
@@ -46,6 +48,8 @@ export type SessionEventOutcome = {
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
+  /** Structured provider cause from the selected, settled runtime attempt. */
+  errorReason?: FailoverReason;
   /** Admission policy decides whether a durable producer may retry this refusal. */
   retryable?: boolean;
   deliveryAttempted?: boolean;
@@ -199,6 +203,8 @@ export type SessionEventExecution = {
     reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted",
   ) => void;
   onStarted: (runId: string) => void;
+  /** Final runtime event, after fallback selection and terminal overrides. */
+  onTerminalEvent?: (event: Omit<AgentEventPayload, "seq" | "ts">) => void;
   onTerminal: (
     runId: string,
     outcome: "completed" | "failed" | "aborted",

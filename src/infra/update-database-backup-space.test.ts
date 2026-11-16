@@ -132,7 +132,7 @@ it.each([
     });
     expect(preflight.exitCode).toBe(wal ? 0 : 1);
     if (!wal) {
-      expect(preflight.stderrTail).toContain("snapshot-capacity-insufficient");
+      expect(preflight.stderrTail).toMatch(/^Update refused: /u);
     }
     await f.unchanged();
     // Preflight reserves no space: admission must precede even a WAL checkpoint.

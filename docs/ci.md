@@ -160,8 +160,10 @@ complete discovery, runtime ownership, and first-shard WebKit selection.
 Full-inventory two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
-Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
-matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
+Compact mocked Control UI E2E uses nine 16-class jobs with four workers each,
+matching the four observed CPUs per runner. Six shards reached the 20-minute test
+step on hosted AMD EPYC 7763 runners, which run about 1.36 times slower than plan;
+nine leave margin.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
 The Mantis chat recording runs in its dedicated evidence workflow and full release

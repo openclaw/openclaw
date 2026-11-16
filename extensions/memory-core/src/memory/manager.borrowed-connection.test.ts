@@ -256,16 +256,24 @@ describe("memory manager agent database lifecycle", () => {
     const sourcePath = source.status().dbPath;
     const queued = createDeferred<void>();
     const writer = await reservePublishedWriter(() => closeOpenClawAgentDatabasesForTest());
+    const terminalSignals = new Set<AbortSignal>();
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
         const store = await open(...args);
-        const prepare = store.prepare.bind(store);
-        vi.spyOn(store, "prepare").mockImplementation((...prepareArgs) => {
-          const result = prepare(...prepareArgs);
-          queued.resolve();
-          return result;
-        });
+        if (
+          args[0].path === sourcePath &&
+          args[2].moduleUrl.href ===
+            resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
+        ) {
+          const prepare = store.prepare.bind(store);
+          vi.spyOn(store, "prepare").mockImplementation((...prepareArgs) => {
+            const result = prepare(...prepareArgs);
+            terminalSignals.add(store.terminalSignal);
+            queued.resolve();
+            return result;
+          });
+        }
         return store;
       },
     );
@@ -281,7 +289,7 @@ describe("memory manager agent database lifecycle", () => {
     try {
       await Promise.race([queued.promise, creating]);
       writer.release();
-      await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
+      await creating.catch(() => undefined);
       expect(
         prepare.mock.contexts.filter(
           (database) =>
@@ -290,6 +298,11 @@ describe("memory manager agent database lifecycle", () => {
             database.location() === sourcePath,
         ),
       ).toEqual([]);
+      expect(terminalSignals.size).toBe(1);
+      const [terminalSignal] = terminalSignals;
+      expect(terminalSignal?.aborted).toBe(true);
+      expect(terminalSignal?.reason).toBeInstanceOf(Error);
+      await expect(creating).rejects.toBe(terminalSignal?.reason);
     } finally {
       writer.release();
       await Promise.allSettled([writer.done, creating]);

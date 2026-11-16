@@ -65,17 +65,18 @@ export function inspectPluginCaptureSource(
   return { real, directory: acquirePluginSource(() => fs.statSync(real), !prepared).isDirectory() };
 }
 
+/** Selected directory traversal shares cycle detection with synchronous and cooperative capture. */
 export function createPluginSourceDirectoryCapture(
-  captureFile: (source: string, ancestors: Set<string>) => void,
+  captureFile: (source: string, ancestors: Set<string>) => Generator<void, void, void>,
 ) {
   const scannedDirectories = new Set<string>();
-  return (
+  return function* (
     source: string,
     real: string,
     target: string,
     directoryAncestors: Set<string> | undefined,
     originalSource: boolean,
-  ) => {
+  ): Generator<void, void, void> {
     if (directoryAncestors?.has(real)) {
       throw createPluginSourceValidationError(
         "Standalone plugin input contains a directory cycle",
@@ -91,7 +92,7 @@ export function createPluginSourceDirectoryCapture(
         originalSource,
       ).toSorted()) {
         if (isPluginSourceEntry(name)) {
-          captureFile(path.join(source, name), ancestors);
+          yield* captureFile(path.join(source, name), ancestors);
         }
       }
       ancestors.delete(real);

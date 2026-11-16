@@ -20,9 +20,16 @@
  *
  * Without --native-image container I/O is the simulated engine boundary: frozen
  * intervals are owner pause requests. Native Docker mounts the same projection,
- * executes guest shell calls, and measures heartbeat gaps. Neither qualifies btrfs.
+ * executes guest shell calls, and measures heartbeat gaps. For native Linux/btrfs,
+ * place source, fixture and temporary roots there and select --native-engine podman.
+ * Nested Podman uses no guest resource limits; guest cgroup CPU is reported unavailable.
  * Git, agent action, authority, workspace storage, and reconciliation are real.
  * Uses synthetic state with no model or external GitHub calls.
+ * An optional fixture/state/agents tree from team-shape-fixture is cloned before
+ * fixture admission, outside timing. Reports exclusive owner phases by paused state.
+ * Seed it with scripts/perf/team-shape-fixture.ts --state-dir <fixture>/state
+ * --sessions 10000 --runs 0 --approvals 0 --cron 0 --projects 0 --transcript-mib 12288
+ * using node --import ./scripts/tsx.mjs; wait for completion before any arm.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -48,16 +55,19 @@ const { values } = parseArgs({
     "history-mib": { type: "string", default: "512" },
     allocation: { type: "boolean", default: false },
     "native-image": { type: "string" },
+    "native-engine": { type: "string", default: "docker" },
   },
 });
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const testPath = "src/gateway/github-pr-workspace-preparation.test.ts";
 const supportPath = "src/gateway/github-pr-workspace-preparation.test-support.ts";
 const gitSupportPath = "src/gateway/github-publication-git.test-support.ts";
+const harnessPath = "src/gateway/github-publication.test-support.ts";
 const scriptPath = "scripts/perf/github-publication-pause-measure.ts";
 const files = Number(values.files);
 const fileBytes = Number(values["file-bytes"]);
 const historyMiB = Number(values["history-mib"]);
+assert(["docker", "podman"].includes(values["native-engine"]!));
 for (const value of [files, fileBytes, historyMiB]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
@@ -104,8 +114,9 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
-import { it, expect, onTestFinished } from "vitest";
+import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
+import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -118,10 +129,11 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const f = await fixture({ fork: true });
   console.log("publication-pause: workspace ready");
   const nativeImage = process.env.OPENCLAW_PUBLICATION_PAUSE_NATIVE_IMAGE;
+  const nativeEngine = process.env.OPENCLAW_PUBLICATION_PAUSE_NATIVE_ENGINE ?? "docker";
   const nativeName = process.env.OPENCLAW_PUBLICATION_PAUSE_NATIVE_NAME!;
   const docker = (args: string[], input?: string | Buffer, allowFailure = false) =>
     new Promise<{ code: number; stdout: string; stderr: string }>((resolve, reject) => {
-      const child = execFile("docker", args, { encoding: "utf8", maxBuffer: 16 * 1024 ** 2 }, (error, stdout, stderr) => {
+      const child = execFile(nativeEngine, args, { encoding: "utf8", maxBuffer: 16 * 1024 ** 2 }, (error, stdout, stderr) => {
         if (error && !allowFailure) {
           reject(error);
         } else {
@@ -131,7 +143,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
       child.stdin?.end(input);
     });
   if (nativeImage) {
-    await docker(["run", "--detach", "--name", nativeName, "--network=none", "--cap-drop=ALL", "--memory=256m", "--cpus=1", "--env", "GIT_AUTHOR_NAME=Fixture", "--env", "GIT_COMMITTER_NAME=Fixture", "--env", "GIT_AUTHOR_EMAIL=fixture@example.test", "--env", "GIT_COMMITTER_EMAIL=fixture@example.test", "--mount", "type=bind,src=" + f.projection + ",dst=" + f.projection, "--workdir", f.projection, nativeImage, "node", "-e", "const fs=require('fs');setInterval(()=>fs.appendFileSync('.git/pause-proof-heartbeat.jsonl',String(Date.now())+'\\n'),25)"]);
+    await docker(["run", "--detach", "--name", nativeName, "--network=none", "--cap-drop=ALL", ...(nativeEngine === "docker" ? ["--memory=256m", "--cpus=1"] : []), "--env", "GIT_AUTHOR_NAME=Fixture", "--env", "GIT_COMMITTER_NAME=Fixture", "--env", "GIT_AUTHOR_EMAIL=fixture@example.test", "--env", "GIT_COMMITTER_EMAIL=fixture@example.test", "--mount", "type=bind,src=" + f.projection + ",dst=" + f.projection, "--workdir", f.projection, nativeImage, "node", "-e", "const fs=require('fs');setInterval(()=>fs.appendFileSync('.git/pause-proof-heartbeat.jsonl',String(Date.now())+'\\n'),25)"]);
     onTestFinished(async () => { await docker(["rm", "--force", nativeName]); });
     f.sandbox.backend!.runShellCommand = async ({ script, args, stdin }) => {
       const result = await docker(["exec", "--interactive", "--workdir", f.projection, nativeName, "sh", "-c", script, "sandbox-fixture", ...(args ?? [])], stdin, true);
@@ -156,6 +168,18 @@ it("measures immutable object acquisition beside a live guest", async () => {
   console.log("publication-pause: upstream history ready");
   const fetched: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
   const pauses: { start: number; end?: number }[] = [];
+  const phases: { phase: string; at: number; paused: boolean }[] = [];
+  let phase = "operation";
+  const mark = (next = phase) => {
+    phase = next;
+    phases.push({ phase, at: performance.now(), paused: runtime.isPaused() });
+  };
+  const projectionRun = projectionOperation.runLocalWorkspaceProjection;
+  using projectionSpy = vi.spyOn(projectionOperation, "runLocalWorkspaceProjection");
+  projectionSpy.mockImplementation((owner, store, run, options = {}) => projectionRun(owner, store, run, {
+    ...options,
+    onPhase: (next) => { mark(next); options.onPhase?.(next); },
+  }));
   let currentPause: { start: number; end?: number } | undefined;
   const engineCall = engine.execContainer.getMockImplementation()!;
   engine.execContainer.mockImplementation(async (selected, args, options) => {
@@ -165,6 +189,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     }
     const simulated = await engineCall(selected, args, options);
     const result = nativeImage ? await docker(args) : simulated;
+    if (args[0] === "pause" || args[0] === "unpause") mark();
     if (args[0] === "unpause" && currentPause) {
       currentPause.end = performance.now();
       currentPause = undefined;
@@ -192,7 +217,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     return result;
   });
   const allocation = process.env.OPENCLAW_PUBLICATION_PAUSE_ALLOCATION === "1";
-  const guestCpu = async () => nativeImage
+  const guestCpu = async () => nativeImage && nativeEngine === "docker"
     ? Number((await docker(["exec", nativeName, "cat", "/sys/fs/cgroup/cpu.stat"])).stdout.match(/^usage_usec (\d+)$/m)?.[1])
     : null;
   const objectBytesBefore = await bytesUnder(objects);
@@ -206,6 +231,8 @@ it("measures immutable object acquisition beside a live guest", async () => {
     await inspector.post("HeapProfiler.enable");
     await inspector.post("HeapProfiler.startSampling", { samplingInterval: 32768, includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
   }
+  const filesystem = await fs.statfs(f.projection);
+  const agentDatabaseBytes = (await fs.stat(path.join(process.env.OPENCLAW_STATE_DIR!, "agents/main/agent/openclaw-agent.sqlite"))).size;
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   const heapBefore = process.memoryUsage();
@@ -220,6 +247,13 @@ it("measures immutable object acquisition beside a live guest", async () => {
     failure = String(error);
   }
   const ownerMs = performance.now() - started;
+  mark("finished");
+  const phaseMs: Record<string, { running: number; paused: number }> = {};
+  for (let index = 0; index + 1 < phases.length; index++) {
+    const current = phases[index]!;
+    const duration = phases[index + 1]!.at - current.at;
+    (phaseMs[current.phase] ??= { running: 0, paused: 0 })[current.paused ? "paused" : "running"] += duration;
+  }
   const processCpu = process.cpuUsage(cpu);
   const mainCpu = process.threadCpuUsage(threadCpu);
   const heapAfter = process.memoryUsage();
@@ -245,14 +279,14 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const report = {
     fixture: seed,
     qualification: nativeImage
-      ? "Registered action with synthetic GitHub; native Docker guest, Git fetch and workspace owners on macOS bind mount; no btrfs or production database claim"
+      ? "Registered action with synthetic GitHub; native container, Git and workspace owners; filesystem type and synthetic database bytes reported separately"
       : "Registered action with synthetic GitHub and simulated container engine; real Git fetch and workspace owners; local filesystem, no native guest or btrfs claim",
-    nativeImage: nativeImage ?? null,
+    nativeImage: nativeImage ?? null, nativeEngine, filesystemType: filesystem.type, agentDatabaseBytes,
     heartbeatMaxGapMs: heartbeats.length ? heartbeats.reduce((longest, stamp, index) => Math.max(longest, index ? stamp - heartbeats[index - 1]! : 0), 0) : null,
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
-    heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs,
+    heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs, phaseMs,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,
@@ -345,10 +379,27 @@ if (values["freeze-source"] || values["refresh-harness"]) {
       .replace("maxOutputBytes: 256 * 1024,", "maxOutputBytes: options?.maxOutputBytes,"),
   );
   fs.writeFileSync(path.join(destination, testPath), fixtureTest);
+  const harness = fs.readFileSync(path.join(sourceRoot, harnessPath), "utf8");
+  const stateNeedle = '    vi.stubEnv("OPENCLAW_STATE_DIR", root);';
+  assert.equal(harness.split(stateNeedle).length, 2);
+  fs.writeFileSync(
+    path.join(destination, harnessPath),
+    harness.replace(
+      stateNeedle,
+      stateNeedle +
+        String.raw`
+    const seedAgents = path.join(process.env.OPENCLAW_PUBLICATION_PAUSE_FIXTURE!, "state", "agents");
+    if (await fs.stat(seedAgents).then(() => true, () => false)) {
+      await fs.cp(seedAgents, path.join(root, "agents"), { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+    }
+`,
+    ),
+  );
   fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptPath));
   const overlays = [
     supportPath,
     gitSupportPath,
+    harnessPath,
     testPath,
     scriptPath,
     ...(values["source-overlay"] ?? []),
@@ -411,6 +462,7 @@ try {
         OPENCLAW_PUBLICATION_PAUSE_OUTPUT: output,
         OPENCLAW_PUBLICATION_PAUSE_ALLOCATION: values.allocation ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_IMAGE: values["native-image"],
+        OPENCLAW_PUBLICATION_PAUSE_NATIVE_ENGINE: values["native-engine"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_NAME: "openclaw-pause-proof-" + process.pid,
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(output, "vitest-fs-cache"),
       },

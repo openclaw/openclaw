@@ -339,17 +339,17 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("handles URL-only attachments for audio transcription", async () => {
+  it("transcribes URL-only audio outside an unrelated raw-prefix denial", async () => {
     const ctx: MsgContext = {
-      Body: "",
+      SessionKey: "agent:main:whatsapp:direct:fixture",
       media: [{ url: "https://example.com/note.ogg", contentType: " Audio/Ogg; codecs=opus " }],
       ChatType: "direct",
       Surface: "whatsapp",
     };
     const cfg = createGroqAudioConfig({
       scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct", channel: "whatsapp" } }],
+        default: "allow",
+        rules: [{ action: "deny", match: { rawKeyPrefix: "agent:other:", keyPrefix: "agent:" } }],
       },
     });
 

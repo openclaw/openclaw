@@ -403,9 +403,41 @@ The presets are:
 - `operator`: other people's sessions are writable, all agents are allowed, and
   scopes are `operator.read`, `operator.write`, `operator.approvals`,
   `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` runs their sessions' exec and file tools in a per-person
+  sandbox.
 - `viewer`: other people's sessions are viewable, all agents are allowed, and the
   only scope is `operator.sessions.read`. Viewers can read visible conversations,
   but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+For those sessions' exec and file tools, an unavailable sandbox backend or failed
+provisioning is an error, not a fallback to a host or node target. The **Access**
+invite form warns when the selected role requires a sandbox and the configured
+Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
+for setup.
+
+The sandbox requirement does not contain every execution path. Before inviting
+someone you do not trust with the machine, review the
+[sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+
+- Select the [QuickJS Code Mode executor](/tools/code-mode/executors#choose-an-executor);
+  the default Node executor runs cells in the Gateway process.
+- Exclude [CLI backends](/gateway/cli-backends) with the role's
+  [modelPolicy](/gateway/operator-scopes#model-policy); their native tools and
+  sandboxing are separate from session exec and file tools.
+- Keep such roles off worker profiles, which can receive the agent's shared
+  GitHub identity independently of the session sandbox setting.
+- Do not add `operator.write` or `operator.admin` if the person must not invoke
+  commands directly on paired nodes outside a session. The stock guest preset
+  has neither scope; node command policy and approvals still apply.
+
+Also review shared transcripts and Gateway-brokered GitHub publication in that
+exclusions list: a session sandbox does not limit what shared conversations reveal
+or what the shared publication account can do.
 
 Presets are ordinary editable definitions, not reserved names or a hardcoded
 permission ceiling. Custom definitions may include `operator.admin`. A member
@@ -414,6 +446,25 @@ Editing a definition reconnects affected members with current permissions;
 removing one denies that role. Missing presets are installed again on the next
 activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
 clearing a stored profile role with `null` remains allowed.
+
+On **Access**, choose an invite's role from the claw's defined roles. **Operator**
+is selected when it is defined; otherwise the first role alphabetically is selected.
+Each option describes access to other people's sessions, sandbox requirements, and
+administrator access. Roles with `operator.admin` are marked **Administrator access**
+and require confirmation before creating an invite. With no roles defined, add a
+definition in config before inviting anyone; there is no role-definition editor here.
+Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting with a
+letter. Other configured names are shown as unavailable rather than renamed.
+Approving a request grants exactly the role named in its invite.
+
+From an approved owner browser, choose **Change role** on a member, select a defined
+role, and save. The browser signs the membership change with its owner device key.
+The member's devices disconnect and reconnect with the new limits. Members whose
+role was deleted are marked **Blocked** with the missing role's name; choose another
+role to restore access. Members who can load the Access plugin see their own role,
+not other people's access or owner controls. The plugin currently requires
+`operator.read`; session-read-only members, including the Viewer preset, cannot
+open it.
 
 Preset installation never sets or changes `gateway.roles.default` or
 `gateway.roles.assignments`. Without a default, other sign-in methods keep their
@@ -436,9 +487,14 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). It shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
-  approve or deny their request, and remove members. Use an approved owner
+  approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+- **Member names**: an approved member is named from their OpenClaw ID account,
+  or from the part of their email before the `@` when the account reports no
+  name. Their first visit opens a new session, which asks for a name and photo
+  before it offers a composer; they can skip it and set both later in
+  **Settings → Profile**. Both are stored only in this Gateway's profile.
 - **Your devices**, in the account menu: view approved owner browsers and choose
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner

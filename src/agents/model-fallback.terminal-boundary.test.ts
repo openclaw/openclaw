@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureSessionEventConfigPolicy } from "../auto-reply/reply/session-event-policy.js";
+import {
+  SessionDeliveryGenerationRevokedError,
+  SessionDeliveryGenerationUnavailableError,
+} from "../config/sessions/session-delivery-generation-errors.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import {
   decodeSessionTranscriptWorkerReadError,
@@ -109,6 +114,34 @@ function transportedSessionReadFailure() {
   return decodeSessionTranscriptWorkerReadError(failure);
 }
 it.each([
+  [
+    "session event config authority",
+    () => {
+      const policy = captureSessionEventConfigPolicy({}, "main");
+      try {
+        policy.assertCurrent({ tools: { deny: ["exec"] } }, []);
+      } catch (cause) {
+        return new Error("Session target preparation outlived its attempt", {
+          cause: new Error("admitted run authority is no longer active", { cause }),
+        });
+      }
+      throw new Error("Expected policy refusal");
+    },
+    false,
+  ],
+  ...[SessionDeliveryGenerationUnavailableError, SessionDeliveryGenerationRevokedError].map(
+    (Failure) =>
+      [
+        Failure.name,
+        () =>
+          new Error("Session target preparation outlived its attempt", {
+            cause: new Error("admitted run authority is no longer active", {
+              cause: new Failure(),
+            }),
+          }),
+        false,
+      ] as const,
+  ),
   [
     "unscoped preflight",
     () =>

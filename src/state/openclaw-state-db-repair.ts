@@ -36,7 +36,7 @@ import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cr
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import {

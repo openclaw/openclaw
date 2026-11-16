@@ -40,13 +40,24 @@ describe("standalone runtime process build graph", () => {
     ).toEqual(["fixture/shared"]);
   });
 
-  const postgresLazyWorkers = [
-    "state/openclaw-state-lease-heartbeat.worker",
-    "cron/store/read-only.worker",
+  const lazyWorkers = [
+    ...["state/openclaw-state-lease-heartbeat.worker", "cron/store/read-only.worker"].map(
+      (name) => ({
+        name,
+        optional: [
+          "src/state/openclaw-state-db-engine.ts",
+          "src/state/postgres-schema.generated/runtime.ts",
+        ],
+      }),
+    ),
+    {
+      name: "process/supervisor/service-child-group-anchor",
+      optional: ["src/node-host/node-worker-lineage-completion.ts"],
+    },
   ];
-  it.each(postgresLazyWorkers)(
-    "keeps PostgreSQL outside %s static imports",
-    async (name) => {
+  it.each(lazyWorkers)(
+    "keeps optional handlers outside $name static imports",
+    async ({ name, optional }) => {
       const [{ build: buildRuntime }, { default: buildConfigs }] = await Promise.all([
         import("tsdown"),
         import("../../tsdown.config.ts"),
@@ -105,11 +116,7 @@ describe("standalone runtime process build graph", () => {
         };
         const eager = closure(false);
         const reachable = closure(true);
-        const postgres = [
-          "src/state/openclaw-state-db-engine.ts",
-          "src/state/postgres-schema.generated/runtime.ts",
-        ];
-        for (const source of postgres) {
+        for (const source of optional) {
           const owners = chunks.filter((chunk) =>
             Object.entries(chunk.modules).some(
               ([id, module]) =>
@@ -123,7 +130,7 @@ describe("standalone runtime process build graph", () => {
           ).toBe(true);
           expect(
             owners.filter((chunk) => eager.has(chunk.fileName)).map((chunk) => chunk.fileName),
-            `SQLite eagerly loads ${source}`,
+            `${name} eagerly loads ${source}`,
           ).toEqual([]);
         }
       } finally {

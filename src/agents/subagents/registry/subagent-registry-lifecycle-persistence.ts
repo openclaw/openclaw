@@ -51,14 +51,11 @@ export async function commitSubagentLifecycleMutation(
       if (args.mutate(draft, current) === false) {
         return { value: current };
       }
+      const retire = typeof args.retire === "function" ? args.retire(draft) : args.retire;
       return {
         value: draft,
-        postimages: new Map([
-          [
-            draft.runId,
-            (typeof args.retire === "function" ? args.retire(draft) : args.retire) ? null : draft,
-          ],
-        ]),
+        postimages: new Map([[draft.runId, retire ? null : draft]]),
+        terminalRows: retire ? new Map([[draft.runId, draft]]) : undefined,
       };
     },
     {

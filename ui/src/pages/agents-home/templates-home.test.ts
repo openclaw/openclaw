@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import "../../lib/toast-host.tsx";
@@ -20,6 +20,16 @@ import { createDetail } from "./templates-catalog.test-helpers.ts";
 
 beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
+
+/** jsdom has no image decoding; tests decide when catalog artwork becomes ready. */
+function stubImageDecode(decode: () => Promise<void>) {
+  const stub = vi.fn(decode);
+  HTMLImageElement.prototype.decode = stub;
+  onTestFinished(() => {
+    Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
+  });
+  return stub;
+}
 
 describe("Templates discovery", () => {
   it.each([
@@ -344,16 +354,15 @@ describe("Templates discovery", () => {
         packageName: workflowOperator.packageName,
         version: workflowOperator.latestVersion,
       };
-      expect(request).toHaveBeenCalledWith("templates.add.plan", { source });
-
       expect(request.mock.calls.some(([method]) => method === "templates.add.apply")).toBe(false);
       detail.querySelector<HTMLButtonElement>("[data-templates-confirm] button")?.click();
       await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
       expect(request).toHaveBeenCalledWith(
         "templates.add.apply",
-        expect.objectContaining({ source }),
+        { mode: "chat", source, agentId: "workflow-operator" },
         expect.objectContaining({ onSent: expect.any(Function) }),
       );
+      expect(request.mock.calls.some(([method]) => method === "templates.add.plan")).toBe(false);
     },
   );
 
@@ -575,13 +584,23 @@ describe("Templates discovery", () => {
 });
 
 it.each(["card", "detail"])(
-  "shows Template artwork and falls back on an image error in the %s",
+  "shows Template artwork and falls back to the Blobster in the %s",
   async (surface) => {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    const options = { templateIconUrl, templatesEnabled: true };
-    const container = surface === "card" ? createPage(options).page : createDetail(options).detail;
+    stubImageDecode(() => Promise.resolve());
+    const create = (iconUrl?: string) => {
+      const options = { templateIconUrl: iconUrl, templatesEnabled: true };
+      return surface === "card" ? createPage(options).page : createDetail(options).detail;
+    };
     const selector =
       surface === "card" ? ".agents-home__template-art" : ".plugin-catalog-detail__icon";
+    // Only the Blobster fallback has two filled eyes; its stroke takes the container's color.
+    const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
+    const withoutArtwork = create();
+    await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
+    expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+
+    const container = create(templateIconUrl);
     await waitForSolid(() =>
       expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(templateIconUrl),
     );
@@ -590,6 +609,51 @@ it.each(["card", "detail"])(
     expect(image.getAttribute("crossorigin")).toBe("anonymous");
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
-    expect(container.querySelector(`${selector} svg`)).not.toBeNull();
+    expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
   },
 );
+
+it.each(["decoded", "failed"] as const)(
+  "keeps the catalog placeholders until first-screen artwork has %s",
+  async (outcome) => {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
+    const artwork = createDeferredCore();
+    const decode = stubImageDecode(() => artwork.promise);
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
+    const preloaded = decode.mock.contexts[0] as HTMLImageElement;
+    // The preload must share the card image's request mode to reuse its response.
+    expect(preloaded.src).toBe(templateIconUrl);
+    expect(preloaded.crossOrigin).toBe("anonymous");
+    expect(preloaded.referrerPolicy).toBe("no-referrer");
+    await nextTurn();
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    expect(page.querySelectorAll("[data-templates-placeholder]")).not.toHaveLength(0);
+
+    if (outcome === "decoded") {
+      artwork.resolve();
+    } else {
+      artwork.reject(new Error("decode failed"));
+    }
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
+    expect(page.querySelector(".agents-home__template-art img")?.getAttribute("src")).toBe(
+      templateIconUrl,
+    );
+  },
+);
+
+it("stops waiting for slow artwork after the reveal budget", async () => {
+  vi.useFakeTimers();
+  try {
+    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
+    stubImageDecode(() => new Promise<void>(() => {}));
+    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(page.querySelector("[data-templates-entry]")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+  } finally {
+    vi.useRealTimers();
+  }
+});
