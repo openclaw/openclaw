@@ -1,7 +1,7 @@
 /** Assertions for update outcomes and persisted source metadata. */
 import { expect } from "vitest";
 
-export function expectRecordFields(
+export function expectUpdateFields(
   actual: Record<string, unknown> | undefined,
   expected: Record<string, unknown>,
 ) {
