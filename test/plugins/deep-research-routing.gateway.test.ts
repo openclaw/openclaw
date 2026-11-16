@@ -59,6 +59,8 @@ import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-sing
 import { setCanonicalUserProfileRole } from "../../src/state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
+const compareJobIds = (left: string, right: string) => left.localeCompare(right);
+
 // Drain global owners only after withOpenClawTestState closes scoped writers/leases.
 afterEach(() => drainGlobalSingletonLifecycleState());
 
@@ -841,9 +843,9 @@ it("admits browser research through the real Gateway session gate, recovers acce
       expect(retainedRead[1].job.report).toBe("Retained browser-started report");
       const retainedList = await invoke("list");
       expect(retainedList[1].incarnation).toBe(input.incarnation);
-      expect(retainedList[1].jobs.map((job: { jobId: string }) => job.jobId).toSorted()).toEqual(
-        [jobId, pausedJobId, modelJobId].toSorted(),
-      );
+      expect(
+        retainedList[1].jobs.map((job: { jobId: string }) => job.jobId).toSorted(compareJobIds),
+      ).toEqual([jobId, pausedJobId, modelJobId].toSorted(compareJobIds));
       const replayedStart = await invoke("start", input);
       expect(replayedStart[0], JSON.stringify(replayedStart)).toBe(true);
       expect(replayedStart[1].job.jobId).toBe(jobId);
@@ -888,8 +890,10 @@ it("admits browser research through the real Gateway session gate, recovers acce
       await clock.advanceBy(10_000);
       expect(provider).toHaveBeenCalledTimes(5);
       expect(
-        (await invoke("list"))[1].jobs.map((job: { jobId: string }) => job.jobId).toSorted(),
-      ).toEqual([jobId, pausedJobId, modelJobId, currentJobId].toSorted());
+        (await invoke("list"))[1].jobs
+          .map((job: { jobId: string }) => job.jobId)
+          .toSorted(compareJobIds),
+      ).toEqual([jobId, pausedJobId, modelJobId, currentJobId].toSorted(compareJobIds));
       const replacement = await patchSessionEntryCore(scope, () => ({
         sessionId: "ui-reset-incarnation",
         lifecycleRevision: "reset",
