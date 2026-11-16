@@ -367,7 +367,7 @@ export async function preparePostgresClientCredentials(
       );
     const result = prepared
       ? await (
-          await import("../infra/update-doctor-migration-attribution.js")
+          await import("../infra/update-doctor-migration-context.js")
         ).runUpdateSqliteMigrationAsync(prepared.custody.database, prepared.custody.path, recover, {
           retainExclusive: true,
         })
