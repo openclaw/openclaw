@@ -92,6 +92,15 @@ it.each([
   );
 });
 
+it("keeps a failed condition check's unfired trigger through persisted history", () => {
+  const entry = cronRunLogEntryFromEvent(
+    { jobId: BASE.jobId, action: "finished", status: "error", error: "boom", triggerFired: false },
+    100,
+    undefined,
+  );
+  expect(cronRunRecordToRunLogEntry(recordFromEntry(entry))?.triggerFired).toBe(false);
+});
+
 it("keeps quiet-trigger recovery detail out of run history", () => {
   const record = recordFromEntry({ ...BASE, status: "ok" });
   const evaluation = { fired: false, stateChanged: true, state: { ready: false } } as const;

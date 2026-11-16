@@ -360,7 +360,7 @@ function createDeadlineHook(packageRoot, artifactRoot) {
   fs.writeFileSync(
     output,
     `
-import { registerHooks } from 'node:module';
+import nodeModule from 'node:module';
 import fs from 'node:fs';
 const update = process.argv.indexOf('update');
 if (update >= 2 && process.argv[update + 1] === 'repair') {
@@ -382,7 +382,7 @@ if (update >= 2 && process.argv[update + 1] === 'repair') {
       throw error;
     }
   };
-  registerHooks({ load(url, context, nextLoad) {
+  nodeModule.registerHooks({ load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
     if (url !== ${JSON.stringify(plugins[0].url)}) return loaded;
     const source = typeof loaded.source === 'string' ? loaded.source : Buffer.from(loaded.source).toString('utf8');

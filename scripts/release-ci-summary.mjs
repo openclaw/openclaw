@@ -2516,11 +2516,12 @@ async function validateStrictChildRun({
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion });
+  const targetSha = parentEvidence.manifest.targetSha;
+  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion, targetSha });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion)
+    !terminalPolicyPass(policyChild, targetVersion, targetSha)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -3303,6 +3304,13 @@ export async function validateReleaseRunEvidence(
     !isDeepStrictEqual(rootEvidence.manifestJson.waivers ?? [], sortReleaseJsonValueKeys(waivers))
   ) {
     throw new Error("release manifest waivers differ from checked-in release tooling policy");
+  }
+  // Authenticate root failures against their own candidate above, then enforce
+  // the grant's destination binding even when changelog-only reuse is valid.
+  const destinationTargetSha =
+    reuseRequest?.targetSha ?? expectedTargetSha ?? currentEvidence.manifest.targetSha;
+  if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
+    throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(

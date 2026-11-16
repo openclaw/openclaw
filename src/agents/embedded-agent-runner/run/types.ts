@@ -109,6 +109,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Resume an admitted turn's history without re-admitting its original input after steering. */
+  replayCurrentTranscript?: true;
   /** Set only by prompt admission after validating an already-delivered input. */
   inputAlreadyDelivered?: true;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */

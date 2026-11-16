@@ -204,7 +204,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   );
   const admitted = rendered.split("\n").filter((line) => line.includes('{index="'));
   const count = (name: string) => admitted.filter((line) => line.startsWith(`${name}{`)).length;
-  expect(admitted).toHaveLength(16384);
+  expect(admitted).toHaveLength(16576);
   for (const name of families) {
     const size = count(name);
     expect(size).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
@@ -224,7 +224,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   const rebuilt = store.render().toString();
   expect(rebuilt).not.toContain(`${competing}{index="late"}`);
   expect(samples(rebuilt, `${late}{`)).toHaveLength(32);
-  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16384);
+  expect(rebuilt.split("\n").filter((line) => line.includes('{index="'))).toHaveLength(16576);
   store.reset();
   expect(store.render().toString()).toBe("");
   for (let index = 0; index < 128; index++) {
