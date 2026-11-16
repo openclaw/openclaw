@@ -29,6 +29,16 @@ it.each(["token_redacted_config", "password_redacted_config"])(
 );
 
 it.each<[Partial<MessageParams>, string, boolean?, string?]>([
+  [
+    {
+      authMode: "trusted-proxy",
+      authProvided: "none",
+      reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+      client: { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+    },
+    "unauthorized: trusted proxy header missing; check Cloudflare Access or verified Tailscale Serve UI auth",
+    true,
+  ],
   [{ authProvided: "bootstrap-token", reason: "bootstrap_token_invalid" }, setupRejected, true],
   [{ authProvided: "bootstrap-token" }, setupRejected, true],
   [
@@ -66,7 +76,12 @@ it.each<[Partial<MessageParams>, string, boolean?, string?]>([
   ],
   [
     nodeRejection("trusted_proxy_missing_header_cf-access-jwt-assertion"),
-    "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway",
+    "unauthorized: trusted-proxy node needs a device token; pair/provision it or use SSH with gateway password",
+  ],
+  [
+    { authMode: "trusted-proxy", reason: "tailscale_user_missing" },
+    "unauthorized: verified Tailscale Serve identity required; check Serve headers and tailnet login",
+    true,
   ],
   [nodeRejection("trusted_proxy_local_interface_check_failed"), "unauthorized"],
 ])("formats an actionable auth failure for %j", (params, expected, closeLimit, excluded) => {

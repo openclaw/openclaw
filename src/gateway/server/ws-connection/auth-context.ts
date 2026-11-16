@@ -13,6 +13,7 @@ import {
 import {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
+  authorizeWsGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
@@ -58,6 +59,8 @@ export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: ConnectParams["auth"] | null;
   hasDeviceIdentity: boolean;
+  isUiAuthSurface: boolean;
+  role: string;
   req: IncomingMessage;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
@@ -76,13 +79,23 @@ export async function resolveConnectAuthState(params: {
   const deviceCredential = params.hasDeviceIdentity ? (explicitDeviceToken ?? token) : undefined;
   const deferRateLimitFailure = Boolean(deviceCredential);
 
-  const authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
+  // The WS transport serves native nodes too. Only operator Control UI
+  // connections may use ambient, verified Tailscale identity.
+  const authorizeWs =
+    params.isUiAuthSurface && params.role === "operator"
+      ? authorizeWsControlUiGatewayConnect
+      : authorizeWsGatewayConnect;
+  const authResult: GatewayAuthResult = await authorizeWs({
     auth: params.resolvedAuth,
     connectAuth: sharedConnectAuth,
     req: params.req,
     trustedProxies: params.trustedProxies,
     allowRealIpFallback: params.allowRealIpFallback,
-    rateLimiter: sharedConnectAuth ? params.rateLimiter : undefined,
+    rateLimiter:
+      sharedConnectAuth ||
+      (params.isUiAuthSurface && !deviceCredential && params.resolvedAuth.mode === "trusted-proxy")
+        ? params.rateLimiter
+        : undefined,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
     deferRateLimitFailure,

@@ -17,6 +17,7 @@ import {
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
+  authorizeWsGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
@@ -567,6 +568,239 @@ describe("gateway auth", () => {
     const authConfig = { mode: "password" as const, password };
     const auth = resolveGatewayAuth({ authConfig, env: {} });
     expect(() => assertGatewayAuthConfigured(auth, authConfig)).toThrow(error);
+  });
+});
+
+describe("mixed Cloudflare Access and managed Tailscale Serve", () => {
+  const trustedProxy = {
+    userHeader: "cf-access-authenticated-user-email",
+    requiredHeaders: ["cf-access-jwt-assertion"],
+    allowLoopback: true,
+    allowUsers: ["alice@example.test"],
+  };
+  const auth = { mode: "trusted-proxy" as const, allowTailscale: true, trustedProxy };
+  const proxyOptions = { trustedProxies: ["127.0.0.1"] };
+
+  it("keeps Cloudflare's required headers and allowlist mandatory", async () => {
+    const cfReq = (headers: Record<string, string>) =>
+      request({ "x-forwarded-for": "203.0.113.5", ...headers });
+    const authorize = (headers: Record<string, string>) =>
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: cfReq(headers),
+        ...proxyOptions,
+      });
+    await expect(
+      authorize({
+        "cf-access-jwt-assertion": "signed-jwt-fixture",
+        "cf-access-authenticated-user-email": "alice@example.test",
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "trusted-proxy", user: "alice@example.test" });
+    // Opting in to Serve must not add a Serve-specific Fetch Metadata
+    // requirement to existing Cloudflare-authenticated Control UI reads.
+    await expect(
+      authorizeControlUiReadHttpGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: cfReq({
+          "cf-access-jwt-assertion": "signed-jwt-fixture",
+          "cf-access-authenticated-user-email": "alice@example.test",
+        }),
+        browserOriginPolicy: { requestHost: "gateway.local" },
+        ...proxyOptions,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "trusted-proxy", user: "alice@example.test" });
+
+    await expect(
+      authorize({ "cf-access-authenticated-user-email": "alice@example.test" }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+    });
+    await expect(
+      authorize({
+        "cf-access-jwt-assertion": "signed-jwt-fixture",
+        "cf-access-authenticated-user-email": "mallory@example.test",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "trusted_proxy_user_not_allowed" });
+    await expect(
+      authorize({
+        "cf-access-jwt-assertion": "signed-jwt-fixture",
+      }),
+    ).resolves.toEqual({ ok: false, reason: "trusted_proxy_user_missing" });
+  });
+
+  it("rejects forged Cloudflare headers from an untrusted listener", async () => {
+    const req = request(
+      {
+        "x-forwarded-for": "203.0.113.5",
+        "cf-access-authenticated-user-email": "alice@example.test",
+        "cf-access-jwt-assertion": "attacker-controlled-assertion",
+      },
+      "10.0.0.99",
+    );
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req,
+        ...proxyOptions,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+  });
+
+  it("accepts verified managed Serve for operator UI without Cloudflare headers", async () => {
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: createTailscaleForwardedReq(),
+        tailscaleWhois: lookupTailscaleIdentity,
+        ...proxyOptions,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "tailscale", user: "peter@github" });
+  });
+
+  it.each([
+    { name: "no whois identity", whois: async () => null, missingLogin: false },
+    {
+      name: "mismatched whois identity",
+      whois: async () => ({ login: "mallory@github", name: "Mallory" }),
+      missingLogin: false,
+    },
+    { name: "missing Serve identity header", whois: lookupTailscaleIdentity, missingLogin: true },
+  ])("rejects $name on managed Serve", async ({ whois, missingLogin }) => {
+    const req = createTailscaleForwardedReq();
+    if (missingLogin) {
+      delete req.headers["tailscale-user-login"];
+    }
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req,
+        tailscaleWhois: whois,
+        ...proxyOptions,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "tailscale_user_missing" });
+  });
+
+  it("rejects forged Serve headers from the ordinary listener", async () => {
+    const whois = vi.fn(lookupTailscaleIdentity);
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: createTailscaleForwardedReq(false),
+        trustedProxies: ["10.0.0.1"],
+        tailscaleWhois: whois,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+    expect(whois).not.toHaveBeenCalled();
+  });
+
+  it("respects allowTailscale=false and does not grant Serve to nodes or generic HTTP", async () => {
+    const whois = vi.fn(lookupTailscaleIdentity);
+    const authorize = authorizeWsControlUiGatewayConnect({
+      auth: { ...auth, allowTailscale: false },
+      connectAuth: null,
+      req: createTailscaleForwardedReq(),
+      tailscaleWhois: whois,
+      ...proxyOptions,
+    });
+    await expect(authorize).resolves.toMatchObject({ ok: false });
+    await expect(
+      authorizeWsGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: createTailscaleForwardedReq(),
+        tailscaleWhois: whois,
+        ...proxyOptions,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+    });
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: createTailscaleForwardedReq(),
+        tailscaleWhois: whois,
+        ...proxyOptions,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+    });
+    expect(whois).not.toHaveBeenCalled();
+  });
+
+  it("limits repeated unverified Serve requests independently of valid identity", async () => {
+    const limiter = createSingleAttemptLimiter();
+    const reject = () =>
+      authorizeWsControlUiGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: createTailscaleForwardedReq(),
+        tailscaleWhois: async () => null,
+        rateLimiter: limiter,
+        ...proxyOptions,
+      });
+    try {
+      await expect(reject()).resolves.toEqual({ ok: false, reason: "tailscale_user_missing" });
+      await expect(reject()).resolves.toMatchObject({ ok: false, reason: "rate_limited" });
+      await expect(
+        authorizeWsControlUiGatewayConnect({
+          auth,
+          connectAuth: null,
+          req: createTailscaleForwardedReq(),
+          tailscaleWhois: lookupTailscaleIdentity,
+          rateLimiter: limiter,
+          ...proxyOptions,
+        }),
+      ).resolves.toMatchObject({ ok: true, method: "tailscale" });
+      expect(limiter.check("100.64.0.1", "shared-secret").allowed).toBe(true);
+    } finally {
+      limiter.dispose();
+    }
+  });
+
+  it("applies same-origin browser protection to read-only Control UI HTTP", async () => {
+    const req = createTailscaleForwardedReq();
+    await expect(
+      authorizeControlUiReadHttpGatewayConnect({
+        auth,
+        connectAuth: null,
+        req,
+        tailscaleWhois: lookupTailscaleIdentity,
+        browserOriginPolicy: {
+          requestHost: req.headers.host,
+          fetchSite: "same-origin",
+        },
+        ...proxyOptions,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "tailscale" });
+
+    const crossSite = createTailscaleForwardedReq();
+    crossSite.headers.origin = "https://evil.example.test";
+    crossSite.headers["sec-fetch-site"] = "cross-site";
+    await expect(
+      authorizeControlUiReadHttpGatewayConnect({
+        auth,
+        connectAuth: null,
+        req: crossSite,
+        tailscaleWhois: lookupTailscaleIdentity,
+        browserOriginPolicy: {
+          requestHost: crossSite.headers.host,
+          origin: crossSite.headers.origin,
+          fetchSite: crossSite.headers["sec-fetch-site"],
+          allowedOrigins: ["*"],
+        },
+        ...proxyOptions,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "origin_not_allowed" });
   });
 });
 

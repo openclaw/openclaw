@@ -1,6 +1,8 @@
+import type { IncomingMessage } from "node:http";
 import { expect, it, vi } from "vitest";
 import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import { markGatewayIngressTransport } from "../../ingress-attribution.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";
 
 type ResolveConnectAuthStateParams = Parameters<typeof resolveConnectAuthState>[0];
@@ -26,6 +28,8 @@ async function resolveTokenAuthState(params: Partial<ResolveConnectAuthStatePara
     resolvedAuth: { mode: "token", token: "correct-secret", allowTailscale: false },
     connectAuth: {},
     hasDeviceIdentity: true,
+    isUiAuthSurface: false,
+    role: "node",
     req: { headers: {}, socket: { remoteAddress: CLIENT_IP } } as never,
     trustedProxies: [],
     allowRealIpFallback: false,
@@ -52,6 +56,83 @@ function resolveDeviceAuth(
     clientIp: CLIENT_IP,
   });
 }
+
+it("keeps managed Serve node credentials separate from verified Control UI identity", async () => {
+  const req = {
+    socket: { remoteAddress: "127.0.0.1" },
+    headers: {
+      "x-forwarded-for": "100.64.0.1",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.ts.net",
+      "tailscale-user-login": "alice@github",
+    },
+  } as unknown as IncomingMessage;
+  markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "serve" });
+  const auth = {
+    mode: "trusted-proxy" as const,
+    allowTailscale: true,
+    trustedProxy: {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+      allowLoopback: true,
+    },
+  };
+  const options = {
+    resolvedAuth: auth,
+    hasDeviceIdentity: true,
+    isUiAuthSurface: false,
+    role: "node",
+    req,
+    trustedProxies: ["127.0.0.1"],
+    allowRealIpFallback: false,
+  };
+  const rateLimiter = createLimiter();
+
+  const approvedNode = await resolveConnectAuthState({
+    ...options,
+    connectAuth: { deviceToken: "issued-node-token" },
+    rateLimiter,
+  });
+  expect(approvedNode.authResult).toEqual({
+    ok: false,
+    reason: "trusted_proxy_missing_header_cf-access-jwt-assertion",
+  });
+  expect(approvedNode.authOk).toBe(false);
+  const evaluate = (state: typeof approvedNode, tokenValid: boolean) =>
+    resolveConnectAuthDecision({
+      state,
+      hasDeviceIdentity: true,
+      deviceId: "approved-node",
+      publicKey: "approved-pubkey",
+      role: "node",
+      scopes: [],
+      verifyBootstrapToken: async () => ({ ok: false }),
+      verifyDeviceToken: async () => (tokenValid ? { ok: true } : { ok: false }),
+      rateLimiter,
+      clientIp: "100.64.0.1",
+    });
+  await expect(evaluate(approvedNode, true)).resolves.toMatchObject({
+    authOk: true,
+    authMethod: "device-token",
+  });
+
+  const missingCredential = await resolveConnectAuthState({
+    ...options,
+    connectAuth: {},
+    rateLimiter,
+  });
+  await expect(evaluate(missingCredential, true)).resolves.toMatchObject({ authOk: false });
+
+  const revokedCredential = await resolveConnectAuthState({
+    ...options,
+    connectAuth: { deviceToken: "revoked-node-token" },
+    rateLimiter,
+  });
+  await expect(evaluate(revokedCredential, false)).resolves.toMatchObject({
+    authOk: false,
+    authResult: { reason: "device_token_mismatch" },
+  });
+});
 
 it("defers shared-secret failures when an explicit device token is also present", async () => {
   const rateLimiter = createLimiter();

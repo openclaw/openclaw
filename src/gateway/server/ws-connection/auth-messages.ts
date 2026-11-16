@@ -1,4 +1,5 @@
 // WebSocket auth messages format client-specific handshake failures without exposing secret material.
+import { isNativeAppUiClient } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   isGatewayCliClient,
   isOperatorUiClient,
@@ -22,10 +23,15 @@ export function formatGatewayAuthFailureMessage(params: {
 }): string {
   const { authMode, authProvided, reason, client, isLocalClient } = params;
   const isCli = isGatewayCliClient(client);
-  const isControlUi = isOperatorUiClient(client);
+  const isControlUi = isOperatorUiClient(client) || isNativeAppUiClient(client);
   const isWebchat = isWebchatClient(client);
-  if (client?.mode === "node" && reason?.startsWith("trusted_proxy_missing_header_")) {
-    return "gateway rejected this node: trusted-proxy identity-header authentication is required and no usable machine credential was accepted; run `openclaw doctor` on the Gateway";
+  if (reason?.startsWith("trusted_proxy_missing_header_")) {
+    if (client?.mode === "node") {
+      return "unauthorized: trusted-proxy node needs a device token; pair/provision it or use SSH with gateway password";
+    }
+    if (isControlUi) {
+      return "unauthorized: trusted proxy header missing; check Cloudflare Access or verified Tailscale Serve UI auth";
+    }
   }
   const uiHint = "open the OpenClaw URL and paste the token in OpenClaw settings";
   const missingUiTokenHint =
@@ -65,7 +71,9 @@ export function formatGatewayAuthFailureMessage(params: {
     case "bootstrap_token_invalid":
       return SETUP_CODE_REJECTED_MESSAGE;
     case "tailscale_user_missing":
-      return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
+      return authMode === "trusted-proxy"
+        ? "unauthorized: verified Tailscale Serve identity required; check Serve headers and tailnet login"
+        : "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
     case "tailscale_proxy_missing":
       return "unauthorized: tailscale proxy headers missing (use Tailscale Serve or gateway token/password)";
     case "tailscale_whois_failed":

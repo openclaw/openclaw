@@ -21,6 +21,7 @@ You need:
 - [HTTPS certificates](https://tailscale.com/docs/how-to/set-up-https-certificates) enabled in the Tailscale admin console under **DNS > HTTPS Certificates**.
 - Tailscale installed and logged in on the Gateway host.
 - The Gateway already configured with token, password, or trusted-proxy auth. Serve cannot be combined with `gateway.auth.mode: "none"`.
+- If you use Cloudflare Access with `gateway.auth.mode: "trusted-proxy"`, note that the configuration wizard disables managed Serve for this combination. Manual dual ingress is supported **only for verified Control UI identity**; native node onboarding requires separate credentials (see below).
 
 OpenClaw locates the Tailscale CLI automatically. It checks `tailscale` on `PATH`, the macOS app bundle at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, other matching app installations under `/Applications`, and the system locate database. You do not need to add the macOS app-bundle binary to `PATH`.
 
@@ -57,11 +58,17 @@ To explicitly allow Tailscale identity headers for Control UI WebSocket auth:
 openclaw config set gateway.auth.allowTailscale true
 ```
 
-For Serve with token auth, OpenClaw enables this behavior by default unless you set it to `false`. Password and trusted-proxy modes keep their explicit auth boundary unless you opt in.
+For Serve with token auth, OpenClaw enables this behavior by default unless you set it to `false`. Password and trusted-proxy modes keep their explicit auth boundary unless you opt in. With `trusted-proxy`, opting in permits **verified Control UI identity** on the OpenClaw-managed Serve listener only. Cloudflare ingress still requires configured proxy identity and required headers; a custom reverse proxy, raw tailnet address, or forged Tailscale header never qualifies.
 
 This setting lets a verified Tailscale identity satisfy the Control UI WebSocket shared-secret check. OpenClaw verifies the forwarded client address with `tailscale whois` and matches it to the `tailscale-user-login` header. It applies only when the request arrives through Serve on OpenClaw's dedicated managed-Tailscale listener with the expected forwarded headers.
 
-It does not authenticate HTTP API endpoints, remove browser device identity requirements, authenticate node-role connections, or bypass node pairing. See [Tailscale identity headers](/gateway/tailscale#tailscale-identity-headers-serve-only) for the full contract.
+It does not authenticate HTTP API endpoints, remove browser device identity requirements, authenticate node-role connections, or bypass node pairing. Read-only Control UI HTTP requests can use verified Serve identity with the same-origin browser restrictions. See [Tailscale identity headers](/gateway/tailscale#tailscale-identity-headers-serve-only) for the full contract.
+
+### Cloudflare Access and native macOS nodes
+
+A single Gateway can accept Cloudflare Access on its ordinary trusted-proxy listener and verified Tailscale identities for Control UI on its dedicated managed Serve listener when `gateway.auth.allowTailscale=true`. **This does not enroll or authorize a native macOS node via Tailscale identity.** Nodes on the Serve route must supply an authorized device credential (or another supported explicit authentication path), and pairing still applies.
+
+The macOS **primary** remote connection opens both a Control UI and a node connection. If the node does not yet have a valid stored device token for this Gateway, the Tailscale URL alone cannot complete primary onboarding. Use the SSH tunnel transport with the Gateway's configured local-direct password to bootstrap and approve the device, or keep the Cloudflare Access connection as a separate saved Gateway. A pairing approval without a usable device credential does not fix repeated unauthorized node handshakes. No general remote password fallback is enabled.
 
 ## 2. Allow HTTPS in your tailnet policy
 

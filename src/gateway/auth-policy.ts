@@ -104,8 +104,7 @@ export function captureGatewayAuthPolicy(
             : verifiedIdentity && (!allowUsers?.length || allowUsers.includes(verifiedIdentity)),
         );
       } else if (authMethod === "tailscale") {
-        methodEnabled =
-          auth.allowTailscale && auth.mode !== "trusted-proxy" && auth.mode !== "none";
+        methodEnabled = auth.allowTailscale && auth.mode !== "none";
       } else if (authMethod === "none") {
         methodEnabled = auth.mode === "none";
       } else if (auth.mode === "trusted-proxy") {
