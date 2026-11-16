@@ -16,9 +16,8 @@ import {
 import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
 import { summarizeCompactionHistory } from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
-import type { AgentMessage, CompactionResult, SessionTreeEntry } from "../runtime/index.js";
+import type { AgentMessage, SessionTreeEntry } from "../runtime/index.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
-import type { ExtensionEvent } from "../sessions/extensions/types.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
@@ -34,6 +33,11 @@ import {
   splitPreservedRecentTurns,
   type ContextSection,
 } from "./compaction-safeguard-context.js";
+import type {
+  CompactionSafeguardResult,
+  PreparedCompactionSafeguardExecution,
+  RunCompactionSafeguard,
+} from "./compaction-safeguard-execution.types.js";
 import {
   prepareCompactionSafeguardContext,
   prepareCompactionSafeguardHistory,
@@ -42,7 +46,6 @@ import {
   prepareCompactionSafeguardSummary,
   type CompactionSafeguardHistory,
 } from "./compaction-safeguard-preparation.js";
-import type { PreparedCompactionSafeguardExecution } from "./compaction-safeguard-prepared.types.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -135,14 +138,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", runCompactionSafeguard);
 }
 
-type CompactionSafeguardResult =
-  | { cancel: true; compaction?: never }
-  | { cancel?: never; compaction: CompactionResult };
-
 /** @internal The private default compactor can supply worker-prepared facts and host effects. */
 export async function runCompactionSafeguard(
-  event: Extract<ExtensionEvent, { type: "session_before_compact" }>,
-  ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">,
+  event: Parameters<RunCompactionSafeguard>[0],
+  ctx: Parameters<RunCompactionSafeguard>[1],
   prepared?: PreparedCompactionSafeguardExecution,
 ): Promise<CompactionSafeguardResult> {
   const {

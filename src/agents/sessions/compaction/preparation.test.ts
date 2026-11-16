@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import type { SessionEntry, SessionMessageEntry } from "../session-manager-types.js";
-import {
-  prepareAgentCompactionWork,
-  type AgentCompactionPreparationOptions,
-} from "./preparation.js";
+import { prepareAgentCompactionWork } from "./preparation.js";
+import type { AgentCompactionPreparationOptions } from "./preparation.types.js";
 import { estimateCompactedRequestTokens } from "./request-budget.js";
 
 function userEntry(

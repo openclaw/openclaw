@@ -26,7 +26,6 @@ import {
   dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
 } from "../embedded-agent-helpers/openai.js";
-import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -40,7 +39,6 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
-import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import {
   hasNonzeroUsage,
   makeZeroUsageSnapshot,
@@ -49,6 +47,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import type { GenericReplayHistoryParams } from "./replay-history.types.js";
 import type {
   dropReasoningFromHistory,
   dropThinkingBlocks,
@@ -94,10 +93,10 @@ function sanitizeUserReplayContent(
 
 function normalizeAssistantReplayBlockContent(
   message: AssistantReplayMessage,
-  replayContent: unknown[],
+  replayContent: AssistantReplayMessage["content"],
 ): AssistantReplayMessage | null {
   let touched = false;
-  const sanitizedContent: unknown[] = [];
+  const sanitizedContent: AssistantReplayMessage["content"] = [];
   for (const block of replayContent) {
     const record = asOptionalRecord(block);
     const type = record?.type;
@@ -118,7 +117,8 @@ function normalizeAssistantReplayBlockContent(
     }
     touched = true;
     if (trimmed) {
-      sanitizedContent.push({ ...record, text: strippedText });
+      const sanitizedBlock = { ...block, text: strippedText };
+      sanitizedContent.push(sanitizedBlock);
     }
   }
   const spoken = message.openclawDelivery?.tts?.text;
@@ -142,11 +142,7 @@ function normalizeAssistantReplayBlockContent(
   if (sanitizedContent.length === 0) {
     return null;
   }
-  const normalized = replaceCompactionReplayOwnerContent(
-    message,
-    sanitizedContent as AssistantReplayMessage["content"],
-  );
-  return normalized;
+  return replaceCompactionReplayOwnerContent(message, sanitizedContent);
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
@@ -162,19 +158,19 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
   if (!previous || previous.role !== "assistant") {
     return false;
   }
-  const usage = (next as { usage?: unknown }).usage;
+  const usage = next.usage;
   if (
     !usage ||
     typeof usage !== "object" ||
-    hasNonzeroUsage(normalizeUsage(usage as UsageLike)) ||
-    (next as { stopReason?: unknown }).stopReason !== "stop" ||
+    hasNonzeroUsage(normalizeUsage(usage)) ||
+    next.stopReason !== "stop" ||
     extractToolCallsFromAssistant(previous).length > 0 ||
     extractToolCallsFromAssistant(next).length > 0
   ) {
     return false;
   }
-  const previousContent = (previous as { content?: unknown }).content;
-  const nextContent = (next as { content?: unknown }).content;
+  const previousContent = previous.content;
+  const nextContent = next.content;
   return (
     Array.isArray(previousContent) &&
     previousContent.length > 0 &&
@@ -202,7 +198,7 @@ function normalizeAssistantReplayMessage(
   ) {
     return null;
   }
-  const replayContent = (message as { content?: unknown }).content;
+  const replayContent = message.content;
   // Hidden transcript rows still belong to model context, including tool-call/result pairs.
   if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
     return null;
@@ -222,7 +218,7 @@ function normalizeAssistantReplayMessage(
   const assistantMessage =
     blockContent === replayContent
       ? message
-      : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
+      : replaceCompactionReplayOwnerContent(message, blockContent);
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
   // Token-limited thinking is incomplete provider state. Replaying it can
   // resend a partial signature, while visible text or tool calls remain useful.
@@ -302,8 +298,8 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   return touched ? out : messages;
 }
 
-function normalizeAssistantUsageSnapshot(usage: unknown) {
-  const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
+function normalizeAssistantUsageSnapshot(usage: UsageLike | null | undefined) {
+  const normalized = normalizeUsage(usage);
   if (!normalized) {
     return makeZeroUsageSnapshot();
   }
@@ -352,7 +348,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   let touched = false;
   const out = [...messages];
   for (let i = 0; i < out.length; i += 1) {
-    const message = out[i] as (AgentMessage & { role?: unknown; usage?: unknown }) | undefined;
+    const message = out[i];
     if (!message || message.role !== "assistant") {
       continue;
     }
@@ -386,8 +382,10 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
     }
     out[i] = {
       ...message,
-      usage: normalizedUsage,
-    } as AgentMessage;
+      // Do not synthesize billing evidence for sparse legacy usage.
+      // SAFETY: Token fields are canonical; replay consumers accept missing cost via normalizeUsage.
+      usage: normalizedUsage as AssistantUsageSnapshot,
+    };
     touched = true;
   }
 
@@ -420,7 +418,7 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
 
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
-    const role = (message as { role?: unknown } | undefined)?.role;
+    const role = message?.role;
 
     if (role !== "toolResult") {
       assertNoPendingCalls();
@@ -430,10 +428,8 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
       continue;
     }
 
-    if (role === "toolResult") {
-      const toolCallId = extractToolResultId(
-        message as Extract<AgentMessage, { role: "toolResult" }>,
-      );
+    if (message.role === "toolResult") {
+      const toolCallId = extractToolResultId(message);
       if (!toolCallId || !pending.delete(toolCallId)) {
         throw formatOpenAIResponsesReplayInvariantError({
           reason: "orphan_tool_result",
@@ -444,13 +440,11 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
       continue;
     }
 
-    if (role !== "assistant") {
+    if (message.role !== "assistant") {
       continue;
     }
 
-    for (const toolCall of extractToolCallsFromAssistant(
-      message as Extract<AgentMessage, { role: "assistant" }>,
-    )) {
+    for (const toolCall of extractToolCallsFromAssistant(message)) {
       pending.set(toolCall.id, i);
     }
   }
@@ -470,19 +464,6 @@ export type ReplayHistorySanitizers = {
   stripInvalidThinkingSignatures: typeof stripInvalidThinkingSignatures;
   dropReasoningFromHistory: typeof dropReasoningFromHistory;
   dropThinkingBlocks: typeof dropThinkingBlocks;
-};
-
-export type GenericReplayHistoryParams = {
-  /** Inter-session provenance has already been annotated by the caller. */
-  messages: AgentMessage[];
-  allowedToolNames?: Iterable<string>;
-  policy: TranscriptPolicy;
-  imageLimits: ImageSanitizationLimits;
-  signedThinkingProvider: boolean;
-  allowProviderOwnedThinkingReplay: boolean;
-  isOpenAIResponsesApi: boolean;
-  latestModelSwitchTimestamp?: number | null;
-  preserveLatestAssistantThinking?: boolean;
 };
 
 /** Data-only cleanup before provider hooks. Policy and route facts are host-resolved. */

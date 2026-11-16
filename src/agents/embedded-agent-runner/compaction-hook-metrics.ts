@@ -1,9 +1,8 @@
 /** Effect-free compaction accounting, shared with worker-local replay preparation. */
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  estimateCompactedRequestTokens,
-  type CompactionRequestBudget,
-} from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/preparation.types.js";
+import { estimateCompactedRequestTokens } from "../sessions/compaction/request-budget.js";
+import type { BeforeCompactionHookMetrics } from "./compaction-hook-metrics.types.js";
 
 function estimateTokenCountSafe(
   messages: AgentMessage[],
@@ -26,7 +25,7 @@ export function buildBeforeCompactionHookMetrics(params: {
   currentMessages: AgentMessage[];
   observedTokenCount?: number;
   estimateTokensFn: (message: AgentMessage) => number;
-}) {
+}): BeforeCompactionHookMetrics {
   return {
     messageCountOriginal: params.originalMessages.length,
     tokenCountOriginal: estimateTokenCountSafe(params.originalMessages, params.estimateTokensFn),

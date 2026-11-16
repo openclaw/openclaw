@@ -1,4 +1,5 @@
 /** Effect-free replay transforms shared by the host and transcript preparation worker. */
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { isAssistantMessageWithContent } from "../thinking-signatures.js";
@@ -9,10 +10,7 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function isToolCallBlock(block: AssistantContentBlock): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
+  const type = asOptionalObjectRecord(block)?.type;
   return type === "toolCall" || type === "tool_use" || type === "function_call";
 }
 
@@ -46,14 +44,12 @@ function filterAssistantContent(
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  const record = block as {
-    data?: unknown;
-    signature?: unknown;
-    thinkingSignature?: unknown;
-    thought_signature?: unknown;
-  };
+  const record = asOptionalObjectRecord(block);
+  if (!record) {
+    return false;
+  }
   const candidates =
-    (block as { type?: unknown }).type === "redacted_thinking"
+    record.type === "redacted_thinking"
       ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
       : [record.signature, record.thinkingSignature, record.thought_signature];
   return candidates.some(

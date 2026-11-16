@@ -3,8 +3,8 @@ import type {
   compactWithoutSummary,
   CompactionPreparation,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
-import type { runCompactionSafeguard } from "../../agent-hooks/compaction-safeguard.js";
-import type { CompactionRequestBudget } from "./request-budget.js";
+import type { RunCompactionSafeguard } from "../../agent-hooks/compaction-safeguard-execution.types.js";
+import type { CompactionRequestBudget } from "./preparation.types.js";
 
 /** Only the embedded compactor's known builtin may consume worker-prepared metadata. */
 export const preparedSessionCompactionWork: unique symbol = Symbol("preparedSessionCompactionWork");
@@ -19,7 +19,7 @@ export type PreparedSessionCompactionWork = {
   floor: PreparedCompactionFloor;
   deterministic: () => ReturnType<typeof compactWithoutSummary>;
   execute: (
-    event: Parameters<typeof runCompactionSafeguard>[0],
-    context: Parameters<typeof runCompactionSafeguard>[1],
-  ) => ReturnType<typeof runCompactionSafeguard>;
+    event: Parameters<RunCompactionSafeguard>[0],
+    context: Parameters<RunCompactionSafeguard>[1],
+  ) => ReturnType<RunCompactionSafeguard>;
 };

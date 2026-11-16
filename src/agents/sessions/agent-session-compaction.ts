@@ -30,8 +30,12 @@ import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import {
   prepareAgentCompactionWork,
   createCompactionReplacementProjector,
-  type CompactionSummaryOutputPolicy as SummaryOutputPolicy,
 } from "./compaction/preparation.js";
+import type {
+  CompactionSummaryOutputPolicy as SummaryOutputPolicy,
+  CompactionRequestBudget,
+  CompactionRequestConstraints,
+} from "./compaction/preparation.types.js";
 import {
   preparedSessionCompactionWork,
   type PreparedSessionCompactionWork,
@@ -41,8 +45,6 @@ import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
   replayTokenBudget,
-  type CompactionRequestBudget,
-  type CompactionRequestConstraints,
 } from "./compaction/request-budget.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
