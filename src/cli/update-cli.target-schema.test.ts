@@ -55,6 +55,8 @@ import {
   resolveGatewayInstallEntrypoint,
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
+  resolveUpdateInstallKind,
+  resolveUpdateInstallIdentity,
   runCommandWithTimeout,
   doctorCommand,
   mockGitUpdateAfterMutation,
@@ -83,6 +85,7 @@ const { preflightOpenClawDatabaseSchemas } = await vi.importActual<
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const {
+    baseConfig,
     createCaseDir,
     initializeExistingUpdateProfile,
     mockFileBackedPathExists,
@@ -106,6 +109,7 @@ describe("update-cli", () => {
   } = createUpdateCliFixture();
 
   it("refuses a v2026.7.1-2 target and names every current-schema agent store", async () => {
+    baseConfig.update = { channel: "stable" };
     await useFileBackedConfig();
     await mockPackageInstallAtCaseDir("schema-published-downgrade");
     const env = process.env;
@@ -142,6 +146,9 @@ describe("update-cli", () => {
   it.each(["git", "package-to-git", "package-preview"] as const)(
     "refuses a service-only incompatible %s target before any mutable preparation",
     async (kind) => {
+      if (kind === "package-preview") {
+        baseConfig.update = { channel: "stable" };
+      }
       const fixture = createCaseDir(`schema-service-only-${kind}`);
       const { pkgRoot, nodeModules, entryPath } = await setupInstalledPackageRoot(fixture, "1.0.0");
       const root = kind === "git" ? fixture : pkgRoot;
@@ -150,6 +157,8 @@ describe("update-cli", () => {
       if (kind === "git") {
         await writeOpenClawPackageFixture(root, "1.0.0", { git: true });
         vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+        vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+        vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
       } else {
         mockFileBackedPathExists();
         mockNpmGlobalRoot(nodeModules);
@@ -327,6 +336,7 @@ describe("update-cli", () => {
   });
 
   it("preserves original state when target metadata resolution is interrupted before admission", async () => {
+    baseConfig.update = { channel: "stable" };
     await useFileBackedConfig();
     const root = await mockPackageInstallAtCaseDir("openclaw-early-metadata");
     await closeOpenClawStateDatabaseAsync();
@@ -367,6 +377,7 @@ describe("update-cli", () => {
   });
 
   it("settles an admitted update interrupted during plugin preflight (SIGTERM)", async () => {
+    baseConfig.update = { channel: "stable" };
     await useFileBackedConfig();
     const root = await mockPackageInstallAtCaseDir("openclaw-early-signal");
     const packageBefore = await fs.readFile(path.join(root, "package.json"), "utf8");
@@ -425,6 +436,7 @@ describe("update-cli", () => {
   });
 
   it("refuses incompatible inspected runtime requirements when a later lookup disagrees", async () => {
+    baseConfig.update = { channel: "stable" };
     runtimeRecovery.stubNodeRuntime();
     // This case specifies a non-container system runtime, independent of the test host.
     runtimeRecovery.mockNonContainerSystemRuntime();
@@ -451,6 +463,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
   });
 
   it("previews explicit artifacts without claiming staged plugin admission", async () => {
+    baseConfig.update = { channel: "stable" };
     mockPackageInstallStatus(createCaseDir("openclaw-local-preview"));
     await updateCommand({ dryRun: true, json: true, tag: "/tmp/candidate.tgz" });
     expect(lastWriteJsonCall()).toMatchObject({
@@ -468,6 +481,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
   });
 
   it("previews a same-version package override as an explicit artifact update", async () => {
+    baseConfig.update = { channel: "stable" };
     await mockPackageInstallAtCaseDir("openclaw-same-version-override-preview");
     readPackageVersion.mockResolvedValue("1.0.0");
     primeNpmChannelTag("latest", "1.0.0");
@@ -540,6 +554,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
   it.each([false, true])(
     "reports unavailable plugins without refusing the core update (dryRun=%s)",
     async (dryRun) => {
+      baseConfig.update = { channel: "stable" };
       const detail =
         'Plugin "example" update availability could not be confirmed before core installation.';
       const sentinel = await runControlPlaneUpdate({
@@ -575,6 +590,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
   );
 
   it("preserves control-plane update sentinel consumption on restart health failure", async () => {
+    baseConfig.update = { channel: "stable" };
     let sentinelConsumed = false;
     const sentinel = await runControlPlaneUpdate({
       expectedExitCode: 1,
@@ -605,6 +621,7 @@ Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtime
   });
 
   it("keeps a core update successful when a plugin cannot load", async () => {
+    baseConfig.update = { channel: "stable" };
     const { updatedEntrypoint } = setupNpmUpdatedRootRefresh();
     readPackageVersion.mockResolvedValue("2026.4.24");
     serviceLoaded.mockResolvedValue(true);

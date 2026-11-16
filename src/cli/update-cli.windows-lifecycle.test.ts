@@ -137,6 +137,7 @@ describe("update-cli", () => {
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
+    fixture.baseConfig.update = { channel: "stable" };
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDir = fixture.tempDirs.make("openclaw-update-isolated-service-");
     const { nodeModules } = await fixture.setupInstalledPackageRoot(tempDir);
@@ -256,6 +257,9 @@ describe("update-cli", () => {
   ] as const)(
     "starts $command triage when native $fault preparation cannot restore task autostart",
     async ({ command, fault }) => {
+      if (command === "update") {
+        fixture.baseConfig.update = { channel: "stable" };
+      }
       const stopFailure = fault === "stop-enable-committed";
       runtimeRecovery.stubNodeRuntime();
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -533,6 +537,7 @@ describe("update-cli", () => {
   );
 
   it("restores package files without re-enabling Windows autostart after interruption", async () => {
+    fixture.baseConfig.update = { channel: "stable" };
     await fixture.useFileBackedConfig();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
@@ -701,6 +706,7 @@ describe("update-cli", () => {
         });
       } else {
         const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
+        fixture.baseConfig.update = { channel: "stable" };
         fixture.primeServiceCommand(
           [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
           { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
@@ -779,6 +785,7 @@ describe("update-cli", () => {
   );
 
   it("guards a running Windows task during a no-restart package update", async () => {
+    fixture.baseConfig.update = { channel: "stable" };
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(os, "homedir").mockReturnValue(fixture.fixtureRoot);
     const { nodeModules, pkgRoot, entryPath } = await fixture.setupInstalledPackageRoot(

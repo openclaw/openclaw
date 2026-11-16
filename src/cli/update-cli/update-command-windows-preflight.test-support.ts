@@ -50,6 +50,7 @@ export function registerWindowsTaskAdmissionTests(
   ])(
     "checks stopped Windows task admission from native facts: $scenario ($tag)",
     async ({ scenario, facts, proceeds, tag }) => {
+      fixture.baseConfig.update = { channel: "stable" };
       const nativeProbe = await vi.importActual<
         typeof import("../../daemon/schtasks-state-probe.js")
       >("../../daemon/schtasks-state-probe.js");

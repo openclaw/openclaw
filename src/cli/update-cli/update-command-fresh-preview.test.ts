@@ -78,7 +78,13 @@ function writeStoredChannel(channel: "stable" | "beta") {
 describe("update command admission with fresh state", () => {
   it("requires fresh downgrade confirmation without creating a run or exiting before release", async () => {
     await expect(
-      updateCommand({ admission: "installed", tag: "2026.9.2", json: true, restart: false }),
+      updateCommand({
+        admission: "installed",
+        channel: "stable",
+        tag: "2026.9.2",
+        json: true,
+        restart: false,
+      }),
     ).rejects.toMatchObject({ code: 1 });
     expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
@@ -99,7 +105,12 @@ describe("update command admission with fresh state", () => {
     });
     await withTriageTerminal(true, async () => {
       await expect(
-        updateCommand({ admission: "installed", tag: "2026.9.2", restart: false }),
+        updateCommand({
+          admission: "installed",
+          channel: "stable",
+          tag: "2026.9.2",
+          restart: false,
+        }),
       ).rejects.toMatchObject({
         code: 0,
       });
@@ -198,7 +209,12 @@ describe("update command admission with fresh state", () => {
       vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
         observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
       });
-      const failure = await updateCommand({ yes: true, json: true, restart: false }).then(
+      const failure = await updateCommand({
+        channel: "stable",
+        yes: true,
+        json: true,
+        restart: false,
+      }).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -351,6 +367,7 @@ describe("update command admission with fresh state", () => {
       });
 
       const outcome = await updateCommand({
+        channel: "stable",
         tag: "2026.9.2",
         yes: true,
         json: true,
@@ -407,7 +424,13 @@ describe("update command admission with fresh state", () => {
 
   it("previews an older stable without runtime state despite an inherited run", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunIds[0]);
-    await updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false });
+    await updateCommand({
+      channel: "stable",
+      tag: "2026.9.2",
+      dryRun: true,
+      json: true,
+      restart: false,
+    });
 
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -420,7 +443,7 @@ describe("update command admission with fresh state", () => {
     expectFreshStatePreserved();
   });
 
-  it.each([{ channel: "stable" }, { tag: "latest" }])(
+  it.each([{ channel: "stable" }, { channel: "stable", tag: "latest" }])(
     "refuses unresolved registry metadata for %j before creating runtime state",
     async (target) => {
       vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
@@ -548,7 +571,7 @@ describe("update command admission with fresh state", () => {
     });
 
     await expect(
-      updateCommand({ tag: "2026.9.2", yes: true, json: true, restart: true }),
+      updateCommand({ channel: "stable", tag: "2026.9.2", yes: true, json: true, restart: true }),
     ).rejects.toBe(handoffStop);
 
     expect(staged.close).toHaveBeenCalledOnce();
@@ -618,6 +641,7 @@ it.each([
       .spyOn(commandRun, "admitUpdateCommandRun")
       .mockRejectedValue(new Error("artifact-admitted"));
     const outcome = await updateCommand({
+      channel: "stable",
       tag: "file:/fixture/candidate.tgz",
       yes: true,
       json: true,
@@ -699,6 +723,7 @@ it.each(["node", "concurrent-state"] as const)(
     const doctor = vi.spyOn(initialization, "initializeUpdateStateFromTarget");
     const admission = vi.spyOn(commandRun, "admitUpdateCommandRun");
     await updateCommand({
+      channel: "stable",
       tag: "file:/fixture/candidate.tgz",
       yes: true,
       json: true,
@@ -739,9 +764,12 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
     .spyOn(initialization, "initializeUpdateStateFromTarget")
     .mockRejectedValue(new Error("confirmation was bypassed"));
   const admission = vi.spyOn(commandRun, "admitUpdateCommandRun");
-  await updateCommand({ tag: "file:/fixture/older.tgz", json: true, restart: false }).catch(
-    () => undefined,
-  );
+  await updateCommand({
+    channel: "stable",
+    tag: "file:/fixture/older.tgz",
+    json: true,
+    restart: false,
+  }).catch(() => undefined);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
     expect.objectContaining({ status: "skipped", reason: "downgrade-confirmation-required" }),
   );

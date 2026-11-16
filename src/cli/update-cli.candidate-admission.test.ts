@@ -1,4 +1,4 @@
-import { describe, vi } from "vitest";
+import { beforeEach, describe, vi } from "vitest";
 import {
   doctorCommandCall,
   expectNoSideEffects,
@@ -41,6 +41,7 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const {
+    baseConfig,
     baseSnapshot,
     createCaseDir,
     fixtureRoot,
@@ -55,6 +56,11 @@ describe("update-cli", () => {
     setupInstalledPackageRoot,
     tempDirs,
   } = createUpdateCliFixture();
+
+  beforeEach(() => {
+    // Candidate admission scenarios use synthetic stable npm targets.
+    baseConfig.update = { channel: "stable" };
+  });
 
   registerCandidateAdmissionTests({
     createCaseDir,

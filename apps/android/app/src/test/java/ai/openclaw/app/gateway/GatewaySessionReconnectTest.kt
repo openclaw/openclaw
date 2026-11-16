@@ -966,7 +966,9 @@ class GatewaySessionReconnectTest {
         assertEquals(
           listOf("abort", "detach", null),
           closes.map {
-            it.getValue("params").jsonObject["disposition"]
+            it
+              .getValue("params")
+              .jsonObject["disposition"]
               ?.jsonPrimitive
               ?.content
           },

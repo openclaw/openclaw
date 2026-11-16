@@ -65,7 +65,14 @@ describe("update command admission with fresh state", () => {
         .mockResolvedValue({ ok: false, error: "fixture-stop" });
 
       await expect(
-        updateCommand({ admission: "installed", tag: "2026.9.2", yes: true, json: true, restart }),
+        updateCommand({
+          admission: "installed",
+          channel: "stable",
+          tag: "2026.9.2",
+          yes: true,
+          json: true,
+          restart,
+        }),
       ).rejects.toMatchObject({ code: 1 });
 
       expect(runtimePreflight).toHaveBeenCalledExactlyOnceWith(

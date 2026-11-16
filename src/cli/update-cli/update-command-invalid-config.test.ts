@@ -28,7 +28,8 @@ it.each([
 
     const update = updateCommand({
       admission: "installed",
-      tag: "2026.9.2",
+      // Read-only invalid-config preview must not request a channel change.
+      ...(dryRun ? {} : { channel: "stable" as const, tag: "2026.9.2" }),
       json: true,
       yes: true,
       restart: false,

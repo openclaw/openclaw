@@ -268,6 +268,7 @@ describe("update-cli", () => {
 
 describe("update-cli", () => {
   const {
+    baseConfig,
     mockFileBackedPathExists,
     mockPackageInstallStatus,
     mockServicePackageCommands,
@@ -277,7 +278,11 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
-  beforeEach(() => runtimeRecovery.stubNodeRuntime());
+  beforeEach(() => {
+    runtimeRecovery.stubNodeRuntime();
+    // Package runtime scenarios use the stable targets configured by their fixtures.
+    baseConfig.update = { channel: "stable" };
+  });
 
   it("preserves split-root package updates when the service definition is writable-overridden", async () => {
     const oldInstall = await setupServicePackageAtPrefix({

@@ -47,7 +47,13 @@ it.each([
     });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
 
-    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+    await updateCommand({
+      channel: "stable",
+      tag: targetMetadata.version,
+      yes: true,
+      dryRun: true,
+      json,
+    });
 
     const output = json
       ? JSON.stringify(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0])
@@ -158,7 +164,13 @@ it.each([
     }
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const manifest = fs.readFileSync(path.join(fixture.root, "package.json"));
-    const opts = { tag: targetMetadata.version, yes: true, json, restart };
+    const opts = {
+      channel: "stable" as const,
+      tag: targetMetadata.version,
+      yes: true,
+      json,
+      restart,
+    };
 
     await updateCommand({ ...opts, dryRun: true });
 
@@ -195,7 +207,7 @@ it.each([
           : []),
         {
           kind: "continue-update",
-          command: `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
+          command: `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --channel stable --tag 2026.9.2`,
         },
       ];
       const message = [
@@ -258,7 +270,7 @@ it.each([
             steps: expect.arrayContaining([
               expect.objectContaining({
                 stderrTail: expect.stringContaining(
-                  `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
+                  `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --channel stable --tag 2026.9.2`,
                 ),
                 failureFacts: expect.arrayContaining([
                   expect.objectContaining({
@@ -326,7 +338,13 @@ it.each([false, true])(
       },
     }));
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+    await updateCommand({
+      channel: "stable",
+      tag: targetMetadata.version,
+      yes: true,
+      dryRun: true,
+      json,
+    });
     const output = json
       ? JSON.stringify(vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0])
       : log.mock.calls.flat().join("\n");

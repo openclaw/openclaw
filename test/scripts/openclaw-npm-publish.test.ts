@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const scriptPath = "scripts/openclaw-npm-publish.sh";
+const scriptPath = path.resolve("scripts/openclaw-npm-publish.sh");
+const stagedPackageVersion = "2026.1.1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
+function runPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string) {
   return spawnSync("bash", [scriptPath, ...args], {
+    cwd,
     encoding: "utf8",
     env: { ...process.env, GITHUB_ACTIONS: "false", WORKFLOW_SHA: "", ...env },
   });
@@ -29,6 +31,11 @@ function makePackageTarball(root: string, packageJson?: string): string {
 }
 
 function makeStagedNpm(root: string): string {
+  // Staged-version recovery is independent of the checkout's release train.
+  writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version: stagedPackageVersion }),
+  );
   const callsPath = path.join(root, "npm-calls.jsonl");
   const npmPath = path.join(root, "npm");
   writeFileSync(
@@ -138,14 +145,18 @@ describe("openclaw npm publish wrapper", () => {
     (_label, env, status, observation) => {
       const tempRoot = tempDirs.make("openclaw-npm-publish-");
       const callsPath = makeStagedNpm(tempRoot);
-      const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
-      const result = runPublishWrapper(["--publish"], {
-        NPM_CALLS: callsPath,
-        OPENCLAW_NPM_PUBLISH_TAG: "beta",
-        PACKAGE_VERSION: packageVersion,
-        PATH: `${tempRoot}:${process.env.PATH}`,
-        ...env,
-      });
+      const packageVersion = stagedPackageVersion;
+      const result = runPublishWrapper(
+        ["--publish"],
+        {
+          NPM_CALLS: callsPath,
+          OPENCLAW_NPM_PUBLISH_TAG: "beta",
+          PACKAGE_VERSION: packageVersion,
+          PATH: `${tempRoot}:${process.env.PATH}`,
+          ...env,
+        },
+        tempRoot,
+      );
 
       expect(result.status).toBe(status);
       expect(result.stderr).toContain("Cannot publish over previously staged version");
@@ -172,18 +183,22 @@ describe("openclaw npm publish wrapper", () => {
   it("observes a staged companion tarball by its exact package identity", () => {
     const tempRoot = tempDirs.make("openclaw-npm-publish-");
     const callsPath = makeStagedNpm(tempRoot);
-    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const packageVersion = stagedPackageVersion;
     const packageName = "@openclaw/gateway-client";
     const tarball = makePackageTarball(
       tempRoot,
       JSON.stringify({ name: packageName, version: packageVersion }),
     );
-    const result = runPublishWrapper(["--publish", tarball], {
-      NPM_CALLS: callsPath,
-      OPENCLAW_NPM_PUBLISH_TAG: "beta",
-      PACKAGE_VERSION: packageVersion,
-      PATH: `${tempRoot}:${process.env.PATH}`,
-    });
+    const result = runPublishWrapper(
+      ["--publish", tarball],
+      {
+        NPM_CALLS: callsPath,
+        OPENCLAW_NPM_PUBLISH_TAG: "beta",
+        PACKAGE_VERSION: packageVersion,
+        PATH: `${tempRoot}:${process.env.PATH}`,
+      },
+      tempRoot,
+    );
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
