@@ -61,7 +61,7 @@ type UpdateStateInspectionInput = { resultPath?: string; stagingTokenDirectory?:
   | (Parameters<
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
-  | { mode: "sqlite-generations"; paths: string[]; stateDir: string }
+  | { mode: "sqlite-generations"; paths: string[]; stateDir: string; digests?: unknown }
   | { mode: "migration-filesystem-backup"; output: string; userPathBaseDirectory: string }
   | {
       mode: "database-generations";
@@ -69,13 +69,19 @@ type UpdateStateInspectionInput = { resultPath?: string; stagingTokenDirectory?:
       stateDir: string;
       generationFormat?: "committed" | "paired";
       pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+      /** Digests the parent's earlier observations verified; only paired reads exchange them. */
+      digests?: unknown;
     }
 );
 
 async function inspectCandidateState(input: UpdateStateInspectionInput): Promise<unknown> {
   if (input.mode === "sqlite-generations") {
     const { readUpdateDatabaseGenerationPair } = await import("./update-database-generations.js");
-    return readUpdateDatabaseGenerationPair(input.paths);
+    const { parseSqliteFileDigests, serializeSqliteFileDigests } =
+      await import("./sqlite-file-generation.js");
+    const digests = parseSqliteFileDigests(input.digests ?? {});
+    const pair = readUpdateDatabaseGenerationPair(input.paths, undefined, digests);
+    return { ...pair, digests: serializeSqliteFileDigests(digests) };
   }
   if (input.mode === "runtime-retention") {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
@@ -129,10 +135,18 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     case "database-generations": {
       const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
         await import("./update-physical-database-generations.js");
-      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
       if (input.generationFormat === "paired") {
-        return pair;
+        const { parseSqliteFileDigests, serializeSqliteFileDigests } =
+          await import("./sqlite-file-generation.js");
+        const digests = parseSqliteFileDigests(input.digests ?? {});
+        const pair = await readUpdatePhysicalDatabaseGenerationPair(
+          input.paths,
+          input.pluginOwners,
+          digests,
+        );
+        return { ...pair, digests: serializeSqliteFileDigests(digests) };
       }
+      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
       return input.generationFormat === undefined &&
         (await isLegacyUpdateGenerationRequest({
           ...process.env,

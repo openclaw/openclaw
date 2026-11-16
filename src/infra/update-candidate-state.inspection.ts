@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,11 @@ import {
 } from "./runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  parseSqliteFileDigests,
+  serializeSqliteFileDigests,
+  type SqliteFileDigests,
+} from "./sqlite-file-generation.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
@@ -238,6 +244,8 @@ type UpdateDatabaseGenerationReadOptions = {
   acquisition?: UpdateRecoveryCaptureAcquisition;
   retryAdvice?: boolean;
   pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** The update run's verified digests; paired reads seed their worker and record its results. */
+  digests?: SqliteFileDigests;
 };
 
 export async function readUpdateDatabaseGenerationPairIsolated(
@@ -273,6 +281,41 @@ async function inspectUpdateDatabaseGenerations(
     root !== undefined,
     signal,
   );
+  // Only a worker from this same runtime exchanges digests; another release may predate the field.
+  // Update-invoked Doctor names its own install root, so compare the resolved worker files.
+  const workerFile = (selectedRoot?: string) =>
+    fs.realpathSync(
+      fileURLToPath(
+        resolveRuntimeWorkerUrl({
+          ...runtimeProcessEntrypoints.updateCandidateState,
+          root: selectedRoot,
+        }),
+      ),
+    );
+  const carried = options.digests;
+  let carry = paired && carried !== undefined && root === undefined;
+  if (paired && carried !== undefined && root !== undefined) {
+    try {
+      carry = workerFile(root) === workerFile();
+    } catch {
+      // A root without this worker selects another runtime; it hashes as before.
+    }
+  }
+  const families = new Set(
+    paths.flatMap((pathname) => [pathname, `${pathname}-journal`, `${pathname}-wal`]),
+  );
+  // Take the seeds out first: only a successful worker returns digests, so a refusal
+  // leaves these files to be hashed afresh by the next read.
+  const seeds: SqliteFileDigests = new Map();
+  if (carry && carried) {
+    for (const file of families) {
+      const digest = carried.get(file);
+      if (digest) {
+        seeds.set(file, digest);
+        carried.delete(file);
+      }
+    }
+  }
   const inspection = withStateInspectionCleanup(stagingRoot, async () => {
     const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot, timeoutMs, signal };
     const inventorySchema = z.record(z.string(), z.nullable(z.string().regex(/^[a-f0-9]{64}$/u)));
@@ -288,6 +331,7 @@ async function inspectUpdateDatabaseGenerations(
           generationFormat: paired ? "paired" : "committed",
           paths,
           ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
+          ...(carry ? { digests: serializeSqliteFileDigests(seeds) } : {}),
           stateDir: resolveStateDir(sourceEnv),
           config: {},
         },
@@ -300,11 +344,13 @@ async function inspectUpdateDatabaseGenerations(
             committed: inventorySchema,
             physical: inventorySchema,
             emptyReaderAlternates: z.record(z.string(), z.string()),
+            digests: z.unknown().optional(),
           })
         : inventorySchema.transform((committed) => ({
             committed,
             physical: committed,
             emptyReaderAlternates: {},
+            digests: undefined,
           })),
     );
     if (
@@ -316,7 +362,15 @@ async function inspectUpdateDatabaseGenerations(
     ) {
       throw new Error("Database generation worker did not return the supplied inventory.");
     }
-    return generations;
+    const { digests, ...pair } = generations;
+    if (carry && carried) {
+      for (const [file, digest] of parseSqliteFileDigests(digests ?? {})) {
+        if (families.has(file)) {
+          carried.set(file, digest);
+        }
+      }
+    }
+    return pair;
   });
   return retainSnapshotWork(inspection, () => controller.abort());
 }
