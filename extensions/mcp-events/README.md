@@ -2,17 +2,19 @@
 
 Optional bundled source for event-driven OpenClaw automations. This implements
 OpenAI's versioned MCP Events webhook profile for MCP 2.0 (protocol version
-2026-07-28), not the experimental polling, streaming, gap, or terminated controls.
+2026-07-28) and poll delivery (`events/poll`) from the MCP Events extension
+(SEP-3415). Push streams and the gap and terminated controls are not implemented.
 
 ## Setup
 
 1. Configure and authenticate an HTTP MCP server through OpenClaw's existing MCP
    connection settings. This plugin does not store a second set of credentials.
-2. Enable `mcp-events` and configure `callbackOrigin` with a public HTTPS origin.
-   Forward only `/plugins/mcp-events/callback/*` through your reverse proxy. Do not
-   expose the Gateway administration surface. OpenClaw neither creates a tunnel
-   nor changes network exposure for you. DNS/public-address preflight does not
-   prove reachability; the server's signed challenge does.
+2. Enable `mcp-events`. Without `callbackOrigin`, events arrive by poll and
+   no public route is needed. For webhook delivery, configure `callbackOrigin` with a
+   public HTTPS origin and forward only `/plugins/mcp-events/callback/*` through
+   your reverse proxy. Do not expose the Gateway administration surface. OpenClaw
+   neither creates a tunnel nor changes network exposure for you. DNS/public-address
+   preflight does not prove reachability; the server's signed challenge does.
 3. Create an automation with an authored agent-turn instruction and this schedule:
 
 ```json
@@ -27,11 +29,26 @@ OpenAI's versioned MCP Events webhook profile for MCP 2.0 (protocol version
 }
 ```
 
-The connected server must advertise `capabilities.events` from `server/discover`
-and support `events/list`, `events/subscribe`, and `events/unsubscribe` on the
-same native authenticated endpoint. Schemas and filters come from that account's
+The connected server must advertise `capabilities.extensions["io.modelcontextprotocol/events"]`
+(or the earlier `capabilities.events`) from `server/discover` and support
+`events/list` plus, per event, `events/poll` or `events/subscribe` and
+`events/unsubscribe`, on the same native authenticated endpoint. OpenClaw uses
+webhook when `callbackOrigin` is configured and the event offers it, else poll. Schemas and filters come from that account's
 catalog. Subscription identity includes its principal, callback URL, event name,
 and canonical JSON arguments.
+
+## Poll delivery
+
+- One poll loop per event automation, on the Gateway scheduler. The first poll
+  starts from now (`cursor: null`).
+- Each batch goes through the same durable ingress queue and Cron execution
+  owner as webhook events, in server order. The cursor is persisted after the
+  batch is queued; a crash re-polls it and duplicate event IDs are dropped.
+- `hasMore: true` polls again at once; otherwise OpenClaw waits `nextPollMs`
+  (floor 1 s, ceiling 1 h). The cursor survives restarts.
+- Failures back off up to five minutes. `NotFound` or `Unsupported` rediscovers
+  the event type and starts again from now. Invalid events are skipped with a
+  warning. There is no remote subscription to clean up.
 
 ## Delivery and lifecycle
 

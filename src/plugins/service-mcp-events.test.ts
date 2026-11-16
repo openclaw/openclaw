@@ -396,6 +396,23 @@ it("retains exact cleanup across benign refresh, removal, and connector config r
   expect(mocks.request.mock.lastCall?.[0].params?.delivery).not.toHaveProperty("secret");
   await expect(prepared.unsubscribe(signal)).rejects.toThrow("no captured");
 });
+it("polls only the persisted source's event and arguments, with no cleanup identity", async () => {
+  const prepared = await prepare();
+  const poll = {
+    name: subscription.name,
+    arguments: subscription.arguments,
+    cursor: "cursor-1",
+    maxEvents: 100,
+  };
+  await prepared.request("events/poll", poll, signal);
+  expect(mocks.request.mock.lastCall?.[0]).toMatchObject({ method: "events/poll", params: poll });
+  for (const mismatch of [{ name: "other.event" }, { arguments: { calendar: "home" } }]) {
+    await expect(prepared.request("events/poll", { ...poll, ...mismatch }, signal)).rejects.toThrow(
+      "persisted source",
+    );
+  }
+  await expect(prepared.unsubscribe(signal)).rejects.toThrow("no captured");
+});
 it("preserves cleanup on unknown subscribe outcome and rejects post-revocation success", async () => {
   const prepared = await prepare();
   mocks.request.mockImplementationOnce(async () => {

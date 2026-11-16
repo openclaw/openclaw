@@ -2,22 +2,19 @@ import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtim
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalArguments } from "./protocol.js";
 
-export type McpEventsConfig = { callbackOrigin: string; maxPendingEvents: number };
+/** Without callbackOrigin there is no inbound route, so events arrive by poll only. */
+export type McpEventsConfig = { callbackOrigin?: string; maxPendingEvents: number };
 
-export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
-  const config = record(value);
-  if (!config || typeof config.callbackOrigin !== "string") {
-    throw new Error(
-      "Configure mcp-events.callbackOrigin with a public HTTPS origin; expose only the callback route through your reverse proxy",
-    );
+function resolveCallbackOrigin(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  let url: URL;
+  let url: URL | undefined;
   try {
-    url = new URL(config.callbackOrigin);
-  } catch {
-    throw new Error("MCP Events callbackOrigin must be a public HTTPS origin");
-  }
+    url = typeof value === "string" ? new URL(value) : undefined;
+  } catch {}
   if (
+    !url ||
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
@@ -26,9 +23,15 @@ export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
     url.pathname !== "/"
   ) {
     throw new Error(
-      "MCP Events callbackOrigin must be a public HTTPS origin without credentials, path, query, or fragment",
+      "MCP Events callbackOrigin must be a public HTTPS origin without credentials, path, query, or fragment; omit it to receive events by poll",
     );
   }
+  return url.origin;
+}
+
+export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
+  const config = record(value) ?? {};
+  const callbackOrigin = resolveCallbackOrigin(config.callbackOrigin);
   const maxPendingEvents = config.maxPendingEvents ?? 10_000;
   if (
     typeof maxPendingEvents !== "number" ||
@@ -38,7 +41,7 @@ export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
   ) {
     throw new Error("MCP Events maxPendingEvents must be an integer from 1 to 100000");
   }
-  return { callbackOrigin: url.origin, maxPendingEvents };
+  return { ...(callbackOrigin ? { callbackOrigin } : {}), maxPendingEvents };
 }
 
 /** DNS/public-address preflight is not a reachability claim or permission to expose the Gateway. */

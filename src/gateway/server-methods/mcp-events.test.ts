@@ -120,6 +120,24 @@ it("discovers before listing and returns one explicit page without server-privat
   expect(mocks.release).toHaveBeenCalledOnce();
   expect(mocks.prepare.mock.calls[0]?.[0].principal.requester).toBeUndefined();
 });
+it("accepts the SEP-3415 extension entry and lists poll events, not push-only ones", async () => {
+  const pollEvent = { ...event, name: "calendar.polled", delivery: ["poll"] };
+  mocks.request.mockImplementation(async (input) =>
+    input.method === "server/discover"
+      ? {
+          supportedVersions: ["2026-07-28"],
+          capabilities: { extensions: { "io.modelcontextprotocol/events": {} } },
+        }
+      : { events: [event, pollEvent, { ...event, name: "calendar.pushed", delivery: ["push"] }] },
+  );
+  const f = fixture();
+  await f.run();
+  expect(f.respond).toHaveBeenCalledWith(
+    true,
+    { serverName: "calendar", events: [event, pollEvent] },
+    undefined,
+  );
+});
 it("keeps an astral event description whole at the catalog cap", async () => {
   const f = fixture();
   const prefix = "a".repeat(4095);

@@ -51,7 +51,10 @@ function projectCatalog(value: unknown) {
     };
   });
   return {
-    events: events.filter((event) => event.delivery.includes("webhook")),
+    // OpenClaw consumes webhook and poll delivery; push (events/stream) is not implemented.
+    events: events.filter(
+      (event) => event.delivery.includes("webhook") || event.delivery.includes("poll"),
+    ),
     ...(value.nextCursor !== undefined ? { nextCursor: value.nextCursor } : {}),
   };
 }
@@ -171,7 +174,12 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
           !Array.isArray(discovered.supportedVersions) ||
           !discovered.supportedVersions.includes(MCP_EVENTS_PROTOCOL_VERSION) ||
           !isRecord(discovered.capabilities) ||
-          !Object.hasOwn(discovered.capabilities, "events")
+          // SEP-3415 extension entry, or the top-level key that predates it.
+          !(
+            Object.hasOwn(discovered.capabilities, "events") ||
+            (isRecord(discovered.capabilities.extensions) &&
+              Object.hasOwn(discovered.capabilities.extensions, "io.modelcontextprotocol/events"))
+          )
         ) {
           throw new Error("This MCP server does not advertise the supported Events protocol.");
         }

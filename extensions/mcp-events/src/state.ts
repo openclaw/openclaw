@@ -11,8 +11,9 @@ export type SubscriptionBinding = {
   principalId: string;
   arguments: Record<string, unknown>;
   definition: EventDefinition;
-  callbackUrl: string;
-  secret: string;
+  /** Webhook delivery only. A binding without a callback URL receives its events by poll. */
+  callbackUrl?: string;
+  secret?: string;
   previousSecret?: { value: string; until: number };
   pendingSecret?: string;
   status: "pending" | "active" | "revoked";
@@ -25,7 +26,12 @@ export type SubscriptionBinding = {
   failures: number;
   cleanupPending: boolean;
   retiredAt?: number;
-  lastError?: "subscribe_failed" | "cleanup_failed" | "source_unavailable" | "state_unavailable";
+  lastError?:
+    | "subscribe_failed"
+    | "poll_failed"
+    | "cleanup_failed"
+    | "source_unavailable"
+    | "state_unavailable";
   updatedAt: number;
 };
 

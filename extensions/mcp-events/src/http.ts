@@ -11,8 +11,6 @@ import {
   CALLBACK_PREFIX,
   CallbackError,
   MAX_EVENT_BYTES,
-  MCP_EVENTS_PROFILE,
-  identityHash,
   parseCallback,
   verifyWebhook,
 } from "./protocol.js";
@@ -101,7 +99,8 @@ async function receiveCallback(
   }
   service.assertService();
   const binding = service.bindings.get(bindingId);
-  if (!binding?.live) {
+  // Poll bindings have no callback route.
+  if (!binding?.live || binding.facts.callbackUrl === undefined) {
     throw new CallbackError(410, "Subscription is no longer active");
   }
   try {
@@ -116,7 +115,7 @@ async function receiveCallback(
   const guard = service.authority.guard(binding);
   guard();
   const secrets = [
-    binding.facts.secret,
+    ...(binding.facts.secret ? [binding.facts.secret] : []),
     ...(binding.facts.pendingSecret ? [binding.facts.pendingSecret] : []),
     ...(binding.facts.previousSecret && binding.facts.previousSecret.until > service.now
       ? [binding.facts.previousSecret.value]
@@ -137,52 +136,6 @@ async function receiveCallback(
     }
     throw new CallbackError(410, "Subscription expired");
   }
-  const account = service.account(binding.facts.accountId);
-  const admission = account.admission.then(async () => {
-    guard();
-    const id = identityHash([binding.facts.accountId, bindingId, parsed.event.eventId]);
-    const unsettled = await account.queue.listUnsettled!();
-    guard();
-    const duplicate =
-      unsettled.pending.some((row) => row.id === id) ||
-      unsettled.claims.some((row) => row.id === id);
-    if (
-      !duplicate &&
-      unsettled.pending.length + unsettled.claims.length >= service.deps.config.maxPendingEvents
-    ) {
-      throw new CallbackError(503, "Event queue is full; retry later");
-    }
-    const result = await account.queue.enqueueAuthorized!(
-      id,
-      {
-        jobId: binding.facts.jobId,
-        sourceIdentity: binding.facts.sourceIdentity,
-        eventId: parsed.event.eventId,
-        receivedAtMs: service.now,
-        payload: { profile: MCP_EVENTS_PROFILE, bindingId, event: parsed.event },
-      },
-      { laneKey: binding.facts.jobId, receivedAt: service.now, assertCurrent: guard },
-    );
-    guard();
-    if (result.kind === "failed") {
-      throw new CallbackError(503, "Event is retained for recovery; inspect ingress diagnostics");
-    }
-    // Persist only after durable ingress. Cursors are opaque upstream watermarks, not event sequence IDs.
-    if (result.kind === "accepted" || result.kind === "pending" || result.kind === "claimed") {
-      const cursor = result.record.payload.payload.event.cursor;
-      await service.mutate(binding, (facts) => {
-        facts.cursor = cursor;
-        facts.cursorRevision++;
-      });
-    }
-    guard();
-  });
-  account.admission = admission.catch(() => {});
-  try {
-    await service.track(admission);
-  } finally {
-    // A cursor write can fail after durable enqueue; committed work must still be woken.
-    service.requestDrain();
-  }
+  await service.ingress.admit(binding, [parsed.event]);
   return {};
 }
