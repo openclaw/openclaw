@@ -3,7 +3,10 @@ import { isDeepStrictEqual } from "node:util";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as readRecord,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -93,8 +96,8 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
         }
       };
       const workspaceDir =
-        binding?.cwd?.trim() ||
-        options.context.workspaceDir?.trim() ||
+        readNonBlankString(binding?.cwd) ??
+        readNonBlankString(options.context.workspaceDir) ??
         resolveCodexDefaultWorkspaceDir(configuredPlugin);
       const request = options.request ?? (await loadCommandRpc()).codexControlRequest;
       const connection = await resolveCodexBindingAppServerConnection({
