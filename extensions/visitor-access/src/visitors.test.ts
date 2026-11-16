@@ -124,6 +124,19 @@ describe("VisitorAccessService", () => {
     expect(fixture.mutations()).toEqual([]);
   });
 
+  it("describes definitions alone as unrestricted rather than retaining an assigned role", async () => {
+    const fixture = visitorFixture({
+      profiles: [{ id: "stored-staff", emails: [EMAIL], role: "staff" }],
+      grants: [visitorGrant(EMAIL)],
+      gatewayConfig: {
+        gateway: { roles: { definitions: { guest: guestRole, staff: staffRole } } },
+      },
+    });
+    expect((await fixture.list()).text).toContain(
+      "Gateway access is unrestricted: roles are disabled",
+    );
+  });
+
   it.each<[string, Partial<ProfileFixture>, string, typeof staffRole?]>([
     ["assigned guest", { role: "guest" }, 'restricted guest (assigned role "guest")'],
     [

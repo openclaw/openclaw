@@ -12,10 +12,7 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerHasSourceCustody,
-} from "../state/openclaw-state-maintenance-context.js";
+import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
 import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
@@ -142,7 +139,8 @@ export async function prepareArtifactPreservingSqliteRead(
     !scope ||
     getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
-    isUpdateRehearsalPrivateDatabase(pathname, process.env)
+    isUpdateRehearsalPrivateDatabase(pathname, process.env) ||
+    readCustodiedDrainedSqliteSource(pathname)
   ) {
     return;
   }
@@ -162,25 +160,6 @@ export async function prepareArtifactPreservingSqliteRead(
   } else {
     retainArtifactSnapshot(scope, prepared, sourceIdentity);
   }
-}
-
-/**
- * Under schema-maintenance custody no other owner opens the source, and a drained family has
- * no journal or WAL frames to interpret. An immutable open then reads the committed bytes in
- * place without adding a lock, WAL or index beside the source, where a private image would
- * cost the whole family's size on disk.
- */
-export function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
-  if (!maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname)) {
-    return undefined;
-  }
-  if (
-    fs.existsSync(`${pathname}-journal`) ||
-    (fs.statSync(`${pathname}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0
-  ) {
-    return undefined;
-  }
-  return fs.statSync(pathname, { bigint: true });
 }
 
 // Immutable reads cannot detect a writer, so a changed source invalidates what was read.
@@ -210,7 +189,9 @@ export function openSqliteReadOnlyDatabase(
   // and scoped, but do not copy the same database again for each canary check.
   const sourceIdentity = readDatabasePathIdentitySync(pathname);
   let snapshot = findArtifactSnapshot(scope, sourceIdentity);
-  const drained = snapshot ? undefined : readCustodiedDrainedSqliteSource(pathname);
+  const drained = snapshot
+    ? undefined
+    : readCustodiedDrainedSqliteSource(sourceIdentity.canonicalPath);
   if (!snapshot && !drained && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
     snapshot = retainArtifactSnapshot(scope, prepared, sourceIdentity);
@@ -226,14 +207,15 @@ export function openSqliteReadOnlyDatabase(
   };
   scope.readers.add(close);
   const location =
-    snapshot?.location ?? (drained ? resolveImmutableSqliteFileUri(pathname) : pathname);
+    snapshot?.location ??
+    (drained ? resolveImmutableSqliteFileUri(sourceIdentity.canonicalPath) : pathname);
   const db = openNodeSqliteDatabase(location, { ...options, readOnly: true });
   const dispose = db.close.bind(db);
   native.close = () => {
     if (db.isOpen) {
       dispose();
       if (drained) {
-        assertCustodiedSourceUnchanged(pathname, drained);
+        assertCustodiedSourceUnchanged(sourceIdentity.canonicalPath, drained);
       }
     }
   };
@@ -612,6 +594,7 @@ export function prepareSqliteReadOnlyLocationSync(
 
 async function prepareSqliteSnapshotSource(
   pathname: string,
+  onPrepare?: (phase: "start" | "done", bytes: number) => void,
 ): Promise<PreparedSqliteReadOnlyLocation | undefined> {
   const canonicalPath = fs.realpathSync.native(pathname);
   const journalPath = `${canonicalPath}-journal`;
@@ -628,24 +611,30 @@ async function prepareSqliteSnapshotSource(
   if (!journal.isFile()) {
     throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
   }
+  onPrepare?.("start", fs.statSync(canonicalPath).size);
   return await prepareSqliteReadOnlyLocation(canonicalPath);
 }
 
 export async function withSqliteSnapshotSource<T>(
   pathname: string,
   operation: (sourcePath: string) => Promise<T>,
+  onPrepare?: (phase: "start" | "done", bytes: number) => void,
 ): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
+  let prepared = await prepareSqliteSnapshotSource(pathname, onPrepare);
   try {
+    if (prepared) {
+      onPrepare?.("done", fs.statSync(prepared.location).size);
+    }
     return await operation(prepared ? prepared.location : pathname);
   } catch (error) {
     if (prepared) {
       throw error;
     }
-    prepared = await prepareSqliteSnapshotSource(pathname);
+    prepared = await prepareSqliteSnapshotSource(pathname, onPrepare);
     if (!prepared) {
       throw error;
     }
+    onPrepare?.("done", fs.statSync(prepared.location).size);
     return await operation(prepared.location);
   } finally {
     await prepared?.cleanupAsync();

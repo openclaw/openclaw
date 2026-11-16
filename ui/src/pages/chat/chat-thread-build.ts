@@ -84,7 +84,7 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
@@ -329,7 +329,9 @@ export function buildChatItems(
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
       !hasHandoffToolCall(msg) &&
-      !permissionInMessage(msg)
+      !permissionInMessage(msg) &&
+      // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+      !readProjectedContinuation(msg)
     ) {
       continue;
     }

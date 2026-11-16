@@ -3,7 +3,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { acceptSessionSourceValidation } from "./session-source-authority.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   SqliteExpectedSessionTranscriptTurnResult,
@@ -62,18 +62,16 @@ export async function restoreSessionTurnColdTranscript(
               target: scope,
               acceptSourceValidation: (validation) =>
                 acceptSessionSourceValidation(source, validation),
-              readMetadata: async () =>
-                (
-                  await owner.readColdMetadata({
-                    sessionId: scope.sessionId,
-                    env: scope.env ?? process.env,
-                  })
-                ).archive,
+              readMetadata: () =>
+                owner.readColdMetadata({
+                  sessionId: scope.sessionId,
+                  env: scope.env ?? process.env,
+                }),
             },
             guard,
           );
         },
-        projectionLane,
+        sessionStoreLane,
       );
     } else {
       await restoreSessionColdTranscript(target, assertCurrent, undefined, guard);

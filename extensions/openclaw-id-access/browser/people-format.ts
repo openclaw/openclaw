@@ -1,7 +1,7 @@
 // Plain-language text for the People page: who someone is, what their devices
 // are doing and what a removal cut. Pure functions, so the wording is tested
 // without rendering.
-import type { Member, MemberDevice, RemovalSummary } from "./types.js";
+import type { Member, MemberDevice, OwnerDevice, RemovalSummary } from "./types.js";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -40,14 +40,17 @@ export function formatAgo(atMs: number, nowMs: number): string {
 
 /**
  * A member's presence across their devices: "active now" while any device is
- * connected, else "last seen …", else "not seen yet" (since the Gateway started).
+ * connected, else the most recent live or persisted "last seen …", else "not seen yet".
  */
 export function memberPresence(devices: readonly MemberDevice[], nowMs: number): string {
   if (devices.some((device) => device.connections > 0)) {
     return "active now";
   }
   const seen = devices
-    .map((device) => device.lastSeenAt)
+    .flatMap((device) => [
+      device.lastSeenAt,
+      device.lastSeen === null ? null : device.lastSeen * 1000,
+    ])
     .filter((value): value is number => typeof value === "number");
   return seen.length > 0 ? `last seen ${formatAgo(Math.max(...seen), nowMs)}` : "not seen yet";
 }
@@ -68,6 +71,52 @@ export function memberRunning(
   return title
     ? `running “${title}”`
     : `running ${runs.length} ${runs.length === 1 ? "task" : "tasks"}`;
+}
+
+/** Device approval provenance, resolving fingerprints to labels when listed. */
+export function deviceApprover(
+  device: MemberDevice,
+  memberDevices: readonly MemberDevice[],
+  ownerDevices: readonly OwnerDevice[],
+): string {
+  const approver = device.approvedBy;
+  if (!approver) {
+    return "Approver unavailable";
+  }
+  if (approver.kind === "invite") {
+    return `Approved via invite ${approver.invite_id}`;
+  }
+  if (approver.kind === "owner") {
+    return approver.by === "root"
+      ? "Approved with the recovery key"
+      : `Approved by owner device ${ownerDevices.find((owner) => owner.deviceFp === approver.by)?.label ?? approver.by}`;
+  }
+  return `Approved by ${memberDevices.find((member) => member.deviceFp === approver.device_fp)?.label ?? approver.device_fp}`;
+}
+
+/** Display-only count; the Gateway owns the actual transitive revocation. */
+export function memberDeviceRemovalCount(
+  devices: readonly MemberDevice[],
+  target: MemberDevice,
+): number {
+  const removed = new Set([target.peerKey]);
+  const pending = [target];
+  for (const parent of pending) {
+    if (!parent.deviceFp) {
+      continue;
+    }
+    for (const device of devices) {
+      if (
+        !removed.has(device.peerKey) &&
+        device.approvedBy?.kind === "member_device" &&
+        device.approvedBy.device_fp === parent.deviceFp
+      ) {
+        removed.add(device.peerKey);
+        pending.push(device);
+      }
+    }
+  }
+  return removed.size;
 }
 
 /** Display role names consistently in invite summaries and the picker. */

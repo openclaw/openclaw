@@ -129,6 +129,15 @@ async function runCronIsolatedAgentTurnInTrace(
       runPrepared: runPreparedCronTurn,
     });
   } catch (err) {
+    if (err instanceof CronOperatorSourceError) {
+      return {
+        status: "error",
+        error: err.message,
+        errorClassification: { kind: "permanent" },
+        executionStarted: false,
+        admissionDisposition: "rejected",
+      };
+    }
     if (err instanceof CronSessionLifecycleClaimError) {
       return {
         status: "error",
@@ -415,7 +424,7 @@ async function runCronIsolatedAgentTurnInTrace(
                       target: {
                         agentId: prepared.context.agentId,
                         sessionKey: prepared.context.runSessionKey,
-                        entry: prepared.context.cronSession.sessionEntry,
+                        sessionId: prepared.context.cronSession.sessionEntry.sessionId,
                       },
                       signal: abortSignal,
                       deliveryAttemptFence: params.deliveryAttemptFence,
@@ -497,6 +506,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 automationRun.closed = true;
               }
               const finalized = await finalizeCronRun({
+                runId,
                 automationResult,
                 prepared: prepared.context,
                 execution,

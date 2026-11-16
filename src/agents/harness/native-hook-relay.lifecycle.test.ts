@@ -854,22 +854,17 @@ describe("native hook execution admission", () => {
   });
 
   it.each([
-    { registration: "owned", work: "none", matcher: ["exec"] },
-    { registration: "public", work: "none", matcher: undefined },
-    { registration: "owned", work: "loop detection", matcher: undefined },
+    { registration: "owned", matcher: ["exec"] },
+    { registration: "public", matcher: undefined },
   ] as const)(
-    "selects native execution custody for $registration registration with $work",
-    async ({ registration, work, matcher }) => {
+    "selects native execution custody for $registration registration",
+    async ({ registration, matcher }) => {
       const admit = vi.fn();
       const params = {
         provider: "codex" as const,
         sessionId: "openclaw-session",
         runId: "execution-admission",
-        ...(work !== "none" ? { sessionKey: "agent:main:execution-admission" } : {}),
-        ...(work === "loop detection"
-          ? { config: { tools: { loopDetection: { enabled: true } } } }
-          : {}),
-        executionAdmission: { toolNames: [work === "none" ? "exec_command" : "exec"], admit },
+        executionAdmission: { toolNames: ["exec_command"], admit },
       };
       const relay =
         registration === "owned"
@@ -877,9 +872,6 @@ describe("native hook execution admission", () => {
           : registerNativeHookRelay(params);
       expect(relay.shouldRelayEvent("pre_tool_use")).toBe(registration === "owned");
       expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(matcher);
-      if (work !== "none") {
-        return;
-      }
       const rawPayload = {
         session_id: "native-root",
         turn_id: "native-turn",

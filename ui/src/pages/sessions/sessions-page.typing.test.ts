@@ -780,7 +780,7 @@ describe("Sessions transcript search", () => {
     expect(find("result")?.textContent).toContain("Assistant");
     expect(find("result")?.querySelector("launch")).toBeNull();
     expect(page.textContent).toContain(
-      "3 archived transcripts excluded; open a session to restore its searchable history.",
+      "3 archived chats excluded; open a session to restore its searchable history.",
     );
     expect(find("notice")?.textContent).toContain(t("sessionsView.transcriptSearchIndexing"));
     expect(find("summary")?.textContent).toContain(t("sessionsView.transcriptSearchTruncated"));

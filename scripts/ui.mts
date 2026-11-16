@@ -502,7 +502,11 @@ async function buildAndPublishUi(
           ] satisfies [UiSpawnCall, string][])
         : []),
       validator("check-control-ui-precompressed-assets.mts", staging),
-      validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
+      // The report measures bundle bytes and never fails; a hit reuses bytes it already
+      // measured, and the identity refresh above changes only release metadata.
+      ...(!reuseOutput
+        ? [validator("check-control-ui-performance.mts", "--report-only", "--dist", staging)]
+        : []),
     ];
     for (const [call, label] of calls) {
       const result = runSpawnCallSync(call, label);

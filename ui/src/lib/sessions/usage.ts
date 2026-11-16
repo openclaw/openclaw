@@ -12,9 +12,7 @@ export type SessionUsageQuery = {
   creatorKey?: string;
   query?: string;
   selectedDays?: string[];
-  selectedHours?: number[];
   selectedSessions?: string[];
-  recentKeys?: string[];
   offset?: number;
   sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
   sortDirection?: "asc" | "desc";
@@ -73,10 +71,8 @@ export function requestSessionUsage(
           ...(options?.projection ? { projection: options.projection } : {}),
           ...(query.query ? { query: query.query } : {}),
           ...(query.selectedDays?.length ? { selectedDays: query.selectedDays } : {}),
-          ...(query.selectedHours?.length ? { selectedHours: query.selectedHours } : {}),
           ...(query.selectedSessions?.length ? { selectedSessions: query.selectedSessions } : {}),
           ...(query.offset ? { offset: query.offset } : {}),
-          ...(query.recentKeys ? { recentKeys: query.recentKeys } : {}),
           ...(query.sort ? { sort: query.sort } : {}),
           ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
         }),

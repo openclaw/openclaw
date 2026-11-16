@@ -439,12 +439,21 @@ export function createEngineCompletedRunScenarios(
         ...shared,
         id: `${id}-open`,
         navigation: "measured",
+        initScript: engineProbeInitScript(false, 0, entrySelector(messageCount)),
         expected: `Open the complete ${messageCount}-message ${kind}, with its tail and composer ready.`,
         prepare: async () => {},
         run: async (page) => {
           await page.goto(new URL(route, baseUrl).href, { waitUntil: "domcontentloaded" });
           await ready(page, sessionKey, messageCount);
-          return { messageCount, ...(await geometry(page)) };
+          const readiness = await page.evaluate(() => {
+            const timing: { transcriptMs: number; composerMs: number; readyMs: number } =
+              Reflect.get(window, "__engineBootReadiness");
+            if (!timing.readyMs) {
+              throw new Error("Completed-run readiness clock did not observe the visible tail");
+            }
+            return timing;
+          });
+          return { messageCount, ...readiness, ...(await geometry(page)) };
         },
       };
       const prepare = async (page: Page) => {

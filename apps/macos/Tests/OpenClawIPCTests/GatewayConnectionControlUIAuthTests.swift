@@ -451,6 +451,32 @@ struct GatewayConnectionControlUIAuthTests {
         }
     }
 
+    @Test func `OpenClaw ID ingress signs the dashboard proof without a credential`() async throws {
+        // Regression: ingress issues no device token, so the dashboard challenge threw and the
+        // Control UI behind the OpenClaw ID proxy could never connect.
+        let stateDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+        try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            let endpoint = try GatewayConnection.EndpointSnapshot(
+                config: controlUIRoute("ws://ingress.invalid"), routeAuthority: 1, deviceAuthGatewayID: "ingress")
+            let connection = GatewayConnection(
+                endpointProvider: { endpoint },
+                supportsSharedEndpointRecovery: false,
+                activationBindingKeyProvider: { nil },
+                sessionBox: WebSocketSessionBox(session: makeControlUIAuthSession(
+                    scopes: ["operator.read"], method: "remote-ingress")))
+            try await withControlUIConnection(connection) {
+                _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+                let signed = try await connection.controlUiNativeAuth(endpoint: endpoint, nonce: "nonce", signedAt: 123)
+                let value = try #require(JSONSerialization.jsonObject(with: signed.json) as? [String: Any])
+                #expect(value["auth"] as? [String: String] == [:])
+                #expect((value["device"] as? [String: Any])?["nonce"] as? String == "nonce")
+                #expect(try await connection.controlUiLegacyCredentials(endpoint: endpoint).credentials.isEmpty)
+            }
+        }
+    }
+
     @Test func `identity-free connections cannot lend native device authority`() async throws {
         let endpoint = try GatewayConnection.EndpointSnapshot(
             config: controlUIRoute("ws://identity-free.invalid", token: "shared"), routeAuthority: 1)

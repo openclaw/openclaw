@@ -32,6 +32,7 @@ import {
   withCurrentRuntimeUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -118,17 +119,24 @@ it.for(["protected", "below cap protected insert"] as const)(
     const scope = { agentId: "main", path: storePath };
     const protectedKey = "agent:main:lazy-protected";
     const updatedAt = Date.now();
-    openOpenClawAgentDatabase(scope);
-    runOpenClawAgentWriteTransaction((database) => {
+    const database = openOpenClawAgentDatabase(scope);
+    runOpenClawAgentWriteTransaction((writer) => {
       for (const key of [protectedKey, ...(belowCap ? [] : ["agent:main:lazy-other-protected"])]) {
-        writeSessionEntry(database, key, {
+        writeSessionEntry(writer, key, {
           sessionId: key,
           updatedAt,
           modelSelectionLocked: true,
         });
       }
     }, scope);
+    const identity = readOpenClawAgentDatabaseIdentity(database);
     const request = {
+      source: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: identity.canonicalPath,
+      },
       activeSessionKey: protectedKey,
       archiveDirectory: path.join(path.dirname(storePath), "lazy-archives"),
       maintenanceConfig: {

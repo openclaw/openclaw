@@ -11,11 +11,11 @@ import type {
 } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { CodeModeOutputState, toCodeModeJsonSafe } from "./code-mode-json.js";
-import {
-  createCodeModeNamespaceRuntime,
-  type CodeModeNamespaceDescriptor,
-  type SerializedCodeModeNamespaceValue,
+import type {
+  CodeModeNamespaceDescriptor,
+  SerializedCodeModeNamespaceValue,
 } from "./code-mode-namespaces.js";
+import { getPreparedCodeModeCatalog } from "./code-mode-prepared-catalog.js";
 import {
   DEFAULT_HEADLESS_TOOL_CALLS,
   DEFAULT_HEADLESS_WALL_CLOCK_MS,
@@ -43,6 +43,7 @@ import {
   type PendingBridgeState,
 } from "./code-mode-state.js";
 import type { CodeModeWorkerPayload } from "./code-mode-worker-types.js";
+import { resolveCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -200,16 +201,18 @@ export async function runCodeModeScriptHeadless(params: {
       validateInput: true,
     });
     const bridgeDispatch = { started: false };
-    const namespaceCatalog = runtime.namespaceEntries();
-    const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
+    const prepared = getPreparedCodeModeCatalog(resolveCatalog(params.ctx).entries);
+    const { namespaceRuntime } = prepared;
     const namespaces = mergeHeadlessNamespaces(
       namespaceRuntime.descriptors,
       params.extraNamespaces ?? [],
     );
-    const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
-      reservedNames: namespaces.map((descriptor) => descriptor.globalName),
-      mcpIds: namespaceRuntime.mcpBindings.keys(),
-    });
+    const catalogProjection = params.extraNamespaces?.length
+      ? createCodeModeCatalogProjection(prepared.catalogProjection.bindings, {
+          reservedNames: namespaces.map((descriptor) => descriptor.globalName),
+          mcpIds: namespaceRuntime.mcpBindings.keys(),
+        })
+      : prepared.catalogProjection;
     const parentToolCallId = `headless:${randomUUID()}`;
     const dispatch = (
       boundary: Pick<

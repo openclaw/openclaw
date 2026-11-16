@@ -327,10 +327,8 @@ it("propagates stored child activity through idle ancestors and clears it on set
     keys.forEach((key, index) => seedRow(key, entries[index]!));
     using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
     const read = async (search?: string) => {
-      const result = await listProjectedSessions({
-        projection,
-        opts: { rowMode: "sidebar", search },
-      });
+      const opts = { rowMode: "sidebar" as const, search };
+      const result = await listProjectedSessions({ projection, opts });
       return expandSessionRowFacts(result.sessions, result.sharedFacts);
     };
     const activity = async () => {
@@ -367,6 +365,10 @@ it("propagates stored child activity through idle ancestors and clears it on set
       ).toBe(false);
     }
     expect(await activity()).toEqual([false, false, false, false]);
+    const root = projection.describe({ key: keys[0]!, agentId: "main" })!;
+    const atTime = vi.spyOn(projection.state.rowContext.subagentRuns, "atTime");
+    projection.readChildActivity(root, Date.now());
+    expect(atTime).not.toHaveBeenCalled();
     // Malformed stored cycles neither invent activity nor recurse forever.
     seedRow(keys[0]!, { ...entries[0]!, spawnedBy: keys[3] });
     expect(await activity()).toEqual([false, false, false, false]);

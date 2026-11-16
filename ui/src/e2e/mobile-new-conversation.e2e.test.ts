@@ -80,7 +80,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill("Help me plan the next release.");
       const identity = page.locator(".new-session-page .agent-chat__welcome-identity");
-      const triggers = page.locator(".new-session-page__triggers");
+      const triggers = page.locator(".new-session-page__context-tray .new-session-page__triggers");
       const surface = page.locator(".new-session-page__composer");
       const dir =
         process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
@@ -120,13 +120,20 @@ suite.define(() => {
           Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
           state.name,
         ).toBeLessThanOrEqual(1);
-        // #192044 renamed Local to This computer; keep the picker within half a row.
         const device = page.locator("#new-session-where-trigger");
-        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(targetBox!.width / 2);
+        const deviceBox = (await device.boundingBox())!;
+        if (state.width <= 768) {
+          // Phone placement pickers each own a full row above the writing surface.
+          expect(deviceBox.width).toBe(targetBox!.width);
+        } else {
+          expect(deviceBox.width).toBeLessThanOrEqual(targetBox!.width / 2);
+        }
         expect(
           await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
         ).toBe(true);
-        expect(composerBox!.height).toBeLessThanOrEqual(150);
+        expect(
+          (await surface.locator(":scope > .agent-chat__input").boundingBox())!.height,
+        ).toBeLessThanOrEqual(150);
         expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(state.height);
         expect(composerBox!.x).toBeGreaterThanOrEqual(0);
         expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(state.width);

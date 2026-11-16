@@ -1,0 +1,6 @@
+# Issue #194330: retained acquisition-diagnostics regression coverage.
+# Measured against prepared base 36a1c58e91dd9ae991edd76f9ccbfdcd056c5fa0:
+# 24 LF bytes in publication-events tests and 94 in models-list provider-outcome tests.
+# Proves partial-recovery publication, live handler/adaptor scope propagation,
+# preserved auth outcomes/model rows, and omission of hidden or unsafe identifiers.
+118

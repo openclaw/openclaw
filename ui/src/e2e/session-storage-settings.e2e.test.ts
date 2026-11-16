@@ -55,8 +55,7 @@ const row = (page: Page, title: string) =>
     .filter({ has: page.locator(".settings-row__title").getByText(title, { exact: true }) });
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const ageInput = (page: Page) => page.getByRole("spinbutton", { name: "Archive after (days)" });
-const archiveSwitch = (page: Page) =>
-  page.getByRole("switch", { name: /Archive older transcripts/ });
+const archiveSwitch = (page: Page) => page.getByRole("switch", { name: /Archive older chats/ });
 const expectRow = (page: Page, title: string, text: string) =>
   expect.poll(() => row(page, title).textContent()).toContain(text);
 async function openStorage(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
@@ -81,8 +80,8 @@ suite.define(() => {
         await page.clock.install();
         const gateway = await openStorage(page);
         const run = button(page, "Run now");
-        await expectRow(page, "Transcripts", "1200");
-        await expectRow(page, "Transcripts", "300 uncompressed · 900 archived");
+        await expectRow(page, "Chats", "1200");
+        await expectRow(page, "Chats", "300 uncompressed · 900 archived");
         await page.getByText("Details by agent", { exact: true }).click();
         await expectRow(page, "research", "140 archived");
         await page.getByText("Details by agent", { exact: true }).click();
@@ -110,7 +109,7 @@ suite.define(() => {
           .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
           .toContain("Apply changes");
         await page.clock.resume();
-        await row(page, "Archive older transcripts").getByRole("switch").click();
+        await row(page, "Archive older chats").getByRole("switch").click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(2);
         const saves = await gateway.getRequests("config.set");
         expect(submittedConfig(saves[1]!)).toHaveProperty("session.maintenance.coldStorage", {
@@ -150,7 +149,7 @@ suite.define(() => {
           }),
         );
         await page.clock.runFor(2_000);
-        await notice.filter({ hasText: "Batch completed. 12 transcripts archived." }).waitFor();
+        await notice.filter({ hasText: "Batch completed. 12 chats archived." }).waitFor();
         await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 844 });
         expect(
@@ -175,11 +174,11 @@ suite.define(() => {
       });
       const run = button(page, "Run now");
       await page.getByRole("alert").filter({ hasText: "Archive missing" }).waitFor();
-      expect(await row(page, "Transcripts").count()).toBe(0);
+      expect(await row(page, "Chats").count()).toBe(0);
       expect(await run.isDisabled()).toBe(true);
       await gateway.setMethodResponse("sessions.storage.status", storage);
       await button(page, "Refresh").click();
-      await expectRow(page, "Transcripts", "1200");
+      await expectRow(page, "Chats", "1200");
       await gateway.setMethodResponse("sessions.storage.run", {
         __mockError: { code: "UNAVAILABLE", message: "Not enough disk space" },
       });

@@ -308,7 +308,7 @@ it("keeps read ranges visible and opens the unmodified file path", async () => {
     { onOpenWorkspaceFile },
   );
 
-  const pathButton = query(container, '.chat-tool-card__detail-link[title="Open file"]');
+  const pathButton = query(container, ".chat-tool-card__detail-link");
   expect(pathButton).toBeInstanceOf(HTMLButtonElement);
   pathButton!.click();
   expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: args.path });

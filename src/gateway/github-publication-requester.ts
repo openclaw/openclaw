@@ -1,4 +1,5 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -24,6 +25,13 @@ import {
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
 import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
+  openClawIdRecoveryPrincipalSchema,
+  openclawIdTunnelRolePolicy,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
@@ -32,6 +40,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { repositoryDispatchCredentialReader } from "./repository-dispatch.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
@@ -90,6 +99,12 @@ export type GitHubPublicationRequester = GitHubPublicationRequesterPolicy &
 export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolicy &
   Readonly<{
     version: 2;
+    /** Live invocation only; durable requester snapshots cannot recreate repository admission. */
+    prepareDispatchCredential?(input: {
+      sessionId: string;
+      requestDigest: string;
+      assertCurrent: () => void;
+    }): GitHubCredentialReader | undefined;
     signal: AbortSignal;
     prepareSource(
       selector: GitHubPublicationSourceSelector,
@@ -152,6 +167,7 @@ function prepareRequesterPolicy(
 ) {
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: snapshot.actor,
+    openclawIdPrincipal: snapshot.openclawIdPrincipal,
     scopes: [...snapshot.scopes],
   });
   let retainedAuthority: PluginGatewayAccessAuthority | undefined;
@@ -175,14 +191,20 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
-    const role = profile
-      ? resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          config,
-          profile.githubLogin ?? null,
-        )
-      : undefined;
+    const principal = snapshot.openclawIdPrincipal;
+    if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
+    const role =
+      openclawIdTunnelRolePolicy(principal) ??
+      (profile
+        ? resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.assignedRole,
+            config,
+            profile.githubLogin ?? null,
+          )
+        : undefined);
     if (
       !roleScopesAllow({
         role: "operator",
@@ -269,12 +291,10 @@ function prepareRequesterPolicy(
     const profile = assertPrepared(config);
     if (profile) {
       try {
-        const authority = resumeGatewayOperatorAccessGrant(
-          profile,
-          config,
-          snapshot.grant,
-          retainedAuthority,
-        );
+        const authority = resumeGatewayOperatorAccessGrant(profile, config, snapshot.grant, {
+          retained: retainedAuthority,
+          openclawIdPrincipal: snapshot.openclawIdPrincipal,
+        });
         retainedAuthority = authority;
         onPolicy?.(authority);
       } catch (error) {
@@ -368,6 +388,10 @@ export async function prepareGitHubPublicationRequesterV2(
         });
       }
     }
+    const principal =
+      source?.authority.openclawIdPrincipal?.kind === "member"
+        ? openClawIdRecoveryPrincipalSchema.parse(source.authority.openclawIdPrincipal)
+        : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
       actor: Object.freeze(
@@ -376,6 +400,14 @@ export async function prepareGitHubPublicationRequesterV2(
           : { kind: "system" as const },
       ),
       scopes: Object.freeze([...(source?.authority.scopes ?? options.client.connect.scopes ?? [])]),
+      ...(principal
+        ? {
+            openclawIdPrincipal: Object.freeze({
+              ...principal,
+              authority: Object.freeze(principal.authority),
+            }),
+          }
+        : {}),
       grant,
     });
     let policyAuthority: PluginGatewayAccessAuthority | undefined;
@@ -408,6 +440,23 @@ export async function prepareGitHubPublicationRequesterV2(
     };
     const requester: GitHubPublicationRequesterV2 = Object.freeze({
       version: 2 as const,
+      prepareDispatchCredential: (input: {
+        sessionId: string;
+        requestDigest: string;
+        assertCurrent: () => void;
+      }) =>
+        repositoryDispatchCredentialReader({
+          client: options.client,
+          agentId: session.agentId,
+          sessionKey: session.sessionKey,
+          sessionId: input.sessionId,
+          requestDigest: input.requestDigest,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          assertCurrent: () => {
+            requester.assertCurrent();
+            input.assertCurrent();
+          },
+        }),
       signal,
       snapshot,
       assertInvocationCurrent,
@@ -486,6 +535,19 @@ export async function restoreGitHubPublicationRequester(
   const snapshot = decodeGitHubPublicationRequester(json);
   if (!snapshot) {
     throw new GitHubPublicationRequesterUnavailableError();
+  }
+  if (snapshot.openclawIdPrincipal) {
+    try {
+      await prepareOpenClawIdTunnelPrincipal(snapshot.openclawIdPrincipal);
+    } catch (error) {
+      if (error instanceof OpenClawIdPrincipalChangedError) {
+        throw new GitHubPublicationRequesterUnavailableError();
+      }
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication membership is unavailable; retry recovery after membership storage is ready.",
+        { cause: error },
+      );
+    }
   }
   let identity: PreparedProfileIdentity | undefined;
   let sessionFacts: PreparedPublicationSession | undefined;

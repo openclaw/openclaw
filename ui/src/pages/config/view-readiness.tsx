@@ -3,6 +3,8 @@ import { createMemo, Errored, Loading, Show } from "solid-js";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsSection,
   SettingsUnavailable,
   RetryAction,
 } from "../../components/solid/settings-ui.tsx";
@@ -10,12 +12,23 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
 
-export function ConfigReadLoading(props: { message: string }) {
+export function ConfigReadLoading(props: { message: string; embedded?: boolean; title?: string }) {
   return (
-    <div class="config-loading" aria-busy="true">
-      <span class="btn__spinner config-loading__spinner" aria-hidden="true" />
-      <span>{props.message}</span>
-    </div>
+    <Show
+      when={props.embedded}
+      fallback={
+        <div class="config-loading" aria-busy="true">
+          <span class="btn__spinner config-loading__spinner" aria-hidden="true" />
+          <span>{props.message}</span>
+        </div>
+      }
+    >
+      <SettingsPage>
+        <SettingsSection title={props.title}>
+          <SettingsLoadingSkeleton rows={2} />
+        </SettingsSection>
+      </SettingsPage>
+    </Show>
   );
 }
 

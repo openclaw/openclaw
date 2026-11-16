@@ -157,7 +157,13 @@ public final class OpenClawChatViewModel {
                 ? self.explicitSessionAgentID ?? self.activeAgentId : nil)
     }
 
+    var readerHistoryDeletionRevision: UInt64 = 0
+
     public private(set) var streamingAssistantText: String?
+    @ObservationIgnored private(set) var streamingAssistantRunID: String?
+    @ObservationIgnored private(set) var streamingPriorMessageIDs = Set<UUID>()
+    @ObservationIgnored var streamingRetiredFinalIDs = Set<UUID>()
+    @ObservationIgnored var streamingRetiredSource: (finalID: UUID, raw: String, displayed: String?)?
     /// What the Gateway says the selected run is doing before its first output.
     var runStartup: ChatRunStartup?
     var runStartupStatus: String? {
@@ -165,6 +171,8 @@ public final class OpenClawChatViewModel {
     }
 
     /// Presentation is paced independently; event consumers always see the newest stream text.
+    /// The live bubble renders `displayedStreamingAssistantText`; the transcript decides whether it
+    /// shows from the untracked copy (`liveTextShape`). A clear empties only the untracked copy.
     private(set) var displayedStreamingAssistantText: String?
     @ObservationIgnored private(set) var displayedStreamingAssistantTextUntracked: String?
     @ObservationIgnored var streamPacing = ChatStreamPacing()
@@ -172,6 +180,13 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
+
+    func markTimelineChanged() {
+        self.timelineRevision &+= 1
+    }
+
+    /// Explicit local admission, not received transcript rows or outbox restoration.
+    var localSendRevision: UInt64 = 0
     // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
@@ -326,6 +341,9 @@ public final class OpenClawChatViewModel {
     nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored
     var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
+    /// Set while a reconnect waits on transcript recovery before its catalog refreshes.
+    @ObservationIgnored
+    var pendingTransportRecoveryID: UUID?
     var runOwnershipGeneration: UInt64 = 0
     var latestAppliedRunSnapshotRequestID: UInt64 = 0
     var isApplyingRunSnapshot = false
@@ -531,7 +549,7 @@ public final class OpenClawChatViewModel {
         didSet {
             guard self.turnToolCallsById != oldValue else { return }
             self.toolActivities = prepareToolActivities(from: oldValue)
-            markTimelineChanged()
+            self.markTimelineChanged()
         }
     }
 
@@ -665,11 +683,6 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    @discardableResult
-    public func resumeFromForeground() -> Task<Void, Never> {
-        Task { await self.refreshRunStateAfterForeground() }
-    }
-
     public func abort() {
         guard !self.usesWebConversation else { return }
         Task { await self.performAbort() }
@@ -784,41 +797,40 @@ public final class OpenClawChatViewModel {
 extension OpenClawChatViewModel {
     // MARK: - Internals
 
-    func markTimelineChanged() {
-        self.timelineRevision &+= 1
-    }
-
-    func appendMessage(_ message: OpenClawChatMessage) {
-        self.messages.append(message)
-        self.markTimelineChanged()
-    }
-
-    func removeMessage(id: UUID) {
-        let previousCount = self.messages.count
-        self.messages.removeAll { $0.id == id }
-        if self.messages.count != previousCount {
-            self.markTimelineChanged()
-        }
-    }
-
     func clearStreamingActivity() {
         self.runStartup = nil
         self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
     }
 
-    func updateStreamingAssistantText(_ text: String?) {
-        guard self.streamingAssistantText != text else { return }
+    func updateStreamingAssistantText(_ text: String?, runID: String? = nil) {
+        let owner = text == nil ? nil : runID
+        let ownerChanged = self.streamingAssistantRunID != owner
+        if text == nil {
+            self.streamingPriorMessageIDs.removeAll()
+        } else if ownerChanged || self.streamingAssistantText == nil {
+            self.streamingPriorMessageIDs = Set(self.messages.map(\.id))
+        }
+        if text == nil || ownerChanged || self.streamingAssistantText == nil {
+            self.streamingRetiredFinalIDs.removeAll()
+            self.streamingRetiredSource = nil
+        }
+        self.streamingAssistantRunID = owner
+        guard self.streamingAssistantText != text || ownerChanged else { return }
         self.streamingAssistantText = text
         self.scheduleStreamingAssistantDisplay(text)
+        if ownerChanged { self.markTimelineChanged() }
     }
 
     func applyStreamingAssistantDisplay(_ text: String?) {
-        guard self.displayedStreamingAssistantText != text else { return }
+        guard self.displayedStreamingAssistantTextUntracked != text else { return }
         // Compare both projections against current history: a durable row may have suppressed
         // the previous live words since the last stream update.
         let previousShape = self.streamingTextShape(self.displayedStreamingAssistantTextUntracked)
-        self.displayedStreamingAssistantText = text
+        // Keep the bubble's last words on a clear: emptied in its own observation scope, the bubble
+        // laid out at zero a pass before the transcript swapped in the final row, which collapsed
+        // the transcript and clamped the scroll offset to the top. The next run's words replace them.
+        if let text { self.displayedStreamingAssistantText = text }
         self.displayedStreamingAssistantTextUntracked = text
         guard self.streamingTextShape(text) != previousShape else { return }
         self.liveTextShape &+= 1
@@ -1001,37 +1013,6 @@ extension OpenClawChatViewModel {
         if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
             self.errorText = nil
         }
-    }
-
-    private func refreshRunStateAfterForeground() async {
-        if self.usesWebConversation { self.loadWebConversationChrome()
-            return
-        }
-        let context = self.beginHistoryRequest()
-        let refresh = await refreshHistoryAfterRun(historyRequest: context)
-        guard self.isCurrentSession(context.session) else { return }
-        if refresh.applied,
-           refresh.runSnapshotApplied,
-           context.runOwnershipGeneration == self.runOwnershipGeneration,
-           !self.isSending,
-           refresh.supportsInFlightRunState,
-           !refresh.hasInFlightRun
-        {
-            if refresh.sessionHasActiveRun,
-               Self.hasUnansweredLatestUser(in: self.messages)
-            {
-                self.clearStreamingActivity()
-                // Keep a known run ID authoritative so its stream and terminal
-                // events still route here. Synthesize activity only after the
-                // client has no run identity to preserve.
-                self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
-            } else {
-                self.updateActiveSessionRunWithoutChatSnapshot(false)
-                clearPendingRuns(hapticEvent: assistantHapticEventAfterLatestUser())
-                self.clearStreamingActivity()
-            }
-        }
-        await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
     }
 
     private func performAbort() async {

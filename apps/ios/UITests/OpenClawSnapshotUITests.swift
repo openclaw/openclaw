@@ -252,7 +252,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            let gutterPoint = app.scrollViews["chat-transcript"]
+            guard let transcript = try? self.chatTranscript(in: app) else { return }
+            let gutterPoint = transcript
                 .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
             // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
             let origin = app.coordinate(withNormalizedOffset: .zero)
@@ -1053,7 +1054,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(signIn.isEnabled)
         signIn.tap()
         XCTAssertTrue(app.staticTexts[
-            "No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.",
+            "No native sign-in options are available. Open Models in the web app, or update the Gateway.",
         ].waitForExistence(timeout: 5))
         app.buttons["Close"].tap()
     }

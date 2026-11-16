@@ -93,7 +93,6 @@ function WorkspaceFilePath(props: {
       <button
         class="chat-tool-card__detail chat-tool-card__detail-link"
         type="button"
-        title={t("chat.toolCards.openFile")}
         onClick={() => props.path && props.onOpen?.({ path: props.path })}
       >
         {props.label}
@@ -352,7 +351,7 @@ export function ExpandedToolCardContent(props: ToolCardContentProps) {
   const outcome = () => output().outcome;
   const sidebarAction = () => (
     <Show when={props.options.onOpenSidebar}>
-      <openclaw-tooltip prop:content={t("chat.toolCards.openDetails")}>
+      <openclaw-tooltip prop:content={t("chat.toolCards.openDetailsTooltip")}>
         <button
           class="chat-tool-card__action-btn"
           type="button"

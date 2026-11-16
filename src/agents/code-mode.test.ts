@@ -306,6 +306,27 @@ describe("Code Mode catalog and model-visible surface", () => {
     return index;
   }
 
+  it("advertises manual-step handoffs only for the effective core question tool", () => {
+    const { catalogRef, catalogPrompt } = catalog([fakeTool("ask_user", "Deferred instructions")]);
+    expectFragments(catalogPrompt(), [
+      "requiredAction",
+      "browser sign-in",
+      "ready_to_verify",
+      "action_unresolved",
+      "that the human can complete while this run waits",
+      "not the current user-requested turn",
+      "Never wait in ask_user for a native session control that requires this run to end",
+    ]);
+
+    addClientToolsToToolCatalog({
+      tools: [fakeTool("ask_user", "Client-defined question tool")],
+      enabled: true,
+      catalogRef,
+    });
+    expect(catalogPrompt()).not.toContain("requiredAction");
+    expect(catalog([]).catalogPrompt()).not.toContain("requiredAction");
+  });
+
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
     const index = catalogIndex([

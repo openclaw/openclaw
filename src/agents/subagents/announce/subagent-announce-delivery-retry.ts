@@ -1,6 +1,8 @@
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { GatewayProtocolRequestError } from "../../../../packages/gateway-client/src/protocol-request.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isPlatformMessageRejectedError } from "../../../infra/outbound/deliver-types.js";
@@ -50,6 +52,20 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /Session "[^"]+" is archived\. Restore it before starting new work\./i,
 ];
 
+// The Gateway refused the request itself; resending the same handoff gets the same answer.
+const PERMANENT_GATEWAY_REQUEST_ERROR_CODES: ReadonlySet<string> = new Set([
+  ErrorCodes.INVALID_REQUEST,
+  ErrorCodes.FORBIDDEN,
+]);
+
+function isPermanentGatewayRequestRefusal(candidate: unknown): boolean {
+  return (
+    candidate instanceof GatewayProtocolRequestError &&
+    !candidate.retryable &&
+    PERMANENT_GATEWAY_REQUEST_ERROR_CODES.has(candidate.gatewayCode)
+  );
+}
+
 function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {
   return collectErrorGraphCandidates(error, (candidate) => [
     candidate.cause,
@@ -63,6 +79,7 @@ function hasPermanentAnnounceError(error: unknown): boolean {
     error,
     (candidate) =>
       isPlatformMessageRejectedError(candidate) ||
+      isPermanentGatewayRequestRefusal(candidate) ||
       isSessionTranscriptTurnMismatchErrorMessage(summarizeDeliveryError(candidate)) ||
       PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((pattern) =>
         pattern.test(summarizeDeliveryError(candidate)),

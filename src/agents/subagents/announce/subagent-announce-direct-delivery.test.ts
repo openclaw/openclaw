@@ -484,7 +484,12 @@ it.each([
   const fixture = setup(typeof input === "string" ? "image_generate" : "subagent_settle");
   const resultInput =
     typeof input === "string"
-      ? new GatewayClientRequestError({ code: "INVALID_REQUEST", message: input })
+      ? new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: input,
+          // The Gateway marks transient work-start blocks, such as a pending workspace, retryable.
+          retryable: expected.disposition === "retryable",
+        })
       : input;
   const onDeliveryError = vi.fn();
   fixture.params.onDeliveryError = onDeliveryError;

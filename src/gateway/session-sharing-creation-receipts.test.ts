@@ -55,6 +55,11 @@ it.each(["missing", "idless"] as const)(
           creation: { actor },
           source: authorization.assertCurrent,
           prepareWorkerGrant: authorization.prepareWorkerGrant,
+          followRegistration: (change) =>
+            authorization.followRegistration?.(
+              { agentId: scope.agentId, sessionKey: target.canonicalKey },
+              change,
+            ),
           onCommittedSource: (readSource, entry) => {
             committedEntry = entry;
             authorization.recordCreatedSession?.({

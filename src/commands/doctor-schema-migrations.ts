@@ -6,7 +6,7 @@ import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.j
 import {
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigrationAsync,
-} from "../infra/update-doctor-migration-attribution.js";
+} from "../infra/update-doctor-migration-context.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";

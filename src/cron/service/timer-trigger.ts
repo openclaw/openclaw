@@ -250,11 +250,8 @@ export function resolveDeliveryState(params: {
         failureNotification: noFailureNotification,
       };
     }
-    return {
-      status: "unknown",
-      error: params.error,
-      failureNotification: noFailureNotification,
-    };
+    // The run failed before reporting any delivery: its error is the run's, not delivery's.
+    return { status: "unknown", failureNotification: noFailureNotification };
   }
   if (params.delivered === false) {
     return {
