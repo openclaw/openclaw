@@ -264,7 +264,7 @@ export function requestLocalWorkspaceSweepInDatabase(
             value_json: String(epoch + 2),
             updated_at_ms: Date.now(),
           })
-          .where("value_json", "!=", String(epoch + 2)),
+          .where("config_machine_state.value_json", "!=", String(epoch + 2)),
       ),
   );
 }
