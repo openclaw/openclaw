@@ -144,24 +144,9 @@ describe("stored memory access by session audience", () => {
     }).toEqual(row.expected);
   });
 
-  test("automatic recall injects nothing when the audience goes stale during the search", async () => {
-    const entry = {
-      id: "00000000-0000-4000-8000-000000000001",
-      text: "The owner prefers green tea.",
-      vector: [0.1, 0.2, 0.3],
-      importance: 0.7,
-      category: "preference" as const,
-      createdAt: 1,
-    };
-    vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([{ entry, score: 0.9 }]);
+  test("automatic recall neither embeds nor searches once the audience is stale", async () => {
+    const search = vi.spyOn(MemoryDB.prototype, "search").mockResolvedValue([]);
     const { hook } = registerWithLiveConfig(true, ownerChat);
-    let checks = 0;
-    const assertMemoryAudienceCurrent = () => {
-      checks += 1;
-      if (checks > 1) {
-        throw new Error("synthetic stale memory audience");
-      }
-    };
 
     const result = await hook(
       { prompt: "what tea do I like?", messages: [] },
@@ -169,11 +154,19 @@ describe("stored memory access by session audience", () => {
         agentId: "main",
         sessionKey: "agent:main:synthetic",
         memoryAudience: ownerChat,
-        assertMemoryAudienceCurrent,
+        assertMemoryAudienceCurrent: () => {
+          throw new Error("synthetic stale memory audience");
+        },
         toolAuthority: allowRecall,
       },
     );
 
-    expect({ result, checks }).toEqual({ result: undefined, checks: 2 });
+    expect({ result, embeds: embed.mock.calls.length, searches: search.mock.calls.length }).toEqual(
+      {
+        result: undefined,
+        embeds: 0,
+        searches: 0,
+      },
+    );
   });
 });

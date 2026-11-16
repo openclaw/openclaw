@@ -562,7 +562,6 @@ export default definePluginEntry({
           });
           const recall = await recallOperation.result;
           toolAuthority.assertActive();
-          ctx.assertMemoryAudienceCurrent?.();
           if (recall.status === "timeout") {
             if (recallOperation.phase === "embedding") {
               recordMemoryRecallCooldown(
