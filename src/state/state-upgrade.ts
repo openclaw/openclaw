@@ -19,12 +19,14 @@ import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js"
 import { resolveConfigIncludes } from "../config/includes.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
 import { VERSION } from "../version.js";
+import { createRetainedAgentDatabaseMatcher } from "./agent-deletion-discovery.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -103,8 +105,9 @@ function openReadOnly(pathname: string): DatabaseSync {
   return openNodeSqliteDatabase(pathname, { readOnly: true });
 }
 
-function discoverDatabases(stateDir: string): DatabaseTarget[] {
+function discoverDatabases(stateDir: string, env: NodeJS.ProcessEnv) {
   const targets: DatabaseTarget[] = [];
+  const retainedAgentRoots: string[] = [];
   const realStateDir = fs.realpathSync(stateDir);
   const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
     if (!isSqliteFile(pathname)) {
@@ -135,10 +138,29 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
   } catch {
     // No agents yet.
   }
-  for (const agentId of agents) {
-    add("agent", path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"), agentId);
+  // An uninitialized shared store keeps the normal bootstrap path.
+  if (targets.some((target) => target.kind === "state" && target.version === 0)) {
+    return { targets, retainedAgentRoots };
   }
-  return targets;
+  const config = readUpgradeConfig(resolveConfigPath(env, stateDir));
+  const retained = agents.length
+    ? createRetainedAgentDatabaseMatcher(env, () =>
+        resolveConfiguredAgentDatabaseTargets(config, { env }),
+      )
+    : undefined;
+  for (const agentId of agents) {
+    const root = path.join(stateDir, "agents", agentId);
+    const pathname = path.join(root, "agent", "openclaw-agent.sqlite");
+    // Classify by physical path so a surviving registered/configured owner wins
+    // over a retired directory name. Unknown history preserves the old path.
+    const disposition = retained?.(pathname);
+    if (disposition && disposition !== "unavailable") {
+      retainedAgentRoots.push(root);
+      continue;
+    }
+    add("agent", pathname, agentId);
+  }
+  return { targets, retainedAgentRoots };
 }
 
 const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
@@ -151,8 +173,7 @@ const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
  * the report and set-aside rows have no SQLite home, so SQLite agent databases there
  * keep the previous path (Doctor).
  */
-function outdatedDatabases(stateDir: string): DatabaseTarget[] {
-  const targets = discoverDatabases(stateDir);
+function outdatedDatabases(targets: DatabaseTarget[]): DatabaseTarget[] {
   if (targets.some((target) => target.kind === "state" && target.version === 0)) {
     return [];
   }
@@ -169,7 +190,7 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   return (
     fs.existsSync(stateDir) &&
     (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
-      outdatedDatabases(stateDir).length > 0)
+      outdatedDatabases(discoverDatabases(stateDir, env).targets).length > 0)
   );
 }
 
@@ -367,7 +388,10 @@ export async function upgradeStateDirectory(params: {
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  const outdated = outdatedDatabases(stateDir);
+  const inventory = discoverDatabases(stateDir, env);
+  // Retained/deleting stores belong to their lifecycle owner, not shadow Doctor.
+  excludedRoots.push(...inventory.retainedAgentRoots);
+  const outdated = outdatedDatabases(inventory.targets);
   if (outdated.length === 0) {
     if (resumed) {
       finish(stateDir, undefined, resumedFiles);

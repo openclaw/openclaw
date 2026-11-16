@@ -155,6 +155,60 @@ function installCorpus(instance: Instance, release: string, gatewayOverride = {}
 }
 
 describe("Gateway start upgrades prior-release state by copy and swap", () => {
+  it("starts with a completed retained old agent without changing its files", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "upgrade-retained-agent",
+      startTimeoutMs: 300_000,
+    });
+    try {
+      await instance.startGateway();
+      await instance.stopGateway();
+      const agentDir = path.join(instance.stateDir, "agents", "retained", "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
+      fs.copyFileSync(
+        path.join(
+          corpusDir,
+          "2026.10.10",
+          "state",
+          "agents",
+          "main",
+          "agent",
+          "openclaw-agent.sqlite",
+        ),
+        retainedPath,
+      );
+      const before = sha256(retainedPath);
+      const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"));
+      try {
+        state
+          .prepare(
+            "INSERT INTO agent_deletion_journal (agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, database_paths_json, cleanup_paths_json, created_at, cleanup_completed, delete_files, phase) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 1, 0, 'retiring')",
+          )
+          .run(
+            "retained",
+            "delete-retained",
+            agentDir,
+            path.join(instance.stateDir, "workspace-retained"),
+            path.join(instance.stateDir, "agents", "retained", "sessions"),
+            JSON.stringify([retainedPath]),
+            Date.now(),
+          );
+      } finally {
+        state.close();
+      }
+      await instance.startGateway();
+      const agents = await instance.cli(["gateway", "call", "agents.list", "--json"]);
+      expect(agents.code, agents.stderr).toBe(0);
+      expect(agents.stdout).not.toContain('"id": "retained"');
+      await instance.stopGateway();
+      expect(sha256(retainedPath)).toBe(before);
+      expect(fs.existsSync(retainedPath + ".pre-" + VERSION)).toBe(false);
+    } finally {
+      await instance.cleanup();
+    }
+  }, 600_000);
+
   it("a start refused for invalid config publishes nothing", async () => {
     const instance = await createOpenClawTestInstance({
       name: "upgrade-refused",

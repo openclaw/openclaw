@@ -4,6 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "./openclaw-schema-versions.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
@@ -286,4 +290,84 @@ describe("startup copy ownership", () => {
       expect(fs.readFileSync(path.join(root, name), "utf8")).toBe("kept");
     }
   });
+});
+
+it.each([
+  { completed: true, survivingOwner: false },
+  { completed: false, survivingOwner: false },
+  { completed: true, survivingOwner: true },
+])("preserves deletion ownership during startup: %j", async ({ completed, survivingOwner }) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-retained-"));
+  dirs.push(stateDir);
+  fs.mkdirSync(path.join(stateDir, "state"));
+  const agentDir = path.join(stateDir, "agents", "retained", "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  const retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
+  fs.copyFileSync(
+    fileURLToPath(
+      new URL(
+        "../../test/fixtures/state-corpus-populated/2026.10.10/state/agents/main/agent/openclaw-agent.sqlite",
+        import.meta.url,
+      ),
+    ),
+    retainedPath,
+  );
+  const before = fs.readFileSync(retainedPath);
+  const state = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+  state.exec(
+    "PRAGMA user_version = " +
+      OPENCLAW_STATE_SCHEMA_VERSION +
+      "; CREATE TABLE config_machine_state(state_key TEXT, value_json TEXT); CREATE TABLE diagnostic_events(scope TEXT, event_key TEXT, payload_json TEXT, created_at INTEGER, sequence INTEGER, PRIMARY KEY(scope,event_key)); CREATE TABLE agent_deletion_journal(agent_id TEXT, cleanup_completed INTEGER, delete_files INTEGER, phase TEXT, agent_dir TEXT, database_paths_json TEXT);",
+  );
+  state
+    .prepare("INSERT INTO agent_deletion_journal VALUES (?, ?, 0, ?, ?, ?)")
+    .run("retained", Number(completed), "retiring", agentDir, JSON.stringify([retainedPath]));
+  state.close();
+  const env = {
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  fs.writeFileSync(
+    env.OPENCLAW_CONFIG_PATH,
+    JSON.stringify(survivingOwner ? { agents: { list: [{ id: "survivor", agentDir }] } } : {}),
+  );
+  if (survivingOwner) {
+    expect(isStateUpgradePending(env)).toBe(true);
+    expect(fs.readFileSync(retainedPath)).toEqual(before);
+    return;
+  }
+  expect(isStateUpgradePending(env)).toBe(false);
+  expect(await upgradeStateDirectory({ env, log: { info() {}, warn() {} } })).toEqual({
+    status: "current",
+  });
+  expect(fs.readFileSync(retainedPath)).toEqual(before);
+  const liveDir = path.join(stateDir, "agents", "live", "agent");
+  fs.mkdirSync(liveDir, { recursive: true });
+  const livePath = path.join(liveDir, "openclaw-agent.sqlite");
+  const live = new DatabaseSync(livePath);
+  live.exec(
+    "CREATE TABLE retained_value(value TEXT); INSERT INTO retained_value VALUES ('synthetic'); PRAGMA user_version = " +
+      (OPENCLAW_AGENT_SCHEMA_VERSION - 1),
+  );
+  live.close();
+  let copiedRetiredStore: boolean | undefined;
+  const result = await upgradeStateDirectory({
+    env,
+    log: { info() {}, warn() {} },
+    runChain: async ({ stateDir: shadow }) => {
+      copiedRetiredStore = fs.existsSync(path.join(shadow, "agents", "retained"));
+      throw new Error("exercise the real fallback for the live sibling");
+    },
+  });
+  expect(result).toMatchObject({ status: "upgraded", mode: "fallback" });
+  expect(copiedRetiredStore).toBe(false);
+  expect(fs.readFileSync(retainedPath)).toEqual(before);
+  const upgraded = new DatabaseSync(livePath, { readOnly: true });
+  try {
+    expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+  } finally {
+    upgraded.close();
+  }
 });
