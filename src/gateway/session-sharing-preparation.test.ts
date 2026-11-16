@@ -174,7 +174,7 @@ it("prepares access facts on the reserved lane while bulk reads fill the session
   const run = vi.spyOn(targetDiscoveryLane.pool, "run");
   const held = createDeferred<never>();
   const bulk = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
-    targetDiscoveryLane.pool.run(() => held.promise, { diagnosticOperation: "synthetic-bulk" }),
+    targetDiscoveryLane.pool.run(() => held.promise, {}),
   );
   try {
     await expect(targetDiscoveryLane.pool.run(() => held.promise, {})).rejects.toMatchObject({

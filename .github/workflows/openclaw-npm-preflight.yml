@@ -266,7 +266,7 @@ jobs:
     needs: [check_openclaw_npm_stage]
     if: ${{ always() && !cancelled() && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
     runs-on: >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      ${{ !inputs.use_github_hosted_runners && vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}

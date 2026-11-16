@@ -31,9 +31,12 @@ it("admits a second workspace turn through real prepared runtime after registrat
     await fs.mkdir(bundled);
     const registrations: string[] = [];
     let activeTurn = 0;
-    const requests: Array<Context["systemPrompt"]> = [];
+    const requests: Array<Pick<Context, "systemPrompt" | "messages">> = [];
     const stream: StreamFn = (model, context) => {
-      requests.push(context.systemPrompt);
+      requests.push({
+        systemPrompt: context.systemPrompt,
+        messages: structuredClone(context.messages),
+      });
       const message = makeAgentAssistantMessage({
         api: model.api,
         provider: model.provider,
@@ -167,10 +170,16 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
             expect(network).not.toHaveBeenCalled();
             expect(registrations).toContain(`${siblingPluginId}:0`);
             expect(registrations).toContain(`${siblingPluginId}:1`);
-            expect(requests).toEqual([
-              expect.stringContaining("Original workspace instruction."),
-              expect.stringContaining("Updated workspace instruction."),
-            ]);
+            expect(requests).toHaveLength(2);
+            expect(requests[0]?.systemPrompt).toContain("Original workspace instruction.");
+            // Refreshed workspace instructions append to history without rewriting the pinned prefix.
+            expect(requests[1]?.systemPrompt).toBe(requests[0]?.systemPrompt);
+            expect(JSON.stringify(requests[0]?.messages)).not.toContain(
+              "Updated workspace instruction.",
+            );
+            expect(JSON.stringify(requests[1]?.messages)).toContain(
+              "Updated workspace instruction.",
+            );
           } finally {
             await resetPreparedModelRuntimeSnapshotsForTest();
             resetPluginLoaderTestStateForTest();
