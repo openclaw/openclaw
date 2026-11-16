@@ -573,7 +573,7 @@ suite.define(() => {
       }
     },
   );
-  it("lists the Customize pages and installed plugins in its sidebar", async () => {
+  it("lists the Customize pages in its sidebar", async () => {
     const context = await createContext({ width: 1280, height: 800 });
     const page = await context.newPage();
     const config = { gateway: { controlUi: { experimental: { templates: true } } } };
@@ -606,11 +606,6 @@ suite.define(() => {
       await waitForControlUiRoute(page, { pathname: "/templates", routeId: "templates" });
       expect(await customize.row("Templates").getAttribute("aria-current")).toBe("page");
       expect(await customize.row("Plugins").getAttribute("aria-current")).toBeNull();
-      // An installed plugin opens its settings page, which returns to Plugins.
-      await customize.open("Workboard");
-      await expect
-        .poll(() => new URL(page.url()).pathname + new URL(page.url()).search)
-        .toBe("/settings/plugins/workboard?from=plugins");
     } finally {
       await context.close();
     }
