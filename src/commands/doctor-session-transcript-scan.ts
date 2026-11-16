@@ -9,11 +9,12 @@ import {
   resolveTargetSqliteOptions,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { beginUpdateDoctorHistoricalScan } from "../infra/update-doctor-scan-receipts.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 /** Each snapshot closes its cursors before a repair; each pass owns only its read connection. */
-export function scanDoctorSessionTranscripts(
+export async function scanDoctorSessionTranscripts(
   params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -31,8 +32,10 @@ export function scanDoctorSessionTranscripts(
     target: ExistingAgentDatabaseTarget;
     databaseOptions: ReturnType<typeof resolveTargetSqliteOptions>;
     reportError: (message: string, error: unknown) => void;
-  }) => boolean | void,
-): void {
+  }) => boolean | void | Promise<boolean | void>,
+): Promise<void> {
+  const signal = resolveSqliteInspectionSignal();
+  signal?.throwIfAborted();
   const reportError = (message: string, error: unknown) =>
     note(`${message}: ${formatErrorMessage(error).replace(/\s+/g, " ").trim()}`, params.title);
   for (const candidate of projectExistingAgentDatabaseTargets(
@@ -68,14 +71,22 @@ export function scanDoctorSessionTranscripts(
           )
         : reader.sessionIds();
       for (const sessionId of sessionIds) {
+        signal?.throwIfAborted();
         if (
-          visit({ reader, sessionId, target, databaseOptions, reportError: reportTargetError }) ===
-          false
+          (await visit({
+            reader,
+            sessionId,
+            target,
+            databaseOptions,
+            reportError: reportTargetError,
+          })) === false
         ) {
           clean = false;
         }
+        signal?.throwIfAborted();
       }
     } catch (error) {
+      signal?.throwIfAborted();
       reportTargetError(
         `- ${params.failureLabel} for ${target.agentId} (${target.sqlitePath})`,
         error,

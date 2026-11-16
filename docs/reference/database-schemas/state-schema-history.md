@@ -60,10 +60,78 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 36      | Starter install tables, record versions, and provenance use canonical Template names; unrelated data and absent optional provenance stay unchanged                                                                                                                                                                                             | Unreleased          |
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
+| 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
+| 40      | Original requesting authority retained with pending worker provisioning                                                                                                                                                                                                                                                                        | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 40
+
+Schema 40 adds nullable `worker_environments.provision_source_json` through the
+existing environment writer. Manual creation records its original authenticated
+source with its allocation intent. Exact intent replay cannot replace or remove
+that source. Recovery checks the original source through the authentication owner
+before further provisioning; saved evidence alone does not authorize allocation.
+New independently owned internal work leaves the field `NULL`.
+
+Older unleased `requested` and `provisioning` rows and initial leased
+`bootstrapping` rows (owner epoch zero) cannot identify their original source.
+Migration marks only these pending initial creation rows with an explicit
+unavailable source. Unallocated requests fail without allocating; indeterminate provisioning retains
+its exact operation and resource identity for the existing cleanup owner. Initial
+bootstrap cannot continue without its original source and retains its lease for
+cleanup. This also applies to interrupted internal builds and reserves: recreate
+them after their old intent settles. Existing ready, idle, attached, terminal,
+and maintenance-bootstrap rows retain their bytes and behavior, with the new
+field `NULL`.
+
+SQLite and PostgreSQL publish the nullable column, targeted pending-row update,
+and schema/content markers in one migration transaction. Table-scoped verified
+backup and integrity checks cover `worker_environments` and schema publication
+metadata. Backup and pending-row processing cost scales with environment history;
+deployment qualification should record the affected row count. Unrelated state
+is unchanged. Package metadata and native shared-state readers advance to 40;
+older builds refuse the upgraded database instead of ignoring the original source.
+Rollback restores the verified pre-upgrade backup with its matching build. The
+agent schema is unchanged, and no earlier migration is rewritten.
+
+### State schema 39
+
+Schema 39 implements the retained-lifecycle storage step of the
+[accepted retained-resource design](https://github.com/openclaw/openclaw/issues/188796).
+It adds nullable `worker_environments.retention_json` through the existing
+environment writer, not a second lease owner or sidecar store. This shared-state
+version is independent of agent schema 39.
+
+The field stores an immutable acquisition policy (original owner binding and
+compute-window duration), one unfinished pause/resume operation (operation ID,
+action, and expected provider claim revision), and the latest provider observation.
+The policy is durable before allocation. An exact intent replay preserves it;
+changing or adding policy to an existing environment is refused. Existing leases
+migrate to `NULL` and keep their original unretained behavior.
+
+A new operation requires the current environment owner, an exact stored resource
+receipt and lease, the observed claim revision, and no destroy request or competing
+operation. Exact unfinished operations can replay after restart. Observations clear
+an operation only when their operation ID, action, and expected revision all match,
+the phase is `observed`, and the state is `suspended` for pause or `running` for
+resume. Transport errors, unavailable observations, and unrelated or pending outcomes
+retain the unfinished operation. Recording an expired compute window does not delete
+a disk or settle teardown; confirmed provider deletion remains necessary.
+
+SQLite and PostgreSQL add one nullable text column without a row rewrite, backfill,
+new index, or scan in the DDL itself. The verified table-scoped backup and integrity
+check cover `worker_environments` plus schema publication metadata; unrelated
+repository and pending-result authority bytes remain unchanged. Backup cost scales
+with retained environment history. The largest deployment's row count is not known
+from the implementation checkout and must be recorded with deployment qualification.
+
+The column and schema/content markers publish atomically. Package metadata and the
+native shared-state reader ceiling advance to 39; older builds refuse the newer
+schema rather than ignoring pending lifecycle intent. Downgrade restores the verified
+pre-upgrade backup with its matching binary. No schema-38 migration is rewritten.
 
 ### State schema 38
 

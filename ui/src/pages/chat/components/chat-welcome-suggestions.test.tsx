@@ -50,7 +50,7 @@ describe("chat welcome starter prompts", () => {
 
     expect(buttons.map((button) => button.textContent?.trim())).toEqual([
       "What can you do?",
-      "Tour OpenClaw's code and docs",
+      "Tour OpenClaw’s code and docs",
       "Investigate an issue in a sandbox",
       "Fix a bug and open a draft PR",
     ]);

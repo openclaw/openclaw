@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type { Selectable, Updateable } from "kysely";
 import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "../config/repository-branch-prefix.js";
+import { readWorkerPlacementMovesReadOnly } from "../gateway/worker-environments/placement-move-row-codec.js";
+import { getRequired } from "../gateway/worker-environments/placement-row-codec.js";
+import {
+  matchesWorkspaceResultClaim,
+  pendingResultFromRow,
+} from "../gateway/worker-environments/placement-workspace-result-owner.js";
 import { findWorkerEnvironment } from "../gateway/worker-environments/store-row-codec.js";
 import {
   createSqliteQueryCache,
@@ -22,6 +29,7 @@ import type {
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
   RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutation,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
@@ -259,7 +267,7 @@ export function acceptSessionRepositoryWorkspaceCheckpointInDatabase(
   });
 }
 
-/** No runtime selector calls this until explicit I/O and publication support is installed. */
+/** Activation calls this in the placement transaction after its active postimage exists. */
 export function bindSessionRepositoryWorkspaceDiskInDatabase(
   db: EngineConnection,
   input: RepositoryWorkspaceDiskBinding,
@@ -321,6 +329,71 @@ export function bindSessionRepositoryWorkspaceDiskInDatabase(
   });
 }
 
+/** Local session binding is verified by the materializer's retained source at both grants. */
+export function retireSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: RepositoryWorkspaceDiskRetirement,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!resultRefPattern.test(input.checkpointRef) || !manifestPattern.test(input.manifestHash)) {
+    throw new Error("Repository disk export is invalid");
+  }
+  return mutate(db, input, nowMs, (repository) => {
+    const { claim } = input;
+    const placement = getRequired(db, claim.sessionId);
+    const pending = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<DB>(db)
+        .selectFrom("worker_workspace_pending_results")
+        .selectAll()
+        .where("session_id", "=", claim.sessionId),
+    );
+    const move = readWorkerPlacementMovesReadOnly(db, [claim.sessionId]).get(claim.sessionId);
+    if (
+      !repository.diskAuthority ||
+      placement.state !== "draining" ||
+      !pending ||
+      !matchesWorkspaceResultClaim(placement, pendingResultFromRow(pending), claim) ||
+      placement.agentId !== repository.agentId ||
+      placement.sessionKey !== repository.sessionKey ||
+      move?.target.kind !== "gateway" ||
+      move.abandonSource ||
+      move.source.environmentId !== placement.environmentId ||
+      move.source.ownerEpoch !== placement.activeOwnerEpoch ||
+      move.source.generation + 1 !== placement.generation ||
+      claim.claimId !== claim.runId ||
+      !claim.claimId.startsWith("reclaim-") ||
+      pending.repository_workspace_id !== repository.workspaceId ||
+      pending.staged_result_ref !== input.checkpointRef ||
+      pending.repository_disk_authority_json === null
+    ) {
+      throw new Error("Repository disk retirement lost its exact Gateway move result");
+    }
+    const environment = findWorkerEnvironment(db, placement.environmentId);
+    assertRepositoryWorkspaceDiskIdentity(repository.diskAuthority, environment);
+    assertRepositoryWorkspaceDiskIdentity(
+      requireRepositoryWorkspaceDiskAuthority(JSON.parse(pending.repository_disk_authority_json)),
+      environment,
+    );
+    if (
+      environment?.state !== "attached" ||
+      environment.ownerEpoch !== placement.activeOwnerEpoch ||
+      environment.destroyRequestedAtMs !== null ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== placement.sessionId
+    ) {
+      throw new Error("Repository disk retirement lost its original attachment");
+    }
+    // The local worktree is already bound. This export is a retained handoff receipt,
+    // not a new mirror source; pending-result custody still owns physical retirement.
+    return {
+      disk_authority_json: null,
+      checkpoint_ref: input.checkpointRef,
+      manifest_hash: input.manifestHash,
+    };
+  });
+}
+
 export function deleteSessionRepositoryWorkspaceInDatabase(
   db: EngineConnection,
   workspaceId: string,
@@ -338,4 +411,106 @@ export function deleteSessionRepositoryWorkspaceInDatabase(
     owner: deleted ? { agentId: deleted.agent_id, sessionKey: deleted.session_key } : undefined,
     changed: deleted !== undefined,
   };
+}
+/** Offline retained-owner repair; its caller owns the transaction and live commit admission. */
+export function restoreSessionRepositoryWorkspaceDiskInDatabase(
+  db: EngineConnection,
+  input: {
+    source: SessionRepositoryWorkspaceRecord;
+    expectedCurrent: SessionRepositoryWorkspaceRecord | null;
+  },
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!db.isTransaction) {
+    throw new Error("Repository disk recovery requires its offline shared-state transaction");
+  }
+  const { source } = input;
+  if (!source.diskAuthority || !source.baseCommit || !source.baseManifestHash) {
+    throw new Error("Repository disk recovery requires a complete sealed binding");
+  }
+  const current = readSessionRepositoryWorkspaceInDatabase(db, source.workspaceId);
+  const owner = findSessionRepositoryWorkspaceInDatabase(db, source);
+  if (
+    !isDeepStrictEqual(current ?? null, input.expectedCurrent) ||
+    (owner && owner.workspaceId !== source.workspaceId)
+  ) {
+    throw new Error("Repository disk recovery selection changed");
+  }
+  if (
+    current &&
+    !isDeepStrictEqual(
+      {
+        ...source,
+        diskAuthority: current.diskAuthority,
+        revision: current.revision,
+        createdAtMs: current.createdAtMs,
+        updatedAtMs: current.updatedAtMs,
+      },
+      { ...current, diskAuthority: current.diskAuthority },
+    )
+  ) {
+    throw new Error("Repository disk recovery would overwrite a different workspace");
+  }
+  assertRepositoryWorkspaceDiskIdentity(
+    source.diskAuthority,
+    findWorkerEnvironment(db, source.diskAuthority.environmentId),
+  );
+  if (current?.diskAuthority) {
+    if (!isDeepStrictEqual(current.diskAuthority, source.diskAuthority)) {
+      throw new Error("Repository disk recovery would overwrite a different resource receipt");
+    }
+    return {
+      workspaceId: current.workspaceId,
+      workspace: current,
+      owner: { agentId: current.agentId, sessionKey: current.sessionKey },
+      changed: false,
+    };
+  }
+  if (current) {
+    return bindSessionRepositoryWorkspaceDiskInDatabase(
+      db,
+      {
+        workspaceId: current.workspaceId,
+        expectedRevision: current.revision,
+        diskAuthority: source.diskAuthority,
+      },
+      nowMs,
+    );
+  }
+  // Insert only metadata into the same owner. Ordinary disk binding below still verifies
+  // the exact restored placement, attachment, receipt, base and absence of pending results.
+  if (!tableExists(db, table)) {
+    ensureSessionRepositoryWorkspaceSchema(db);
+  }
+  executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .insertInto(table)
+      .values({
+        workspace_id: source.workspaceId,
+        agent_id: source.agentId,
+        session_key: source.sessionKey,
+        url: source.url,
+        requested_ref: source.requestedRef,
+        run_setup_script: source.runSetupScript ? 1 : 0,
+        base_commit: source.baseCommit,
+        base_manifest_hash: source.baseManifestHash,
+        branch: source.branch,
+        checkpoint_ref: source.checkpointRef,
+        manifest_hash: source.manifestHash,
+        disk_authority_json: null,
+        revision: source.revision,
+        created_at_ms: source.createdAtMs,
+        updated_at_ms: nowMs,
+      }),
+  );
+  return bindSessionRepositoryWorkspaceDiskInDatabase(
+    db,
+    {
+      workspaceId: source.workspaceId,
+      expectedRevision: source.revision,
+      diskAuthority: source.diskAuthority,
+    },
+    nowMs,
+  );
 }

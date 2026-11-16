@@ -217,7 +217,7 @@ describe("agents_wait", () => {
     const result = await runUntilCompleted({
       execTool,
       waitTool,
-      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe(); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
+      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe({ includeRarelyNeededOutputSchema: true }); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
     });
     expect(result).toMatchObject({
       status: "completed",
@@ -386,6 +386,25 @@ describe("agents_wait", () => {
       timestamp: 2,
     });
     records.clear();
+    // Settled facts survive the display-limit omission, including a child that failed.
+    const facts = { runId: "finished-child", sessionKey: "agent:worker:subagent:w", label: "W" };
+    const completed = [
+      { ...facts, status: "done", result: "x".repeat(40_000) },
+      { ...facts, runId: "not-finished", status: "failed" },
+    ];
+    const large = createNestedToolActivity({
+      ...activity.details,
+      result: { content: [{ type: "text", text: JSON.stringify({ completed }) }] },
+    });
+    expect(large.details.result.content).toEqual([
+      { type: "text", text: "[Nested tool output omitted: exceeds display limit]" },
+    ]);
+    const serialized = JSON.stringify(large);
+    const reread = readNestedToolActivity(JSON.parse(serialized));
+    expect(reread?.details.subagentCompletions).toEqual([
+      facts,
+      { ...facts, runId: "not-finished", outcome: "failed" },
+    ]);
     const persisted = JSON.stringify(activity);
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },

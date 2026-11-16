@@ -46,6 +46,7 @@ export interface SessionDataInputs {
   readonly isConnected: boolean;
   readonly connected: boolean;
   readonly navigationVisible: boolean;
+  readonly navigationCollapsed: boolean;
   readonly navigationView: "sessions" | "online" | "pages";
   readonly contextualSidebar?: ContextualSidebar;
   readonly sidebarAgentsMode: "chip" | "roster";

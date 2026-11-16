@@ -24,7 +24,6 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../cli-execution-auth.js";
 import { isClaudeCliProvider } from "../cli-output-records.js";
-import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
@@ -52,6 +51,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
+import { resolveTurnCyberAccessProgram } from "../model-catalog-access-programs.js";
 import { isCliProvider } from "../model-selection.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -312,6 +312,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    const { runCliAgent } = await import("../cli-runner.js");
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withAdmittedCliCandidate(
       {
@@ -343,9 +344,16 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         readMode: "writable",
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
-        const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
+        const accessProgram = resolveTurnCyberAccessProgram({
+          program: params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram,
+          provider: params.providerOverride,
+          model: params.modelOverride,
+          noticeScope: `log:${params.sessionKey ?? params.sessionId}`,
+          notify: (notice) => log.info(notice),
+        });
         if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
             "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",

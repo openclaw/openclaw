@@ -20,6 +20,7 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import type { CommandPalette } from "./command-palette.tsx";
 
 export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
@@ -27,6 +28,7 @@ export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
   let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
     vi.useFakeTimers();
     restoreDialogPolyfill = installDialogPolyfill();
     scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
@@ -61,7 +63,10 @@ export function createGateway(
     ((method: string) =>
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
   const client = createTestGatewayClient((...args) => {
-    // Creation catalogs must not consume scripted search replies.
+    // Draft chrome reads must not consume scripted search replies.
+    if (args[0] === "agent.identity.get") {
+      return null;
+    }
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }

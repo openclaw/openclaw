@@ -154,8 +154,8 @@ function prepareBody(scenario: BodyScenario = {}, parentEnv: NodeJS.ProcessEnv =
   writeFileSync(
     join(root, "gh"),
     `#!/usr/bin/env node
-const fs = require("node:fs");
-const { execFileSync } = require("node:child_process");
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 const args = process.argv.slice(2);
 if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "fixture.github.invalid") {
   throw new Error("Expected the bound attribution repository host");

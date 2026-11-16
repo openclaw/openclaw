@@ -310,7 +310,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
-                    message: `tool promptGuidance blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                    message: `tool promptGuidance blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
                   });
                   const { promptGuidance: _blocked, ...rest } = options;
                   bound.registerTool(tool, rest);
@@ -322,12 +322,12 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
                 bound.registerAgentToolResultMiddleware(handler, options, params.hookPolicy);
               },
               enqueueNextTurnInjection: async (injection) => {
-                if (params.hookPolicy?.allowPromptInjection === false) {
+                if (params.hookPolicy?.allowPromptModification === false) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
-                    message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                    message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
                   });
                   return {
                     enqueued: false,
@@ -354,7 +354,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
                 if (!resolvePromptInjectionAllowed(params.hookPolicy)) {
                   return {
                     steered: false,
-                    reason: `blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                    reason: `blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
                   };
                 }
                 if (registryParams.activateGlobalSideEffects === false) {

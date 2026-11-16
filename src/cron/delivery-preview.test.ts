@@ -139,6 +139,50 @@ it("prefers the persistent target over the creator's route", () =>
     expect(await preview()).toEqual(externalPreview("persistent-recipient"));
   }));
 
+it.each<[string, OpenClawConfig["cron"]]>([
+  ["Gateway", { delivery: { channel: "telegram", to: "default-recipient" } }],
+  ["agent", { agents: { main: { delivery: { channel: "telegram", to: "default-recipient" } } } }],
+])("routes a route-less current job to the %s default", (_layer, cron) =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const withDefault = { ...cfg, cron };
+    expect(await resolveCronDeliveryPreview({ cfg: withDefault, job })).toEqual(
+      externalPreview("default-recipient"),
+    );
+    expect(
+      await resolveCronDeliveryPreview({
+        cfg: withDefault,
+        job: { ...job, delivery: { mode: "announce", to: "explicit-recipient" } },
+      }),
+    ).toEqual(externalPreview("explicit-recipient"));
+  }),
+);
+
+it("routes a route-less current job to its human creator's default over the agent default", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const cron = {
+      agents: { main: { delivery: { channel: "telegram", to: "agent-recipient" } } },
+      creators: { alice: { delivery: { channel: "telegram", to: "creator-recipient" } } },
+    };
+    const withDefaults = { ...cfg, cron };
+    const createdActor = { type: "human", source: "profile", id: "alice" } as const;
+    expect(
+      await resolveCronDeliveryPreview({ cfg: withDefaults, job: { ...job, createdActor } }),
+    ).toEqual(externalPreview("creator-recipient"));
+    expect(await resolveCronDeliveryPreview({ cfg: withDefaults, job })).toEqual(
+      externalPreview("agent-recipient"),
+    );
+  }));
+
+it("keeps the creator's route when only another agent has a default", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const cron = {
+      agents: { other: { delivery: { channel: "telegram", to: "default-recipient" } } },
+    };
+    expect(await resolveCronDeliveryPreview({ cfg: { ...cfg, cron }, job })).toEqual(
+      externalPreview("recipient"),
+    );
+  }));
+
 it("lists a refused agent's repair reason beside a healthy preview", () =>
   withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
     const refusal = {
@@ -351,7 +395,7 @@ it("uses the creating conversation route without a public session key", () =>
     },
   ));
 
-it("batches creating-conversation reads while preserving each generation and refreshing next list", () =>
+it("batches creating-conversation reads and refreshes the next list", () =>
   withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
     const jobs = Array.from({ length: 12 }, (_, index) => {
       const sessionKey = `agent:main:dashboard:source-${index}`;
@@ -374,10 +418,12 @@ it("batches creating-conversation reads while preserving each generation and ref
           inputs.some((input) => input.projection === "sharing"),
         ),
       ).toHaveLength(1);
+      // The stored transcript id is ignored: the link names its conversation by key.
       jobs[0]!.sourceConversation.sessionId = "superseded-session";
+      jobs[1]!.sessionKey = jobs[1]!.sourceConversation.sessionKey = "agent:main:dashboard:gone";
       const next = await resolveCronDeliveryPreviews({ cfg, jobs });
-      expect(next[jobs[0]!.id]).toMatchObject(blockedPreview("original session generation"));
-      expect(next[jobs[1]!.id]).toEqual(conversationPreview("creating conversation"));
+      expect(next[jobs[0]!.id]).toEqual(conversationPreview("creating conversation"));
+      expect(next[jobs[1]!.id]).toMatchObject(blockedPreview("original session generation"));
     } finally {
       reads.mockRestore();
     }
@@ -456,8 +502,10 @@ it("does not rebind implicit delivery when the public session key changes", () =
     expect(await preview()).toEqual(externalPreview("other-recipient"));
   }));
 
+// The creating conversation is linked by key: an edit (new session id) or reset (new revision)
+// keeps the automation's implicit route on that conversation.
 it.each(["replacement-session", "source-session"])(
-  "rejects a replacement conversation's external route with sessionId=%s",
+  "follows the creating conversation's current route after it changes to sessionId=%s",
   (sessionId) =>
     withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {
       const sessionKey = job.sessionKey!;
@@ -470,6 +518,6 @@ it.each(["replacement-session", "source-session"])(
           lifecycleRevision: "replacement-generation",
         }),
       });
-      expect(await preview()).toMatchObject(blockedPreview("original session generation"));
+      expect(await preview()).toEqual(externalPreview("replacement-recipient"));
     }),
 );

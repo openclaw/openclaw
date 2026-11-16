@@ -12,7 +12,9 @@ import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
@@ -69,6 +71,7 @@ type SessionCompanionRunParams = {
   images?: ImageContent[];
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertSourceCurrent?: () => void;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   assertInputCurrent?: () => void;
   signal: AbortSignal;
 };
@@ -153,6 +156,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     cwd: params.workspaceDir,
     runId,
     storePath,
+    followRegistration: params.followRegistration,
   });
   const expectedSeedOwner = {
     lifecycleRevision: target.sessionEntry.lifecycleRevision,
@@ -240,11 +244,8 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
-    const sessionManager = await SessionManager.openAsync(
-      target,
-      undefined,
-      undefined,
-      params.signal,
+    const sessionManager = await withSessionTranscriptHydrationCaller("companion", () =>
+      SessionManager.openAsync(target, undefined, undefined, params.signal),
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();
@@ -405,6 +406,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     ownerId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
+    followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
     assertInputCurrent?: () => void;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
@@ -508,9 +510,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       if (controller.signal.aborted) {
         throw new Error("session companion preparation was cancelled");
       }
-      if (thread.busy) {
-        throw new SessionCompanionAskError("busy", "Side chat is answering another question.");
-      }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
       const currentSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
@@ -575,6 +574,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         ...(input.images.length ? { images: input.images } : {}),
         ...(request.operatorAuthority ? { operatorAuthority: request.operatorAuthority } : {}),
         assertSourceCurrent,
+        followRegistration: request.followRegistration,
         ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
       };

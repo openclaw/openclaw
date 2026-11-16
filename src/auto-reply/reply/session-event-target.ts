@@ -360,6 +360,12 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    // The lease follows the key; later admission pins the chat's current transcript.
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);

@@ -173,6 +173,24 @@ describe("finalized tool descriptor snapshots", () => {
     },
   );
 
+  it("shares schema projections across interleaved catalogs without retaining run bindings", async () => {
+    const parameters = schema();
+    const first = (await published(() => [tool(parameters)])).tool().parameters;
+    using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+    for (let index = 0; index < 80; index++) {
+      const current = tool(parameters, { description: `Current description ${index}` });
+      const next = attempt([current, tool(parameters, { name: `sibling_${index}` })], {
+        hookContext: { sessionId: `catalog-${index}` },
+      });
+      expect(next.tool().parameters).toBe(first);
+      expect(next.tool().description).toBe(current.description);
+      await next.tool().execute("current", {});
+      expect(current.execute).toHaveBeenCalledOnce();
+      await next.settle();
+    }
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("retains isolated published schemas across source and sibling changes", async () => {
     const nestedSchema = () => ({
       type: "object",
@@ -207,21 +225,22 @@ describe("finalized tool descriptor snapshots", () => {
     expect(attempt(tools()).tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
-  it.each([
-    ["provider", { modelProvider: "google" }],
-    ["model", { modelId: "other-model" }],
-    ["API", { modelApi: "anthropic-messages" }],
-    ["compatibility", { modelCompat: { unsupportedToolSchemaKeywords: ["title"] } }],
-    ["config", { config: { tools: { allow: ["lookup"] } } }],
-  ] satisfies Array<[string, Options]>)("refreshes when %s changes", async (_name, change) => {
-    const parameters = schema();
+  it("shares unchanged definitions across config and route changes but isolates schema compatibility", async () => {
+    const parameters = { ...schema(), title: "Lookup" };
     const previous = (await published(() => [tool(parameters)])).tool().parameters;
-    const changed = attempt([tool(parameters)], change);
-    expect(changed.tool().parameters).not.toBe(previous);
-    await changed.settle();
-    const refreshed = attempt([tool(parameters)], change).tool().parameters;
-    expect(getPublishedRuntimeToolInputSchema(refreshed)).toBeDefined();
-    expect(refreshed).not.toBe(previous);
+    for (const change of [
+      { modelId: "other-model" },
+      { modelApi: "anthropic-messages" },
+      { config: { tools: { allow: ["lookup"] } } },
+    ]) {
+      const changed = await published(() => [tool(parameters)], change);
+      expect(changed.tool().parameters).toEqual(parameters);
+    }
+    const compat = { modelCompat: { unsupportedToolSchemaKeywords: ["title"] } };
+    const stripped = (await published(() => [tool(parameters)], compat)).tool().parameters;
+    expect(stripped).toEqual(schema());
+    expect(attempt([tool(parameters)]).tool().parameters).toBe(previous);
+    expect(attempt([tool(parameters)], compat).tool().parameters).toBe(stripped);
   });
 
   it("refreshes on plugin load, unload, and metadata lifecycle reset", async () => {
@@ -253,7 +272,7 @@ describe("finalized tool descriptor snapshots", () => {
       });
     const previous = (await published(() => [search()])).tool().parameters;
     const enabled = attempt([search(), tool(schema(), { name: "sessions_history" })]);
-    expect(enabled.tool().parameters).not.toBe(previous);
+    expect(enabled.tool().parameters).toBe(previous);
     expect(enabled.tool().description).toContain("Follow up with sessions_history");
     await enabled.settle();
     const disabled = attempt([search()]);

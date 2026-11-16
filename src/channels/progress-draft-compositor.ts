@@ -11,6 +11,7 @@ import {
   createChannelProgressDraftEventHandlers,
   routePreparedProgressItem,
 } from "./progress-draft-events.js";
+import { createChannelProgressDraftGate } from "./progress-draft-gate.js";
 import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createProgressDraftSnapshotState,
@@ -27,7 +28,6 @@ import { createProgressDraftToolRuns } from "./progress-draft-tool-runs.js";
 import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
-  createChannelProgressDraftGate,
   type AgentPlanStep,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftTextForStreaming,
@@ -552,14 +552,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
           return false;
         }
         // Backend waits override the headline only; the prior work status stays intact.
-        toolRuns?.breakRun();
+        // A wait renders no tool row, so it must not split a consecutive tool run.
         modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
         return modelWaitText
           ? await startAndRender({ flush: true })
           : await renderAfterRetraction();
       }
       if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
-        const status = projectChannelWorkStatus(payload);
+        const status = projectChannelWorkStatus(payload, { toolIcons: params.toolIcons });
         const current = lines.find(
           (line) => typeof line === "object" && line.kind === "operation-status",
         );

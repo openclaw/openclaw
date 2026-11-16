@@ -18,7 +18,8 @@ export type SettingsOptions = {
   draft: NewSessionDraft;
   context: ApplicationContext | undefined;
   preferences: PaletteSessionPreferences;
-  onAgentPickerOpen: (open: boolean) => void;
+  identityTargetsRef: (read: () => readonly string[]) => void;
+  onIdentityTargetsChange: () => void;
   onChange: () => void;
   onConnectMachine: () => void;
 };

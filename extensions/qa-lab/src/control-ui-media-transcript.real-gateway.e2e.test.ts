@@ -300,7 +300,7 @@ suite.define(() => {
             !pane.state.chatLoading
           );
         });
-        const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         await send(page, "Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
         reportPhase("powerpoint-request-sent");
         const card = page.locator(".chat-assistant-attachment-card", {

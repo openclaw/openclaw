@@ -1,4 +1,4 @@
-export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false) {
+export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restoreGatewayService(reason, decision = params.recovery, childStatus, previousGeneration = false, updaterStopped = false, beforeStart = () => {}) {
   if (managedUpdateLease?.action.kind !== "update" || !ownsManagedUpdateLease()) return false;
   let expectedRevision;
   const record = (restored) => recordManagedUpdateOutcome(
@@ -30,9 +30,14 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   if (!ownsRecovery()) return false;
   // Activation may consume or replace the notification. Annotate only the
   // observed revision; notification persistence never decides recovery safety.
+  if (updaterStopped) {
+    const stop = readGatewayStop();
+    if (stop?.runId !== params.runId || stop.started)
+      return refuse("recovery refused: Gateway stop intent was superseded");
+  }
   if (childStatus) expectedRevision = await recordManagedUpdateOutcome(reason, undefined, childStatus);
   if (recovery?.kind === "systemd") {
-    if (!pendingServiceStop || (await pendingServiceStop).code !== 0) {
+    if (!updaterStopped && (!pendingServiceStop || (await pendingServiceStop).code !== 0)) {
       return refuse("recovery refused: exact systemd stop did not complete");
     }
     const parked = await inspectSystemdService(recovery.unit);
@@ -43,10 +48,11 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
     // permits recovering that later stopped invocation.
     if (!parked || parked.Id !== recovery.unit || parked.LoadState !== "loaded" ||
       (parked.ActiveState !== "inactive" && parked.ActiveState !== "failed") ||
-      parked.MainPID !== "0" || !(previousGeneration || isParkedSystemdGeneration(parked, true)) ||
+      parked.MainPID !== "0" || !(updaterStopped || previousGeneration || isParkedSystemdGeneration(parked, true)) ||
       !ownsRecovery()) {
       return refuse("recovery refused: parked systemd service identity changed or stop is incomplete");
     }
+    beforeStart();
     const started = childStatus
       ? await restart()
       : await runOwned("systemctl", ["--user", "start", recovery.unit]);
@@ -64,8 +70,12 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   } else if (recovery?.kind === "launchd") {
     try {
       const target = "gui/" + recovery.uid + "/" + recovery.label;
-      const deadline = Date.now() + params.recoveryTimeoutMs;
-      const run = (args) => runOwned("launchctl", args, undefined, deadline);
+      // The recovery budget is elapsed time; a wall-clock step must not extend or
+      // truncate it. Spawns still receive an epoch deadline because they share the
+      // cross-process parent-exit contract consumed by runServiceCommand.
+      const recoveryBudget = createMonotonicBudget(params.recoveryTimeoutMs);
+      const run = (args) =>
+        runOwned("launchctl", args, undefined, recoveryBudget.commandDeadlineAt());
       const before = await run(["print", target]);
       if (before.code === 0) {
         const pid = parseLaunchctlJob(before.stdout, target).runtime.pid;
@@ -75,6 +85,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       } else if (!isLaunchdNotLoaded(before)) {
         return refuse();
       }
+      beforeStart();
       if (childStatus) {
         const restarted = await restart();
         // The guarded CLI owns its restart deadline; identity inspection gets a fresh probe budget.
@@ -88,7 +99,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       } else {
         const enabled = await run(["enable", target]);
         let kickstarted = false;
-        for (let inspection = enabled; enabled.code === 0 && Date.now() < deadline;) {
+        for (let inspection = enabled; enabled.code === 0 && recoveryBudget.remainingMs() > 0;) {
           inspection = await run(["print", target]);
           if (inspection.code === 0) {
             const pid = parseLaunchctlJob(inspection.stdout, target).runtime.pid;
@@ -99,13 +110,15 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
             }
             // launchd retains the old label until its ExitTimeOut-bounded teardown completes.
             if (pid === params.parentPid) {
-              await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+              await sleep(Math.min(500, recoveryBudget.remainingMs()));
               continue;
             }
             if (kickstarted) break;
             kickstarted = true;
+            beforeStart();
             inspection = await run(["kickstart", target]);
           } else if (isLaunchdNotLoaded(inspection)) {
+            beforeStart();
             inspection = await run(["bootstrap", "gui/" + recovery.uid, recovery.plistPath]);
           } else break;
           if (inspection.code === 0) continue;
@@ -114,7 +127,7 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
             /already exists in domain|operation already in progress|bootstrap failed: 37/i.test(detail)) continue;
           if (kickstarted && isLaunchdNotLoaded(inspection)) continue;
           if (!/bootstrap failed: 5|input\/output error/i.test(detail)) break;
-          await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
+          await sleep(Math.min(500, recoveryBudget.remainingMs()));
         }
         serviceRunning = restored;
       }
@@ -123,7 +136,8 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
       return refuse("recovery refused: " + (error instanceof Error ? error.message : String(error)));
     }
   } else if (recovery?.kind === "schtasks") {
-    restored = (await runOwned("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
+    beforeStart();
+    restored = (updaterStopped ? await restart() : await runOwned("schtasks.exe", ["/Run", "/TN", recovery.taskName])).code === 0;
   }
   // Manager liveness survives a failed readiness probe, but version facts require
   // the new process to answer; never reuse the pre-activation runtime identity.

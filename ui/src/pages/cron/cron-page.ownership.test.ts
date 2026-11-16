@@ -30,12 +30,33 @@ it("lets a human owner edit their job but not another person's job", async () =>
   });
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   gateway.emitSnapshot({
-    hello: operatorHello(["operator.read", "operator.write"]),
+    hello: operatorHello(["operator.admin"]),
     selfUser: { id: "alice", identity: { type: "profile", id: "alice" } },
   });
   const page = createPage(createContext(gateway), { render: true });
   mounted.push(page);
-  await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(2));
+  await waitForCronPage(() => {
+    expect(page.cron.cronJobs).toHaveLength(2);
+    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull();
+  });
+  gateway.emitSnapshot({ hello: operatorHello(["operator.read", "operator.write"]) });
+  await waitForCronPage(() => {
+    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).toBeNull();
+  });
+  const identity = gateway.snapshot.selfUser!.identity!;
+  identity.id = "bob";
+  page.refreshView();
+  await waitForCronPage(() => {
+    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull();
+  });
+  identity.id = "alice";
+  page.refreshView();
+  await waitForCronPage(() =>
+    expect(page.querySelector('[data-test-id="cron-row-run-own"]')).not.toBeNull(),
+  );
   page.selectJob(own);
   await page.settle();
   await waitForCronPage(() =>
@@ -55,4 +76,9 @@ it("lets a human owner edit their job but not another person's job", async () =>
   );
   page.patchForm({ name: "Unauthorized" });
   expect(page.cron.cronForm.name).toBe(other.name);
+  page.closePanel();
+  gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
+  await waitForCronPage(() =>
+    expect(page.querySelector('[data-test-id="cron-row-run-other"]')).not.toBeNull(),
+  );
 });

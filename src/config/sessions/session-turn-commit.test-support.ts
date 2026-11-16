@@ -125,8 +125,15 @@ export function runSessionTurnCountTests(harness: TurnTestHarness) {
             parent_id: ids[index - 1] ?? "seed",
           })),
         ]);
-        // Includes the transaction envelope and every adapter trip.
-        const sqliteBudget = count === 1 ? 13 : count === 513 ? 16 : callerIds ? 12 : 11;
+        expect(
+          database.db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM session_transcript_active_event_facts WHERE session_id = ?",
+            )
+            .get(scope.sessionId),
+        ).toEqual({ count: count + 1 });
+        // Includes the envelope and adapter trips; SQLite writes facts once per 512-message batch.
+        const sqliteBudget = count === 1 ? 14 : count === 513 ? 18 : callerIds ? 13 : 12;
         const postgresBudget = count === 1 ? 12 : count === 513 ? 9 : callerIds ? 8 : 7;
         expect(measured).toEqual(
           harness.engine === "sqlite"

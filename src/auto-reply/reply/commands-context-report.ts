@@ -91,7 +91,7 @@ async function buildTranscriptCompactabilityLines(
   targetSessionEntry: SessionEntry | undefined,
 ): Promise<string[]> {
   if (!targetSessionEntry?.sessionId?.trim()) {
-    return ["Compactable transcript: unavailable (no active transcript session)"];
+    return ["Compactable chat history: unavailable (no active session)"];
   }
 
   const isRealConversation = createRealConversationClassifier();
@@ -104,11 +104,11 @@ async function buildTranscriptCompactabilityLines(
     }
   }
   if (!totalMessages) {
-    return ["Compactable transcript: unavailable (no transcript messages found)"];
+    return ["Compactable chat history: unavailable (no messages found)"];
   }
 
   return [
-    `Compactable transcript: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} transcript message(s)`,
+    `Compactable chat history: ${formatInt(realConversationMessages)} real conversation message(s) / ${formatInt(totalMessages)} history entries`,
     ...(realConversationMessages === 0
       ? [
           "Compaction note: prompt/cache usage may be high even when there are no compactable conversation messages.",
@@ -167,7 +167,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "",
         "Try:",
         "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable transcript counts)",
+        "- /context detail (per-file + per-tool + per-skill + system prompt size + compactable chat history counts)",
         "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
@@ -347,7 +347,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
   const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
   const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
-  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const estimatedChars = report.systemPrompt.estimatedChars;
+  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)}${estimatedChars ? `; estimated ${formatCharsAndTokens(estimatedChars)}` : ""})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =

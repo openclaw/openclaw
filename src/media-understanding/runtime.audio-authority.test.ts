@@ -9,7 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { installPinnedHostnameTestHooks } from "./audio.test-helpers.js";
 import { transcribeOpenAiCompatibleAudio } from "./openai-compatible-audio.js";
-import type { MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 
 const cli = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({

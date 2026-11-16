@@ -12,10 +12,10 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -170,7 +170,7 @@ export function acquireAuthProfileReadDatabase(
   const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);
-    unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
+    unregisterReadHandleExitClose ??= registerProcessExitCleanup(closeAuthProfileReadPool);
     armReadHandleIdleClose(resolvedPath, candidate);
   }
   let readable = false;

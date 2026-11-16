@@ -1,4 +1,4 @@
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
@@ -25,6 +25,45 @@ export function canonicalSessionKeyMigrationRequiredError(
   detail: string,
 ): SessionCanonicalKeyMigrationRequiredError {
   return new SessionCanonicalKeyMigrationRequiredError(detail);
+}
+
+function isCanonicalSessionKey(sessionKey: string): boolean {
+  const trimmed = sessionKey.trim();
+  if (!trimmed || sessionKey !== trimmed) {
+    return false;
+  }
+  if (normalizeStoreSessionKey(sessionKey) !== sessionKey) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(trimmed);
+  return (
+    trimmed === "global" ||
+    trimmed === "unknown" ||
+    (parsed !== null && trimmed.startsWith(`agent:${parsed.agentId}:`))
+  );
+}
+
+export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgentId?: string): void {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (
+    !isCanonicalSessionKey(sessionKey) ||
+    (expectedAgentId && parsed && parsed.agentId !== normalizeAgentId(expectedAgentId))
+  ) {
+    throw canonicalSessionKeyMigrationRequiredError(
+      `refusing non-canonical session key write ${sessionKey}`,
+    );
+  }
+}
+
+export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): void {
+  const sessionKeys = [
+    entry.parentSessionKey,
+    entry.spawnedBy,
+    entry.forkSource?.sessionKey,
+  ].filter((sessionKey): sessionKey is string => sessionKey !== undefined);
+  for (const sessionKey of sessionKeys) {
+    assertCanonicalSessionKeyWrite(sessionKey);
+  }
 }
 
 /** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */

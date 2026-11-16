@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "./control-ui-plugin-e2e.ts";
 import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 
 const workboardNativePlugins: NativeControlUiPluginFixture[] = [
@@ -22,4 +22,4 @@ export const workboardUi = {
       group: "control",
     },
   ],
-} satisfies Pick<ControlUiMockGatewayScenario, "nativePlugins" | "controlUiTabs">;
+} satisfies Pick<NativeControlUiMockGatewayScenario, "nativePlugins" | "controlUiTabs">;

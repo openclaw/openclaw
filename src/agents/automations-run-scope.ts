@@ -27,20 +27,19 @@ export function resolveAutomationsRunScope(
       }>
     | undefined,
 ): AutomationsRunScope {
-  const jobId = options?.jobId?.trim();
-  if (!jobId || (options?.trigger !== "event" && options?.trigger !== "cron")) {
-    return { denied: false };
-  }
-  // The context owns the scope. An ingress turn whose context was not admitted
-  // gets no automations tool rather than an unscoped one.
+  // Admission owns job identity even when a session continuation omits its
+  // diagnostic jobId or trigger projection.
   const scope =
-    options.trigger === "event"
-      ? readScheduledIngressAutomationsScope(options)
-      : readScheduledOccurrenceAutomationsScope(options);
+    readScheduledOccurrenceAutomationsScope(options) ??
+    readScheduledIngressAutomationsScope(options);
   if (scope) {
     const selfJobId = readScheduledAutomationsSelfJobId(scope);
     return selfJobId ? { selfJobId, denied: false } : { denied: true };
   }
-  // A cron turn built without an admitted context stays restricted to its own job.
+  const jobId = options?.jobId?.trim();
+  if (!jobId || (options?.trigger !== "event" && options?.trigger !== "cron")) {
+    return { denied: false };
+  }
+  // Without admission, cron stays restricted and ingress gets no tool.
   return options.trigger === "cron" ? { selfJobId: jobId, denied: false } : { denied: true };
 }

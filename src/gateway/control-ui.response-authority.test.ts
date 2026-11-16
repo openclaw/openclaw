@@ -38,12 +38,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import {
-  handleControlUiAssistantMediaRequest,
-  handleControlUiAvatarRequest,
-  handleControlUiHttpRequest,
-} from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { invalidateOperatorRolePolicy, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
@@ -86,7 +83,7 @@ function httpResponse(
 
 function registerPanel(
   config: OpenClawConfig,
-  grant?: { signal: AbortSignal; assertCurrent(): void },
+  authorize?: () => { signal: AbortSignal; assertCurrent(): void } | undefined,
 ) {
   const { registry } = createPluginRegistryFixture(config);
   registerVirtualTestPlugin({
@@ -95,8 +92,8 @@ function registerPanel(
     id: "person-access",
     name: "Person access",
     register(api) {
-      if (grant) {
-        api.registerGatewayAccessPolicy({ authorize: () => grant });
+      if (authorize) {
+        api.registerGatewayAccessPolicy({ authorize });
       }
       api.registerHttpRoute({
         path: "/secure-hook",
@@ -166,7 +163,7 @@ describe("Control UI response authority", () => {
       const grant = new AbortController();
       const expiresAt = 1_000;
       let now = 0;
-      registerPanel(config, {
+      const authority = {
         signal: grant.signal,
         assertCurrent() {
           grant.signal.throwIfAborted();
@@ -174,7 +171,8 @@ describe("Control UI response authority", () => {
             throw new Error("Visitor grant expired");
           }
         },
-      });
+      };
+      registerPanel(config, () => (now < expiresAt ? authority : undefined));
       const { entered, release, hold } = preparationGate();
       vi.spyOn(devInstallBranch, "resolveDevInstallGitBranch").mockImplementation(() =>
         hold("private-branch"),

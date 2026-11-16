@@ -18,16 +18,22 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import * as inventoryRuntime from "../config/sessions/session-store-target-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-availability.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -52,7 +58,10 @@ import {
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./session-utils-store-worker.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 import { withStateDirEnv } from "./session-utils.test-support.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
@@ -155,6 +164,49 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
+  it.each(["target", "entry"] as const)(
+    "reads a first database created during %s discovery",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+        const agentId = "cold";
+        const key = `agent:${agentId}:first-session`;
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { [agentId]: {} } },
+        };
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const entry = { sessionId: "created-during-discovery", updatedAt: 1 };
+        const prepare = inventoryRuntime.prepareSessionStoreTargetInventoryRead;
+        using _ = vi
+          .spyOn(inventoryRuntime, "prepareSessionStoreTargetInventoryRead")
+          .mockImplementationOnce((...args) => {
+            const inventory = prepare(...args);
+            return {
+              ...inventory,
+              async withRead<T>(
+                operation: Parameters<typeof inventory.withRead<T>>[0],
+                assertCurrent?: () => void,
+                signal?: AbortSignal,
+              ) {
+                await replaceSessionEntry({ agentId, sessionKey: key, env }, entry);
+                return inventory.withRead(operation, assertCurrent, signal);
+              },
+            };
+          });
+        const observed =
+          kind === "entry"
+            ? (await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key, agentId, env })).entry
+            : await withGatewaySessionStoreTarget(
+                { cfg, key, agentId, env },
+                (target, _members, assertCurrent) => {
+                  assertCurrent();
+                  return target.store[key];
+                },
+              );
+        expect(observed).toMatchObject(entry);
+      });
+    },
+  );
+
   it("rejects an unreadable canonical candidate instead of returning its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const alias = "agent:main:main";
@@ -336,112 +388,135 @@ describe("retained exact row publications", () => {
   it.each(["lookup", "qualified"] as const)(
     "keeps %s rows through non-row events but fences members, aliases and topology",
     async (mode) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const cfg: OpenClawConfig = {
-          agents: { entries: { main: {}, research: {} } },
-          session: { scope: "global" },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const key = "global";
-        await seedEntry(key, "retained-row");
-        await seedEntry(key, "unrelated-row", {}, "research");
-        const unrelatedDatabase = openOpenClawAgentDatabase({ agentId: "research" });
-        const selected = await withGatewaySessionStoreTarget(
-          { cfg, key: "main", agentId: "main" },
-          (target) => target,
-        );
-        const scope = { agentId: "main", sessionKey: key, storePath: selected.storePath };
-        addSessionMember(scope, { identityId: "revoked-member", addedBy: "owner" });
-        const read = (consume: (assertCurrent: () => void) => void) =>
-          mode === "lookup"
-            ? withGatewaySessionStoreTarget(
-                { cfg, key: "main", agentId: "main", includeMembership: true },
-                (_target, _members, assert) => consume(assert),
-              )
-            : withQualifiedGatewaySessionStoreTarget({
-                target: {
-                  agentId: selected.agentId,
-                  canonicalKey: selected.canonicalKey,
-                  requestedKey: "main",
-                  storeKey: key,
-                  storeKeys: selected.storeKeys,
-                  storePath: selected.storePath,
-                  readSource: selected.capturedReadSource,
-                  keyFormat: "agent-qualified",
-                },
-                logicalStorePath: selected.storePath,
-                includeMembership: true,
-                consume: (_target, _members, assert) => consume(assert),
-              });
-        await read((assertCurrent) => {
-          for (const publicationScope of [
-            "agent-runs",
-            "subagent-runs",
-            "profiles",
-            "catalog",
-            "config",
-            "config-presentation",
-            "config-profiles",
-            "runtime",
-            "acp",
-            "worker-placements",
-            "worker-environments",
-          ]) {
-            sessionChanges.emit({ all: true, scope: publicationScope });
-            assertCurrent();
-          }
-          sessionChanges.emit({ sessionKey: key, agentId: "main" });
-          sessionChanges.emit({ sessionKey: key, scope: "runtime" });
-          sessionChanges.emit({ sessionKey: key, scope: "automation" });
-          sessionChanges.emit({ all: true, scope: { agentId: "other" } });
-          sessionChanges.emit({
-            sessionKey: "agent:main:other",
-            storePath: selected.storePath,
-          });
-          assertCurrent();
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const gateway = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(state.env),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: state.configPath,
+            role: "gateway",
+            processNamespace: readGatewayLockProcessNamespace(),
+          },
         });
-        await read((assertCurrent) => {
-          addSessionMember(
-            { agentId: "research", sessionKey: key },
-            { identityId: "unrelated-member", addedBy: "owner" },
-          );
-          sessionChanges.emit({
-            all: true,
-            scope: { agentId: "research", storePath: unrelatedDatabase.path },
-          });
-          expect(assertCurrent, "unrelated physical store publication").not.toThrow();
-        });
-        await read((assertCurrent) => {
-          expect(removeSessionMember(scope, "revoked-member")?.identityId).toBe("revoked-member");
-          expect(assertCurrent).toThrow("Session sharing facts changed during read");
-        });
-        const database = openOpenClawAgentDatabase({ agentId: "main" });
-        const aliasDirectory = path.join(
-          path.dirname(path.dirname(database.path)),
-          "membership-alias",
-        );
-        symlinkSync(path.dirname(database.path), aliasDirectory, "junction");
-        const aliasPath = path.join(aliasDirectory, path.basename(database.path));
-        openOpenClawAgentDatabase({ agentId: "main", path: aliasPath });
-        await read((assertCurrent) => {
-          addSessionMember(
-            { agentId: "main", sessionKey: key, storePath: aliasPath },
-            { identityId: "aliased-member", addedBy: "owner" },
-          );
-          expect(assertCurrent).toThrow("Session sharing facts changed during read");
-        });
-        const publications: SessionRowChange[] = [
-          { all: true, scope: "stores" },
-          { all: true, scope: { agentId: "main", storePath: selected.storePath } },
-          // Both the canonical row and its request aliases remain publication dependencies.
-          { sessionKey: "main", storePath: selected.storePath, facts: { kind: "removed" } },
-        ];
-        for (const publication of publications) {
+        try {
+          const cfg: OpenClawConfig = {
+            agents: { entries: { main: {}, research: {} } },
+            session: { scope: "global" },
+          };
+          setRuntimeConfigSnapshot(cfg, cfg);
+          const key = "global";
+          await seedEntry(key, "retained-row");
+          await seedEntry(key, "unrelated-row", {}, "research");
+          const unrelatedDatabase = openOpenClawAgentDatabase({ agentId: "research" });
+          const selected = await (async () => {
+            using filesystem = observeMainThreadFs();
+            const target = await withGatewaySessionStoreTarget(
+              { cfg, key: "main", agentId: "main" },
+              (value) => value,
+            );
+            expect(filesystem.calls()).toEqual({});
+            return target;
+          })();
+          const scope = { agentId: "main", sessionKey: key, storePath: selected.storePath };
+          addSessionMember(scope, { identityId: "revoked-member", addedBy: "owner" });
+          const read = (consume: (assertCurrent: () => void) => void) =>
+            mode === "lookup"
+              ? withGatewaySessionStoreTarget(
+                  { cfg, key: "main", agentId: "main", includeMembership: true },
+                  (_target, _members, assert) => consume(assert),
+                )
+              : withQualifiedGatewaySessionStoreTarget({
+                  target: {
+                    agentId: selected.agentId,
+                    canonicalKey: selected.canonicalKey,
+                    requestedKey: "main",
+                    storeKey: key,
+                    storeKeys: selected.storeKeys,
+                    storePath: selected.storePath,
+                    readSource: selected.capturedReadSource,
+                    keyFormat: "agent-qualified",
+                  },
+                  logicalStorePath: selected.storePath,
+                  includeMembership: true,
+                  consume: (_target, _members, assert) => consume(assert),
+                });
           await read((assertCurrent) => {
+            for (const publicationScope of [
+              "agent-runs",
+              "subagent-runs",
+              "profiles",
+              "catalog",
+              "config",
+              "config-presentation",
+              "config-profiles",
+              "runtime",
+              "acp",
+              "worker-placements",
+              "worker-environments",
+            ]) {
+              sessionChanges.emit({ all: true, scope: publicationScope });
+              assertCurrent();
+            }
+            sessionChanges.emit({ sessionKey: key, agentId: "main" });
+            sessionChanges.emit({ sessionKey: key, scope: "runtime" });
+            sessionChanges.emit({ sessionKey: key, scope: "automation" });
+            sessionChanges.emit({ all: true, scope: { agentId: "other" } });
+            sessionChanges.emit({
+              sessionKey: "agent:main:other",
+              storePath: selected.storePath,
+            });
             assertCurrent();
-            sessionChanges.emit(publication);
+          });
+          await read((assertCurrent) => {
+            addSessionMember(
+              { agentId: "research", sessionKey: key },
+              { identityId: "unrelated-member", addedBy: "owner" },
+            );
+            sessionChanges.emit({
+              all: true,
+              scope: { agentId: "research", storePath: unrelatedDatabase.path },
+            });
+            expect(assertCurrent, "unrelated physical store publication").not.toThrow();
+          });
+          await read((assertCurrent) => {
+            expect(removeSessionMember(scope, "revoked-member")?.identityId).toBe("revoked-member");
             expect(assertCurrent).toThrow("Session sharing facts changed during read");
           });
+          const database = openOpenClawAgentDatabase({ agentId: "main" });
+          const aliasDirectory = path.join(
+            path.dirname(path.dirname(database.path)),
+            "membership-alias",
+          );
+          symlinkSync(path.dirname(database.path), aliasDirectory, "junction");
+          const aliasPath = path.join(aliasDirectory, path.basename(database.path));
+          openOpenClawAgentDatabase({ agentId: "main", path: aliasPath });
+          await read((assertCurrent) => {
+            addSessionMember(
+              { agentId: "main", sessionKey: key, storePath: aliasPath },
+              { identityId: "aliased-member", addedBy: "owner" },
+            );
+            expect(assertCurrent).toThrow("Session sharing facts changed during read");
+          });
+          const publications: SessionRowChange[] = [
+            { all: true, scope: "stores" },
+            { all: true, scope: { agentId: "main", storePath: selected.storePath } },
+            // Both the canonical row and its request aliases remain publication dependencies.
+            { sessionKey: "main", storePath: selected.storePath, facts: { kind: "removed" } },
+          ];
+          for (const publication of publications) {
+            await read((assertCurrent) => {
+              assertCurrent();
+              sessionChanges.emit(publication);
+              expect(assertCurrent).toThrow("Session sharing facts changed during read");
+            });
+          }
+        } finally {
+          try {
+            await closeOpenClawAgentDatabasesAsync();
+          } finally {
+            gateway.release();
+          }
         }
       });
     },

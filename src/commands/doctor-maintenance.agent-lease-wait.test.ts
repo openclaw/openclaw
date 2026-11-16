@@ -14,6 +14,7 @@ import {
   GATEWAY_SHUTDOWN_RESERVE_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
 } from "../infra/gateway-shutdown-budget.js";
+import * as stateOwnerHeartbeat from "../infra/gateway-state-owner-heartbeat.js";
 import {
   acquireGatewayStateOwner,
   resolveGatewayStateOwnerPath,
@@ -22,6 +23,7 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as leaseInspection from "../state/openclaw-agent-db-lease-inspection.js";
 import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -95,6 +97,7 @@ function holdState(databasePath: string, gateway = false) {
 }
 
 function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
+  const leaseReads = vi.spyOn(leaseInspection, "readActiveOpenClawAgentDatabaseLeasesReadOnly");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -133,6 +136,12 @@ function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
     advanceTo: async (ms = now) => {
       now = ms;
       await vi.advanceTimersToNextTimerAsync();
+      // A poll now awaits a real child read before it can log or arm its next timer.
+      await Promise.allSettled(
+        leaseReads.mock.results.flatMap((attempt) =>
+          attempt.type === "return" ? [attempt.value] : [],
+        ),
+      );
     },
     logged,
     firstWait: logged("Waiting"),
@@ -321,6 +330,20 @@ function holdForegroundState(published: boolean) {
 it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
   "settles the foreground state owner before update Doctor admission: %s",
   async (outcome) => {
+    const heartbeatStops: Promise<void>[] = [];
+    const startHeartbeat = stateOwnerHeartbeat.startGatewayStateOwnerHeartbeat;
+    vi.spyOn(stateOwnerHeartbeat, "startGatewayStateOwnerHeartbeat").mockImplementation(
+      (...args) => {
+        const heartbeat = startHeartbeat(...args);
+        const stop = heartbeat.stop;
+        vi.spyOn(heartbeat, "stop").mockImplementation(() => {
+          const stopped = stop();
+          heartbeatStops.push(stopped);
+          return stopped;
+        });
+        return heartbeat;
+      },
+    );
     const { databasePath, predecessor } = holdForegroundState(outcome !== "rowless-released");
     const before = fs.readFileSync(databasePath);
     let authorized = true;
@@ -377,6 +400,8 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
       }
       const completed = await doctor.result;
       await ("maintenance" in completed ? completed.maintenance?.release() : undefined);
+      // Lease release is synchronous; its requested heartbeat shutdown still owns a deadline.
+      await Promise.all(heartbeatStops);
       if (outcome === "rowless-released") {
         expect(vi.getTimerCount()).toBe(0);
       }

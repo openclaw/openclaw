@@ -5,7 +5,7 @@ import {
   resolveCompactionReplayEligibility,
   stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
@@ -52,10 +52,6 @@ import {
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
-import {
-  shouldWaitForCompletionRequiredAsyncTasks,
-  waitForCompletionRequiredAsyncTasks,
-} from "./attempt-async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
   findCurrentAttemptAssistantMessage,
@@ -116,47 +112,6 @@ export async function settleEmbeddedAttemptStream(input: {
   shouldFlushForContextEngine: boolean;
 }) {
   const { attempt, activeSession, sessionManager, subscription, state } = input;
-
-  try {
-    if (
-      shouldWaitForCompletionRequiredAsyncTasks({
-        sessionKey: attempt.sessionKey,
-        toolMetas: subscription.toolMetas,
-        yieldDetected: state.yieldAborted,
-        abortSignal: input.runAbortSignal,
-      })
-    ) {
-      const asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
-        getToolMetas: () =>
-          subscription.toolMetas.filter(
-            (entry) => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
-          ),
-        sessionKey: attempt.sessionKey,
-        getDeadlineAtMs: () => {
-          const deadlineAtMs = input.getRunAbortDeadlineAtMs();
-          return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
-        },
-        onDeadlineChanged: input.onRunAbortDeadlineChanged,
-        abortSignal: input.runAbortSignal,
-      });
-      // An aborted run legitimately leaves async tasks unfinished; stamping a
-      // timeout failure here would reclassify the abort as an errored completion.
-      if (asyncTaskWait.timedOutRunIds.length > 0 && !input.readLifecycleState().aborted) {
-        state.promptError = new Error(
-          `Timed out waiting for async task completion: ${asyncTaskWait.timedOutRunIds.join(", ")}`,
-        );
-        state.promptErrorSource = "prompt";
-      }
-    }
-  } catch (err) {
-    // Cancelled task observation must still reach after-turn settlement. The
-    // lifecycle owner already records timeout versus user abort; another read
-    // here could wait indefinitely behind the same database coordinator.
-    const lifecycle = input.readLifecycleState();
-    if ((!lifecycle.timedOut && !lifecycle.aborted) || !isRunnerAbortError(err)) {
-      throw err;
-    }
-  }
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
@@ -536,6 +491,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     (messages) => messages,
     async ({ context, ...provider }) => {
       assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
       const prepared = await materializeProviderContext({
         ...provider,
         context,
@@ -545,7 +501,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceOnly: input.workspaceOnly,
         localRoots: input.workspaceOnly
           ? undefined
-          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
         onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
         sandbox:
           input.sandbox?.enabled && input.sandbox.fsBridge

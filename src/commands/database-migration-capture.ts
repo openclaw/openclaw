@@ -9,7 +9,6 @@ import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { resolveBackupConfigCapture } from "../infra/backup-config-capture.js";
-import { createBackupArchive } from "../infra/backup-create.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
 import { rebindRehearsalClientCredentials } from "../infra/client-credential-restore.js";
@@ -25,6 +24,7 @@ import { withArtifactPreservingStateReads } from "../state/artifact-preserving-s
 import { backupRestoreCommand } from "./backup-restore.js";
 import { canonicalizePathForContainment } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
+import { createDatabaseMigrationFilesystemBackup } from "./database-migration-filesystem-backup.js";
 import { withGatewayMigrationQuiescence } from "./database-migration-quiescence.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -237,11 +237,12 @@ export async function createDatabaseMigrationCapture(options: {
     if (!preparedBase) {
       // The SQLite-only exact owner has admitted every physical store before
       // ordinary archive traversal. Both images share this same suspension.
-      await createBackupArchive({
+      await createDatabaseMigrationFilesystemBackup({
         output: base,
-        verify: true,
+        stateDir,
+        config: configuration.snapshot.config,
+        env,
         signal,
-        preserveSourceArtifacts: true,
       });
       await revalidate();
     }

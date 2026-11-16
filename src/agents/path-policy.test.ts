@@ -15,13 +15,13 @@ import {
   toRelativeWorkspacePath,
 } from "./path-policy.js";
 
-describe("toRelativeWorkspacePath (windows semantics)", () => {
-  beforeEach(() => {
-    // Sandbox input resolution is not under test; return normalized input paths directly.
-    resolveSandboxInputPathMock.mockReset();
-    resolveSandboxInputPathMock.mockImplementation((filePath: string) => filePath);
-  });
+beforeEach(() => {
+  // Sandbox input resolution is not under test; return normalized input paths directly.
+  resolveSandboxInputPathMock.mockReset();
+  resolveSandboxInputPathMock.mockImplementation((filePath: string) => filePath);
+});
 
+describe("toRelativeWorkspacePath (windows semantics)", () => {
   it("preserves candidate case when the root itself is spelled with different case", () => {
     withMockedWindowsPlatform(() => {
       const root = "C:\\Users\\User\\OpenClaw";

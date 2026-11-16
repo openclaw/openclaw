@@ -97,7 +97,7 @@ agent workspace, use **Plugins → Skills → My skills**. Create or import the
 You do not need host shell access or permission to edit shared Gateway settings.
 
 You can also ask the agent to create or improve a personal skill. Its
-`skill_workshop` tool uses the Gateway's authorized library service; it does not
+`skill_library` tool uses the Gateway's authorized library service; it does not
 write managed revision directories directly. The result names the published
 revision and explains when the session can use it. Ask explicitly to use the new revision in the current session or share it
 with the team.

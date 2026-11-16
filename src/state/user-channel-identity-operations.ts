@@ -61,6 +61,18 @@ function unwrapIdentityResult<T>(result: UserChannelIdentityResult<T>, profileId
   throw new Error("Unsupported channel identity result");
 }
 
+/** A presentation lookup: the returned profile ID is not an authority lease. */
+export async function readCanonicalUserChannelIdentityProfileId(
+  identity: UserChannelIdentity,
+  options: IdentityOptions = {},
+): Promise<string | undefined> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "userProfiles.channelIdentity.resolve",
+    identity,
+  });
+  return reply?.linked?.profileId;
+}
+
 export async function listCanonicalUserChannelIdentities(
   profileId: string,
   options: IdentityOptions = {},

@@ -52,6 +52,48 @@ A command handler that sends its own response can return `{ suppressReply: true 
 OpenClaw then sends no reply of its own for that command, neither the result text
 nor a missing-reply notice.
 
+A command can hand the turn to the agent instead of replying. `{ continueAgent: true }`
+runs the agent on the original message. `{ continueAgent: { prompt } }` sends `prompt` to
+the model as this turn's message, the same way core `/learn` rewrites its turn. Earlier
+history is not changed. Use this for commands that turn a short slash command into a
+longer model request:
+
+```ts
+api.registerCommand({
+  name: "recall",
+  description: "Recall what we did",
+  acceptsArgs: true,
+  handler: async (ctx) =>
+    ctx.args?.trim() === "list"
+      ? { text: "Nothing saved yet." }
+      : {
+          continueAgent: {
+            prompt: `Recall request (JSON string): ${JSON.stringify(ctx.args ?? "")}`,
+          },
+        },
+});
+```
+
+Treat user arguments as data inside the prompt (for example, JSON-quote them). An
+empty `prompt` fails the command. Continuation works for text commands and native
+slash commands; scheduled command turns refuse it.
+
+What the transcript shows follows the turn's committed input, exactly as for core
+`/learn`. When the typed input is already committed before the command runs (Gateway
+chat input, or any command that declares `runtimeCapabilities: ["subagents"]`, which
+commits its input before exposing subagents), the user record keeps the typed command
+and stores `prompt` as its model projection; replay sends the model the projection.
+Otherwise the user record is `prompt` itself.
+
+Channels that run native commands themselves call `dispatch.execute(...)`. When
+`pluginCommandResultContinuesAgent(result)` (from `openclaw/plugin-sdk/plugin-command-runtime`)
+is true, they skip their own reply and pass the same dispatch to the reply pipeline as the
+planned plugin command decision. The pipeline then applies the result once, without running
+the command again. Before it does, the pipeline checks the command's authorization
+(`requireAuth`, `requiredScopes`) again against the reply turn's current requester facts,
+so a requester whose access changed after the handler returned is refused before any
+model or tool work.
+
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback
 before awaiting preparation and pass it to the mutation owner's current-authority
@@ -73,7 +115,7 @@ invocations:
 ```ts
 api.registerCommand({
   name: "pair",
-  description: "Pair a device",
+  description: "Connect a device",
   clientPresentation: {
     when: "no-arguments",
     action: { kind: "device-pairing" },

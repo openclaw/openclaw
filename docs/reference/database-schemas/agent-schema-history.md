@@ -56,6 +56,8 @@ backup and its matching build, not just reinstalling the older package.
 | 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
 | 38      | PostgreSQL full-text search splits punctuation-joined tokens like SQLite FTS5 ([#183547](https://github.com/openclaw/openclaw/pull/183547)); metadata-only SQLite advance                                                                              | `Unreleased` |
 | 39      | Retained cold transcript navigation for bounded history reads without restoration                                                                                                                                                                      | `Unreleased` |
+| 40      | Durable session creation receipts bound to the original session incarnation                                                                                                                                                                            | `Unreleased` |
+| 41      | Active transcript byte and dependency facts in an initially empty companion table                                                                                                                                                                      | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -401,6 +403,11 @@ node, window, and main-key session-validation triggers. The session
 writer validates its serialized row before persisting it and writes the final
 validity value directly. Ordinary writes leave no pending validation marker and
 need no post-write row reread or validity update.
+
+Placement retirement and Doctor identity probes consume the recorded validity,
+session key, and current session ID without decoding entry payloads or participant
+projections. Invalid or ambiguous identities remain indeterminate; offline repairs
+still cross canonical admission before their identity facts can be consumed.
 
 `session_canonical_validation_pending` remains a derived admission queue.
 Offline imports, Doctor repairs, and main-key policy changes explicitly queue

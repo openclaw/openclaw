@@ -523,9 +523,14 @@ export async function convergePostCoreUpdatePlugins(params: {
 }> {
   const { assertCurrent } = params;
   assertCurrent?.();
+  // Shipped parents that predate the run ledger never pass a run id, so they
+  // cannot provide an executor or a plugin cohort; they keep plain convergence.
+  const runlessLegacyParent =
+    !params.opts.run && !process.env[UPDATE_RUN_ID_ENV]?.trim() && !params.requiresCohort;
   if (
     (params.requiresCohort || process.env[POST_CORE_UPDATE_ENV] === "1") &&
-    !params.opts.run?.executorFence
+    !params.opts.run?.executorFence &&
+    !runlessLegacyParent
   ) {
     throw new UpdateCommandRecoveryPendingError(
       "Plugin cohort convergence requires its live outer update executor.",

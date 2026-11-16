@@ -18,7 +18,8 @@ import {
 import { createAuthorityGatewayTestEnv } from "./test-helpers.env.js";
 
 const programs = ["daybreak_blue", "daybreak_red"] as const;
-const roleGrants: Record<string, Array<(typeof programs)[number]>> = {
+const roleGrants: Record<string, Array<(typeof programs)[number]> | undefined> = {
+  admin: undefined,
   standard: [],
   blue: ["daybreak_blue"],
   red: ["daybreak_red"],
@@ -38,7 +39,7 @@ const headers = (role: string) => ({
 });
 
 it(
-  "enforces explicit role grants through authenticated session RPCs without model restrictions",
+  "honors admin authority and explicit ceilings through authenticated session RPCs",
   { timeout: 90_000 },
   () =>
     withOpenClawTestState(
@@ -84,7 +85,7 @@ it(
                     agents: "*",
                     sessions: { others: "none" },
                     scopes,
-                    ...(cyber.length ? { accessPrograms: { cyber } } : {}),
+                    ...(cyber !== undefined ? { accessPrograms: { cyber } } : {}),
                   },
                 ]),
               ),
@@ -162,7 +163,7 @@ it(
               for (const program of programs) {
                 const patch = () =>
                   client.request("sessions.patch", { key, cyberAccessProgram: program });
-                if (grants.includes(program)) {
+                if (grants === undefined || grants.includes(program)) {
                   await patch();
                   expect(await selected()).toBe(program);
                   await client.request("sessions.reset", { key, reason: "new" });

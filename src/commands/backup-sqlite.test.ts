@@ -212,35 +212,23 @@ describe("SQLite backup commands", () => {
     },
   );
 
-  it("requires exactly one named OpenClaw database source", async () => {
-    const runtime = createRuntime();
-
-    await expect(
-      backupSqliteCreateCommand(runtime, { repository: "/tmp/snapshots" }),
-    ).rejects.toThrow("Choose a SQLite snapshot source");
-    await expect(
-      backupSqliteCreateCommand(runtime, {
-        global: true,
-        agent: "main",
-        repository: "/tmp/snapshots",
-      }),
-    ).rejects.toThrow("Choose exactly one SQLite snapshot source");
-  });
-
   it.each([
+    [{}, "Choose a SQLite snapshot source: --global or --agent <id>.", "ExpectedCliError"],
     [
-      "unknown",
-      "nope-agent",
-      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      { global: true, agent: "main" },
+      "Choose exactly one SQLite snapshot source: --global or --agent <id>.",
+      "ExpectedCliError",
     ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
+    [
+      { agent: "nope-agent" },
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      "Error",
+    ],
+    [{ agent: "   " }, "--agent must not be blank", "ExpectedCliError"],
+  ] as const)("rejects invalid SQLite snapshot source %j", async (source, message, name) => {
     await expect(
-      backupSqliteCreateCommand(createRuntime(), {
-        agent,
-        repository: "/tmp/snapshots",
-      }),
-    ).rejects.toThrow(message);
+      backupSqliteCreateCommand(createRuntime(), { ...source, repository: "/tmp/snapshots" }),
+    ).rejects.toMatchObject({ message, name });
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {

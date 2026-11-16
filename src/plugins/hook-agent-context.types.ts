@@ -51,6 +51,16 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
   trigger?: string;
+  /**
+   * OpenClaw tool names the model could call this turn, after policy. Set on `agent_end`
+   * by runtimes that know them; runtime-native tools (such as Codex shell) are not listed.
+   */
+  toolNames?: readonly string[];
+  /**
+   * The transcript entry that ended this turn, set on `agent_end` when the runtime recorded one.
+   * Pass it as `through` to `api.runtime.subagent.runForkedTurn` to fork the finished turn.
+   */
+  completedTurn?: { sessionId: string; entryId: string };
   channelId?: string;
   /** Typed origin of the turn's user-role input when supplied by the producer. */
   inputProvenance?: InputProvenance;

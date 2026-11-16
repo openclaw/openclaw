@@ -17,7 +17,10 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
 import { ModelSelectionLockedError } from "../../sessions/model-selection-error.js";
@@ -262,7 +265,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
         totalTokens: 150_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         updatedAt: 1,
       },
     );
@@ -436,7 +439,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
         totalTokens: 10_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         updatedAt: 1,
       };
       await replaceParentTranscript(root, storePath, parentEntry.sessionId, [
@@ -527,7 +530,7 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
         totalTokens: 80_000,
         totalTokensFresh: fresh,
-        totalTokensVersion: 1 as const,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         updatedAt: 1,
       };
       const parentScope = {
@@ -614,7 +617,7 @@ describe("forkSessionEntryFromParent", () => {
       expect(storedParent).toMatchObject({
         totalTokens: 80_000,
         totalTokensFresh: fresh,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       });
 
       await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({

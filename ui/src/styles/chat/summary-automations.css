@@ -162,8 +162,6 @@ openclaw-chat-summary-automations {
   flex: 0 0 12px;
   width: 12px;
   height: 12px;
-  border-color: color-mix(in srgb, var(--muted) 30%, transparent);
-  border-top-color: var(--muted);
   animation-duration: 1.5s;
 }
 

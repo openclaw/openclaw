@@ -52,7 +52,7 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--allowedTools",
   "mcp__openclaw__*",
   "--disallowedTools",
-  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+  "ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor",
 ] as const;
 
 // Only equivalent bare tools confer general capabilities; Glob and notebook-cell
@@ -80,23 +80,28 @@ function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): reado
   ];
 }
 
-// Orchestration tools whose descendants inherit the parent's tool list, so they confer
-// no capability of their own. Order is canonical: equivalent selections launch one argv.
-const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow"] as const;
+// Agent and Workflow descendants inherit the parent's tool list, so they confer no
+// capability of their own. WebSearch runs on Anthropic's servers and confers web_search,
+// which core keeps only while the turn's OpenClaw policy allows it and no configured
+// OpenClaw search provider already serves it. Order is canonical:
+// equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow", "WebSearch"] as const;
+// Used when the operator sets no `default` list; an explicit list (even []) replaces it.
+const CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS: readonly string[] = ["WebSearch"];
 
 /** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
 function resolveClaudeManagedNativeTools(
   ctx: Parameters<NonNullable<CliBackendPlugin["resolveManagedNativeTools"]>>[0],
 ): readonly string[] {
   const pluginConfig = ctx.config?.plugins?.entries?.anthropic?.config;
-  const selection = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
-  if (!isRecord(selection)) {
-    return [];
-  }
+  const configured = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
+  const selection = isRecord(configured) ? configured : {};
   const agents = isRecord(selection.agents) ? selection.agents : undefined;
   const selected = Object.hasOwn(agents ?? {}, ctx.agentId)
     ? agents?.[ctx.agentId]
-    : selection.default;
+    : Object.hasOwn(selection, "default")
+      ? selection.default
+      : CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS;
   return Array.isArray(selected)
     ? CLAUDE_MANAGED_NATIVE_TOOLS.filter((name) => selected.includes(name))
     : [];
@@ -136,6 +141,7 @@ function createClaudeCliAuthInput(params: {
 
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
+  isOAuthToken: (value: string) => boolean,
 ): ClaudeCliPreparedExecution | undefined {
   // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
   // OpenClaw-owned). Native `claude` logins are never forwarded; the current
@@ -167,8 +173,13 @@ function resolveClaudeCliAuthInput(
     });
   }
   if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    // Claude Code rejects an OAuth token on its API-key descriptor ("Invalid API key").
+    // Older imports stored subscription tokens as api_key profiles; send them the way
+    // the Anthropic HTTP route already does, by the credential's own shape.
     return createClaudeCliAuthInput({
-      envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      envName: isOAuthToken(credential.key)
+        ? "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"
+        : "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
       value: credential.key,
     });
   }
@@ -219,6 +230,9 @@ export function buildAnthropicCliBackend(
         return instructions ? `/compact ${instructions}` : "/compact";
       },
       input: "arg",
+      // Live turns send OpenClaw's prompt as Claude Code's replacement system prompt;
+      // the resumed compaction process must too, or its prefix misses their cache.
+      systemPromptFileArg: "--system-prompt-file",
       validateOutput: (rawOutput) => {
         for (const line of rawOutput.split("\n")) {
           try {
@@ -284,13 +298,13 @@ export function buildAnthropicCliBackend(
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
     prepareExecution: (context) => {
-      const prepare = () => {
-        const credentialContext = context as typeof context & {
-          authCredential?: ClaudeCliAuthCredential;
-          isolatedCompletionPrompt?: string;
-          isolatedCompletionSystemPrompt?: string;
-        };
-        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+      const credentialContext = context as typeof context & {
+        authCredential?: ClaudeCliAuthCredential;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
+      };
+      const prepare = (isOAuthToken: (value: string) => boolean = () => false) => {
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential, isOAuthToken);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
         const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
@@ -318,7 +332,7 @@ export function buildAnthropicCliBackend(
             : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
         return {
@@ -333,7 +347,16 @@ export function buildAnthropicCliBackend(
         };
       };
       const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
-      return supportProbe ? supportProbe.then(prepare) : prepare();
+      // The setup entry stays light: only API-key profiles need the shared credential classifier.
+      const classifier =
+        credentialContext.authCredential?.type === "api_key"
+          ? import("openclaw/plugin-sdk/provider-stream-shared").then(
+              (sdk) => sdk.isAnthropicOAuthApiKey,
+            )
+          : undefined;
+      return supportProbe || classifier
+        ? Promise.all([supportProbe, classifier]).then(([, isOAuthToken]) => prepare(isOAuthToken))
+        : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
     classifyErrorCode: classifyClaudeCliErrorCode,

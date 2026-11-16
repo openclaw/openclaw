@@ -13,12 +13,8 @@ import { encodeRun } from "./update-run-codec.js";
 import { readUpdateRunRecord } from "./update-run-read.kernel.js";
 import { toPublicUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
 import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
-import {
-  mutateRunInTransaction,
-  persistRun,
-  updateRunLedgerSchema,
-  upsertStep,
-} from "./update-run-write.js";
+import { upsertStep } from "./update-run-step-upsert.js";
+import { mutateRunInTransaction, persistRun, updateRunLedgerSchema } from "./update-run-write.js";
 
 let root: string;
 let database: DatabaseSync | undefined;

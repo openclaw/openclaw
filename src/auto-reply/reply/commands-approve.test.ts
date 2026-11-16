@@ -355,7 +355,7 @@ describe("handleApproveCommand", () => {
 
   it.each([
     ["command-authorized non-owner", false, "Only the owner can approve OpenClaw changes"],
-    ["owner revoked before decision", true, "Check the request in the Control UI"],
+    ["owner revoked before decision", true, "Check the request in the OpenClaw app"],
   ] as const)("rejects %s without reviewer custody", async (_name, senderIsOwner, text) => {
     resolveApprovalOverGatewayMock.mockRejectedValue(new Error("unknown or expired approval id"));
     isPendingSystemAgentApprovalMock.mockResolvedValue(true);

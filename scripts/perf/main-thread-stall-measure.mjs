@@ -19,9 +19,56 @@ import {
   getMainThreadTaskName,
   runWithMainThreadTask,
 } from "../../src/infra/main-thread-stall.ts";
-import { createStallFlightRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
+import { createStallFlightRecorder as createDefaultStallRecorder } from "../../src/logging/diagnostic-stall-flight-recorder.ts";
 
-const [mode = "phase", countText = "21", iterationsText = "200000"] = process.argv.slice(2);
+const [mode = "phase", countText = "21", iterationsText = "200000", recorderModule] =
+  process.argv.slice(2);
+// An explicit baseline snapshot avoids switching a checkout used by another proof.
+const createStallFlightRecorder = recorderModule
+  ? (await import(recorderModule)).createStallFlightRecorder
+  : createDefaultStallRecorder;
+// Node 24: interrupt 5 1200 [pinned baseline recorder module URL].
+if (mode === "interrupt") {
+  const { stallCpuOwner } = await import("../../src/logging/diagnostic-stall-cpu.test-support.ts");
+  const warnings = [];
+  const recorder = createStallFlightRecorder((message) => warnings.push(message));
+  try {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
+    for (let sample = 0; sample < Number(countText); sample++) {
+      const before = process.memoryUsage();
+      const cpu = process.cpuUsage();
+      const startedAt = performance.now();
+      stallCpuOwner(Number(iterationsText));
+      const endedAt = performance.now();
+      const reportAt = performance.now();
+      const report = recorder.sample({ startedAt, endedAt });
+      const reportMs = performance.now() - reportAt;
+      const used = process.cpuUsage(cpu);
+      console.log(
+        JSON.stringify({
+          node: process.version,
+          sample,
+          elapsedMs: endedAt - startedAt,
+          reportMs,
+          cpuMs: (used.user + used.system) / 1000,
+          before,
+          after: process.memoryUsage(),
+          load: loadavg(),
+          warnings,
+          report,
+        }),
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
+    }
+  } finally {
+    recorder.stop();
+  }
+  process.exit(0);
+}
 // Linux: kernel 5 3600 (blocked) or kernel 5 0 (idle A/A control).
 // Compare pinned base/candidate builds in ABBA order; no operator data is needed.
 if (mode === "kernel") {
@@ -52,7 +99,10 @@ if (mode === "kernel") {
         }
       }),
     );
-    return heaps.reduce((sum, heap) => sum + heap.total_allocated_bytes, 0);
+    return {
+      allocated: heaps.reduce((sum, heap) => sum + heap.total_allocated_bytes, 0),
+      heapUsed: heaps.reduce((sum, heap) => sum + heap.used_heap_size, 0),
+    };
   };
   try {
     await pause(500);
@@ -74,7 +124,8 @@ if (mode === "kernel") {
       const usedMain = process.threadCpuUsage(mainCpu);
       const used = process.cpuUsage(cpu);
       const mainAllocated = getHeapStatistics().total_allocated_bytes - allocated;
-      const workerAllocated = (await workerAllocation()) - workerBefore;
+      const workerAfter = await workerAllocation();
+      const workerAllocated = workerAfter.allocated - workerBefore.allocated;
       console.log(
         JSON.stringify({
           sample,
@@ -85,6 +136,9 @@ if (mode === "kernel") {
           mainCpuMs: (usedMain.user + usedMain.system) / 1000,
           mainAllocated,
           workerAllocated,
+          workerHeapUsed: workerAfter.heapUsed,
+          mainHeapUsed: process.memoryUsage().heapUsed,
+          workers: workers.length,
           sessions: sessions.length,
           files: inventory.length,
           rss: process.memoryUsage().rss,

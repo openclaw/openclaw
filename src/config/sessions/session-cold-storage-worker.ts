@@ -9,6 +9,8 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { SqliteWorkerExecutionAuthority } from "../../infra/sqlite-worker-contract.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -46,9 +48,13 @@ import {
   type SessionColdSourceMatches,
 } from "./session-cold-storage-source-guard.worker.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
+import type { SessionColdMutationResult, SessionColdSource } from "./session-cold-storage.types.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
+import {
+  assertSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "./session-store-read-candidates.js";
 import {
   publishUnchangedSessionTranscriptAuthority,
   readStagedSessionTranscriptAuthority,
@@ -78,6 +84,8 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
     }
 );
 export type SessionColdWorkerData = {
+  source: SessionColdSource;
+  executionAuthority?: SqliteWorkerExecutionAuthority;
   commitGate: SharedArrayBuffer;
   sourceMatches?: SessionColdSourceMatches;
   plan: SessionColdMutationPlan;
@@ -89,6 +97,21 @@ export type SqliteArchiveMutationRequest = {
   data: SessionColdWorkerData;
   port: MessagePort;
 };
+
+export function assertSessionColdSourceCurrent(pathname: string, source: SessionColdSource): void {
+  for (const custody of source.readCustody ?? []) {
+    assertSessionStoreReadCandidate(custody.sourcePath, custody.candidates);
+    for (const candidate of custody.candidates) {
+      if (!isSessionStoreReadCandidateCurrent(candidate)) {
+        throw new Error("Cold transcript selection changed outside its original custody");
+      }
+      if (candidate.identity) {
+        assertDatabasePathIdentity(candidate.path, candidate.identity);
+      }
+    }
+  }
+  assertDatabasePathIdentity(pathname, source.readIdentity);
+}
 
 export async function prepareSessionColdRestoreInWorker(
   plan: Extract<SessionColdMutationPlan, { kind: "cold-restore" }>,
@@ -158,14 +181,15 @@ export function mutateSessionColdTranscriptInWorker(
         if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
-        const protectedIds = readSessionColdStorageProtection(
-          database,
-          plan.beforeMs,
-          new Set(plan.liveSessionKeys),
-          sessionIds,
-        );
+        let protectedIds: Set<string> | undefined;
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
+          protectedIds ??= readSessionColdStorageProtection(
+            database,
+            plan.beforeMs,
+            new Set(plan.liveSessionKeys),
+            sessionIds,
+          );
           const { sessionId, snapshot } = prepared.plan;
           const fresh = readSessionStateDeleteSnapshot(database.db, sessionId);
           if (

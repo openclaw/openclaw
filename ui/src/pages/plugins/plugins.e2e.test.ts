@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import {
@@ -23,6 +23,7 @@ import {
   pluginMethods,
   readOnlyConnectResponse,
   server,
+  setupPluginPage as setup,
   setupPluginsE2e,
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
@@ -39,22 +40,6 @@ const renamedPlugin = (plugin: (typeof discoveryResult.items)[number], name: str
   ...plugin,
   catalog: { ...plugin.catalog, name },
 });
-
-async function setup(
-  methodResponses: Record<string, unknown> = {},
-  options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
-  viewport?: Parameters<typeof newContext>[0],
-) {
-  const context = await newContext(viewport);
-  onTestFinished(() => context.close());
-  const page = await context.newPage();
-  const gateway = await installMockGateway(page, {
-    featureMethods: pluginMethods,
-    methodResponses: { ...pluginMethodResponses(), ...methodResponses },
-    ...options,
-  });
-  return { page, gateway, context };
-}
 
 async function expectBrowse(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
@@ -119,7 +104,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
     const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
     // The older category response must not replace loading for the newer search intent.
-    const loading = role(catalog, "status", "Loading ClawHub plugins…");
+    const loading = role(catalog, "status", "Loading plugins…");
     await loading.waitFor();
     expect(await cards.count()).toBe(0);
     expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
@@ -628,10 +613,18 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("explains a successful empty ClawHub response", async () => {
     const { page } = await setup({ "plugins.catalog.browse": { items: [] } });
+    await page.emulateMedia({ colorScheme: "light" });
     await page.goto(`${server.baseUrl}plugins`);
-    await text(page, "No plugins found").waitFor();
+    await text(page, "No plugins match your search.").waitFor();
     await text(page, "Try a different search or choose another filter.").waitFor();
     expect(await page.locator(".plugin-catalog-card").count()).toBe(0);
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const proof = createControlUiE2eArtifactDir("plugin-empty-search");
+      await page.getByRole("region", { name: "Explore plugins" }).screenshot({
+        animations: "disabled",
+        path: path.join(proof, "empty-search.png"),
+      });
+    }
   });
 
   it("reloads ClawHub discovery after the Gateway reconnects", async () => {

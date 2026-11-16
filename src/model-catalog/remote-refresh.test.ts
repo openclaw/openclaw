@@ -6,13 +6,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import * as machineRows from "../state/config-machine-state-row.js";
 import * as machineState from "../state/config-machine-state-write.js";
 import { readConfigMachineState as readState } from "../state/config-machine-state.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "../state/openclaw-state-db-cache.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext as workerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
@@ -71,9 +74,8 @@ const storeCatalog = (row: StoredCatalog) => writeCatalog(row, workerContext(dat
 const mirrorConfig = (suffix = "") => ({
   models: { catalogRefresh: { url: `https://mirror.example.test/${suffix}catalog.json` } },
 });
-const currentKey = "modelCatalog.remote.v4";
-const previousKey = "modelCatalog.remote.v3";
-const olderKey = "modelCatalog.remote.v2";
+const currentKey = "modelCatalog.remote.v3";
+const previousKey = "modelCatalog.remote.v2";
 const legacyKey = "modelCatalog.remote";
 const initial: StoredCatalog = {
   bundle_json: '{"schemaVersion":1}',
@@ -293,11 +295,33 @@ describe("remote model catalog store", () => {
   it("keeps snapshots detached across stores, commits, and retirement", async () => {
     const { db, read, write, check, put } = store();
     const other = store();
-    put("fixture.unrelated", true);
+    using filesystem = observeMainThreadFs();
+    const receipt = machineRows.readRemoteModelCatalogReceipt;
+    let receiptFilesystemCalls = 0;
+    using receipts = vi
+      .spyOn(machineRows, "readRemoteModelCatalogReceipt")
+      .mockImplementation((pathname) => {
+        const before = filesystem.count();
+        try {
+          return receipt(pathname);
+        } finally {
+          receiptFilesystemCalls += filesystem.count() - before;
+        }
+      });
+    using operations = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
     expect(await read()).toBeUndefined();
-    expect(await read()).toBeUndefined(); // Retain the cached-absence branch.
+    expect(receipts).toHaveBeenCalled();
+    expect(receiptFilesystemCalls).toBe(0);
+    put("fixture.unrelated", true);
+    operations.mockClear();
+    expect(await read()).toBeUndefined();
+    expect(await read()).toBeUndefined();
+    expect(operations).toHaveBeenCalledTimes(2);
     await write(initial);
+    operations.mockClear();
     expect(await read()).toEqual({ id: 1, ...initial });
+    expect(await read()).toEqual({ id: 1, ...initial });
+    expect(operations).toHaveBeenCalledTimes(1);
     expect(await other.read()).toBeUndefined();
     const retained = await read();
     retained!.checked_at = -1;
@@ -321,15 +345,13 @@ describe("remote model catalog store", () => {
     machineState.importConfigMachineState([[previousKey, initial]], db);
     expect(await read()).toEqual({ id: 1, ...initial });
     put(previousKey, null);
-    put(olderKey, { ...initial, checked_at: 4 });
-    expect(await read()).toEqual({ id: 1, ...initial, checked_at: 4 });
-    put(olderKey, null);
     put(legacyKey, { ...initial, checked_at: 5 });
     expect(await read()).toEqual({ id: 1, ...initial, checked_at: 5 });
     const beforeFailure = workerContext(db);
     recordOpenClawStateDatabaseOpenFailure(db.path, new Error("catalog database refused"));
     await expect(readAsync(beforeFailure)).rejects.toThrow();
     await expect(read()).rejects.toThrow();
+    expect(receiptFilesystemCalls).toBe(0);
   });
 
   it("stores one machine-state snapshot and rejects stale refreshes", async () => {
@@ -373,7 +395,7 @@ describe("remote model catalog store", () => {
     ).toEqual({ value_json: "{" });
   });
 
-  it.each([legacyKey, olderKey, previousKey])(
+  it.each([legacyKey, previousKey])(
     "adopts only matching %s rows without writing the older client slot",
     async (key) => {
       const { db, check, state, put } = store();
@@ -386,7 +408,7 @@ describe("remote model catalog store", () => {
       put(key, latest);
       expect(readCatalog(db)).toEqual({ id: 1, ...latest });
       if (key === legacyKey) {
-        // Raw newer-slot precedence survives a null payload; reads still fall back.
+        // Raw v2 precedence survives a null payload, while reads still fall back to v1.
         put(previousKey, null);
         expect(await check(15, { expected: latest })).toBe(false);
         expect(state()).toBeUndefined();

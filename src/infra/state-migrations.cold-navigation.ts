@@ -149,7 +149,7 @@ export async function migrateSessionColdNavigation(
                   changes.push(...backup.changes);
                 } else {
                   changes.push(
-                    `Saved pre-repair SQLite backup: ${backupDoctorSqliteRepair(target.path, "cold-navigation")}`,
+                    `Saved pre-repair SQLite backup: ${await backupDoctorSqliteRepair(target.path, "cold-navigation")}`,
                   );
                 }
                 backedUp = true;

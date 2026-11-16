@@ -1,6 +1,7 @@
 // Focused low-level text/runtime helpers used by bundled plugins.
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
@@ -29,7 +30,8 @@ export async function runChannelProbe<
   onError?: (error: unknown) => TErrorResult,
 ): Promise<(TResult | TErrorResult) & { elapsedMs: number }> {
   const startedAt = Date.now();
-  const elapsedMs = () => Date.now() - startedAt;
+  const startedAtMonotonic = monotonicNow();
+  const elapsedMs = () => monotonicNow() - startedAtMonotonic;
   const finish = <T extends ChannelProbeResult>(result: T) => ({
     ...result,
     elapsedMs: result.elapsedMs ?? elapsedMs(),

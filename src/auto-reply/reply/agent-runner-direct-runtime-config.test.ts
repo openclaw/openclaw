@@ -13,7 +13,7 @@ import {
   listSessionPendingInputs,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -314,7 +314,7 @@ describe("runReplyAgent runtime config", () => {
         const runtime = await createStoredRuntime(tempDir, {
           totalTokens: 95_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });
         const { replyParams, followupRun, sessionEntry } = runtime;
         if (flushing) {

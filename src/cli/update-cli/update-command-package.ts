@@ -19,10 +19,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import {
-  getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -34,7 +31,6 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
-  resolveGlobalInstallTarget,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
@@ -57,7 +53,6 @@ import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
   readPackageVersion,
-  resolveGlobalManager,
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
@@ -79,7 +74,6 @@ type PackageDoctorContext = {
   executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
   inputHash: string;
-  changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
@@ -377,10 +371,9 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   installSpec?: string;
   timeoutMs: number;
   startedAt: number;
-  honorPackageRoot?: boolean;
   resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
-  installTarget?: ResolvedGlobalInstallTarget;
+  installTarget: ResolvedGlobalInstallTarget;
   beforeVerifyCandidate?: (root: string) => Promise<void>;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
@@ -511,21 +504,7 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
   resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
-  let installTarget = params.installTarget;
-  if (!installTarget) {
-    const manager = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: params.timeoutMs,
-    });
-    installTarget = await resolveGlobalInstallTarget({
-      manager,
-      runCommand: runCommandWithTimeout,
-      timeoutMs: params.timeoutMs,
-      pkgRoot: params.root,
-      honorPackageRoot: params.honorPackageRoot === true,
-    });
-  }
+  const { installTarget } = params;
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv(undefined, installTarget));
   const pkgRoot = installTarget.packageRoot;
   const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;

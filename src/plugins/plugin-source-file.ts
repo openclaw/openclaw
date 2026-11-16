@@ -65,17 +65,18 @@ export function inspectPluginCaptureSource(
   return { real, directory: acquirePluginSource(() => fs.statSync(real), !prepared).isDirectory() };
 }
 
+/** Selected directory traversal shares cycle detection with synchronous and cooperative capture. */
 export function createPluginSourceDirectoryCapture(
-  captureFile: (source: string, ancestors: Set<string>) => void,
+  captureFile: (source: string, ancestors: Set<string>) => Generator<void, void, void>,
 ) {
   const scannedDirectories = new Set<string>();
-  return (
+  return function* (
     source: string,
     real: string,
     target: string,
     directoryAncestors: Set<string> | undefined,
     originalSource: boolean,
-  ) => {
+  ): Generator<void, void, void> {
     if (directoryAncestors?.has(real)) {
       throw createPluginSourceValidationError(
         "Standalone plugin input contains a directory cycle",
@@ -91,7 +92,7 @@ export function createPluginSourceDirectoryCapture(
         originalSource,
       ).toSorted()) {
         if (isPluginSourceEntry(name)) {
-          captureFile(path.join(source, name), ancestors);
+          yield* captureFile(path.join(source, name), ancestors);
         }
       }
       ancestors.delete(real);
@@ -195,6 +196,7 @@ export function copyPluginSourceFile(
     preserveSourceMode?: boolean;
     copyFile?: typeof copyRootFileSync;
     openFile?: typeof openRootFileSync;
+    expectedSourceIdentity?: Pick<fs.BigIntStats, "dev" | "ino">;
   } = {},
 ) {
   return withPluginSourceFile(
@@ -202,6 +204,10 @@ export function copyPluginSourceFile(
     boundary,
     (fd) => {
       const admitted = fs.fstatSync(fd, { bigint: true });
+      const expected = options.expectedSourceIdentity;
+      if (expected && (admitted.dev !== expected.dev || admitted.ino !== expected.ino)) {
+        throw new Error("Native plugin artifact changed during admission");
+      }
       try {
         const metrics = getPluginGenerationMetrics();
         const mode = options.preserveSourceMode
@@ -302,14 +308,20 @@ export function copyPluginSourceFile(
   );
 }
 
-export function linkPluginSourceFile(source: string, boundary: string, target: string): void {
-  withPluginSourceFile(source, boundary, (fd) => {
+/** Returns true for a hardlink, false for a verified independent copy. */
+export function linkPluginSourceFile(source: string, boundary: string, target: string): boolean {
+  return withPluginSourceFile(source, boundary, (fd) => {
     const admitted = fs.fstatSync(fd, { bigint: true });
     fs.linkSync(source, target);
     const linked = fs.statSync(target, { bigint: true });
     if (linked.dev !== admitted.dev || linked.ino !== admitted.ino) {
-      throw new Error("Native plugin artifact changed during admission");
+      // Some filesystems materialize link() as a copy. Discard that unverified
+      // output and bind the guarded copy to the inode still pinned by this fd.
+      fs.unlinkSync(target);
+      copyPluginSourceFile(source, boundary, target, { expectedSourceIdentity: admitted });
+      return false;
     }
+    return true;
   });
 }
 

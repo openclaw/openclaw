@@ -369,7 +369,7 @@ export function findRetainedBrowserDashboardTab(
   return tabs.find(
     (tab) =>
       tab.nativeTargetId === targetId &&
-      (!profile || tab.profile === profile) &&
+      (!profile || tab.profile === profile || tab.profileAliases?.includes(profile)) &&
       (tab.dashboard?.state === "active" || tab.dashboard?.state === "stopping"),
   );
 }

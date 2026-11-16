@@ -105,7 +105,7 @@ export async function waitForPatch(
       setTimeout(resolve, 10);
     });
   }
-  throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
+  throw new Error(`No sessions match your search.patch request found: ${JSON.stringify(requests)}`);
 }
 
 /** Playwright reacquires replaced controls before dispatching the single click. */

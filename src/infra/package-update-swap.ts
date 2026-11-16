@@ -508,6 +508,7 @@ export async function swapStagedPackageInstall(
             backupRoot,
             // Rollback snapshots remain recovery evidence even after successful restoration.
             databaseBackupRoot: rollbackResult ? undefined : transaction.databaseBackupRoot,
+            discardDatabaseCaptures: transaction.discardDatabaseCaptures,
             retireLegacyBackups: rollbackResult ? undefined : retireLegacyBackups,
             launchers,
             packageBackedUp,

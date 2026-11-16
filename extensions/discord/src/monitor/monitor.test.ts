@@ -1,7 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-import { ChannelType } from "discord-api-types/v10";
+import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -16,7 +16,16 @@ import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import type { DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
-import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
+import {
+  BaseComponentInteraction,
+  createInteraction,
+  type ComponentData,
+} from "../internal/discord.js";
+import {
+  attachRestMock,
+  createInternalComponentInteractionPayload,
+  createInternalTestClient,
+} from "../internal/test-builders.test-support.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
   createButtonEntry,
@@ -737,6 +746,84 @@ describe("discord component interactions", () => {
     expect(update).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
+
+  it.each([0, MessageFlags.IsComponentsV2])(
+    "preserves the source and sends private feedback when a pre-acknowledged plugin declines (flags=%s)",
+    async (flags) => {
+      await registerEntries([createButtonEntry({ callbackData: "example:decline" })]);
+      dispatchPluginInteractiveHandlerMock.mockImplementation(async (input) => {
+        const { onMatched } = input as Parameters<
+          typeof import("../interactive-dispatch.js").dispatchDiscordPluginInteractiveHandler
+        >[0];
+        await onMatched?.();
+        return { matched: true, handled: false, duplicate: false };
+      });
+      const client = createInternalTestClient();
+      const { post, patch } = attachRestMock(client, {
+        post: vi.fn(async () => ({ id: "reply-1", channel_id: "dm-channel" })),
+      });
+      const interaction = createInteraction(
+        client,
+        createInternalComponentInteractionPayload({
+          id: "declined-interaction",
+          token: "declined-token",
+          channel_id: "dm-channel",
+          user: {
+            id: "123456789",
+            username: "AgentUser",
+            discriminator: "0001",
+            global_name: null,
+            avatar: null,
+          },
+          message: {
+            id: "msg-1",
+            channel_id: "dm-channel",
+            author: {
+              id: "app1",
+              username: "bot",
+              discriminator: "0000",
+              global_name: null,
+              avatar: null,
+            },
+            flags,
+            content: "",
+            timestamp: "2026-11-01T00:00:00.000Z",
+            edited_timestamp: null,
+            tts: false,
+            mention_everyone: false,
+            mentions: [],
+            mention_roles: [],
+            attachments: [],
+            embeds: [],
+            pinned: false,
+            type: 0,
+          },
+        }),
+      );
+      if (!(interaction instanceof BaseComponentInteraction)) {
+        throw new Error("expected a component interaction");
+      }
+
+      await createDiscordComponentButton(createComponentContext()).run(interaction, {
+        cid: "btn_1",
+      } as ComponentData);
+
+      expect(post.mock.calls).toEqual([
+        ["/interactions/declined-interaction/declined-token/callback", { body: { type: 6 } }],
+        [
+          "/webhooks/app1/declined-token",
+          { body: { content: "✓", flags: MessageFlags.Ephemeral } },
+          undefined,
+        ],
+        expect.arrayContaining([
+          "/channels/dm-channel/messages",
+          expect.objectContaining({ body: expect.objectContaining({ content: "ok" }) }),
+        ]),
+      ]);
+      expect(patch).not.toHaveBeenCalled();
+      expect(dispatchReplyMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("resolves plugin binding approvals without falling through to Claw", async () => {
     await registerEntries([

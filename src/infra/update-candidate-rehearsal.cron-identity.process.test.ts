@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -99,7 +100,7 @@ async function cleanupFixture(fixture: Awaited<ReturnType<typeof prepareFixture>
   const privateRoot = fixture.rehearsal.stateDir;
   await fixture.rehearsal.cleanup();
   await expect(fs.stat(privateRoot)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await fs.readFile(fixture.source.databasePath)).toEqual(fixture.sourceBytes);
+  expectBytesEqual(await fs.readFile(fixture.source.databasePath), fixture.sourceBytes, "source");
 }
 
 it.each(["default-state", "explicit-state", "custom-config"] as const)(
@@ -153,5 +154,5 @@ it("leaves selector-less published requests unresolved through first private adm
     ...buildUpdateRehearsalPathEnv(targetStateDir),
   });
   expect(result.boundStoreKey).toBeUndefined();
-  expect(await fs.readFile(source.databasePath)).toEqual(sourceBytes);
+  expectBytesEqual(await fs.readFile(source.databasePath), sourceBytes, "source");
 });

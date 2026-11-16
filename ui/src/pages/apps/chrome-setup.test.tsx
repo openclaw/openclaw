@@ -120,17 +120,17 @@ describe("Apps local Chrome setup", () => {
     expect(setup.textContent).toContain("Working on this device…");
 
     pending.reject(new Error("Native setup unavailable"));
-    await expectText(setup, "Setup could not finish");
+    await expectText(setup, "Couldn’t finish setup.");
     await idle(setup);
     click(setup, labels.verify);
     flush();
     expect(setup.textContent).toContain("Working on this device…");
-    expect(setup.textContent).not.toContain("Setup could not finish");
+    expect(setup.textContent).not.toContain("Couldn’t finish setup.");
     expect(buttons(setup).every((button) => button.disabled)).toBe(true);
     retry.resolve(result(connected));
     await expectText(setup, "Extension connected on this device.");
     await idle(setup);
-    expect(setup.textContent).not.toContain("Setup could not finish");
+    expect(setup.textContent).not.toContain("Couldn’t finish setup.");
   });
   it.each([{ actions: [] }, { actions: ["inspect"] }] as const)(
     "offers only $actions",
@@ -191,7 +191,7 @@ describe("Apps local Chrome setup", () => {
         ...(reason === "mismatched action" ? { action: "verify" } : {}),
         ...(reason === "malformed phase" ? { phase: "unknown" } : {}),
       });
-      await expectText(setup, "Setup could not finish");
+      await expectText(setup, "Couldn’t finish setup.");
       expect(setup.textContent).not.toContain("Host:");
       expect(setup.textContent).not.toContain("Example Mac");
       if (reason === "replaced handler") {

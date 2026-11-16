@@ -100,18 +100,19 @@ export function readConfigMutationFileSync(
 export function resolveConfigSetMode(
   opts: ConfigSetOptions,
 ): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
-  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasRef =
+    opts.refProvider !== undefined || opts.refSource !== undefined || opts.refId !== undefined;
   const hasProvider = Boolean(
-    opts.providerSource ||
+    opts.providerSource !== undefined ||
     opts.providerAllowlist?.length ||
-    opts.providerPath ||
-    opts.providerMode ||
-    opts.providerTimeoutMs ||
-    opts.providerMaxBytes ||
-    opts.providerCommand ||
+    opts.providerPath !== undefined ||
+    opts.providerMode !== undefined ||
+    opts.providerTimeoutMs !== undefined ||
+    opts.providerMaxBytes !== undefined ||
+    opts.providerCommand !== undefined ||
     opts.providerArg?.length ||
-    opts.providerNoOutputTimeoutMs ||
-    opts.providerMaxOutputBytes ||
+    opts.providerNoOutputTimeoutMs !== undefined ||
+    opts.providerMaxOutputBytes !== undefined ||
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||
