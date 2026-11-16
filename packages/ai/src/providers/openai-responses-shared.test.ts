@@ -90,7 +90,7 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
-const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const reasoningReplayIdentity = { sessionId: "session-a" };
 
 type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
 type RequestOptions = Parameters<
@@ -873,7 +873,7 @@ describe("processResponsesStream", () => {
   });
 
   it("suppresses rejected persisted compaction state on the following turn", async () => {
-    const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+    const replayIdentity = { sessionId: "session-a" };
     const prior = createAssistantOutput();
     captureOpenAIResponsesCompaction(
       prior,

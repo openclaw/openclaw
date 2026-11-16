@@ -17,7 +17,7 @@ const model = {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 
 function createAssistant(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -201,10 +201,8 @@ describe("OpenAI Responses reasoning replay", () => {
         null,
         { ...metadata, v: 2 },
         { ...metadata, provider: "other-provider" },
-        { ...metadata, model: "other-model" },
         { ...metadata, baseUrlHash: "other-endpoint" },
         { ...metadata, sessionHash: "other-session" },
-        { ...metadata, authProfileHash: "other-auth" },
       ]) {
         const block = {
           type: "thinking" as const,

@@ -161,14 +161,12 @@ describe("openai transport stream", () => {
       model,
       {
         reasoningReplayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-          authProfileId: "openai:oauth",
           sessionId: "session-123",
         }),
       },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-      authProfileId: "openai:oauth",
       sessionId: "session-123",
     });
     const thinkingBlock = output.content[0] as {

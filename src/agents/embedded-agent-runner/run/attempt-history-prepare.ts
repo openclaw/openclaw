@@ -154,7 +154,6 @@ export async function prepareEmbeddedAttemptHistory(
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );

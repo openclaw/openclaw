@@ -28,7 +28,7 @@ const model = {
   contextWindow: 1_000_000,
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
 
 function createAssistant(
@@ -66,7 +66,6 @@ function compactionState(
     model: metadata.model,
     baseUrlHash: metadata.baseUrlHash,
     sessionHash: metadata.sessionHash,
-    authProfileHash: metadata.authProfileHash,
   };
 }
 

@@ -273,12 +273,54 @@ describe("models.list provider catalog outcomes", () => {
       catalogProjector: projector,
     });
 
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], ...expected }]);
+    expect(prepared.read().models).toEqual([
+      {
+        ...model,
+        agentRuntime: {
+          id: "openclaw",
+          source: "implicit",
+          cloudPlacementExecutionMode: "worker-turn",
+          cloudPlacementSupported: true,
+          devicePlacementSupported: true,
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        },
+        tags: ["configured"],
+        ...expected,
+      },
+    ]);
     const hostEvaluations = evaluateEntry.mock.calls.length;
     evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+    expect(prepared.read().models).toEqual([
+      {
+        ...model,
+        agentRuntime: {
+          id: "openclaw",
+          source: "implicit",
+          cloudPlacementExecutionMode: "worker-turn",
+          cloudPlacementSupported: true,
+          devicePlacementSupported: true,
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        },
+        tags: ["configured"],
+        available: true,
+      },
+    ]);
     evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-    expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+    expect(prepared.read().models).toEqual([
+      {
+        ...model,
+        agentRuntime: {
+          id: "openclaw",
+          source: "implicit",
+          cloudPlacementExecutionMode: "worker-turn",
+          cloudPlacementSupported: true,
+          devicePlacementSupported: true,
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        },
+        tags: ["configured"],
+        available: false,
+      },
+    ]);
     expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
   });
 });

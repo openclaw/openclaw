@@ -13,6 +13,28 @@ await vi.hoisted(() => import("./models-list.test-support.js"));
 describe("models.list", () => {
   setupModelsListFixture();
 
+  it("states the implicit runtime and placement facts for an unconfigured model", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      loadGatewayModelCatalog: catalogLoader([
+        { id: "implicit-model", name: "Implicit model", provider: "custom" },
+      ]),
+    });
+    await request;
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      models: [
+        {
+          id: "implicit-model",
+          agentRuntime: {
+            id: "openclaw",
+            source: "implicit",
+            cloudPlacementExecutionMode: "worker-turn",
+          },
+        },
+      ],
+    });
+  });
+
   it.each(["claude-fable-5-1", "Claude Gateway/claude-fable-5-1"])(
     "publishes the native Fable effort ladder for %s on a custom Messages provider",
     async (id) => {
@@ -452,6 +474,14 @@ describe("models.list", () => {
             id: "demo-model",
             name: "Demo Model",
             provider: "demo-provider",
+            agentRuntime: {
+              id: "openclaw",
+              source: "implicit",
+              cloudPlacementExecutionMode: "worker-turn",
+              cloudPlacementSupported: true,
+              devicePlacementSupported: true,
+              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+            },
             available: false,
             unavailableReason: "missing-auth",
           },
@@ -557,6 +587,14 @@ describe("models.list", () => {
             id: "vision-model",
             name: "Vision Model",
             provider: "demo-provider",
+            agentRuntime: {
+              id: "openclaw",
+              source: "implicit",
+              cloudPlacementExecutionMode: "worker-turn",
+              cloudPlacementSupported: true,
+              devicePlacementSupported: true,
+              devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+            },
             available: false,
             unavailableReason: "missing-auth",
             contextWindow: 128_000,

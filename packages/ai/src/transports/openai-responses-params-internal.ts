@@ -176,7 +176,6 @@ export function buildOpenAIResponsesParams(
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
     replayReasoningItems: true,
     replayResponsesItemIds,
-    authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,

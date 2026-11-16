@@ -19,7 +19,7 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
   };
 }
 const model = fixtures.createModel();
-const identity = { sessionId: "session-current", authProfileId: "profile-current" };
+const identity = { sessionId: "session-current" };
 const item = {
   type: "reasoning",
   id: "rs_synthetic",

@@ -144,7 +144,7 @@ afterEach(() => {
 
 describe("OpenAI Responses provider prompt observer", () => {
   it("replays inline compaction with runtime facts after the user and an unchanged next-turn prefix", async () => {
-    const identity = { sessionId: "compacted-runtime-context", authProfileId: "profile" };
+    const identity = { sessionId: "compacted-runtime-context" };
     const model = createModel();
     const context = createCompactionContext(model, identity);
     context.systemPrompt = "Complete stable instructions";
@@ -215,7 +215,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       }
       sdkState.outcomes = [response];
       const model = createModel();
-      const identity = { sessionId: "unbound-shape", authProfileId: "profile-a" };
+      const identity = { sessionId: "unbound-shape" };
       const stream = await Promise.resolve(
         createOpenAIResponsesTransportStreamFn()(model, createCompactionContext(model, identity), {
           apiKey: "test-key",
@@ -240,7 +240,7 @@ describe("OpenAI Responses provider prompt observer", () => {
   it.each(["shared", "chatgpt"] as const)(
     "preserves measured checkpoint usage through %s egress and saved-history replay",
     async (transport) => {
-      const identity = { sessionId: `usage-${transport}`, authProfileId: "usage-profile" };
+      const identity = { sessionId: `usage-${transport}` };
       const model = createModel<Api>(
         transport === "chatgpt"
           ? { api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.test/backend-api" }
@@ -331,7 +331,7 @@ describe("OpenAI Responses provider prompt observer", () => {
 
   it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
     const model = createModel();
-    const identity = { sessionId: "reasoning-session", authProfileId: "reasoning-profile" };
+    const identity = { sessionId: "reasoning-session" };
     const context = createCompactionContext(model, identity);
     const reasoning = {
       type: "reasoning",
@@ -380,7 +380,7 @@ describe("OpenAI Responses provider prompt observer", () => {
   });
 
   it("recovers Azure compaction rejection and suppresses it on the next turn", async () => {
-    const identity = { sessionId: "azure-recovery-session", authProfileId: "azure-profile" };
+    const identity = { sessionId: "azure-recovery-session" };
     const azureModel = createModel({
       api: "azure-openai-responses",
       provider: "azure-openai-responses",
@@ -438,7 +438,7 @@ describe("OpenAI Responses provider prompt observer", () => {
   });
 
   it("rebuilds full history when compaction leaves an orphaned function output", async () => {
-    const identity = { sessionId: "orphan-recovery-session", authProfileId: "openai-profile" };
+    const identity = { sessionId: "orphan-recovery-session" };
     const openAIModel = createModel();
     const context = createOrphanedToolOutputCompactionContext(openAIModel, identity);
     const observations: ResponsesPromptObservation[] = [];
@@ -475,7 +475,7 @@ describe("OpenAI Responses provider prompt observer", () => {
   });
 
   it("lazily rebuilds full history after reasoning and compaction rejection", async () => {
-    const identity = { sessionId: "sdk-recovery-session", authProfileId: "sdk-profile" };
+    const identity = { sessionId: "sdk-recovery-session" };
     const openAIModel = createModel();
     const context = createCompactionContext(openAIModel, identity, true);
     const invalidEncryptedContent = () =>
@@ -516,7 +516,7 @@ describe("OpenAI Responses provider prompt observer", () => {
   it.each(["response.failed"] as const)(
     "retries encrypted reasoning rejected by the SDK %s drain without dropping compaction",
     async () => {
-      const identity = { sessionId: "sdk-drain-session", authProfileId: "sdk-drain-profile" };
+      const identity = { sessionId: "sdk-drain-session" };
       const model = createModel({
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -738,7 +738,7 @@ describe("OpenAI Responses provider prompt observer", () => {
 
   it("observes each native WebSocket connection-limit dispatch before send", async () => {
     const prompt = "PRIVATE-NATIVE-WEBSOCKET-PROMPT";
-    const identity = { sessionId: "websocket-usage-session", authProfileId: "websocket-profile" };
+    const identity = { sessionId: "websocket-usage-session" };
     const model = createModel({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.test/backend-api",

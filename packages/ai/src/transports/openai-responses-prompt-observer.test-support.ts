@@ -31,7 +31,7 @@ export function completedSdkResponse(responseId: string): {
 
 export function createCompactionContext(
   model: Model,
-  identity: { authProfileId: string; sessionId: string },
+  identity: { sessionId: string },
   includeReasoning = false,
 ): Context {
   const prior: AssistantMessage = {
@@ -82,7 +82,7 @@ export function createCompactionContext(
 
 export function createOrphanedToolOutputCompactionContext(
   model: Model,
-  identity: { authProfileId: string; sessionId: string },
+  identity: { sessionId: string },
 ): Context {
   const callId = "call_compacted";
   const prior: AssistantMessage = {

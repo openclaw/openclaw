@@ -362,7 +362,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           effectiveModel,
           {
             sessionId: params.sessionId,
-            authProfileId: runtimePlan.auth.forwardedAuthProfileId,
             enabled: compactionReplayEnabled,
           },
         );
@@ -455,7 +454,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             replay: {
               model: effectiveModel,
               sessionId: params.sessionId,
-              authProfileId: runtimePlan.auth.forwardedAuthProfileId,
               enabled: compactionReplayEnabled,
             },
           });
