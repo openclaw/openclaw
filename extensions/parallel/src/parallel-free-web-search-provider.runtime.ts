@@ -16,10 +16,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { executeParallelSearchRequest } from "./parallel-search-normalize.js";
 
-// Free hosted Search MCP. This keyless transport is used only after the user
+// Search on the hosted Parallel MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
-// https://docs.parallel.ai/integrations/mcp/search-mcp
-const PARALLEL_MCP_SEARCH_URL = "https://search.parallel.ai/mcp";
+// https://docs.parallel.ai/integrations/mcp/quickstart
+const PARALLEL_MCP_SEARCH_URL = "https://mcp.parallel.ai/mcp";
 // Initial protocol version we advertise on `initialize`; we then echo whatever
 // the server negotiates back on every follow-up request.
 const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -181,19 +181,15 @@ export async function executeParallelFreeWebSearchProviderTool(
           },
         );
 
-      // Search sessions are distinct from the server's MCP transport session.
-      const sessionId = request.sessionId?.trim() || randomUUID();
-      const searchArgs: Record<string, unknown> = {
+      const searchArgs = {
         // MCP requires a non-empty objective (REST treats it as optional); when the
         // caller only supplied keyword queries, use them as the objective rather
         // than failing the call.
         objective: request.objective ?? request.searchQueries.join(" "),
         search_queries: request.searchQueries,
-        session_id: sessionId,
+        ...(request.sessionId ? { session_id: request.sessionId } : {}),
+        ...(request.clientModel ? { client_model: request.clientModel } : {}),
       };
-      if (request.clientModel) {
-        searchArgs.model_name = request.clientModel;
-      }
 
       const initId = randomUUID();
       const init = await postMcp({
@@ -241,7 +237,7 @@ export async function executeParallelFreeWebSearchProviderTool(
 
       return {
         search_id: typeof payload.search_id === "string" ? payload.search_id : undefined,
-        session_id: sessionId,
+        session_id: payload.session_id,
         results,
         warnings: payload.warnings,
         usage: payload.usage,
