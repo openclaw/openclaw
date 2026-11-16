@@ -307,6 +307,8 @@ describe("production lint suppressions", () => {
         // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
         "src/agents/shell-utils.ts|no-control-regex|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
+        // MCP catalog metadata is snapshotted through JSON so undefined members are dropped.
+        "src/agents/tool-search-prepared-catalog.ts|unicorn/prefer-structured-clone|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
         "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",
         // Board private helpers only sort cloned layouts or freshly filtered arrays.
