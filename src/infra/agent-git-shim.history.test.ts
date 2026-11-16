@@ -12,6 +12,25 @@ async function withHistoryFixture(
   await withTempDir("agent-git-blobs-", async (root) => run(await historyFixture(root)));
 }
 
+async function writeFakeSleep(dir: string) {
+  await fs.writeFile(
+    path.join(dir, "sleep"),
+    [
+      "#!/bin/sh",
+      "count=0",
+      '[ -f "$OPENCLAW_FAKE_SLEEP_COUNT" ] && count=$(cat "$OPENCLAW_FAKE_SLEEP_COUNT")',
+      "count=$((count + 1))",
+      'echo "$count" > "$OPENCLAW_FAKE_SLEEP_COUNT"',
+      'if [ -n "$OPENCLAW_FAKE_SLEEP_RELEASE" ] && [ "$count" -ge "$OPENCLAW_FAKE_SLEEP_RELEASE" ]; then',
+      '  /bin/rm -f "$OPENCLAW_FAKE_LEGACY/pid"',
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+}
+
 async function historyFixture(
   root: string,
   versions = 12,
@@ -504,4 +523,303 @@ it.skipIf(process.platform === "win32")(
         (await fs.stat(path.join(base, ".git", "openclaw-history-blobs.lock.kernel"))).isFile(),
       ).toBe(true);
     }),
+);
+
+it.skipIf(process.platform === "win32")(
+  "gives up the prefetch on a legacy lock marker whose pid was reused",
+  () =>
+    withHistoryFixture(async ({ root, file, reader }) => {
+      const { base, linked, invoke, newPacks, requests } = await reader();
+      // An older shim's directory record whose pid now belongs to a long-lived
+      // process of the same user: kill -0 succeeds, so the bounded wait has to
+      // expire rather than wait for good.
+      const legacy = path.join(base, ".git", "openclaw-history-blobs.lock");
+      await fs.mkdir(legacy);
+      await fs.writeFile(path.join(legacy, "pid"), `${process.pid}\n`);
+      const wrapper = path.join(root, "legacy sleep");
+      await fs.mkdir(wrapper);
+      await writeFakeSleep(wrapper);
+      const counter = path.join(root, "legacy sleep count");
+      const started = Date.now();
+      // Pickaxe is the content search the review named: after the bounded wait
+      // it must take the failed-preparation path, not native lazy Git.
+      const result = await invoke(["log", "-S", "history line 3", "--", file], linked, {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_FAKE_SLEEP_COUNT: counter,
+      });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      // The loop sleeps 299 times and gives up on the 300th attempt.
+      expect(Number(await fs.readFile(counter, "utf8"))).toBe(299);
+      // The prefetch is given up and the content search stays offline: no
+      // per-blob lazy fetch starts beside the live legacy owner.
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stderr).toContain("pathspec");
+      expect(result.stderr).toContain("shared partial-clone blob budget");
+      expect(await newPacks()).toHaveLength(0);
+      expect(await requests()).toHaveLength(0);
+      // The wait runs before the kernel lock, so a timed-out caller never
+      // creates the kernel lock file; the legacy marker is never removed.
+      expect(
+        await fs
+          .stat(path.join(base, ".git", "openclaw-history-blobs.lock.kernel"))
+          .catch(() => null),
+      ).toBeNull();
+      expect((await fs.stat(legacy)).isDirectory()).toBe(true);
+    }),
+  30_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "releases the legacy wait when the marker disappears before the bound",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { base, linked, invoke, newPacks } = await reader();
+      const legacy = path.join(base, ".git", "openclaw-history-blobs.lock");
+      await fs.mkdir(legacy);
+      await fs.writeFile(path.join(legacy, "pid"), `${process.pid}\n`);
+      const wrapper = path.join(root, "release sleep");
+      await fs.mkdir(wrapper);
+      await writeFakeSleep(wrapper);
+      const counter = path.join(root, "release sleep count");
+      const args = ["log", "--stat", "--", file];
+      const result = await invoke(args, linked, {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_FAKE_SLEEP_COUNT: counter,
+        OPENCLAW_FAKE_SLEEP_RELEASE: "3",
+        OPENCLAW_FAKE_LEGACY: legacy,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe(git(origin, args));
+      expect(await newPacks()).toHaveLength(1);
+      expect(Number(await fs.readFile(counter, "utf8"))).toBe(3);
+      expect(await fs.stat(path.join(legacy, "pid")).catch(() => null)).toBeNull();
+    }),
+  30_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "serialises prefetches after a stale legacy marker",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { base, linked, invoke } = await reader();
+      const peer = path.join(root, "stale race peer");
+      git(base, ["worktree", "add", "--detach", peer]);
+      // A dead owner leaves the old directory record behind. The old shim
+      // reclaims it and can remove a successor's lock; the kernel lock must
+      // serialise the same two callers instead.
+      const legacy = path.join(base, ".git", "openclaw-history-blobs.lock");
+      await fs.mkdir(legacy);
+      const deadPid = spawnSync("sh", ["-c", "echo $$"], { encoding: "utf8" }).stdout.trim();
+      await fs.writeFile(path.join(legacy, "pid"), `${deadPid}\n`);
+      const wrapper = path.join(root, "stale wrapper");
+      const journal = path.join(root, "stale journal");
+      await fs.mkdir(wrapper);
+      await fs.writeFile(
+        path.join(wrapper, "git"),
+        [
+          "#!/bin/sh",
+          'case " $* " in',
+          '  *" fetch "*)',
+          '    echo enter >> "$OPENCLAW_STALE_JOURNAL"',
+          '    sleep "$OPENCLAW_STALE_HOLD"',
+          '    "$OPENCLAW_STALE_GIT" "$@"',
+          "    status=$?",
+          '    echo leave >> "$OPENCLAW_STALE_JOURNAL"',
+          '    exit "$status" ;;',
+          "esac",
+          'exec "$OPENCLAW_STALE_GIT" "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      await fs.writeFile(
+        path.join(wrapper, "rm"),
+        [
+          "#!/bin/sh",
+          'case "$1 $2" in',
+          '  "-f "*"openclaw-history-blobs.lock/pid")',
+          '    sleep "$OPENCLAW_STALE_RM_DELAY" ;;',
+          "esac",
+          'exec /bin/rm "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+      const env = {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_STALE_GIT: realGit,
+        OPENCLAW_STALE_JOURNAL: journal,
+        OPENCLAW_STALE_HOLD: "6",
+      };
+      const history = ["log", "--stat", "--", file];
+      const unrelated = ["log", "--stat", "--", "other.txt"];
+      const results = await Promise.all([
+        invoke(history, linked, { ...env, OPENCLAW_STALE_RM_DELAY: "2" }),
+        invoke(unrelated, peer, { ...env, OPENCLAW_STALE_RM_DELAY: "5" }),
+      ]);
+      for (const [index, result] of results.entries()) {
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe(git(origin, index === 0 ? history : unrelated));
+      }
+      const events = (await fs.readFile(journal, "utf8")).trim().split("\n");
+      // Two disjoint object sets, so two fetches. The delayed rm opens the
+      // old reclaim window; the journal must not contain two enters in a row.
+      expect(events.filter((event) => event === "enter")).toHaveLength(2);
+      expect(events.filter((event) => event === "leave")).toHaveLength(2);
+      let inside = false;
+      for (const event of events) {
+        expect(event, events.join(",")).toBe(inside ? "leave" : "enter");
+        inside = !inside;
+      }
+      expect(inside).toBe(false);
+    }),
+  60_000,
+);
+
+it.skipIf(process.platform !== "linux")(
+  "falls back to the directory mutex when flock is unavailable",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { base, linked, invoke, newPacks } = await reader();
+      const wrapper = path.join(root, "no flock");
+      await fs.mkdir(wrapper);
+      await fs.writeFile(path.join(wrapper, "flock"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const args = ["log", "--stat", "--", file];
+      const result = await invoke(args, linked, {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe(git(origin, args));
+      expect(await newPacks()).toHaveLength(1);
+      expect(
+        await fs
+          .stat(path.join(base, ".git", "openclaw-history-blobs.lock.fallback"))
+          .catch(() => null),
+      ).toBeNull();
+    }),
+);
+
+it.skipIf(process.platform !== "linux")(
+  "falls back to the directory mutex when flock is missing from PATH",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { linked, invoke, newPacks } = await reader();
+      const minimal = path.join(root, "minimal path");
+      await fs.mkdir(minimal);
+      for (const command of [
+        "git",
+        "awk",
+        "cat",
+        "grep",
+        "mkdir",
+        "rm",
+        "rmdir",
+        "sed",
+        "sh",
+        "sleep",
+        "uname",
+        "wc",
+      ]) {
+        const resolved = spawnSync("sh", ["-c", `command -v ${command}`], {
+          encoding: "utf8",
+        }).stdout.trim();
+        expect(resolved, command).not.toBe("");
+        await fs.symlink(resolved, path.join(minimal, command));
+      }
+      const args = ["log", "--stat", "--", file];
+      const result = await invoke(args, linked, { PATH: minimal });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toBe(git(origin, args));
+      expect(await newPacks()).toHaveLength(1);
+    }),
+);
+
+it.skipIf(process.platform !== "linux")(
+  "serialises fallback prefetches and removes the fallback marker",
+  () =>
+    withHistoryFixture(async ({ root, origin, file, git, reader }) => {
+      const { base, linked, invoke } = await reader();
+      const peer = path.join(root, "fallback peer");
+      git(base, ["worktree", "add", "--detach", peer]);
+      const wrapper = path.join(root, "fallback wrapper");
+      const journal = path.join(root, "fallback journal");
+      await fs.mkdir(wrapper);
+      await fs.writeFile(path.join(wrapper, "flock"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      await fs.writeFile(
+        path.join(wrapper, "git"),
+        [
+          "#!/bin/sh",
+          'case " $* " in',
+          '  *" fetch "*)',
+          '    echo enter >> "$OPENCLAW_FALLBACK_JOURNAL"',
+          "    sleep 0.6",
+          '    "$OPENCLAW_FALLBACK_GIT" "$@"',
+          "    status=$?",
+          '    echo leave >> "$OPENCLAW_FALLBACK_JOURNAL"',
+          '    exit "$status" ;;',
+          "esac",
+          'exec "$OPENCLAW_FALLBACK_GIT" "$@"',
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+      const env = {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_FALLBACK_GIT: realGit,
+        OPENCLAW_FALLBACK_JOURNAL: journal,
+      };
+      const history = ["log", "--stat", "--", file];
+      const unrelated = ["log", "--stat", "--", "other.txt"];
+      const results = await Promise.all([
+        invoke(history, linked, env),
+        invoke(unrelated, peer, env),
+      ]);
+      for (const [index, result] of results.entries()) {
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe(git(origin, index === 0 ? history : unrelated));
+      }
+      expect((await fs.readFile(journal, "utf8")).trim().split("\n")).toEqual([
+        "enter",
+        "leave",
+        "enter",
+        "leave",
+      ]);
+      expect(
+        await fs
+          .stat(path.join(base, ".git", "openclaw-history-blobs.lock.fallback"))
+          .catch(() => null),
+      ).toBeNull();
+    }),
+  60_000,
+);
+
+it.skipIf(process.platform !== "linux")(
+  "waits on an orphaned fallback marker and leaves it for manual rescue",
+  () =>
+    withHistoryFixture(async ({ root, file, reader }) => {
+      const { base, linked, invoke, newPacks, requests } = await reader();
+      const fallback = path.join(base, ".git", "openclaw-history-blobs.lock.fallback");
+      await fs.mkdir(fallback);
+      await fs.writeFile(path.join(fallback, "pid"), "999999\n");
+      const wrapper = path.join(root, "orphan wrapper");
+      await fs.mkdir(wrapper);
+      await fs.writeFile(path.join(wrapper, "flock"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      await writeFakeSleep(wrapper);
+      const counter = path.join(root, "orphan sleep count");
+      const started = Date.now();
+      const result = await invoke(["log", "-S", "history line 3", "--", file], linked, {
+        PATH: `${wrapper}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_FAKE_SLEEP_COUNT: counter,
+      });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(Number(await fs.readFile(counter, "utf8"))).toBe(299);
+      expect(result.code, result.stderr).toBe(2);
+      expect(result.stderr).toContain("shared partial-clone blob budget");
+      expect(await newPacks()).toHaveLength(0);
+      expect(await requests()).toHaveLength(0);
+      expect((await fs.stat(fallback)).isDirectory()).toBe(true);
+    }),
+  30_000,
 );

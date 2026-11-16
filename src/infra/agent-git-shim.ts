@@ -384,6 +384,62 @@ $1
   [ "$blob_verb" != grep ] || [ -n "$blob_args" ] || return 1
   return 0
 }
+wait_for_legacy_prefix() {
+  # An older shim may still hold its mkdir directory lock from before the
+  # upgrade. Serve a live owner first and never reclaim or remove the record.
+  # kill -0 only shows that the pid exists, so a reused pid could hold us for
+  # good; bound the wait the way the directory lock was bounded. This runs
+  # before the kernel lock so parallel callers wait 30 s together instead of
+  # queueing behind each other for another 30 s.
+  legacy=$common/openclaw-history-blobs.lock
+  attempts=0
+  while read -r owner 2>/dev/null < "$legacy/pid" && kill -0 "$owner" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 300 ] || return 1
+    sleep 0.1
+  done
+  return 0
+}
+prefetch_with_lock() {
+  # The kernel lock file is never unlinked and stays in .git as an empty file.
+  # A failed open or an unavailable command must fall back, so the open and the
+  # lock run in a nested subshell; a failed exec cannot end this shell. The
+  # kernel drops the descriptor lock when that subshell exits, so there is no
+  # reclaim step and no interval in which two callers believe they own it.
+  if ! (
+    { exec 9>>"$common/openclaw-history-blobs.lock.kernel"; } 2>/dev/null || exit 1
+    case $(uname -s) in
+      Linux) flock -x 9 2>/dev/null || exit 1 ;;
+      *) lockf -s 9 2>/dev/null || exit 1 ;;
+    esac
+    missing=$(query_repository missing_blobs "$@")
+    [ -n "$missing" ] || exit 0
+    query_repository fetch_blobs "$@" 2>/dev/null || :
+  ); then
+    # No usable kernel lock: keep an mkdir mutex without the old reclaim step.
+    # Cleanup only removes the record while this process still owns the pid
+    # file, so it cannot delete a successor's lock. If this process is killed
+    # before cleanup, the directory stays and every later prefetch on this
+    # path waits 30 s and skips. The directory is in $common (the
+    # git-common-dir), not in a linked worktree's .git file. Stop every process
+    # that may use it, then remove it with:
+    # rm -r "$(git rev-parse --git-common-dir)/openclaw-history-blobs.lock.fallback"
+    # The kernel lock and this mutex are different names, so environments that
+    # resolve different binaries can still fetch beside each other.
+    lock=$common/openclaw-history-blobs.lock.fallback; attempts=0
+    until mkdir "$lock" 2>/dev/null; do
+      attempts=$((attempts + 1))
+      [ "$attempts" -lt 300 ] || return 1
+      sleep 0.1
+    done
+    trap 'if [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ]; then rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; fi' 0
+    trap 'exit 1' HUP INT TERM
+    echo $$ > "$lock/pid"
+    missing=$(query_repository missing_blobs "$@")
+    [ -n "$missing" ] || return 0
+    query_repository fetch_blobs "$@" 2>/dev/null || :
+  fi
+}
 prepare_blobs() {
   [ "$no_lazy_fetch" != 1 ] || return 0
   case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
@@ -411,6 +467,8 @@ log.follow'*)
   fi
   # Show prepares history speculatively; other content searches must stay offline
   # after this bounded prefetch, even when discovery or the fetch cannot finish.
+  # A legacy or lock timeout skips the prefetch; non-show searches then take the
+  # offline path, while show keeps its speculative native fallback.
   [ "$blob_verb" = show ] || prepared_blobs=1
   (
     if [ "$blob_verb" = blame ]; then
@@ -449,19 +507,12 @@ log.follow'*)
     [ -n "$missing" ] || return 0
     # Serialize across linked worktrees, then inspect the objects under the lock:
     # overlapping callers fetch only the part not already supplied by the leader.
-    # The lock is a kernel lock on a file this shim never unlinks: flock(1) and
-    # lockf(1) both lock an open descriptor, and the kernel drops it when this
-    # subshell exits, so there is no reclaim step and no interval in which two
-    # callers both believe they own it.
-    lock=$common/openclaw-history-blobs.lock.kernel
-    exec 9>>"$lock" || return 0
-    case $(uname -s) in
-      Linux) flock -x 9 || return 0 ;;
-      *) lockf -s 9 || return 0 ;;
-    esac
-    missing=$(query_repository missing_blobs "$@")
-    [ -n "$missing" ] || return 0
-    query_repository fetch_blobs "$@" 2>/dev/null || :
+    # An old shim cannot see the kernel lock: it can still create its directory
+    # marker while a new prefetch runs, so the upgrade window is one-sided. The
+    # new side reads the old marker first and serves a live owner, which orders
+    # the common case without changing processes that are already running.
+    wait_for_legacy_prefix || return 0
+    prefetch_with_lock "$@"
   )
 }
 
