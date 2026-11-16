@@ -259,9 +259,15 @@ it.each([
     messages.splice(0, messages.length, ...reloaded);
     const saved = messages[1];
     assert(saved?.role === "assistant");
-    if (identity === "provider") saved.provider = "other-responses-provider";
-    if (identity === "api") saved.api = "openai-completions";
-    if (identity === "model") saved.model = "other-model";
+    if (identity === "provider") {
+      saved.provider = "other-responses-provider";
+    }
+    if (identity === "api") {
+      saved.api = "openai-completions";
+    }
+    if (identity === "model") {
+      saved.model = "other-model";
+    }
     cleanupSessionResources();
     expect((await respond()).stopReason).toBe("stop");
     expect(server.requests).toHaveLength(2);
