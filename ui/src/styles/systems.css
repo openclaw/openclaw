@@ -17,7 +17,6 @@ openclaw-systems-page {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: var(--bg);
 }
 .systems-toolbar {
   display: flex;
@@ -832,7 +831,6 @@ openclaw-systems-page {
     --systems-inset: 0px;
 
     padding: 8px 8px 16px;
-    background: transparent;
   }
 
   /* With stats off the viewer takes the space: Backups goes with the stats and only
