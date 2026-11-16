@@ -465,6 +465,7 @@ OAuth re-authentication preserves an existing profile id only when the provider'
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only checks profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
 - A stored profile for that provider that is omitted from the explicit order is not silently tried later. Check output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
+- When no profile in the explicit order is usable, the model is refused as an unavailable saved login (`selected_auth_profile_unavailable`). Turns and compaction move to the next model in `agents.defaults.model.fallbacks`; with no fallback, the reply says the saved login isn't available and asks you to choose another login.
 - A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
 
 Prepared agent requests use their selected plugin metadata, configuration, workspace, and environment for auth profile eligibility, ordering, and environment credential evidence. An empty selected plugin set remains authoritative; another request’s plugin aliases cannot add profiles or change the credential owner.

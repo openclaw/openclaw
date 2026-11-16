@@ -204,7 +204,10 @@ function readFallbackCandidateRateLimit(
     return { eligible: true, ...(Number.isFinite(retryAt) ? { retryAt } : {}) };
   } catch (error) {
     // The existing cooldown/auth owner can establish unavailability. Deferred
-    // metadata and native credentials still enter normal candidate admission.
-    return { eligible: !isFailoverError(error) };
+    // metadata and native credentials still enter normal candidate admission, and so
+    // does an unavailable saved login: the runner attempts and reports it.
+    return {
+      eligible: !isFailoverError(error) || error.code === "selected_auth_profile_unavailable",
+    };
   }
 }

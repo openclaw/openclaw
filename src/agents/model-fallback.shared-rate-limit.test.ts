@@ -234,3 +234,33 @@ it.each(["header", "body"])("blocks later turns on a generic timed 429 (%s)", as
   await vi.advanceTimersByTimeAsync(3 * 86_400_000 + 60_001);
   await expect(createProviderRateLimitRequest(model, { apiKey }).wait()).resolves.toBeUndefined();
 });
+
+it("leaves a primary refused by its explicit auth order to the runner (#194689)", () => {
+  const backupProvider = `${provider}-backup`;
+  // No `auth: "api-key"`: a required provider key bypasses the profile order.
+  const { auth: _requiredAuth, ...inferredAuth } = cfg.models.providers[provider];
+  const authConfig: OpenClawConfig = {
+    ...cfg,
+    // Declared but never stored, like the reporter's terminally failed profile.
+    auth: {
+      profiles: { [`${provider}:revoked`]: { provider, mode: "api_key" } },
+      order: { [provider]: [`${provider}:revoked`] },
+    },
+    agents: {
+      defaults: {
+        model: { primary: `${provider}/primary`, fallbacks: [`${backupProvider}/backup`] },
+      },
+    },
+    models: { providers: { [provider]: inferredAuth, [backupProvider]: inferredAuth } },
+  };
+  const chain = resolveModelCandidateChain({
+    cfg: authConfig,
+    provider,
+    model: "primary",
+    manifestPlugins: [],
+  });
+  const routed = prepareModelFallbackRateLimit(chain, { cfg: authConfig, authStore: null });
+  // Demoting it here would skip the runner's failure record and "Model switched" notice.
+  expect(routed.candidates.map(({ model }) => model)).toEqual(["primary", "backup"]);
+  expect(routed.attempts).toEqual([]);
+});

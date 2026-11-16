@@ -88,6 +88,22 @@ function createAuthProfileCooldownError(
   );
 }
 
+// A local refusal, not a provider response: no HTTP status, and the saved-login code keeps
+// its copy and lets fallback owners (turns and compaction) move to the next model.
+function createExplicitAuthOrderError(
+  params: PrepareAgentRuntimeAuthPlanParams,
+  message: string,
+  profileId: string | undefined,
+): FailoverError {
+  return new FailoverError(message, {
+    reason: "auth",
+    code: "selected_auth_profile_unavailable",
+    provider: params.provider,
+    model: params.modelId,
+    profileId,
+  });
+}
+
 type LogicalAuthAttempt = Extract<
   ReturnType<typeof selectProviderModelAuthSources>,
   { kind: "selected" }
@@ -603,10 +619,15 @@ export function prepareAgentRuntimeAuth(
   };
   const rejectionError = (
     decision: Extract<ReturnType<typeof selectOpenAIModelRouteAuth>, { kind: "rejected" }>,
-  ) =>
-    decision.reason === "all-cooldown" && decision.source
-      ? createAuthProfileCooldownError(params, decision.source.profileId)
-      : new Error(decision.message);
+  ) => {
+    if (decision.reason === "all-cooldown" && decision.source) {
+      return createAuthProfileCooldownError(params, decision.source.profileId);
+    }
+    if (decision.reason === "explicit-order") {
+      return createExplicitAuthOrderError(params, decision.message, decision.source?.profileId);
+    }
+    return new Error(decision.message);
+  };
   const assertForwardedProfile = (profileId: string | undefined, plan: AgentRuntimeAuthPlan) => {
     if (profileId && harnessOwnsOpenAIAuth && plan.forwardedAuthProfileId !== profileId) {
       throw new Error(`Auth profile "${profileId}" cannot be forwarded to the codex runtime.`);

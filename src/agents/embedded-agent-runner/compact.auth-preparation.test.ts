@@ -232,13 +232,26 @@ it.each(["direct", "queued"] as const)(
   },
 );
 
-it("compacts through the configured fallback when the primary profile is cooling down", async () => {
+it.each([
+  { name: "the primary profile is cooling down", auth: undefined, storedPrimary: true },
+  {
+    // #194689: an explicit order whose only profile has no stored credential.
+    name: "the explicit auth order has no usable primary profile",
+    storedPrimary: false,
+    auth: {
+      profiles: { "primary:revoked": { provider: "primary", mode: "api_key" as const } },
+      order: { primary: ["primary:revoked"] },
+    },
+  },
+])("compacts through the configured fallback when $name", async ({ auth, storedPrimary }) => {
   const baseParams = await prepareCompactionParams();
   const agentDir = join(baseParams.workspaceDir, "agent");
   const authStore = {
     version: 1 as const,
     profiles: {
-      "primary:default": createApiKeyCredential("primary", "test-primary-key"),
+      ...(storedPrimary
+        ? { "primary:default": createApiKeyCredential("primary", "test-primary-key") }
+        : {}),
       "backup:default": createApiKeyCredential("backup", "test-backup-key"),
     },
     usageStats: {
@@ -270,6 +283,7 @@ it("compacts through the configured fallback when the primary profile is cooling
       preflightRequired: true,
       preflightCompactionTrigger: "transcript_bytes",
       config: {
+        auth,
         agents: {
           defaults: { model: { primary: "primary/model", fallbacks: ["backup/model"] } },
         },

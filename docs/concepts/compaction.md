@@ -286,7 +286,7 @@ compaction notices are disabled. If the current request cannot fit, reduce it or
 `agents.defaults.compaction.model` has no chain, so its refusals go straight to this
 trim.
 
-Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
+Preflight compaction also uses that chain when the primary auth profile is already in cooldown, or when an explicit `auth.order` for the primary provider has no usable profile. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
