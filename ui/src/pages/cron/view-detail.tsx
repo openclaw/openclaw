@@ -6,6 +6,7 @@ import { SettingsSection, SettingsPage } from "../../components/solid/settings-u
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatCronCadence } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { failedRunId } from "./route-model.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
   AdminRequired,
@@ -71,7 +72,13 @@ export function DetailView(
               <FailureDetails
                 job={job()}
                 fullCause={showHistory()}
-                onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
+                onReviewRun={(() => {
+                  // Review opens the failed run in the history; without one there is none.
+                  const runId = failedRunId(job());
+                  return showHistory() || !runId
+                    ? undefined
+                    : () => props.onSelectJob(job(), runId);
+                })()}
               />
             )}
           </Show>
