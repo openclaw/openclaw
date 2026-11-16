@@ -17,6 +17,7 @@ import { sectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
+import { SidebarListGroup } from "./sidebar-list-group.tsx";
 import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
@@ -86,27 +87,35 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         ? null
         : normalizeAgentId(filter.agentId ?? resolveSessionNavigationAgentId(app));
     const defaultAgentId = app.agents.state.agentsList?.defaultId;
-    const order = (job: CronCompactJob) =>
-      filter.sort === "nextRunAtMs"
-        ? (job.nextRunAtMs ?? Number.POSITIVE_INFINITY)
-        : -(job.updatedAtMs ?? 0);
+    const direction = filter.sortDir === "desc" ? -1 : 1;
     return jobs()
       .filter(
         (job) =>
-          agentId === null ||
-          normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId,
+          (agentId === null ||
+            normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId) &&
+          (filter.scheduleKind === "all" || job.scheduleKind === filter.scheduleKind) &&
+          (filter.lastRun === "all" || (job.lastRunStatus ?? "unknown") === filter.lastRun) &&
+          (filter.trigger === "all" || (filter.trigger === "conditional") === Boolean(job.trigger)),
       )
-      .filter(
-        (job) =>
-          filter.lastRun === "all" ||
-          (filter.lastRun === "error" ? job.lastRunStatus === "error" : job.lastRunStatus === "ok"),
-      )
-      .toSorted((left, right) =>
-        filter.sort === "name"
-          ? (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
-          : order(left) - order(right),
-      );
+      .toSorted((left, right) => {
+        if (filter.sort === "name") {
+          return (
+            direction *
+            (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
+          );
+        }
+        const leftMs = left[filter.sort];
+        const rightMs = right[filter.sort];
+        // Automations without the time sort last in either direction.
+        return leftMs == null || rightMs == null
+          ? Number(leftMs == null) - Number(rightMs == null)
+          : direction * (leftMs - rightMs);
+      });
   });
+  const activeJobs = () =>
+    automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
+  const pausedJobs = () =>
+    automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // The automation the page has open, as the page records it for returning to Automations.
@@ -139,36 +148,6 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
       </a>
     );
   };
-  // Group headings share the Sessions sidebar's group heading.
-  const Group = (group: {
-    label: string;
-    jobs: CronCompactJob[];
-    open: boolean;
-    onToggle: () => void;
-  }) => (
-    <Show when={group.jobs.length > 0}>
-      <div class="sidebar-automations__group" role="group" aria-label={group.label}>
-        <div class="sidebar-recent-sessions__head">
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded={group.open ? "true" : "false"}
-            onClick={() => group.onToggle()}
-          >
-            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-              <span class="sidebar-session-group-toggle__icon">
-                <Icon name={group.open ? "chevronDown" : "chevronRight"} />
-              </span>
-            </span>
-            <span class="sidebar-recent-sessions__label-text">{group.label}</span>
-          </button>
-        </div>
-        <Show when={group.open}>
-          <For each={group.jobs}>{(job) => <Row job={job} />}</For>
-        </Show>
-      </div>
-    </Show>
-  );
   return (
     <nav class="sidebar-automations" aria-label={t("tabs.cron")}>
       <a
@@ -183,19 +162,25 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         </span>
         <span class="nav-item__text">{t("cron.list.newTask")}</span>
       </a>
-      <Group
-        label={t("cron.tabs.active")}
-        jobs={automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled)}
-        open={activeOpen()}
-        onToggle={() => setActiveOpen(!activeOpen())}
-      />
-      <Group
-        label={t("cron.tabs.paused")}
-        jobs={automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled)}
-        // Paused is the one group shown when the filter asks for it.
-        open={pausedOpen() || automationsFilter().status === "paused"}
-        onToggle={() => setPausedOpen(!pausedOpen())}
-      />
+      <Show when={activeJobs().length > 0}>
+        <SidebarListGroup
+          label={t("cron.tabs.active")}
+          open={activeOpen()}
+          onToggle={() => setActiveOpen(!activeOpen())}
+        >
+          <For each={activeJobs()}>{(job) => <Row job={job} />}</For>
+        </SidebarListGroup>
+      </Show>
+      <Show when={pausedJobs().length > 0}>
+        <SidebarListGroup
+          label={t("cron.tabs.paused")}
+          // Paused is the one group shown when the filter asks for it.
+          open={pausedOpen() || automationsFilter().status === "paused"}
+          onToggle={() => setPausedOpen(!pausedOpen())}
+        >
+          <For each={pausedJobs()}>{(job) => <Row job={job} />}</For>
+        </SidebarListGroup>
+      </Show>
     </nav>
   );
 }
