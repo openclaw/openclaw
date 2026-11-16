@@ -300,6 +300,31 @@ describe("frozen admission upgrade Docker aliases", () => {
   );
 });
 
+describe("frozen admission skill library contract", () => {
+  it.each([false, true])("records selected migration=%s with omissions disabled", (split) => {
+    const doctor = "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts";
+    const migration = "src/config/skill-library-tool-split-migration.ts";
+    const files: Record<string, string> = {
+      [doctor]: split ? readFileSync(doctor, "utf8") : "export const oldToolNames = [];",
+    };
+    if (split) {
+      files[migration] = readFileSync(migration, "utf8");
+    }
+    const f = fixture(files, true);
+    const result = f.run(
+      { consumers: ["upgrade-survivor"] },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.contracts[0].modes.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE).toBe(
+      split ? "current" : "preserve",
+    );
+    expect(record.sources.selected.map((file: { path: string }) => file.path)).toContain(doctor);
+    expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
+  });
+});
+
 describe("frozen admission bootstrap repairs", () => {
   const reader = "scripts/lib/frozen-target-source.mjs";
 

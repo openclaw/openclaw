@@ -87,6 +87,21 @@ openclaw_frozen_target_source_flag() {
   esac
 }
 
+openclaw_resolve_frozen_upgrade_skill_library_contract() {
+  local source_root="${1:?missing selected source root}" has_migration has_doctor
+  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE=current
+  [ -n "${OPENCLAW_SELECTED_SHA:-}" ] || return 0
+  openclaw_frozen_target_source validate "$source_root" || return 2
+  has_migration="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/skill-library-tool-split-migration.ts 'export function materializeSkillLibraryToolSplit')" || return 2
+  has_doctor="$(openclaw_frozen_target_source_flag contains "$source_root" src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts 'id: "tools.skill-library-split"')" || return 2
+  # Pre-split targets must preserve the specimen, not acquire a future tool grant.
+  case "$has_migration:$has_doctor" in
+    0:0) export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE=preserve ;;
+    1:1) ;;
+    *) echo "unsupported selected skill-library migration contract" >&2; return 2 ;;
+  esac
+}
+
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {
   local source_root="${1:?missing selected source root}" authorization_status=0 has_tool_search_recipe
   local has_membership_warning has_absent_membership
