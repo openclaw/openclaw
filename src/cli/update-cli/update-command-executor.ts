@@ -395,7 +395,7 @@ export async function withUpdateCommandExecutor<T>(
                   // Only explicit repair settles a cancelled original after its updater exits.
                   return retained.kind === "current" && retained.lease.version === 4
                     ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
-                    : "Another update executor owns this installation.";
+                    : `Another update executor owns this installation. If no update is running, retry ${formatCliCommand("openclaw update repair")} in a moment; it settles once the interrupted update's processes are gone.`;
                 },
               );
             } finally {

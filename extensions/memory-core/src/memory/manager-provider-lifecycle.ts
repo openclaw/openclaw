@@ -1,11 +1,15 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   formatErrorMessage,
   readErrorName,
   toErrorObject,
 } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveUserPath,
@@ -19,7 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { resolveEmbeddingProviderAdapterTransport, type EmbeddingProvider } from "./embeddings.js";
+import { resolveEmbeddingProviderAdapterTransport } from "./embeddings.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
@@ -106,7 +110,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected providerInitPromise: Promise<void> | null = null;
   protected embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   protected providerRetirementPromise: Promise<void> = Promise.resolve();
-  protected providersPendingRetirement = new Set<EmbeddingProvider>();
+  protected providersPendingRetirement = new Set<MemoryEmbeddingProvider>();
   protected activeBackgroundCleanup = new Set<Promise<void>>();
   protected indexIdentityDirty = false;
   private primaryRecoveryPromise: Promise<void> | null = null;
@@ -323,16 +327,16 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       !meta ||
       this.closed ||
       this.syncProviderGeneration ||
-      Date.now() < this.primaryRecoveryRetryAt ||
+      performance.now() < this.primaryRecoveryRetryAt ||
       this.refreshIndexIdentityDirty({ providerKeyKnown: true, indexState }).status === "valid"
     ) {
       return;
     }
     // A fallback-owned index stays on that provider. Recovery only restores a
     // primary that can read the published index, never implicitly reindexes it.
-    this.primaryRecoveryRetryAt = Date.now() + EMBEDDING_PROBE_CACHE_TTL_MS;
+    this.primaryRecoveryRetryAt = performance.now() + EMBEDDING_PROBE_CACHE_TTL_MS;
     const recovery = (async () => {
-      let candidate: EmbeddingProvider | null = null;
+      let candidate: MemoryEmbeddingProvider | null = null;
       try {
         const result = await this.createConfiguredEmbeddingProvider({
           ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
@@ -473,7 +477,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     return this.retireProvider(provider);
   }
 
-  private retireProvider(provider: EmbeddingProvider | null): Promise<void> {
+  private retireProvider(provider: MemoryEmbeddingProvider | null): Promise<void> {
     if (provider) {
       this.providersPendingRetirement.add(provider);
     }
@@ -679,12 +683,12 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected cacheProbeResult(result: MemoryEmbeddingProbeResult): MemoryEmbeddingProbeResult {
-    const checkedAtMs = Date.now();
+    // Expiry uses elapsed time; reported timestamps stay wall-clock epochs.
     this.embeddingProbeCache.set(this.cacheKey, {
       result,
       adapters: this.getEmbeddingProbeOwners(),
-      checkedAtMs,
-      expireAtMs: checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
+      checkedAtMs: Date.now(),
+      expireAtMs: performance.now() + EMBEDDING_PROBE_CACHE_TTL_MS,
     });
     return result;
   }
@@ -694,7 +698,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     if (!cached) {
       return null;
     }
-    const nowMs = Date.now();
+    const nowMs = performance.now();
     if (nowMs >= cached.expireAtMs) {
       this.embeddingProbeCache.delete(this.cacheKey);
       return null;
@@ -704,7 +708,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       checked: true,
       cached: true,
       checkedAtMs: cached.checkedAtMs,
-      cacheExpiresAtMs: cached.expireAtMs,
+      cacheExpiresAtMs: cached.checkedAtMs + EMBEDDING_PROBE_CACHE_TTL_MS,
     };
   }
 
@@ -727,10 +731,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
             this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
         });
       }
+      const signal = getAsyncWorkSignal();
       try {
-        await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
+        await this.probeEmbeddingProvider(this.provider, this.providerRuntime, signal);
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
+        // Ctrl+C stops the check; it must not be remembered as a provider failure.
+        signal?.throwIfAborted();
         const message = formatErrorMessage(err);
         return this.cacheProbeResult({ ok: false, error: message });
       }

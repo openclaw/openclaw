@@ -5,19 +5,20 @@ type AccessRolePolicy = Pick<
   NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>,
   "accessPrograms"
 >;
-type OperatorModelExecutionPolicy = Pick<AdmittedRunOperatorAuthority, "modelPolicy"> & {
+type OperatorModelExecutionPolicy = Pick<AdmittedRunOperatorAuthority, "modelPolicy" | "scopes"> & {
   rolePolicy?: AccessRolePolicy;
 };
 
-/** Named roles grant each program explicitly; standalone/System behavior is unchanged. */
+/** Admin authority includes execution capabilities unless the role sets an explicit ceiling. */
 export function isOperatorAccessProgramAllowed(
-  role: AccessRolePolicy | undefined,
+  authority: Pick<OperatorModelExecutionPolicy, "scopes" | "rolePolicy"> | undefined,
   program: CyberAccessProgram | undefined,
 ): boolean {
-  if (!role || !program || program === "standard") {
+  if (!authority?.rolePolicy || !program || program === "standard") {
     return true;
   }
-  return role.accessPrograms?.cyber.includes(program) === true;
+  const grants = authority.rolePolicy.accessPrograms;
+  return grants ? grants.cyber.includes(program) : authority.scopes.includes("operator.admin");
 }
 
 /** Native dispatch must retain exact policy checks for model or Access restrictions. */
@@ -26,8 +27,8 @@ export function requiresOperatorModelExecutionPolicy(
 ): boolean {
   return (
     authority?.modelPolicy !== undefined ||
-    !isOperatorAccessProgramAllowed(authority?.rolePolicy, "daybreak_blue") ||
-    !isOperatorAccessProgramAllowed(authority?.rolePolicy, "daybreak_red")
+    !isOperatorAccessProgramAllowed(authority, "daybreak_blue") ||
+    !isOperatorAccessProgramAllowed(authority, "daybreak_red")
   );
 }
 

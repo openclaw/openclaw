@@ -4,6 +4,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/ses
 import {
   isConfiguredAgentDatabaseTarget,
   resolveConfiguredAgentDatabaseCandidatePaths,
+  resolveConfiguredSessionStoreTargets,
 } from "../config/sessions/targets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
@@ -167,10 +168,22 @@ export function collectAgentDatabasePreflightTargets(options: {
   }
   // An occupied custom-store candidate can have a newer, unreadable owner.
   // Check its version without promoting it into an owned migration target.
-  const candidates: Array<{ agentId?: string; path: string; holdForDeletionRecovery?: true }> = [
+  const candidates: Array<{
+    agentId?: string;
+    path: string;
+    holdForDeletionRecovery?: true;
+    held?: true;
+  }> = [
     // Migration deduplication must not discard configured ownership claims.
     ...configuredTargets,
     ...agentTargets,
+    ...(purpose === "runtime"
+      ? ((deletionJournal.status === "present"
+          ? deletionJournal.held
+          : deletionJournal.status === "unavailable"
+            ? deletionJournal.known?.held
+            : undefined) ?? [])
+      : []),
     // Migration discovery intentionally declines ownership of foreign registry
     // paths. Preflight remains read-only, so preserve their downgrade guard.
     ...(options.configuredAgentDatabaseTargets !== undefined
@@ -194,16 +207,34 @@ export function collectAgentDatabasePreflightTargets(options: {
     configuredAgentDatabaseTargets: configuredTargets,
     registeredAgentDatabases: registeredDatabases,
   });
+  if (purpose === "runtime" && options.agentAdmissionConfig) {
+    for (const target of resolveConfiguredSessionStoreTargets(
+      options.agentAdmissionConfig,
+      options.env,
+    )) {
+      const pathname = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
+      if (classifyDeletion(pathname, target.agentId) === "held") {
+        candidates.push({ agentId: target.agentId, path: pathname, held: true });
+      }
+    }
+  }
   return {
     configuredTargets,
     candidates:
       purpose === "runtime"
-        ? candidates.filter((row) => typeof classifyDeletion(row.path, row.agentId) !== "object")
+        ? candidates.flatMap((row) => {
+            const disposition = classifyDeletion(row.path, row.agentId);
+            return disposition === "held"
+              ? [{ ...row, held: true as const }]
+              : typeof disposition === "object"
+                ? []
+                : [row];
+          })
         : deletionJournal.status === "unavailable"
           ? preparedDiscovery && options.onAgentDatabaseDiscovery
             ? (options.configuredAgentDatabaseCandidatePaths ?? [])
                 .filter((pathname) => !retained.some((candidate) => samePath(candidate, pathname)))
-                .map((pathname) => ({
+                .map((pathname): (typeof candidates)[number] => ({
                   agentId: undefined,
                   path: pathname,
                   holdForDeletionRecovery: true as const,
@@ -224,10 +255,13 @@ export function collectAgentDatabasePreflightTargets(options: {
               }
               return row.agentId === undefined || !retainedAgentIds.has(row.agentId);
             }),
-    isRetainedPath: (pathname: string) =>
-      purpose === "runtime"
-        ? typeof classifyDeletion(pathname) === "object"
-        : retained.some((candidate) => samePath(candidate, pathname)),
+    isRetainedPath: (pathname: string) => {
+      if (purpose === "runtime") {
+        const disposition = classifyDeletion(pathname);
+        return disposition === "held" || typeof disposition === "object";
+      }
+      return retained.some((candidate) => samePath(candidate, pathname));
+    },
     failures,
     preparedDiscovery,
   };

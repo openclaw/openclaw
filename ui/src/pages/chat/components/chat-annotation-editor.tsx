@@ -132,7 +132,7 @@ export function showChatAnnotationEditor(options: {
                 remove = element;
               }}
               type="button"
-              class="btn btn--icon btn--ghost chat-annotation-editor__delete"
+              class="oc-icon-button chat-annotation-editor__delete"
               aria-label={t("chat.messages.deleteAnnotation")}
               title={t("chat.messages.deleteAnnotation")}
               onClick={() => {

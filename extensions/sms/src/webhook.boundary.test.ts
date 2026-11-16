@@ -158,6 +158,7 @@ function holdIncompletePost(
   port: number,
   index: number,
   fixture: ReturnType<typeof createBoundaryFixture>,
+  clientAddress: string,
 ) {
   const body = new URLSearchParams({ incomplete: String(index) }).toString();
   const req = request({
@@ -169,6 +170,8 @@ function holdIncompletePost(
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       "content-length": Buffer.byteLength(body),
+      "x-forwarded-for": clientAddress,
+      "x-twilio-signature": "invented",
     },
   });
   fixture.ownRequest(req);
@@ -228,124 +231,159 @@ beforeEach(() => {
   advanceSmsTestAccountId();
 });
 
-it("closes overflow uploads and recovers capacity for a signed callback", () => {
-  const fixture = createBoundaryFixture();
-  return fixture.run(async () => {
-    const account = createSmsTestAccount({ accountId: "boundary" });
-    const registry = createEmptyPluginRegistry();
-    setActivePluginRegistry(registry);
-    void fixture.track(
-      startSmsGatewayAccount({
-        cfg: {},
-        account,
-        channelRuntime: {} as SmsChannelRuntime,
-        abortSignal: fixture.signal,
-      }),
-      true,
-    );
-    await fixture.wait(vi.waitFor(() => expect(registry.httpRoutes).toHaveLength(1)));
-    fixture.signal.throwIfAborted();
-    const route = registry.httpRoutes[0];
-    if (!route) {
-      throw new Error("expected the SMS gateway to register its account route");
-    }
-
-    const received = { requests: 0, bodyReaders: 0 };
-    const capacityReady = createDeferred<void>();
-    const handler: RequestListener = (req, res) => {
-      received.requests += 1;
-      if (received.requests <= 64) {
-        req.once("data", () => {
-          received.bodyReaders += 1;
-          if (received.bodyReaders === 64) {
-            capacityReady.resolve();
-          }
-        });
-      }
+it.each(["source", "route"] as const)(
+  "bounds %s uploads while preserving callback capacity",
+  (scope) => {
+    const fixture = createBoundaryFixture();
+    return fixture.run(async () => {
+      const account = createSmsTestAccount({ accountId: "boundary" });
+      const registry = createEmptyPluginRegistry();
+      setActivePluginRegistry(registry);
       void fixture.track(
-        fixture.track(Promise.resolve(route.handler(req, res))).catch((error: unknown) => {
-          if (!res.writableEnded) {
-            res.statusCode = 500;
-            res.end(error instanceof Error ? error.message : String(error));
-          }
-        }),
-      );
-    };
-    const held: ReturnType<typeof holdIncompletePost>[] = [];
-
-    let callbackFailure: { error: unknown } | undefined;
-    const server = withServer(handler, async (baseUrl) => {
-      try {
-        fixture.signal.throwIfAborted();
-        const port = Number(new URL(baseUrl).port);
-        for (let index = 0; index < 64; index += 1) {
-          held.push(holdIncompletePost(port, index, fixture));
-        }
-        await withinTest(capacityReady.promise, fixture.signal);
-        expect(received).toEqual({ requests: 64, bodyReaders: 64 });
-
-        // Header-only input plus peer closure proves early rejection; Bun marks req.complete on response end.
-        const overflow = await fixture.wait(sendIncompleteRawPost(port, fixture));
-        expect(overflow.response).toContain("HTTP/1.1 429 Too Many Requests\r\n");
-        expect(overflow.response).toMatch(/\r\nConnection: close\r\n/iu);
-        expect(overflow.response).toContain("\r\n\r\nRate limit exceeded");
-        expect(overflow.endedByServer).toBe(true);
-        expect(enqueueSmsIngress).not.toHaveBeenCalled();
-
-        for (const pending of held) {
-          pending.finish();
-        }
-        const released = await fixture.wait(Promise.all(held.map((pending) => pending.result)));
-        expect(released.every((statusCode) => statusCode === 403)).toBe(true);
-
-        const form: Record<string, string> = createSmsTestForm(
-          { Body: "boundary proof", MessageSid: "SM00000000000000000000000000000985" },
+        startSmsGatewayAccount({
+          cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
           account,
+          channelRuntime: {} as SmsChannelRuntime,
+          abortSignal: fixture.signal,
+        }),
+        true,
+      );
+      await fixture.wait(vi.waitFor(() => expect(registry.httpRoutes).toHaveLength(1)));
+      fixture.signal.throwIfAborted();
+      const route = registry.httpRoutes[0];
+      if (!route) {
+        throw new Error("expected the SMS gateway to register its account route");
+      }
+
+      const received = { requests: 0, bodyPrefixes: 0 };
+      const capacityReady = createDeferred<void>();
+      const handler: RequestListener = (req, res) => {
+        received.requests += 1;
+        if (received.requests <= 64) {
+          req.once("data", () => {
+            received.bodyPrefixes += 1;
+            if (received.bodyPrefixes === 64) {
+              capacityReady.resolve();
+            }
+          });
+        }
+        void fixture.track(
+          fixture.track(Promise.resolve(route.handler(req, res))).catch((error: unknown) => {
+            if (!res.writableEnded) {
+              res.statusCode = 500;
+              res.end(error instanceof Error ? error.message : String(error));
+            }
+          }),
         );
-        const { body, signature } = signSmsTestForm(form, account);
-        const admitted = await fixture.wait(
-          (async () => {
-            const response = await fetch(`${baseUrl}/webhooks/sms`, {
+      };
+      const held: ReturnType<typeof holdIncompletePost>[] = [];
+
+      let callbackFailure: { error: unknown } | undefined;
+      const server = withServer(handler, async (baseUrl) => {
+        try {
+          fixture.signal.throwIfAborted();
+          const port = Number(new URL(baseUrl).port);
+          for (let index = 0; index < 64; index += 1) {
+            held.push(
+              holdIncompletePost(
+                port,
+                index,
+                fixture,
+                scope === "source" ? "127.0.0.1" : `203.0.113.${Math.floor(index / 16) + 1}`,
+              ),
+            );
+          }
+          await withinTest(capacityReady.promise, fixture.signal);
+          expect(received).toEqual({ requests: 64, bodyPrefixes: 64 });
+
+          const form = createSmsTestForm({ MessageSid: "SM-pending" }, account);
+          const { body, signature } = signSmsTestForm(form, account);
+          const during = await fixture.wait(
+            fetch(`${baseUrl}/webhooks/sms`, {
               signal: fixture.signal,
               method: "POST",
               body,
               headers: {
                 "content-type": "application/x-www-form-urlencoded",
                 "x-twilio-signature": signature,
+                "x-forwarded-for": "198.51.100.20",
               },
-            });
-            await response.text();
-            return response;
-          })(),
-        );
+            }),
+          );
+          await during.text();
+          expect(during.status).toBe(scope === "source" ? 200 : 429);
+          expect(during.headers.get("x-openclaw-delivery-accepted")).toBe(
+            scope === "source" ? "durable" : null,
+          );
 
-        expect(admitted.status).toBe(200);
-        expect(admitted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-        expect(enqueueSmsIngress).toHaveBeenCalledOnce();
-        expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
-      } catch (error) {
-        callbackFailure = { error };
-        throw error;
-      } finally {
-        for (const pending of held) {
-          pending.request.destroy();
-        }
-        await Promise.allSettled(held.map((pending) => pending.result));
-      }
-    });
-    // Cancellation can finish the test before server.close rejects. Report that
-    // cleanup failure without duplicating the callback's original test error.
-    void fixture.track(
-      server.catch((error: unknown) => {
-        if (!callbackFailure || !Object.is(error, callbackFailure.error)) {
+          // Header-only input plus peer closure proves early rejection; Bun marks req.complete on response end.
+          const overflow = await fixture.wait(sendIncompleteRawPost(port, fixture));
+          expect(overflow.response).toContain("HTTP/1.1 429 Too Many Requests\r\n");
+          expect(overflow.response).toMatch(/\r\nConnection: close\r\n/iu);
+          expect(overflow.response).toContain("\r\n\r\nRate limit exceeded");
+          expect(overflow.endedByServer).toBe(true);
+          expect(enqueueSmsIngress).toHaveBeenCalledTimes(scope === "source" ? 1 : 0);
+
+          for (const pending of held) {
+            pending.finish();
+          }
+          const released = await fixture.wait(Promise.all(held.map((pending) => pending.result)));
+          expect(released.filter((statusCode) => statusCode === 403)).toHaveLength(
+            scope === "source" ? 16 : 64,
+          );
+          expect(released.filter((statusCode) => statusCode === 429)).toHaveLength(
+            scope === "source" ? 48 : 0,
+          );
+
+          const recoveryForm: Record<string, string> = createSmsTestForm(
+            { Body: "boundary proof", MessageSid: "SM00000000000000000000000000000985" },
+            account,
+          );
+          const recovery = signSmsTestForm(recoveryForm, account);
+          const admitted = await fixture.wait(
+            (async () => {
+              const response = await fetch(`${baseUrl}/webhooks/sms`, {
+                signal: fixture.signal,
+                method: "POST",
+                body: recovery.body,
+                headers: {
+                  "content-type": "application/x-www-form-urlencoded",
+                  "x-twilio-signature": recovery.signature,
+                },
+              });
+              await response.text();
+              return response;
+            })(),
+          );
+
+          expect(admitted.status).toBe(200);
+          expect(admitted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+          expect(enqueueSmsIngress).toHaveBeenCalledTimes(scope === "source" ? 2 : 1);
+          expect(enqueueSmsIngress).toHaveBeenLastCalledWith(recoveryForm);
+        } catch (error) {
+          callbackFailure = { error };
           throw error;
+        } finally {
+          for (const pending of held) {
+            pending.request.destroy();
+          }
+          await Promise.allSettled(held.map((pending) => pending.result));
         }
-      }),
-      true,
-    );
-    await fixture.wait(server);
-  });
-});
+      });
+      // Cancellation can finish the test before server.close rejects. Report that
+      // cleanup failure without duplicating the callback's original test error.
+      void fixture.track(
+        server.catch((error: unknown) => {
+          if (!callbackFailure || !Object.is(error, callbackFailure.error)) {
+            throw error;
+          }
+        }),
+        true,
+      );
+      await fixture.wait(server);
+    });
+  },
+);
 it.each([
   [false, "HTTP/1.1 413 Payload Too Large", "Payload too large"],
   [true, "HTTP/1.1 500 Internal Server Error", "Internal Server Error"],

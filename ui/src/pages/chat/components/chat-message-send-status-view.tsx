@@ -1,8 +1,8 @@
 import { Show } from "solid-js";
-import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import type { PendingSteer } from "../chat-pending-inputs.ts";
 import { describePendingSteerWait, isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
@@ -106,17 +106,18 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
   );
 }
 
-export function ChatSteerNow(props: {
-  input?: ChatPendingInputsPage["items"][number];
-  onSend?: (runId: string) => void;
-}) {
+export function ChatSteerNow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
+  // One row speaks for every waiting steer: Send now when the viewer can use it,
+  // otherwise Steering… on the newest.
+  const sendNow = () => Boolean(props.onSend && props.input?.sendNow);
+  const label = () => props.input?.newest && !(props.onSend && props.input.deferToSendNow);
+  const queued = () => props.input?.queued && t("chat.queue.states.followup");
   return (
-    <Show
-      when={(props.onSend || props.input?.steerNow?.status === "blocked") && props.input?.steerNow}
-    >
+    <Show when={(sendNow() || label()) && props.input?.steerNow}>
       {(steerNow) => (
-        <div class="chat-steer-now chat-message-source">
-          {steerNow().status === "available" ? (
+        <div class="chat-steer-now chat-message-source chat-send-status__part">
+          {sendNow() && queued() ? <span role="status">{queued()}</span> : null}
+          {sendNow() ? (
             <button
               class="chat-send-status__action"
               type="button"
@@ -125,10 +126,27 @@ export function ChatSteerNow(props: {
               {t("chat.pendingInputs.sendNow")}
             </button>
           ) : (
-            <span>{describePendingSteerWait(steerNow().tools)}</span>
+            <span
+              role="status"
+              title={queued() || describePendingSteerWait(steerNow())}
+              aria-label={queued() || describePendingSteerWait(steerNow())}
+            >
+              {queued() || t("chat.pendingInputs.steering")}
+            </span>
           )}
         </div>
       )}
+    </Show>
+  );
+}
+
+/** Earlier undelivered steers keep a delivered message's action-row space for their steer row. */
+export function ChatSteerRow(props: { input?: PendingSteer; onSend?: (runId: string) => void }) {
+  return (
+    <Show when={props.input}>
+      <div class="chat-message-actions-row chat-message-actions-row--steer">
+        <ChatSteerNow input={props.input} onSend={props.onSend} />
+      </div>
     </Show>
   );
 }

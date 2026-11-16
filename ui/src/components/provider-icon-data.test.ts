@@ -12,6 +12,8 @@ describe("model provider labels", () => {
     ["acp-qwen", "Qwen Code (ACP)"],
     ["acp-pi", "Pi (ACP)"],
     ["acp-copilot", "GitHub Copilot CLI"],
+    ["tencent-tokenhub", "Tencent TokenHub"],
+    ["vllm", "vLLM"],
   ])("renders provider %s as display text", (provider, label) => {
     expect(providerDisplayLabel(provider)).toBe(label);
   });

@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 
 // The private admission pipe must not change the installed CLI's stdin lifetime.
@@ -386,12 +387,16 @@ export function waitForHandoffResponse(
     // The canonical updater owns activation/finalization budgets. Once closed,
     // the parent joins its helper instead of inventing a shorter shutdown timer.
     if (command !== "closed") {
-      cancelTimeout = scheduleAbsoluteDeadline(Date.now() + timeoutMs, () => {
-        const phase = command ? "respond" : "signal readiness";
-        onOutputError(
-          new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
-        );
-      });
+      cancelTimeout = scheduleAbsoluteDeadline(
+        monotonicDeadlineAfter(timeoutMs),
+        () => {
+          const phase = command ? "respond" : "signal readiness";
+          onOutputError(
+            new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
+          );
+        },
+        monotonicNow,
+      );
     }
     if (settled) {
       return;

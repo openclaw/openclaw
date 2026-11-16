@@ -58,7 +58,7 @@ function configuredGitHub(token: string): OpenClawConfig {
 
 const json = (value: unknown) => new Response(JSON.stringify(value));
 const previewUnavailable =
-  "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
+  "The configured web app GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
 const degradedPreview = {
   ownerKind: "capability" as const,
   ownerId: "control-ui-github",
@@ -778,7 +778,15 @@ describe("controlUi.sessionPullRequests.checks", () => {
     await withOpenClawTestState({ label: "ci-details-missing-client-roles" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const enableRoles = () => {
-        cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+        cfg = {
+          ...cfg,
+          gateway: {
+            roles: {
+              default: "denied",
+              definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+            },
+          },
+        };
         setRuntimeConfigSnapshot(cfg);
       };
       setRuntimeConfigSnapshot(cfg);

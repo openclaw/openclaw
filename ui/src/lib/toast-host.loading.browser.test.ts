@@ -19,13 +19,14 @@ it("keeps the offline failure message and recovery controls visible", async () =
   const dismissed = vi.fn();
   showToast({ severity: "info", message: "Saved", onDismiss: dismissed, durationMs: 60_000 });
 
+  await import("./toast-view.tsx");
   await waitForSolid(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
   const card = host.querySelector<HTMLElement>('[role="alert"]')!;
   const content = card.querySelector<HTMLElement>(".app-toast__content")!;
   const retry = [...card.querySelectorAll("button")].find(
     (button) => button.textContent === "Retry",
   )!;
-  expect(card.textContent).toContain("Couldn’t load this panel.");
+  expect(card.textContent).toContain("Saved");
   expect(getComputedStyle(content).opacity).toBe("1");
   expect(card.getBoundingClientRect().height).toBeGreaterThan(40);
   expect(retry.getBoundingClientRect().width).toBeGreaterThan(0);

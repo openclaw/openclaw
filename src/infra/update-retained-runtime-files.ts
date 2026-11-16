@@ -16,6 +16,7 @@ export const RetainedRuntimeFilesSchema = z
     materializationMs: z.number().nonnegative(),
     linked: z.number().int().nonnegative(),
     copied: z.number().int().nonnegative(),
+    linkFallback: z.object({ count: z.number().int().positive(), code: z.string() }).optional(),
   })
   .or(z.object({ unusableReason: z.string() }));
 

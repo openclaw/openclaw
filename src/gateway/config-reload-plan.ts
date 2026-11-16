@@ -225,6 +225,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     kind: "hot",
     actions: ["reloadPlugins"],
   },
+  // Bundled plugins activated by this path (openclaw-id-access) load only through plugin selection.
+  { prefixes: ["gateway.openclawId.enabled"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },
   { prefixes: ["transcripts", "cloudWorkers.profiles"], kind: "hot", actions: ["reloadPlugins"] },
@@ -281,6 +283,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "update.checkOnStart",
       "update.channel",
       "update.auto.enabled",
+      "update.auto.schedule",
       "telemetry.enabled",
       "telemetry.consentedAt",
     ],

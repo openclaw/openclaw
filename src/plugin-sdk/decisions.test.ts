@@ -21,22 +21,22 @@ vi.mock("./extension-shared.js", () => {
 });
 
 it("handles Decision admission without initializing host runtime bundles", async () => {
-  const { executeOpenAIDecision } = await import("./decisions-openai-runtime.js");
+  const { evaluateOpenAICompatibleDecision } = await import("./decisions-openai-runtime.js");
   await expect(
-    executeOpenAIDecision(
+    evaluateOpenAICompatibleDecision(
       {
         state: { type: "text", text: "explicit fixture" },
         questions: { truth: { type: "boolean" } },
       },
       {
-        provider: "fixture",
-        modelId: "fixture",
-        baseUrl: "https://example.com",
-        auth: { mode: "api-key", apiKey: undefined },
+        model: { provider: "fixture", id: "fixture", name: "Fixture" },
+        auth: { mode: "api-key" },
+        config: {},
         signal: new AbortController().signal,
         deadlineMonotonicMs: performance.now() + 1_000,
         isAdmissible: () => true,
       },
+      { provider: "fixture", baseUrl: "https://example.com" },
     ),
   ).resolves.toEqual({ status: "unavailable", reason: "credentials-unavailable" });
 });

@@ -70,7 +70,10 @@ export type {
 } from "../plugins/agent-executor-controller.types.js";
 export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
 
-export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+export {
+  formatSubagentProgressReference,
+  projectAgentActivityItem,
+} from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 export { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 export { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -163,6 +166,7 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
@@ -364,6 +368,7 @@ export {
 } from "../agents/delegation-guidance.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
+export { buildAgentHarnessBasePrompt } from "../agents/system-prompt-harness-base.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";

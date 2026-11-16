@@ -18,6 +18,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { SIDEBAR_SNAPSHOT_PROJECTION_VERSION } from "./session-sidebar-snapshot.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
@@ -415,7 +416,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 4,
+        projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

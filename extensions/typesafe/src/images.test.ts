@@ -16,10 +16,15 @@ vi.mock("node:crypto", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:crypto")>()),
   randomUUID,
 }));
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const imageHeader = "TypeSafe-Danger-Zone-Images";
 const hostedUrl = "https://api.typesafe.ai/v1";

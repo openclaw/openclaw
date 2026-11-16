@@ -3409,7 +3409,7 @@ retire_git_wrapper_after_npm_install() {
     ui_success "Previous git wrapper retired"
 }
 
-# These metadata documents contain only objects and unescaped ASCII strings.
+# Metadata uses objects, unescaped ASCII strings, and boolean values.
 # Reject other JSON forms and duplicate keys instead of guessing their meaning.
 bun_metadata_string() {
     LC_ALL=C awk -v wanted="$2" '
@@ -3420,9 +3420,13 @@ bun_metadata_string() {
             if (match(json, /^[ \t\r\n]+/)) { json=substr(json,RLENGTH+1); continue }
             if (done) fail()
             quoted=match(json, /^"[A-Za-z0-9_.+\/-]*"/)
+            boolean=!quoted && match(json, /^(true|false)/)
             token=quoted ? substr(json,2,RLENGTH-2) : substr(json,1,1)
-            json=substr(json,quoted ? RLENGTH+1 : 2)
-            if (quoted) {
+            json=substr(json,(quoted || boolean) ? RLENGTH+1 : 2)
+            if (boolean) {
+                if (!depth || state[depth]!="value") fail()
+                state[depth]="end"
+            } else if (quoted) {
                 if (!depth) fail()
                 if (state[depth]=="first" || state[depth]=="key") {
                     if (token ~ /\// || seen[path[depth] "/" token]++) fail()

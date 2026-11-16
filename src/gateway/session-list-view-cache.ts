@@ -88,6 +88,34 @@ export function retainCurrentSessionListPartitions(
   }
 }
 
+/** Aggregate count and runtime-membership facts from admitted partitions. */
+export function mergeSessionListOwnerCounts(parts: SessionListFilteredEntries[]) {
+  const counts = new Map<
+    string,
+    NonNullable<SessionEntrySelection["ownerSessionCounts"]>[number]
+  >();
+  const ownerSessionProfiles = new Map<string, string>();
+  for (const part of parts) {
+    for (const count of part.ownerSessionCounts ?? []) {
+      const combined = counts.get(count.profileId);
+      if (combined) {
+        combined.open += count.open;
+      } else {
+        counts.set(count.profileId, { ...count });
+      }
+    }
+    part.ownerSessionProfiles?.forEach((profileId, key) =>
+      ownerSessionProfiles.set(key, profileId),
+    );
+  }
+  return {
+    ownerSessionProfiles,
+    ownerSessionCounts: [...counts.values()].toSorted((a, b) =>
+      a.profileId.localeCompare(b.profileId),
+    ),
+  };
+}
+
 export type SessionListView = {
   key: string;
   refs: number;
@@ -230,13 +258,22 @@ export class SessionListViewCache {
     const history = (view.rowHistory ??= []);
     history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
-    if (history.length > ROW_HISTORY_LIMIT) {
-      view.historyRefs -= history.shift()!.ids.length;
-      emitTrustedDiagnosticEvent({
-        type: "sessions.list.baseline.retired",
-        cause: "history-evicted",
-      });
-    }
+  }
+
+  private retireOldestGeneration(view: SessionListView) {
+    const refs = view.rowHistory!.shift()!.ids.length;
+    const bytes = refs * 8 + 160;
+    view.historyRefs -= refs;
+    view.refs -= refs;
+    this.refs -= refs;
+    retainedRefs -= refs;
+    view.bytes -= bytes;
+    this.bytes -= bytes;
+    retainedBytes -= bytes;
+    emitTrustedDiagnosticEvent({
+      type: "sessions.list.baseline.retired",
+      cause: "history-evicted",
+    });
   }
 
   update(view: SessionListView) {
@@ -269,10 +306,47 @@ export class SessionListViewCache {
     this.bytes += bytes - view.bytes;
     view.refs = refs;
     view.bytes = bytes;
-    if (bytes > MAX_ESTIMATED_BYTES) {
+    if (
+      this.bytes > MAX_ESTIMATED_BYTES &&
+      view.selection?.ownerSessionCounts &&
+      view.partitions?.size
+    ) {
+      // Retire count acceleration before displacing conditional sidebar baselines.
+      view.partitions = undefined;
+      this.update(view);
+      return;
+    }
+    if ((view.rowHistory?.length ?? 0) > ROW_HISTORY_LIMIT) {
+      this.retireOldestGeneration(view);
+    }
+    if (
+      view.bytes -
+        (view.historyRefs - (view.rowHistory?.at(-1)?.ids.length ?? 0)) * 8 -
+        Math.max(0, (view.rowHistory?.length ?? 0) - 1) * 160 >
+      MAX_ESTIMATED_BYTES
+    ) {
       this.remove(view);
     }
     while (this.lists.size > MAX_VIEWS || this.bytes > MAX_ESTIMATED_BYTES) {
+      // Retire optional count partitions, then old comparison witnesses, before whole views.
+      // Keep its newest generation even while current rows await reconstruction.
+      let history: SessionListView | undefined;
+      if (this.lists.size <= MAX_VIEWS) {
+        for (const candidate of this.lists.values()) {
+          if (candidate.selection?.ownerSessionCounts && candidate.partitions?.size) {
+            candidate.partitions = undefined;
+            this.update(candidate);
+            return;
+          }
+          if (!history && (candidate.rowHistory?.length ?? 0) > 1) {
+            history = candidate;
+          }
+        }
+      }
+      if (history) {
+        this.retireOldestGeneration(history);
+        continue;
+      }
       const oldest = this.lists.values().next().value!;
       this.remove(oldest);
     }

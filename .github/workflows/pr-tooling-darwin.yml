@@ -46,6 +46,7 @@ on:
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
       - "src/test-utils/**"
+      - "!src/test-utils/**/*.test.ts"
       - "vitest.config.ts"
       - "tsconfig*.json"
       - "test/tsconfig.json"
@@ -132,20 +133,13 @@ jobs:
       - name: Test native Darwin process identity
         run: python3 -I -B test/scripts/pr-darwin-process-identity.test.py
 
-      - name: Test dependency cache lifetime
-        run: node scripts/run-vitest.mjs test/scripts/pr-dependency-cache.test.ts --maxWorkers=1
-
-      - name: Test PR wrappers
-        run: node scripts/run-vitest.mjs test/scripts/pr-wrappers.test.ts --maxWorkers=1
-
-      - name: Test materialized anchors
-        run: node scripts/run-vitest.mjs test/scripts/pr-materialized-anchor.test.ts --maxWorkers=1
-
-      - name: Test operation locks
-        run: node scripts/run-vitest.mjs test/scripts/pr-operation-lock.test.ts --maxWorkers=1
-
-      - name: Test selected Git with native GitHub CLI
-        run: node scripts/run-vitest.mjs test/scripts/pr-git-invocation.test.ts --maxWorkers=1
-
-      - name: Test macOS distribution archives
-        run: node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1
+      - name: Test native Darwin tooling
+        run: >-
+          node scripts/run-vitest.mjs
+          test/scripts/pr-dependency-cache.test.ts
+          test/scripts/pr-wrappers.test.ts
+          test/scripts/pr-materialized-anchor.test.ts
+          test/scripts/pr-operation-lock.test.ts
+          test/scripts/pr-git-invocation.test.ts
+          test/scripts/package-mac-dist.test.ts
+          --maxWorkers=1

@@ -53,6 +53,7 @@ describe("WorkboardView", () => {
   it("passes dialog labels and cancellation back to the plugin draft owner", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.lastDispatchSummary = {
+      firstFailure: null,
       started: 0,
       failures: 0,
       promoted: 0,

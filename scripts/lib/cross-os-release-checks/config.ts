@@ -368,7 +368,7 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "ubuntu",
       display_name: "Linux",
-      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-8vcpu-ubuntu-2404"),
+      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-2vcpu-ubuntu-2404"),
       artifact_name: "linux",
     },
     {

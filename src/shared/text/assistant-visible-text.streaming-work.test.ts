@@ -12,17 +12,136 @@ import { canReuseMarkdownOwnership, findCodeOwnership } from "./code-regions.js"
 import { expectPrefixParity, regexWork, streamChunks } from "./streaming.test-support.js";
 import { createTextProjection } from "./text-projection.js";
 
+const settledProse =
+  "The guard rejects the call when values differ.\nIt keeps the settled prefix.\n".repeat(128);
+
+// `regexBudget` is the per-character bound on `regexWork`, which grows with the number of
+// checkpoint stages that scan each settled line. Bracket rows keep one more active stage
+// than the JSON/prose rows, so their bound is looser than the default.
 it.each([
-  ["pretty-printed JSON", `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(128)}}`],
-  ["brace-heavy prose", 'Configure {"mode":"fast"} and continue. '.repeat(128)],
-])("bounds ordinary %s streaming work", (_shape, input) => {
+  ["pretty-printed JSON", `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(128)}}`, 128],
+  ["brace-heavy prose", 'Configure {"mode":"fast"} and continue. '.repeat(128), 128],
+  // A closed legacy bracket block must let the preceding prefix settle instead of pinning the
+  // whole reply; the looser `regexBudget` reflects the extra active checkpoint stage.
+  ["legacy bracket block", "[TOOL_CALL]{}\n[/TOOL_CALL]\n" + settledProse, 512],
+])("bounds ordinary %s streaming work", (_shape, input, regexBudget = 128) => {
   const source = input.slice(0, 4096);
   const stream = createAssistantVisibleStreamText("final_answer");
   const before = markdownOwnershipWork.scannedCharacters;
   const scanned = regexWork(() => streamChunks(source, 4, stream));
   expect(stream.text).toBe(source.trimEnd());
-  expect(scanned).toBeLessThan(source.length * 128);
+  expect(stream.settledLength).toBeGreaterThan(source.length * 0.9);
+  expect(scanned).toBeLessThan(source.length * regexBudget);
   expect(markdownOwnershipWork.scannedCharacters - before).toBeLessThan(source.length * 16);
+});
+
+// A bare mention is not a real tag and must not latch the delivery filter.
+it("keeps a bare relevant-memories mention off the whole-reply re-scan", () => {
+  // regexWork counts characters fed to memories-relevant .test() calls; a bounded
+  // total proves the probe scans a bounded tail instead of the growing reply.
+  const source = "The relevant-memories feature stays off the hot path.\n\n"
+    .repeat(64)
+    .slice(0, 4096);
+  const scanned = regexWork(
+    () => {
+      const stream = createAssistantVisibleStreamText("final_answer");
+      streamChunks(source, 4, stream);
+      expect(stream.text).toContain("relevant-memories feature");
+    },
+    (re) => String(re).includes("relevant") && /memor/i.test(String(re)),
+  );
+  expect(scanned).toBeLessThan(source.length * 8);
+});
+
+// A real ``<relevant-memories>`` tag still gates on and is stripped exactly once.
+it("strips a real relevant-memories tag when it appears", () => {
+  const source = "Intro.\n\n<relevant-memories>\nsecret\n</relevant-memories>\n\nAfter.\n";
+  const stream = createAssistantVisibleStreamText("final_answer");
+  streamChunks(source, 4, stream);
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Intro.");
+  expect(stream.text).toContain("After.");
+});
+
+// The canonical parser accepts whitespace after ``<`` and around ``/``; the probe
+// must match, even when the tag word is split across deltas.
+it("strips whitespace-tolerant relevant-memories tags split across deltas", () => {
+  const source = "Before.\n\n< relevant-memories>\nsecret\n< / relevant_memories>\n\nAfter.\n";
+  const stream = createAssistantVisibleStreamText("final_answer");
+  streamChunks(source, 3, stream);
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Before.");
+  expect(stream.text).toContain("After.");
+});
+
+// An unbounded whitespace run between ``<`` and the tag word still gates the stage.
+// ``< / word>`` shapes are closers in the canonical regex, so the opener omits ``/``.
+it("strips a relevant-memories tag behind an unbounded whitespace gap", () => {
+  const chunks = [
+    "Before.\n\n<",
+    " ".repeat(4096),
+    "relevant-",
+    "memories>\nsecret\n</",
+    " ".repeat(2048),
+    "relevant_memories>\n\nAfter.\n",
+  ];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Before.");
+  expect(stream.text).toContain("After.");
+});
+
+// A whitespace run split across many appends must not push ``<`` out of the tail.
+// The unclosed block hides everything after its opener, so assert batch parity too.
+it("strips a memory tag behind many single-space deltas", () => {
+  const chunks = ["Before.\n<", ...Array<string>(64).fill(" "), "relevant-memories>secret\nDone."];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
+});
+
+// Same gate for the minimax stage: a bare ``minimax:tool_call`` mention must not latch
+// the whole-reply re-scan either.
+it("keeps a bare minimax:tool_call mention off the whole-reply re-scan", () => {
+  const source = "The minimax:tool_call feature stays off the hot path.\n\n"
+    .repeat(64)
+    .slice(0, 4096);
+  const stream = createAssistantVisibleStreamText("final_answer");
+  markdownOwnershipWork.scannedCharacters = 0;
+  streamChunks(source, 4, stream);
+  const md = markdownOwnershipWork.scannedCharacters;
+  expect(stream.text).toContain("minimax:tool_call feature");
+  expect(md).toBe(0);
+});
+
+// The canonical transform also strips a completed <invoke> block when the marker
+// occurs without an exact envelope token. Batch/streaming parity must hold for every
+// delta split; a bare mention (asserted above) must still not latch the stage.
+it("strips a completed invoke block without an exact minimax envelope", () => {
+  const source =
+    'Ready.\n<minimax:tool_call >\n<invoke name="exec">secret</invoke>\n</minimax:tool_call >\nDone.';
+  expectPrefixParity(
+    source,
+    () => createAssistantVisibleStreamText("final_answer"),
+    (text) => sanitizeAssistantVisibleStreamText(text, "final_answer"),
+  );
+  expect(sanitizeAssistantVisibleStreamText(source, "final_answer")).not.toContain("secret");
+});
+
+// The canonical transform needs its marker anywhere in the text, so an invocation
+// shape may arrive before the marker and must still be remembered.
+it("strips an invoke block whose minimax marker arrives later", () => {
+  const chunks = [
+    'Ready.\n<invoke name="exec">secret</invoke>\n',
+    "x".repeat(64),
+    "\nminimax:tool_call\nDone.",
+  ];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(chunks.join(""), "final_answer"));
 });
 
 it("keeps a split tool header across an unbounded whitespace gap", () => {

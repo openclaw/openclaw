@@ -257,6 +257,19 @@ it("backs off failed health checks without ordinary notifications restarting the
   expect(connect).not.toHaveBeenCalled();
 });
 
+it("recovers at once when an app switch returns focus to a still-visible window", async () => {
+  const { snapshot, connect, fetchProbe } = setupRecovery();
+  snapshot.client.stop();
+  fetchProbe.mockRejectedValue(new TypeError("offline"));
+  // Sustained failures back the health check off to one per 4–5 seconds.
+  await vi.advanceTimersByTimeAsync(30_000);
+  fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
+  window.dispatchEvent(new FocusEvent("focus"));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(refreshControlUiServiceWorker).not.toHaveBeenCalled();
+});
+
 it("retries an inferred busy upgrade once when its health check straddles link restoration", async () => {
   const { snapshot, connect, fetchProbe } = setupRecovery();
   fetchProbe.mockRejectedValue(new TypeError("offline"));

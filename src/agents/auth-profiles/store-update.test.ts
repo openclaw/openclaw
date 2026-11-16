@@ -4,6 +4,7 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
@@ -361,6 +362,15 @@ it.for(["local", "legacy-shared"] as const)(
       const reservation = reserveAuthProfileUsagePreparation([
         resolveOpenClawStateSqlitePath(state.env),
       ]);
+      const captured = createDeferred();
+      const capture = executions.captureOpenClawAgentDatabaseExecutionAsync;
+      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+        async (...args) => {
+          const execution = await capture(...args);
+          captured.resolve();
+          return execution;
+        },
+      );
       const updater = vi.fn(() => false);
       const updating = updateStore({
         agentDir: kind === "local" ? agentDir : undefined,
@@ -369,6 +379,11 @@ it.for(["local", "legacy-shared"] as const)(
       });
       void updating.catch(() => {});
       try {
+        await awaitGateBeforeSettlement(
+          captured.promise,
+          updating,
+          "Auth update settled before physical capture",
+        );
         const original = `${databasePath}.original`;
         renameSync(databasePath, original);
         copyFileSync(original, databasePath);
@@ -389,11 +404,11 @@ it.each(["stale", "newer-write", "rebound-owner"])(
     await withState(async (state) => {
       const agentDir = state.agentDir("child");
       seedSnapshot(makeStore({ selected: "synthetic-before" }), agentDir);
-      const capture = executions.captureOpenClawAgentDatabaseExecution;
-      let execution: ReturnType<typeof capture> | undefined;
-      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-        (...args) => {
-          execution = capture(...args);
+      const capture = executions.captureOpenClawAgentDatabaseExecutionAsync;
+      let execution: Awaited<ReturnType<typeof capture>> | undefined;
+      vi.spyOn(executions, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+        async (...args) => {
+          execution = await capture(...args);
           return execution;
         },
       );

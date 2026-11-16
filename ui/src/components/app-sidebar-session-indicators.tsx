@@ -190,6 +190,7 @@ export function renderSidebarSessionIndicators(
       <span
         ref={[sessionRunVisibility(setClockOffscreen)]}
         class={["session-row-trail", { "session-row-trail--snooze": snoozed() }]}
+        style={snoozed() ? undefined : { "min-width": "7ch", "justify-content": "flex-start" }}
         id={metaId()}
         title={
           snoozed()

@@ -156,7 +156,7 @@ describe("renderChatComposer context usage", () => {
     });
     expect(contextRingFor(container)?.getAttribute("title")).toBe("Context: 89% used");
     expect(part(container, "context-value")?.textContent).toContain("180k");
-    expect(part(container, "title")?.textContent).toBe("Prompt budget");
+    expect(part(container, "header .oc-menu-heading__label")?.textContent).toBe("Prompt budget");
     expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
   });
 

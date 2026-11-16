@@ -28,6 +28,7 @@ import {
   MobileTaskProgressControls,
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
+import { ChatDetailsSkills } from "./chat-details-skills.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import "../../../styles/chat/github-publication-mobile.css";
@@ -87,6 +88,7 @@ type ChatDetailsMobileRootContent = {
     | "publicationEntry"
     | "context"
     | "processes"
+    | "skills"
     | "subagents"
     | "taskProgress"
     | "taskProgressNotice"
@@ -99,7 +101,7 @@ type ChatDetailsMobileRootContent = {
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
   publicationEntry?: ChatDetailsMobileEntry;
   processes: ChatDetailsMobileProcessesProps["data"] | undefined;
-  /** Keep every native child; the host routes unlisted children through onSessionSelect. */
+  /** The root shows the native subagent collection; ordinary subsessions stay in the sidebar. */
   subagents: Omit<NonNullable<ChatDetailsMobileRootProps["subagents"]>, "rows">;
   /** One session-owned inventory, shared with desktop; never construct it in the opener. */
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };
@@ -303,6 +305,7 @@ function MobileRoot(
       publicationEntry={
         props.details.githubPublication ? props.content.publicationEntry : undefined
       }
+      skills={<ChatDetailsSkills details={props.details} presented={props.presented} mobile />}
       processes={
         props.content.processes ? (
           <ChatDetailsMobileProcesses

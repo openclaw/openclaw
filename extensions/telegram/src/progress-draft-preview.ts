@@ -73,6 +73,7 @@ function progressLineText(
     const text = compact(typeof line === "string" ? line : line.text);
     return markdownProgressText(text);
   }
+  const tool = Boolean(line.toolName);
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const detail =
     line.detail && line.detail !== line.label
@@ -88,16 +89,22 @@ function progressLineText(
   if (fixedChars >= maxLineChars) {
     return literalProgressText(compact([label, detail, status].filter(Boolean).join(" ")));
   }
-  const parts = [literalProgressText(label, "bold")];
-  if (detail && fixedChars + 1 < maxLineChars) {
-    const compacted = compact(detail);
-    const detailBudget = maxLineChars - fixedChars - 1;
+  const heading = tool
+    ? joinProgressText(
+        [
+          ...(line.icon ? [literalProgressText(line.icon)] : []),
+          literalProgressText(line.label, "bold"),
+        ],
+        " ",
+      )
+    : literalProgressText(label, "bold");
+  const parts = [heading];
+  const detailPrefix = tool ? "· " : "";
+  const detailSpacing = Array.from(detailPrefix).length + 1;
+  if (detail && fixedChars + detailSpacing < maxLineChars) {
+    const detailBudget = maxLineChars - fixedChars - detailSpacing;
     parts.push(
-      literalProgressText(
-        Array.from(compacted).length <= detailBudget
-          ? compacted
-          : compactChannelProgressDraftLine(detail, detailBudget),
-      ),
+      literalProgressText(detailPrefix + compactChannelProgressDraftLine(detail, detailBudget)),
     );
   }
   if (status) {

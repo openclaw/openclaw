@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
 
@@ -155,6 +156,7 @@ it.each([
 ])(
   "re-embeds unchanged legacy $model cache rows once on ordinary search",
   async ({ model, document, query }) => {
+    keepPublishedCacheDuplicates();
     const cfg = fixture.createConfig({
       model,
       cacheEnabled: true,

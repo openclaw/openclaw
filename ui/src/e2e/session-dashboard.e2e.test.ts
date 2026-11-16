@@ -11,10 +11,12 @@ import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-u
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
-  installMockGateway,
-  type ControlUiMockGatewayScenario,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installNativePluginMockGateway,
+  type NativeControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
@@ -56,8 +58,8 @@ async function createProofContext() {
   return { page, close: () => suite.closeBrowserContext(context) };
 }
 
-async function setupDashboard(page: Page, scenario: ControlUiMockGatewayScenario) {
-  const gateway = await installMockGateway(page, {
+async function setupDashboard(page: Page, scenario: NativeControlUiMockGatewayScenario) {
+  const gateway = await installNativePluginMockGateway(page, {
     ...scenario,
     sessionKey,
     featureMethods: [

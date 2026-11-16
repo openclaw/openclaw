@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SpawnResult } from "../process/exec.js";
-import { inspectGog, inspectGogUpgrade, probeGogTokenEnv, upgradeGog } from "./gmail-gog.js";
+import { inspectGog, inspectGogUpgrade, upgradeGog } from "./gmail-gog.js";
 import { gogServeSchema } from "./gmail.test-support.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }));
@@ -22,8 +22,11 @@ const success = (stdout = ""): SpawnResult => ({
 const schemaResult = (flags = ["token-env", "hook-token-env"]) =>
   success(JSON.stringify(gogServeSchema(flags)));
 
-beforeEach(() => {
+beforeEach(async () => {
   mocks.run.mockReset().mockResolvedValue(schemaResult());
+  const bin = tempDirs.make("openclaw-gmail-gog-bin-");
+  await writeExecutable(path.join(bin, "gog"));
+  vi.stubEnv("PATH", bin);
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -34,7 +37,7 @@ it.each([
   { flags: ["hook-token-env"], support: "unsupported" },
 ])("recognizes both secure token sources: $flags", async ({ flags, support }) => {
   mocks.run.mockResolvedValue(schemaResult(flags));
-  expect(await probeGogTokenEnv("/fixture/gog")).toBe(support);
+  await expect(inspectGog()).resolves.toMatchObject({ support });
 });
 
 it.each([
@@ -101,7 +104,7 @@ it.each([
   if (failure === "spawn") {
     mocks.run.mockRejectedValue(new Error("private diagnostic"));
   }
-  expect(await probeGogTokenEnv("/fixture/gog")).toBe("indeterminate");
+  await expect(inspectGog()).resolves.toMatchObject({ support: "indeterminate" });
 });
 
 it("propagates cancellation instead of treating it as an inconclusive check", async () => {
@@ -110,9 +113,7 @@ it("propagates cancellation instead of treating it as an inconclusive check", as
     controller.abort(new Error("cancelled probe"));
     return schemaResult();
   });
-  await expect(probeGogTokenEnv("/fixture/gog", { signal: controller.signal })).rejects.toThrow(
-    "cancelled probe",
-  );
+  await expect(inspectGog({ signal: controller.signal })).rejects.toThrow("cancelled probe");
 });
 
 async function writeExecutable(file: string) {

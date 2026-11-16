@@ -34,6 +34,7 @@ import {
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  skillsUsed?: ChatHistoryState["skillsUsed"];
   stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
@@ -258,6 +259,8 @@ export function commitCurrentChatHistorySnapshot(
     agentId,
   });
   const retained = previous?.sessionId === (state.currentSessionId ?? null) ? previous : undefined;
+  const metadata =
+    historyState === undefined ? retained?.historyState : (historyState ?? undefined);
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -274,8 +277,7 @@ export function commitCurrentChatHistorySnapshot(
         ? projectChatSessionStateSnapshot(state, sessionInfo, retained?.sessionState)
         : retained?.sessionState,
       progressCard: retained?.progressCard,
-      historyState:
-        historyState === undefined ? retained?.historyState : (historyState ?? undefined),
+      historyState: metadata,
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

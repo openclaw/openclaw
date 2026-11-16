@@ -56,7 +56,12 @@ it.for([
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       const finished = once(stdout, "end");
-      options.onReady?.(Object.assign(new ChildProcess(), { stdout, stderr }));
+      options.onReady?.(
+        Object.defineProperties(new ChildProcess(), {
+          stdout: { value: stdout },
+          stderr: { value: stderr },
+        }),
+      );
       for (const chunk of chunks) {
         stdout.write(chunk);
       }

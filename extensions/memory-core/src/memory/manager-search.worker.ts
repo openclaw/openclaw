@@ -38,6 +38,7 @@ import {
   readMemoryDatabaseFacts,
   type MemoryRecallQuery,
 } from "./manager-retrieval-read.js";
+import { searchKeywordWithFallback } from "./manager-search-keyword.js";
 import {
   searchPostgresMemoryKeyword,
   searchPostgresMemoryVector,
@@ -48,7 +49,6 @@ import type {
   MemoryVectorWorkerQuery,
 } from "./manager-search-types.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import { searchKeywordWithFallback } from "./manager-search.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 import { collectMemoryStatusSnapshot, type MemoryStatusQuery } from "./manager-status-state.js";
 

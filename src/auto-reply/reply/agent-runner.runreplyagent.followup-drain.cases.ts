@@ -9,6 +9,7 @@ import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gatew
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -186,6 +187,7 @@ export function registerFollowupDrainCases({
   );
 
   it("runs one queued fallback after Gateway rejects injection", async () => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     using delivery = vi
       .spyOn(routedReplies, "routeReply")
       .mockResolvedValue({ ok: true, delivered: true });
@@ -199,6 +201,12 @@ export function registerFollowupDrainCases({
     const { followupRun, run } = createMinimalRun({
       opts: {
         messageInjectionDisposition: "rejected",
+        messageInjectionRejection: {
+          status: "rejected",
+          reason: "injection_unavailable",
+          runtimeReason: "tool_boundary_timeout",
+          errorMessage: "x".repeat(600),
+        },
         onBlockReply,
         [REPLY_OPERATION_RUN_STATE]: runState,
       },
@@ -218,6 +226,16 @@ export function registerFollowupDrainCases({
     expect(getSessionControllerOperation("main")).toBeUndefined();
     await expect(run()).resolves.toBeUndefined();
 
+    expect(warning).toHaveBeenCalledWith(
+      "steering rejected; applying follow-up policy",
+      expect.objectContaining({
+        reason: "injection_unavailable",
+        runtimeReason: "tool_boundary_timeout",
+        error: "x".repeat(512),
+        disposition: "followup-queued",
+        sessionKey: followupRun.run.sessionKey,
+      }),
+    );
     expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();

@@ -2,9 +2,11 @@
 
 ## Receipt states
 
-- `accepted`: durable intent, not yet saved. `published`: saved.
-- `indexed: false` is publication-time state; search reconciles later. A
-  pending Git checkpoint does not undo publication or justify another save.
+- A write receipt without `state` is published: saved. `state: "accepted"`:
+  durable intent, not yet saved.
+- Receipts name `git` only when the local Git checkpoint is pending or
+  unavailable. That does not undo publication or justify another save. Keyword
+  indexing reconciles on the next search.
 - `conflict`: recovery material is retained. Inspect `knowledge_mutation` and
   `knowledge_history`, then report it. Resume does not resolve conflicts. Never
   overwrite, bypass preconditions or loop.

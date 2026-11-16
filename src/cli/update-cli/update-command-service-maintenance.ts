@@ -8,10 +8,7 @@ import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
 } from "../../daemon/service-inspection-error.js";
-import {
-  resolveManagedServiceNodeRunner,
-  resolveManagedServiceStartupRuntime,
-} from "../../daemon/service-layout.js";
+import { resolveManagedServiceNodeRunner } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   resolveManagedGatewayServiceCommand,
@@ -424,9 +421,6 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? "Gateway service management skipped: the service belongs to a different OpenClaw installation and was left untouched."
           : "Gateway restart skipped: no Gateway service or listener is running.",
     };
-  }
-  if (params.phase === "inspect" && serviceUpdateVerdict.kind === "owned") {
-    params.onOwnedStartupRuntime?.(resolveManagedServiceStartupRuntime(serviceState));
   }
   const operatorRestartWarning =
     process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && serviceUpdateVerdict.kind === "owned"

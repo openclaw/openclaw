@@ -1,6 +1,5 @@
 import { createMemo, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -96,29 +95,15 @@ function skillStateStatus({ skill, verdict }: SkillStateProps) {
   };
 }
 
-/** The list row form: the state's word beside its dot, with the details on hover and focus. */
-export function SkillRowStatus(props: SkillStateProps) {
-  const status = createMemo(() => skillStateStatus(props));
-  return (
-    <span
-      class="skill-row-status"
-      role="img"
-      tabindex="0"
-      aria-label={status().tooltip}
-      title={status().tooltip}
-    >
-      <SettingsStatus kind={status().tone} label={status().label} />
-    </span>
-  );
-}
-
-export function SkillStateStatus(props: SkillStateProps) {
+export function SkillStateStatus(props: SkillStateProps & { showLabel?: boolean }) {
   const status = createMemo(() => skillStateStatus(props));
   return (
     <span
       class={[
-        "plugin-catalog-card__status settings-status",
+        "settings-status",
         {
+          "plugin-catalog-card__status": !props.showLabel,
+          "skill-row-status": props.showLabel,
           "settings-status--danger": status().tone === "danger",
           "settings-status--warn": status().tone === "warn",
           "settings-status--muted": status().tone === "muted",
@@ -131,7 +116,11 @@ export function SkillStateStatus(props: SkillStateProps) {
       title={status().tooltip}
     >
       <span class="settings-status__dot" aria-hidden="true" />
-      <span class="plugin-catalog-card__status-label">{status().label}</span>
+      {props.showLabel ? (
+        status().label
+      ) : (
+        <span class="plugin-catalog-card__status-label">{status().label}</span>
+      )}
     </span>
   );
 }

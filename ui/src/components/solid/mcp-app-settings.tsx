@@ -2,6 +2,7 @@ import { For, Show, createMemo, createStore } from "solid-js";
 import type { McpAppSettings } from "../../../../src/shared/mcp-app-extensions.js";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { Checkbox } from "./checkbox.tsx";
 
 registerMcpAppEnglish();
 
@@ -43,8 +44,7 @@ export function McpAppSettingsForm(props: {
               <small class="muted">{schema.description}</small>
             </Show>
             {schema.type === "boolean" ? (
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={value() === true}
                 disabled={props.busy}
                 onChange={(event) => change(key, event.currentTarget.checked)}

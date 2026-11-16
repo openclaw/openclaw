@@ -9,6 +9,7 @@ export const STATE_SECRET_TABLE_NAMES = [
   "device_auth_tokens",
   "device_bootstrap_tokens",
   "device_identities",
+  "device_pairing_browser_requests",
   "device_pairing_join_codes",
   "device_pairing_paired",
   "gateway_origin_device_tokens",

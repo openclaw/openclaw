@@ -7,13 +7,14 @@ import {
 } from "../../../../src/infra/session-cost-usage-totals.js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {
@@ -35,7 +36,8 @@ import type {
 function SummaryStat(props: {
   hintId: string;
   metric: string;
-  hint?: string;
+  /** Explains a derived metric; `false` when the label already says it all. */
+  hint?: string | false;
   value: string | number;
   sub: string;
   tone?: "good" | "warn" | "bad";
@@ -50,19 +52,21 @@ function SummaryStat(props: {
     >
       <div class="usage-summary-title">
         {t(`usage.overview.${props.metric}`)}
-        <openclaw-tooltip open-on-click>
-          <button
-            id={`usage-summary-hint-${props.hintId}`}
-            type="button"
-            class="usage-summary-hint"
-            aria-label={t(`usage.overview.${props.metric}`)}
-            onClick={(event) => event.currentTarget.focus()}
-          >
-            ?
-          </button>
-          {/* Summary hints intentionally remain open on pointer activation. */}
-          <span slot="content">{props.hint ?? t(`usage.overview.${props.metric}Hint`)}</span>
-        </openclaw-tooltip>
+        <Show when={props.hint !== false}>
+          <openclaw-tooltip open-on-click>
+            <button
+              id={`usage-summary-hint-${props.hintId}`}
+              type="button"
+              class="usage-summary-hint"
+              aria-label={t(`usage.overview.${props.metric}`)}
+              onClick={(event) => event.currentTarget.focus()}
+            >
+              ?
+            </button>
+            {/* Summary hints intentionally remain open on pointer activation. */}
+            <span slot="content">{props.hint ?? t(`usage.overview.${props.metric}Hint`)}</span>
+          </openclaw-tooltip>
+        </Show>
       </div>
       <div
         class={[
@@ -82,10 +86,9 @@ function renderFilterChips(
   sessions: UsageSessionEntry[],
   { filters, callbacks }: Pick<UsageProps, "filters" | "callbacks">,
 ) {
-  const { selectedDays, selectedHours, selectedSessions } = filters;
-  const { onClearDays, onClearHours, onClearSessions, onClearFilters } = callbacks.filters;
-  const hasFilters =
-    selectedDays.length > 0 || selectedHours.length > 0 || selectedSessions.length > 0;
+  const { selectedDays, selectedSessions } = filters;
+  const { onClearDays, onClearSessions, onClearFilters } = callbacks.filters;
+  const hasFilters = selectedDays.length > 0 || selectedSessions.length > 0;
   if (!hasFilters) {
     return undefined;
   }
@@ -109,10 +112,6 @@ function renderFilterChips(
     selectedDays.length === 1
       ? selectedDays[0]
       : t("usage.filters.daysCount", { count: String(selectedDays.length) });
-  const hoursLabel =
-    selectedHours.length === 1
-      ? `${selectedHours[0]}:00`
-      : t("usage.filters.hoursCount", { count: String(selectedHours.length) });
   const chips = [
     {
       active: selectedDays.length > 0,
@@ -120,13 +119,6 @@ function renderFilterChips(
       value: daysLabel,
       removeKey: "usage.filters.removeDays",
       onClear: onClearDays,
-    },
-    {
-      active: selectedHours.length > 0,
-      labelKey: "usage.filters.hours",
-      value: hoursLabel,
-      removeKey: "usage.filters.removeHours",
-      onClear: onClearHours,
     },
     {
       active: selectedSessions.length > 0,
@@ -146,15 +138,13 @@ function renderFilterChips(
             <span class="filter-chip-label">
               {t(labelKey)}: {value}
             </span>
-            <openclaw-tooltip prop:content={t("usage.filters.remove")}>
-              <button class="filter-chip-remove" onClick={onClear} aria-label={t(removeKey)}>
-                <Icon name="x" />
-              </button>
-            </openclaw-tooltip>
+            <button class="filter-chip-remove" onClick={onClear} aria-label={t(removeKey)}>
+              <Icon name="x" />
+            </button>
           </div>
         )}
       </For>
-      {(selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0 ? (
+      {selectedDays.length > 0 && selectedSessions.length > 0 ? (
         <button class="btn btn--sm" onClick={onClearFilters}>
           {t("usage.filters.clearAll")}
         </button>
@@ -515,6 +505,7 @@ export function UsageInsights(props: {
               <div class="usage-summary-grid">
                 <SummaryStat
                   hintId="messages"
+                  hint={false}
                   metric="messages"
                   value={insights().aggregates.messages.total}
                   sub={`${insights().aggregates.messages.user.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} · ${insights().aggregates.messages.assistant.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`}
@@ -528,12 +519,14 @@ export function UsageInsights(props: {
                 />
                 <SummaryStat
                   hintId="tool-calls"
+                  hint={false}
                   metric="toolCalls"
                   value={insights().aggregates.tools.totalCalls}
                   sub={`${insights().aggregates.tools.uniqueTools} ${t("usage.overview.toolsUsed")}`}
                 />
                 <SummaryStat
                   hintId="average-tokens"
+                  hint={false}
                   metric="avgTokens"
                   value={insights().avgTokensLabel}
                   sub={t("usage.overview.acrossMessages", {
@@ -547,11 +540,13 @@ export function UsageInsights(props: {
                   value={insights().cacheHitLabel}
                   sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().cacheBase > 0
+                      ? insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
+                      : undefined
                   }
                 />
                 <SummaryStat
@@ -581,6 +576,7 @@ export function UsageInsights(props: {
                 />
                 <SummaryStat
                   hintId="sessions"
+                  hint={false}
                   metric="sessions"
                   value={props.sessionCount}
                   sub={t("usage.overview.sessionsInRange", {
@@ -630,9 +626,9 @@ export function renderProviderUsage(
 ) {
   const notice =
     stalled || unavailable ? (
-      <div class="callout warning usage-callout">
+      <InlineAlert tone="warning" class="usage-callout">
         {t(stalled ? "usage.providerUsage.stalled" : "usage.providerUsage.unavailable")}
-      </div>
+      </InlineAlert>
     ) : undefined;
   if (providers.length === 0) {
     return notice;

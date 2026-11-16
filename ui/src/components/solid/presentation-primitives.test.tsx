@@ -165,7 +165,7 @@ describe("Solid presentation primitives", () => {
     setBusy(false);
     flush();
     expect(button.disabled).toBe(false);
-    expect(button.getAttribute("aria-busy")).toBe("false");
+    expect(button.getAttribute("aria-busy")).toBeNull();
     fireEvent.click(button);
     expect(click).toHaveBeenCalledOnce();
     expect(original).not.toHaveBeenCalled();

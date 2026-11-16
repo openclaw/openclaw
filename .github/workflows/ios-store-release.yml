@@ -225,19 +225,21 @@ jobs:
       - name: Install mobile release dependencies
         run: node scripts/install-mobile-release-dependencies.mjs
 
+      - name: Configure release bundle location
+        run: echo "BUNDLE_APP_CONFIG=$RUNNER_TEMP/ios-release-bundle-config" >> "$GITHUB_ENV"
+
       - name: Setup Ruby
         uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
-          bundler-cache: false
+          bundler-cache: true
           working-directory: apps/ios
 
-      - name: Install locked Fastlane bundle
+      - name: Verify locked Fastlane bundle
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
           test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 

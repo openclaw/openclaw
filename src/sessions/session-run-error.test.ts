@@ -28,7 +28,7 @@ it.each([
     "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
   ].map((notice) => [notice, notice, notice] as const),
   ...storageFailures.map(([error, , summary]) => {
-    const content = `⚠️ ${summary} For details, open Settings → Logs in the Control UI or run \`openclaw logs --follow\` in your terminal.`;
+    const content = `⚠️ ${summary} For details, open Settings → Logs in the OpenClaw app or run \`openclaw logs --follow\` in your terminal.`;
     return [error, expect.any(String), content] as const;
   }),
   [

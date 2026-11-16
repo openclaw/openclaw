@@ -20,6 +20,7 @@ const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml
 const script = action.runs.steps[0].with.script;
 
 describe("Darwin tooling event scope", () => {
+  const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   it.each([
     [["scripts/lib/ci-node-test-plan.mts"], false],
     [["scripts/lib/ci-extension-test-shards.mts"], false],
@@ -30,15 +31,15 @@ describe("Darwin tooling event scope", () => {
     [["test/scripts/pr-review-artifact-validation.test.ts"], false],
     [["test/scripts/pr-main-refresh.test.ts"], false],
     [["test/scripts/pr-future.test.ts"], false],
-    [["test/helpers/fixture-receipts.test.ts"], false],
-    [["test/helpers/temp-dir.test.ts"], false],
-    [["test/helpers/future/nested.test.ts"], false],
-    [["test/helpers/temp-dir.ts"], true],
-    [["test/helpers/run-node-script.ts"], true],
-    [["test/helpers/future/nested.ts"], true],
-    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.ts"], true],
-    [["test/helpers/temp-dir.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
-    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.test.ts"], false],
+    ...["test/helpers", "src/test-utils"].flatMap<[string[], boolean]>((directory) => [
+      [[`${directory}/example.test.ts`], false],
+      [[`${directory}/future/nested.test.ts`], false],
+      [[`${directory}/example.ts`], true],
+      [[`${directory}/future/nested.ts`], true],
+      [[`${directory}/example.test.ts`, `${directory}/other.ts`], true],
+      [[`${directory}/example.test.ts`, "test/scripts/pr-wrappers.test.ts"], true],
+      [[`${directory}/example.test.ts`, `${directory}/other.test.ts`], false],
+    ]),
     [["test/scripts/pr-dependency-cache.test.ts"], true],
     [["test/scripts/pr-wrappers.test.ts"], true],
     [["test/scripts/pr-materialized-anchor.test.ts"], true],
@@ -66,18 +67,15 @@ describe("Darwin tooling event scope", () => {
     [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
     [[".github/workflows/pr-tooling-darwin.yml"], true],
   ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
   });
 
-  it("executes the complete macOS distribution owner without another admission condition", () => {
-    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
-    const steps = workflow.jobs.darwin.steps.filter(
-      (step: { run?: string }) =>
-        step.run ===
-        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+  it("executes native tooling once with unconditional macOS distribution coverage", () => {
+    const steps = workflow.jobs.darwin.steps.filter((step: { run?: string }) =>
+      step.run?.startsWith("node scripts/run-vitest.mjs "),
     );
     expect(steps).toHaveLength(1);
+    expect(steps[0].run.split(/\s+/u)).toContain("test/scripts/package-mac-dist.test.ts");
     expect(steps[0].if).toBeUndefined();
   });
 });

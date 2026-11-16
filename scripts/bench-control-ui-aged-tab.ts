@@ -9,6 +9,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { webkit, type Browser, type BrowserContext, type JSHandle, type Page } from "playwright";
 import { expect } from "playwright/test";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
+import { SIDEBAR_SESSION_PAGE_SIZE } from "../ui/src/components/app-sidebar-session-types.ts";
 import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import { waitForControlUiInitialRoster } from "../ui/src/test-helpers/control-ui-e2e-readiness.ts";
@@ -31,6 +32,7 @@ import { frames, navigation } from "./lib/control-ui-interaction-navigation.ts";
 import {
   createScenarioFixture,
   interactionScenarios,
+  settingsSection,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   installControlUiResourceCounts,
@@ -49,6 +51,10 @@ const { values } = parseArgs({
     "idle-minutes": { type: "string", default: "120" },
     trace: { type: "boolean", default: false },
     heap: { type: "boolean", default: false },
+    "in-page": { type: "boolean", default: false },
+    "match-sidebar": { type: "boolean", default: false },
+    "match-styles": { type: "boolean", default: false },
+    soak: { type: "string", default: "all" },
   },
 });
 const samples = Number(values.samples);
@@ -80,8 +86,23 @@ if (!raw) {
   throw new Error("Missing production build identity");
 }
 const build = normalizeControlUiBuildInfo(JSON.parse(raw));
-const soak = workingDayScenario(rounds);
+const soakMode = values.soak;
+if (
+  soakMode !== "all" &&
+  soakMode !== "sessions" &&
+  soakMode !== "sessions-in-page" &&
+  soakMode !== "turns" &&
+  soakMode !== "routes" &&
+  soakMode !== "reconnects" &&
+  soakMode !== "overlays"
+) {
+  throw new Error(
+    "Expected --soak all, sessions, sessions-in-page, turns, routes, reconnects or overlays",
+  );
+}
+const soak = workingDayScenario(rounds, soakMode);
 const typing = interactionScenarios.find(({ id }) => id === "chat-typing")!;
+const typingText = "Synthetic typing 0123456789";
 const baseline = createScenarioFixture(build.buildId, build.version!, typing);
 const soakFixture = createScenarioFixture(build.buildId, build.version!, soak);
 // Keep the measured transcripts fixed while the independent soak sessions accumulate turns.
@@ -127,6 +148,10 @@ await json("manifest.json", {
   idleMinutes,
   trace: values.trace,
   heap: values.heap,
+  inPage: values["in-page"],
+  matchSidebar: values["match-sidebar"],
+  matchStyles: values["match-styles"],
+  soak: soakMode,
   host: { platform: os.platform(), arch: os.arch(), load: os.loadavg() },
   contract: `${samples} rotated fresh/control/aged samples; flag >10% median age change beyond fresh A/A; trace runs separate. Same synthetic transport, fixed 400-message probes, 202 sidebar sessions, working-day churn; no forced GC before timing. Idle first input reported separately from its warmed samples.`,
 });
@@ -169,7 +194,26 @@ async function census(page: Page) {
         visibilityChanges: Reflect.get(window, "__agedVisibility"),
         domNodes: document.querySelectorAll("*").length,
         panes: document.querySelectorAll(".chat-pane-cache__pane").length,
+        paneKeys: [...document.querySelectorAll(".chat-pane-cache__pane")].map((node) =>
+          Reflect.get(node, "sessionKey"),
+        ),
+        sidebarRowKeys: [...document.querySelectorAll(".sidebar-recent-session")].map((node) =>
+          node.getAttribute("data-session-key"),
+        ),
+        animations: document.getAnimations().map((animation) => {
+          const effect = animation.effect instanceof KeyframeEffect ? animation.effect : null;
+          const target = effect?.target;
+          return {
+            type: animation.constructor.name,
+            name: animation instanceof CSSAnimation ? animation.animationName : null,
+            property: animation instanceof CSSTransition ? animation.transitionProperty : null,
+            playState: animation.playState,
+            pseudoElement: effect?.pseudoElement,
+            target: target instanceof Element ? target.getAttribute("class") : null,
+          };
+        }),
         stylesheets: sheets.length,
+        stylesheetHrefs: sheets.map((sheet) => sheet.href),
         rules: sheets.reduce((count, sheet) => count + countRules(sheet.cssRules), 0),
         computed: style
           ? {
@@ -186,6 +230,79 @@ async function census(page: Page) {
   };
 }
 type Tab = Awaited<ReturnType<typeof createTab>>;
+async function matchPaneCache(page: Page) {
+  const keys = [sessionKey, baseline.sessions[1]!.key, soakFixture.sessions[1]!.key];
+  const retained = await page
+    .locator(".chat-pane-cache__pane")
+    .evaluateAll((nodes) => nodes.map((node) => Reflect.get(node, "sessionKey")));
+  if (retained.length === keys.length && keys.every((key) => retained.includes(key))) {
+    return;
+  }
+  for (const key of keys.slice(1)) {
+    await navigateToControlUiSession(page, key);
+    await page.locator(`${pane} textarea`).first().waitFor();
+  }
+  await openChat(page);
+  await expect
+    .poll(() =>
+      page
+        .locator(".chat-pane-cache__pane")
+        .evaluateAll((nodes) =>
+          nodes
+            .map((node) => String(Reflect.get(node, "sessionKey")))
+            .toSorted((left, right) => left.localeCompare(right)),
+        ),
+    )
+    .toEqual(keys.toSorted((left, right) => left.localeCompare(right)));
+}
+
+async function matchSidebar(page: Page) {
+  const pagination = page.locator(
+    ".sidebar-session-pagination:not(.sidebar-session-pagination--roster)",
+  );
+  // Lowering the limit clears the deliberately retained prior page; Collapse at
+  // the default limit alone leaves that history intact.
+  await pagination.getByRole("button", { name: "Show more", exact: true }).first().click();
+  await pagination.getByRole("button", { name: "Collapse", exact: true }).first().click();
+  await page.locator(".sidebar-shell__body").evaluate((node) => node.scrollTo(0, 0));
+  await page.mouse.move(0, 0);
+  await frames(page);
+  await expect
+    .poll(() =>
+      page
+        .locator(".sidebar-recent-session")
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-session-key"))),
+    )
+    .toEqual(fixture.sessions.slice(0, SIDEBAR_SESSION_PAGE_SIZE).map((session) => session.key));
+}
+
+async function matchStyles(aged: Page, control: Page) {
+  const hrefs = await aged.evaluate(() =>
+    [...document.styleSheets].flatMap((sheet) => (sheet.href ? [sheet.href] : [])),
+  );
+  await control.evaluate(async (stylesheetUrls) => {
+    const resident = new Set([...document.styleSheets].map((sheet) => sheet.href));
+    for (const href of stylesheetUrls) {
+      if (resident.has(href)) {
+        continue;
+      }
+      await new Promise<void>((resolve, reject) => {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = href;
+        link.addEventListener("load", () => resolve(), { once: true });
+        link.addEventListener(
+          "error",
+          () => reject(new Error(`Could not match stylesheet: ${href}`)),
+          { once: true },
+        );
+        document.head.append(link);
+      });
+    }
+  }, hrefs);
+  await frames(control);
+}
+
 async function createTab(browser: Browser, nativeContext?: BrowserContext) {
   const context =
     nativeContext ??
@@ -269,6 +386,7 @@ async function createTab(browser: Browser, nativeContext?: BrowserContext) {
   }
   await closeModelPicker(page);
   await openChat(page);
+  await matchPaneCache(page);
   return {
     context,
     page,
@@ -302,7 +420,10 @@ const actions = [
       await openChat(page);
       await page.locator(`${pane} textarea`).first().fill("");
     },
-    run: typing.run,
+    run: async (page: Page) => {
+      await page.keyboard.type(typingText);
+      await frames(page);
+    },
   },
   {
     id: "session-switch",
@@ -336,7 +457,12 @@ const actions = [
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await shared("settings-sections").prepare(page, gateway);
     },
-    run: shared("settings-sections").run,
+    run: async (page: Page) => {
+      await settingsSection(page, "/settings/notifications", "notifications");
+      await settingsSection(page, "/settings/connection", "connection");
+      await settingsSection(page, "/settings/appearance", "appearance");
+      await frames(page);
+    },
   },
   { id: "sidebar-toggle", prepare: openChat, run: shared("sidebar-toggle").run },
   {
@@ -356,6 +482,17 @@ const actions = [
     },
   },
 ];
+async function countRequests(page: Page, method: string) {
+  return page.evaluate(
+    (requestMethod) =>
+      (window as MockGatewayWindow).openclawControlUiE2eGateway!.requests.reduce(
+        (count, request) => count + Number(request.method === requestMethod),
+        0,
+      ),
+    method,
+  );
+}
+
 async function sample(
   tab: Tab,
   engine: ControlUiEngine,
@@ -366,6 +503,18 @@ async function sample(
 ) {
   await tab.page.bringToFront();
   await action.prepare(tab.page, tab.gateway);
+  if (action.id !== "route-switch") {
+    await matchPaneCache(tab.page);
+    if (values["match-sidebar"]) {
+      await matchSidebar(tab.page);
+    }
+  }
+  if (action.id === "typing") {
+    await tab.page.locator(`${pane} textarea`).first().focus();
+  }
+  const sends = action.id === "typing" ? await countRequests(tab.page, "chat.send") : undefined;
+  const schemas =
+    action.id === "route-switch" ? await countRequests(tab.page, "config.schema") : undefined;
   const timing = await tab.page.evaluateHandle(createEngineActionTiming, false);
   const measurement =
     values.trace || engine === "chromium"
@@ -388,10 +537,20 @@ async function sample(
     });
     throw error;
   }
+  const wallMs = performance.now() - start;
   await timing.evaluate((value) => value.endScenario());
   const result = await timing.evaluate((value) => value.finish());
   await timing.dispose();
   const metrics = await measurement?.stop();
+  if (action.id === "typing") {
+    await expect(tab.page.locator(`${pane} textarea`).first()).toHaveValue(typingText);
+    if ((await countRequests(tab.page, "chat.send")) !== sends) {
+      throw new Error("Typing must not send a chat request");
+    }
+  }
+  if (schemas !== undefined && (await countRequests(tab.page, "config.schema")) !== schemas) {
+    throw new Error("Warm Settings tabs must retain the loaded config schema");
+  }
   const stylePasses: Array<{ elements: number | null }> = [];
   const visit = (entry: unknown) => {
     if (!isRecord(entry)) {
@@ -416,7 +575,7 @@ async function sample(
     role,
     index,
     action: action.id,
-    wallMs: performance.now() - start,
+    wallMs,
     timing: result,
     metrics: metrics?.metrics,
     stylePasses,
@@ -427,12 +586,16 @@ async function sample(
   if (action.id === "model-picker") {
     await closeModelPicker(tab.page);
   }
+  await assertDocument(tab, `${engine}-${stage}-${role}-${index}-${action.id}-reload`);
+  return row;
+}
+
+async function assertDocument(tab: Tab, prefix: string) {
   if (tab.errors.length) {
     throw new Error(tab.errors.join("\n"));
   }
   const documentId = await tab.page.evaluate(() => String(Reflect.get(window, "__agedDocumentId")));
   if (documentId !== tab.documentId) {
-    const prefix = `${engine}-${stage}-${role}-${index}-${action.id}-reload`;
     await tab.page.screenshot({ path: path.join(output, `${prefix}.png`) });
     await json(`${prefix}.json`, {
       expectedDocumentId: tab.documentId,
@@ -442,13 +605,228 @@ async function sample(
     });
     throw new Error("Measured tab reloaded");
   }
-  return row;
 }
-async function checkpoint(browser: Browser, tab: Tab, engine: ControlUiEngine, stage: string) {
+
+async function inPageSample(
+  tab: Tab,
+  engine: ControlUiEngine,
+  stage: string,
+  role: string,
+  index: number,
+  action: (typeof actions)[number],
+) {
+  await tab.page.bringToFront();
+  await action.prepare(tab.page, tab.gateway);
+  if (action.id !== "route-switch") {
+    await matchPaneCache(tab.page);
+    if (values["match-sidebar"]) {
+      await matchSidebar(tab.page);
+    }
+  }
+  const sends = action.id === "typing" ? await countRequests(tab.page, "chat.send") : undefined;
+  const schemas =
+    action.id === "route-switch" ? await countRequests(tab.page, "config.schema") : undefined;
+  const measurement =
+    values.trace || engine === "chromium"
+      ? await startEngineMeasurement(tab.page, engine, { trace: values.trace })
+      : undefined;
+  const result = await tab.page.evaluate(
+    async ({ id, keys }) => {
+      const active = ".chat-pane-cache__pane--active";
+      const phases: Array<{ syncMs: number; secondFrameMs: number; settledMs: number }> = [];
+      const frame = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      const element = (selector: string) => {
+        const node = document.querySelector<HTMLElement>(selector);
+        if (!node) {
+          throw new Error(`Missing in-page target: ${selector}`);
+        }
+        return node;
+      };
+      const invoke = async (run: () => void, ready: () => boolean = () => true) => {
+        const start = performance.now();
+        run();
+        const syncMs = performance.now() - start;
+        await frame();
+        await frame();
+        const secondFrameMs = performance.now() - start;
+        const deadline = performance.now() + 5_000;
+        while (!ready()) {
+          if (performance.now() > deadline) {
+            throw new Error(`In-page action did not settle: ${id}`);
+          }
+          await frame();
+        }
+        phases.push({ syncMs, secondFrameMs, settledMs: performance.now() - start });
+      };
+      const click = (selector: string) => {
+        const node = element(selector);
+        node.focus();
+        node.click();
+      };
+      const input = (selector: string, value: string) => {
+        const node = element(selector);
+        if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
+          throw new Error(`Expected text input: ${selector}`);
+        }
+        node.focus();
+        node.value = value;
+        node.dispatchEvent(
+          new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }),
+        );
+      };
+      const routeReady = (pathname: string) => {
+        const state = window.openclawControlUi!.snapshot();
+        return (
+          location.pathname === pathname &&
+          state.routeReady &&
+          state.route?.status === "success" &&
+          state.route.pendingMatches.length === 0 &&
+          state.route.resolvedLocation?.pathname === pathname
+        );
+      };
+      if (id === "typing") {
+        let value = "";
+        for (const char of "Synthetic typing 0123456789") {
+          value += char;
+          await invoke(() => input(`${active} textarea`, value));
+        }
+      } else if (id === "session-switch") {
+        for (const key of [keys[1]!, keys[0]!]) {
+          const selector = `.sidebar-recent-session[data-session-key="${CSS.escape(key)}"] .sidebar-recent-session__link`;
+          const pathname = new URL(element(selector).getAttribute("href")!, location.href).pathname;
+          await invoke(
+            () => click(selector),
+            () =>
+              routeReady(pathname) &&
+              window.openclawControlUi!.snapshot().sessionKey === key &&
+              Reflect.get(element(active), "sessionKey") === key &&
+              Reflect.get(element(active), "transcriptReady") === true &&
+              [...document.querySelectorAll(`${active} .chat-text`)].some(
+                (node) =>
+                  node.getClientRects().length > 0 &&
+                  node.textContent?.includes(`Transcript ${keys.indexOf(key)} message`),
+              ),
+          );
+        }
+      } else if (id === "route-switch") {
+        for (const pathname of [
+          "/settings/notifications",
+          "/settings/connection",
+          "/settings/appearance",
+        ]) {
+          await invoke(
+            () => click(`.settings-sidebar a[href="${pathname}"]`),
+            () => routeReady(pathname),
+          );
+        }
+      } else if (id === "sidebar-toggle") {
+        await invoke(() => click(".sidebar-session-toolbar__collapse"));
+        await invoke(
+          () => click('[data-navigation-view="sessions"]'),
+          () =>
+            Boolean(
+              document
+                .querySelector(
+                  `.sidebar-recent-session[data-session-key="${CSS.escape(keys[0]!)}"]`,
+                )
+                ?.getClientRects().length,
+            ),
+        );
+      } else if (id === "model-picker") {
+        await invoke(
+          () => click(`${active} [data-chat-model-select]`),
+          () =>
+            Boolean(
+              document.querySelector(`${active} [data-chat-model-search]`)?.getClientRects().length,
+            ),
+        );
+        await invoke(
+          () => input(`${active} [data-chat-model-search]`, "Warm model 0999"),
+          () =>
+            document.querySelectorAll(`${active} [data-chat-model-option]`).length === 1 &&
+            Boolean(
+              document
+                .querySelector(`${active} [data-chat-model-option="example/model-999"]`)
+                ?.getClientRects().length,
+            ),
+        );
+      }
+      return {
+        phases,
+        syncMs: phases.reduce((sum, phase) => sum + phase.syncMs, 0),
+        settledMs: phases.reduce((sum, phase) => sum + phase.settledMs, 0),
+      };
+    },
+    { id: action.id, keys: baseline.sessions.slice(0, 2).map((session) => session.key) },
+  );
+  const metrics = await measurement?.stop();
+  if (action.id === "typing") {
+    await expect(tab.page.locator(`${pane} textarea`).first()).toHaveValue(
+      "Synthetic typing 0123456789",
+    );
+    if ((await countRequests(tab.page, "chat.send")) !== sends) {
+      throw new Error("In-page typing must not send a chat request");
+    }
+  }
+  if (schemas !== undefined && (await countRequests(tab.page, "config.schema")) !== schemas) {
+    throw new Error("Warm Settings tabs must retain the loaded config schema");
+  }
+  observations.push({
+    engine,
+    stage,
+    role,
+    index,
+    action: action.id,
+    delivery: "in-page",
+    result,
+    metrics: metrics?.metrics,
+    timeline: metrics?.timeline,
+    load: os.loadavg(),
+  });
+  await json("observations.json", observations);
+  if (action.id === "model-picker") {
+    await closeModelPicker(tab.page);
+  }
+  await assertDocument(tab, `${engine}-${stage}-${role}-${index}-${action.id}-reload`);
+}
+
+async function launch(engine: ControlUiEngine) {
+  if (engine === "chromium") {
+    return launchTalkObservationBrowser(output, false);
+  }
+  const browser = await webkit.launch({ headless: true });
+  return { browser, context: undefined, close: () => browser.close() };
+}
+
+async function checkpoint(tab: Tab, engine: ControlUiEngine, stage: string) {
   console.log(JSON.stringify({ engine, stage, phase: "start", load: os.loadavg() }));
-  const fresh = await createTab(browser);
-  const control = await createTab(browser);
+  // Browser-process history must not be shared with either fresh control.
+  const freshBrowser = await launch(engine);
+  let controlBrowser: Awaited<ReturnType<typeof launch>> | undefined;
   try {
+    const fresh = await createTab(freshBrowser.browser);
+    controlBrowser = await launch(engine);
+    const control = await createTab(controlBrowser.browser);
+    if (values["match-styles"]) {
+      await matchStyles(tab.page, fresh.page);
+      await matchStyles(tab.page, control.page);
+    }
+    for (const [role, current] of [
+      ["fresh", fresh],
+      ["control", control],
+      ["aged", tab],
+    ] as const) {
+      checkpoints.push({
+        engine,
+        stage,
+        role,
+        phase: "before-preparation",
+        ...(await census(current.page)),
+      });
+    }
     for (const action of actions) {
       for (let index = 0; index < samples; index++) {
         for (const [role, current] of controlUiBenchOrder(
@@ -459,7 +837,11 @@ async function checkpoint(browser: Browser, tab: Tab, engine: ControlUiEngine, s
           ] as const,
           index,
         )) {
-          await sample(current, engine, stage, role, index, action);
+          if (values["in-page"]) {
+            await inPageSample(current, engine, stage, role, index, action);
+          } else {
+            await sample(current, engine, stage, role, index, action);
+          }
         }
       }
       console.log(JSON.stringify({ engine, stage, action: action.id, phase: "sampled" }));
@@ -505,8 +887,8 @@ async function checkpoint(browser: Browser, tab: Tab, engine: ControlUiEngine, s
       }),
     );
   } finally {
-    await fresh.context.close();
-    await control.context.close();
+    await controlBrowser?.close();
+    await freshBrowser.close();
   }
 }
 const running: Array<{
@@ -521,12 +903,11 @@ const running: Array<{
 const closeBrowsers: Array<() => Promise<void>> = [];
 try {
   for (const engine of engines) {
-    const native =
-      engine === "chromium" ? await launchTalkObservationBrowser(output, false) : undefined;
-    const browser = native?.browser ?? (await webkit.launch({ headless: true }));
-    closeBrowsers.push(native ? native.close : () => browser.close());
+    const native = await launch(engine);
+    const browser = native.browser;
+    closeBrowsers.push(native.close);
     const aged = await createTab(browser);
-    const idle = await createTab(browser, native?.context);
+    const idle = await createTab(browser, native.context);
     await actions[0]!.prepare(idle.page, idle.gateway);
     const idleTiming = await idle.page.evaluateHandle(createEngineActionTiming, false);
     await idleTiming.evaluate((timing) => timing.start());
@@ -548,14 +929,14 @@ try {
     running.push({ engine, browser, aged, idle, idleTiming, idleStart: Date.now(), restore });
   }
   for (const run of running) {
-    await checkpoint(run.browser, run.aged, run.engine, "fresh");
+    await checkpoint(run.aged, run.engine, "fresh");
     await soak.run(run.aged.page, run.aged.gateway, async (label) => {
       if (
         label === "round-1" ||
         label === `round-${Math.ceil(rounds / 2)}` ||
         label === `round-${rounds}`
       ) {
-        await checkpoint(run.browser, run.aged, run.engine, label);
+        await checkpoint(run.aged, run.engine, label);
       }
     });
   }
@@ -600,8 +981,8 @@ try {
       load: os.loadavg(),
     });
     await json("observations.json", observations);
-    await checkpoint(run.browser, run.idle, run.engine, "idle-end");
-    await checkpoint(run.browser, run.aged, run.engine, "aged-end");
+    await checkpoint(run.idle, run.engine, "idle-end");
+    await checkpoint(run.aged, run.engine, "aged-end");
   }
 } catch (error) {
   console.error(error);

@@ -2327,7 +2327,6 @@ platform :ios do
       build_number: options[:build_number],
       destination: options[:destination]
     )
-    render_ios_release_notes(short_version: context[:short_version], build_number: context[:build_number])
     release_sha = context[:git_commit]
     preflight_app_store_version!(short_version: context[:short_version]) if context[:destination] == "app-store"
     ensure_mobile_release_ref_available!(
@@ -2347,8 +2346,23 @@ platform :ios do
         end
       end
     end
+    notes_pid = Process.spawn(
+      "node", "--import", File.join(repo_root, "scripts", "tsx.mjs"),
+      File.join(repo_root, "scripts", "mobile-release-notes.ts"), "generate",
+      "--platform", "ios", "--plan", ENV.fetch("OPENCLAW_IOS_RELEASE_PLAN"),
+      "--output", ENV.fetch("OPENCLAW_MOBILE_RELEASE_NOTES"),
+      chdir: repo_root
+    )
+    begin
+      build = build_app_store_release(context)
+    ensure
+      # The generator has its own budget. Reap it even after a build failure so
+      # artifact collection and worktree cleanup never race its writes.
+      _, notes_status = Process.wait2(notes_pid)
+    end
+    UI.user_error!("iOS release-note generation failed; no upload was attempted.") unless notes_status.success?
+    render_ios_release_notes(short_version: context[:short_version], build_number: context[:build_number])
     verify_apple_release_source!(release_sha)
-    build = build_app_store_release(context)
     # Release operations have one active uploader by policy. This final read
     # catches human state changes before the first App Store mutation; it is
     # not a cross-uploader lock.

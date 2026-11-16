@@ -6,6 +6,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 
 export type ChatHistoryState = {
+  skillsUsed?: import("../../../../packages/gateway-protocol/src/schema/logs-chat.js").ChatSkillLoads;
   stateRevision: NonNullable<ChatHistoryDeltaResult["stateRevision"]>;
   pendingInputs?: ChatPendingInputsPage;
   sessionInfo?: GatewaySessionRow;
@@ -25,6 +26,7 @@ export const CHAT_TRANSCRIPT_METADATA_KEYS = [
   "lastRunId",
   "status",
   "runtimeMs",
+  "abortedLastRun",
   "contextTokens",
   "sessionId",
   "archived",

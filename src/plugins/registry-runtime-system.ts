@@ -78,6 +78,19 @@ export function createPluginSystemRuntime(params: {
     captureSessionGeneration: (...args) => route(() => system.captureSessionGeneration(...args)),
     postSessionNotice: (...args) => route(() => system.postSessionNotice(...args)),
     runCommandWithTimeout: (...args) =>
-      runWithPluginScope(() => system.runCommandWithTimeout(...args)),
+      runWithPluginScope(() => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        return withPluginRuntimeGatewayRequestScope(
+          {
+            ...scope,
+            isWebchatConnect: scope?.isWebchatConnect ?? (() => false),
+            assertSystemOwnerCurrent: () => {
+              scope?.assertSystemOwnerCurrent?.();
+              assertRuntimeCurrent();
+            },
+          },
+          () => system.runCommandWithTimeout(...args),
+        );
+      }),
   } satisfies PluginRuntime["system"];
 }

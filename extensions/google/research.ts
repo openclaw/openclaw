@@ -29,7 +29,7 @@ export type GoogleResearchContext = GoogleResearchAuthContext & {
   recordReceipt: (handle: GoogleResearchHandle) => Promise<void>;
 };
 
-export type GoogleResearchCitation = {
+type GoogleResearchCitation = {
   url: string;
   title?: string;
   /** UTF-8 byte offsets into report, not JavaScript string indices or source excerpts. */

@@ -160,6 +160,11 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
+Details panel also retains its last child-activity preview while reconnecting.
+The default desktop preview shows up to three ordinary child sessions in both
+the saved and live presentation. **Show more** reveals the remaining live rows.
+Child navigation becomes available only after the complete live child query returns;
+an empty or unavailable result removes the saved preview. The
 header also retains its last three viewer avatars and overflow count for that
 conversation while connecting. The reconnect indicator describes connection
 state; the full live presence roster replaces these last-known viewers when it
@@ -286,8 +291,10 @@ recheck the background download policy. English interface code is included; othe
 catalogs, the isolated Mermaid diagram renderer, and plugin-hosted assets are
 excluded from the background inventory and keep their existing loading behavior.
 
-Reloads reuse cached build-versioned fonts, themes, and the web manifest without
-contacting the Gateway. The service worker keeps the current complete build and
+Reloads reuse cached fonts, themes, and the web manifest without contacting the
+Gateway. Their URLs follow the combined public asset content rather than the release ID,
+so updates that leave the public asset set unchanged keep the same cache entries. An
+update from an older release switches to these URLs once. The service worker keeps the current complete build and
 one complete previous generation, so older open documents can still load their
 cached chunks. An incomplete replacement does not discard the last complete shell.
 Unchanged files referenced by the new inventory are retained before older caches

@@ -304,6 +304,7 @@ export async function resolveGatewayProgramArguments(params: {
 }
 
 export async function resolveNodeProgramArguments(params: {
+  resumeSavedTarget?: boolean;
   cliEntrypoint?: string | PlannedCliEntrypoint;
   host: string;
   port: number;
@@ -320,19 +321,22 @@ export async function resolveNodeProgramArguments(params: {
   runtimePath?: string;
   wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
-  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
-  if (params.tls === false && !params.tlsFingerprint) {
-    // Managed services must carry plaintext explicitly; omission would let the
-    // node runtime re-inherit TLS from the operator's global Gateway config.
-    args.push("--no-tls");
-  } else if (params.tls || params.tlsFingerprint) {
-    args.push("--tls");
-  }
-  if (params.tlsFingerprint) {
-    args.push("--tls-fingerprint", params.tlsFingerprint);
-  }
-  if (params.contextPath) {
-    args.push("--context-path", params.contextPath);
+  const args = ["node", "run"];
+  if (!params.resumeSavedTarget) {
+    args.push("--host", params.host, "--port", String(params.port));
+    if (params.tls === false && !params.tlsFingerprint) {
+      // Managed services must carry plaintext explicitly; omission would let the
+      // node runtime re-inherit TLS from the operator's global Gateway config.
+      args.push("--no-tls");
+    } else if (params.tls || params.tlsFingerprint) {
+      args.push("--tls");
+    }
+    if (params.tlsFingerprint) {
+      args.push("--tls-fingerprint", params.tlsFingerprint);
+    }
+    if (params.contextPath) {
+      args.push("--context-path", params.contextPath);
+    }
   }
   if (params.nodeId) {
     args.push("--node-id", params.nodeId);

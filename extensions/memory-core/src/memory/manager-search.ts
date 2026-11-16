@@ -4,7 +4,6 @@ import {
   admitStoreSearch,
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -428,26 +427,6 @@ export async function searchKeyword(
       hasBodyMatch: true as const,
     });
   });
-}
-
-export async function searchKeywordWithFallback(params: {
-  db: DatabaseSync;
-  body: Omit<MemoryKeywordWorkerQuery["body"], "matchAny">;
-  path: MemoryKeywordWorkerQuery["path"];
-}) {
-  const runBody = (matchAny = false) =>
-    searchKeyword({ ...params.body, db: params.db, matchAny })
-      .then((rows) => ({ rows, error: undefined }))
-      .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-  let body = await runBody();
-  const path = await searchPathKeyword({ ...params.path, db: params.db })
-    .then((rows) => ({ rows, error: undefined }))
-    .catch((error: unknown) => ({ rows: [], error: formatErrorMessage(error) }));
-  // A filename hit also preserves AND precision. Expand only an empty result.
-  if (body.rows.length === 0 && path.rows.length === 0 && !body.error && !path.error) {
-    body = await runBody(true);
-  }
-  return { body, path };
 }
 
 export async function searchPathKeyword(

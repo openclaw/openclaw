@@ -23,6 +23,7 @@ import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
+import { ChatDetailsSkills } from "./chat-details-skills.tsx";
 import type {
   ChatDetailsDesktopSectionId,
   ChatDetailsOutputs,
@@ -34,8 +35,6 @@ import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
-
-export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
 
 registerEnglishCatalog(registerSessionProgressEnglish);
 
@@ -511,6 +510,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </>
                   )}
                 </Show>
+                <ChatDetailsSkills
+                  details={props.props!}
+                  presented={active()}
+                  desktop={props.desktop}
+                  expanded={sectionExpanded("skills")}
+                  onExpandedChange={(expanded) => changeSection("skills", expanded)}
+                />
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
                 </Show>
@@ -651,9 +657,7 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => {
-    props.onReady?.();
-  });
+  onSettled(() => props.onReady?.());
   return (
     <>
       <ChatDetailsSession

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  findModelByNativeAlias,
   findModelCatalogEntry,
   findModelInCatalog,
   resolvePreparedModelThinkingCompat,
@@ -87,4 +88,22 @@ it.each([
   expect({ ...model.compat, ...result }.supportedReasoningEfforts).toEqual(
     prepared === undefined ? selected : expected,
   );
+});
+
+it("resolves a CLI-native alias only through the menu-published row", () => {
+  const catalog = [
+    { provider: "claude-cli", id: "claude-fable-5-1", params: { nativeModelAliases: ["fable"] } },
+    { provider: "claude-cli", id: "claude-fable-5-2" },
+    { provider: "anthropic", id: "claude-fable-5-2", params: { nativeModelAliases: ["fable"] } },
+  ];
+  expect(findModelByNativeAlias(catalog, "claude-cli", "fable")?.id).toBe("claude-fable-5-1");
+  expect(findModelByNativeAlias(catalog, "claude-cli", "opus")).toBeUndefined();
+  // Ambiguous menus resolve nothing rather than guessing.
+  expect(
+    findModelByNativeAlias(
+      [...catalog, { provider: "claude-cli", id: "x", params: { nativeModelAliases: ["fable"] } }],
+      "claude-cli",
+      "fable",
+    ),
+  ).toBeUndefined();
 });

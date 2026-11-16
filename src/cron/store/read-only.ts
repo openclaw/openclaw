@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
+import { canAccess } from "../../infra/path-existence.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import {
   throwSqliteLifecycleErrors,
@@ -142,7 +142,7 @@ async function readCronState({
   inspect?: CronReadOnlyRequest["inspect"];
 }): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
+  if (!(await canAccess(statePath))) {
     return { ok: true };
   }
   // Doctor's all-partition inventory must not create WAL/SHM files beside the source.

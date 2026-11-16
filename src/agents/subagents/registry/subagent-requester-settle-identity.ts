@@ -128,8 +128,6 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     controllerSessionKey: entry.controllerSessionKey,
     controllerStorePath: entry.controllerStorePath,
     requesterTurnRunId: entry.requesterTurnRunId,
-    completionRequesterSessionId: entry.completionRequesterSessionId,
-    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
 }
 
@@ -156,6 +154,7 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       batchRunIds: wake.batchRunIds?.toSorted(),
       rearmGeneration: wake.rearmGeneration,
       requesterYieldBatch: wake.requesterYieldBatch === true,
+      requesterRunId: wake.requesterRunId,
       afterRequesterYield: wake.afterRequesterYield === true,
       yieldedFinalDeliverable: wake.yieldedFinalDeliverable === true,
       pauseNotice: wake.pauseNotice,
@@ -223,6 +222,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
     suppressTaskDelivery: current.killReconciliation.suppressTaskDelivery === true,
   },
   batchRunIds: current.requesterSettleWake?.batchRunIds?.toSorted(),
+  requesterRunId: current.requesterSettleWake?.requesterRunId,
   rearmGeneration: current.requesterSettleWake?.rearmGeneration,
   requesterYieldBatch: current.requesterSettleWake?.requesterYieldBatch === true,
   yieldedFinalDeliverable: current.requesterSettleWake?.yieldedFinalDeliverable === true,

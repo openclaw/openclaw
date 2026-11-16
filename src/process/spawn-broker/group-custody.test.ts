@@ -1,8 +1,16 @@
+import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { processProbeEntrypoints } from "../process-probes-runtime.test-support.js";
 import {
   brokerSpawnPreload,
   signalFixturePid,
@@ -61,4 +69,24 @@ it.skipIf(process.platform === "win32").each(["native", "execa"] as const)(
     expect(isPidDefinitelyDead(childPid!)).toBe(true);
     expect(recorded.brokerPgid).toBe(recorded.brokerPid);
   },
+);
+
+it.runIf(process.platform === "linux" && ["x64", "arm64"].includes(process.arch))(
+  "closes a broker and stops its children when the kernel denies group signals",
+  async () => {
+    const fixture = resolveRuntimeWorkerUrl(processProbeEntrypoints.groupCustodyDenied);
+    // The scenario needs Node command pipes and runs under the real filter; vitest itself cannot.
+    const node = resolveTestNodeExecPath();
+    const { stdout } = await promisify(execFile)(node, resolveRuntimeWorkerArgv(fixture, node), {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+    expect(JSON.parse(stdout)).toEqual({
+      closed: "closed",
+      attachedDead: true,
+      descendantDead: true,
+    });
+  },
+  25_000,
 );

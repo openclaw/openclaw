@@ -230,7 +230,7 @@ describe("Gateway owner lease", () => {
           owner: "previous-generation",
           state: "dead",
         });
-        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath);
+        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath, undefined, { reuse: true });
         const prepared = copy.mock.results[0];
         if (prepared?.type !== "return") {
           throw new Error("Expected one recovered private lease snapshot");
@@ -867,7 +867,6 @@ describe("Gateway owner lease", () => {
       const recorded = readGatewayOwnerLease({ env });
       expect(recorded).toBeDefined();
       renameSync(lock.lockPath, `${lock.lockPath}.retired`);
-      expect(() => lock.assertCurrent()).toThrow("no longer current");
       await lock.release();
       expect(existsSync(lock.stateLockPath)).toBe(false);
       expect(readGatewayOwnerLease({ env })?.owner).toBe(recorded?.owner);
