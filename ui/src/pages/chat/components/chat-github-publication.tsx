@@ -370,31 +370,14 @@ function PublicationButton(props: {
       >
         <button
           ref={(element) => controlRef?.(element)}
-          class={["chat-pr__create", { "oc-menu-item": Boolean(props.controls) }]}
+          class="chat-pr__create"
           type="button"
           aria-busy={operation.busy() ? "true" : undefined}
           disabled={action().disabled}
           onClick={() => operation.run(action().click)}
         >
-          <Show when={props.controls || operation.busy()}>
-            <span class="oc-menu-item__icon" aria-hidden="true">
-              <Show
-                when={operation.busy()}
-                fallback={
-                  <Icon
-                    name={
-                      props.publication.result?.status === "needs_confirmation"
-                        ? "check"
-                        : props.publication.result
-                          ? "refresh"
-                          : "gitPullRequest"
-                    }
-                  />
-                }
-              >
-                <span class="btn__spinner" />
-              </Show>
-            </span>
+          <Show when={operation.busy()}>
+            <span class="btn__spinner" aria-hidden="true" />
           </Show>
           {action().label}
           <Loading on={operation.scope()} fallback={null}>
