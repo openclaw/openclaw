@@ -35,7 +35,6 @@ rank	removed_lines	file	keeper_files	reason
 408	0	src/agents/system-prompt.test.ts	src/agents/system-prompt.test.ts	Retained: live prompt test group still selects this suite; the broad area keeper does not replace its executable group role.
 # retained_hunk	src/gateway/server-methods/chat-send-dispatch-errors.test.ts	The original broadcastAdmissionRelease assignment repair is absent from frozen-main source; no obsolete case or assignment is reintroduced.
 # coupled_fixture	test/vitest-ui-package-config.test.ts	Restored exact current-main UI discovery assertions and ui/vitest.config.ts because the geometry suite is retained.
-# validation_repair	test/vitest-projects-config.test.ts	Remove the retired usage.sessions-usage member from the shared expected isolated-method inventory; retain both full-array assertions (CI 132571320577).
 # helper_cleanup	Keep only unreferenced helper deletions; retained recovery and ingress suites retain their required support.
 # helper_pruning	extensions/visitor-access/src/visitors.test-support.ts	extensions/visitor-access/src/visitors.test-support.ts	Retained helper is its own surviving owner; remove only unused exports and their exclusive implementation/imports, preserving internal callers.
 # helper_pruning	extensions/xai/realtime-voice-provider.test-support.ts	extensions/xai/realtime-voice-provider.test-support.ts	Retained helper is its own surviving owner; remove only unused exports and their exclusive implementation/imports, preserving internal callers.
