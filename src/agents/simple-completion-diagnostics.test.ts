@@ -73,6 +73,7 @@ it("does not serialize prompts for the default activity and stability listeners"
   // A previous non-isolated test may have installed plugin callbacks from a narrow mock.
   const unrelatedHost = createAiTransportHost({
     plugin: {
+      ...createAiTransportHost().plugin,
       resolveProviderStream: () => {
         throw new Error("Unrelated test provider runtime must not be used");
       },

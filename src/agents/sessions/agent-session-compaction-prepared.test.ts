@@ -7,7 +7,6 @@ import { compactWithoutSummary } from "../../../packages/agent-core/src/harness/
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
-import { compactionSettings } from "./agent-session-boundary.test-support.js";
 import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
@@ -24,6 +23,7 @@ import {
   type PreparedSessionCompactionWork,
 } from "./compaction/prepared-work.js";
 import { SessionManager } from "./session-manager.js";
+import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -42,7 +42,10 @@ async function fixture() {
     timestamp: 4,
   });
   const branch = original.getBranch();
-  const settings = compactionSettings({ reserveTokens: 1000 });
+  const settings = SettingsManager.inMemory({
+    compaction: { enabled: false, reserveTokens: 1000, keepRecentTokens: 1 },
+    retry: { enabled: false },
+  });
   const full = prepareAgentCompactionWork(branch, {
     itemId: "fixture-plan",
     settings: settings.getCompactionSettings(),
