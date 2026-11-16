@@ -112,6 +112,7 @@ describe("renderUsage", () => {
 
   it("keeps selected providers usable without claiming an unknown inventory is empty", () => {
     const props = createUsageProps();
+    const onQueryDraftChange = (props.callbacks.filters.onQueryDraftChange = vi.fn());
     props.filters.queryDraft = "provider:openai";
     const { container, setData } = mountReactiveUsage(props);
     document.body.appendChild(container);
@@ -141,6 +142,15 @@ describe("renderUsage", () => {
     expect(search.value).toBe("anthropic");
     expect(surface.querySelector('[aria-label="anthropic"]')).not.toBeNull();
     expect(surface.querySelector(".usage-value-picker__empty")).toBeNull();
+    search.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }),
+    );
+    expect(onQueryDraftChange).not.toHaveBeenCalled();
+    search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onQueryDraftChange).toHaveBeenCalledExactlyOnceWith(
+      "provider:openai provider:anthropic ",
+    );
   });
 
   it("keeps an IME-composed Enter from applying the usage query", () => {

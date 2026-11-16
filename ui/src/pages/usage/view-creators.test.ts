@@ -245,6 +245,26 @@ it("keeps creator choices and opaque identities through row, picker, and search 
       item.getAttribute("aria-label"),
     ),
   ).toEqual(["Jordan Lee"]);
+  onSelect.mockClear();
+  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+    search.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...composition }),
+    );
+    expect(onSelect).not.toHaveBeenCalled();
+    flush();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  }
+  const end = new CompositionEvent("compositionend", { bubbles: true });
+  search.dispatchEvent(end);
+  search.dispatchEvent(
+    Object.defineProperty(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      "timeStamp",
+      { value: end.timeStamp - 1 },
+    ),
+  );
+  expect(onSelect).not.toHaveBeenCalled();
+  search.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
