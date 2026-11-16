@@ -4,6 +4,7 @@ import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/p
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { expect, it, vi } from "vitest";
+import * as historyWorker from "../../session-history-worker-runtime.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   consumeCodexAppServerLiveThread,
@@ -261,7 +262,7 @@ it.each(["binding", "lineage"] as const)(
 );
 
 it.each([false, true])(
-  "settles a yielded parent under retained source authority (revoked: %s)",
+  "settles a yielded parent after finalization byte-limit rejection (source revoked: %s)",
   async (revoked) => {
     const params = parentParams("yielded-parent");
     // Full host tool construction can exceed the lightweight fixture's 5s budget.
@@ -269,6 +270,15 @@ it.each([false, true])(
     params.agentId = "main";
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
+    const capture = vi
+      .spyOn(historyWorker, "projectCodexSettledHistoryInWorker")
+      .mockResolvedValue({
+        status: "rejected",
+        reason: "byte_limit",
+      });
+    params.onSettledTurn = async (attempt, captureContext) => {
+      attempt.settledTurnFinalizationContext = await captureContext();
+    };
     let sourceRevoked = false;
     const host = await createAgentHarnessHostCapabilitiesForTest({
       attempt: params,
@@ -329,6 +339,7 @@ it.each([false, true])(
       expect(response, JSON.stringify(response)).toMatchObject({ success: true });
       const outcome = await Promise.allSettled([run]);
       expect(harness.requests.some(({ method }) => method === "turn/interrupt")).toBe(true);
+      expect(capture).toHaveBeenCalled();
       const ownership = await consumeCodexAppServerLiveThread(harness.client, "thread-1");
       if (revoked) {
         expect(outcome[0]).toMatchObject({ status: "rejected" });
@@ -336,7 +347,10 @@ it.each([false, true])(
       } else {
         expect(outcome[0]).toMatchObject({
           status: "fulfilled",
-          value: { terminal: { kind: "ok" } },
+          value: {
+            terminal: { kind: "ok" },
+            settledTurnFinalizationContext: { source: "unavailable" },
+          },
         });
         expect(ownership).toBeDefined();
         ownership!.assertCurrent();
