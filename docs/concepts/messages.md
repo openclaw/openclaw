@@ -106,7 +106,7 @@ When a channel supplies history, it wraps it with:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
-Thread starter and thread history notes use the same current-message marker after their context, keeping the request separate from earlier messages. Queued turns insert newly active goals before this marker. The marker is runtime context and does not change the saved user message. Ambient room events omit it and keep their optional-response policy.
+For non-reset requests, rendered structured history uses the same current-message marker unless the channel already supplies an inline current-message header. Thread starter and thread history notes also use the marker after their context, keeping the request separate from earlier messages. Queued turns insert newly active goals before this marker. The marker is runtime context and does not change the saved user message. Contexts using optional room participation, including ambient room events and optional bot-authored requests, omit this response-directing marker.
 
 For non-direct chats (groups/channels/rooms), the current message body is prefixed with the sender label, matching the style used for history entries. Directive stripping only applies to the current-message section, so history stays intact. Channels that wrap history should set `BodyForCommands` (or the legacy `CommandBody` / `RawBody`) to the original message text and keep `Body` as the combined prompt.
 

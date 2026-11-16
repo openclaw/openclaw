@@ -297,12 +297,13 @@ export function buildInboundMetaSystemPrompt(
 }
 
 /** Builds per-turn context with host-generated structural facts and untrusted human content. */
-export function buildInboundUserContextPrefix(
+export function buildInboundUserContext(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
   sessionEntry?: SessionEntry,
-): string {
+): { text: string; hasHistory: boolean } {
   const blocks: string[] = [];
+  let hasHistory = false;
   const appendJsonContext = (label: string, payload: unknown) => {
     blocks.push(formatContextJsonBlock(markInboundContextLabel(label), payload));
   };
@@ -506,6 +507,7 @@ export function buildInboundUserContextPrefix(
         const qualifiers = [order, relation].filter(Boolean).join(", ");
         const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
         blocks.push([markInboundContextLabel(header), ...lines].join("\n"));
+        hasHistory = true;
         continue;
       }
     }
@@ -541,6 +543,7 @@ export function buildInboundUserContextPrefix(
     });
     if (historyLines.length > 0) {
       blocks.push([markInboundContextLabel(historyLabel), ...historyLines].join("\n"));
+      hasHistory = true;
     }
   }
 
@@ -553,5 +556,5 @@ export function buildInboundUserContextPrefix(
     blocks.push(currentMessageContext);
   }
 
-  return blocks.join("\n\n");
+  return { text: blocks.join("\n\n"), hasHistory };
 }

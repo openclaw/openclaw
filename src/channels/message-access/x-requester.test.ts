@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { resolveGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import { initSessionState } from "../../auto-reply/reply/test/session.test-support.js";
 import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -134,7 +134,7 @@ it("resolves X API senders through account-scoped profile links, never asserted 
             }
           : undefined,
       );
-      const prefix = buildInboundUserContextPrefix(context);
+      const prefix = buildInboundUserContext(context).text;
       if (linked) {
         expect(JSON.parse(prefix.match(/```json\n([\s\S]*?)\n```/)![1]!)).toMatchObject({
           requester_profile: { id: profile.id, display_name: "Ada Lovelace" },

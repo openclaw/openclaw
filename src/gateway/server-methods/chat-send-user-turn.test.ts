@@ -9,7 +9,7 @@ import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import { resolveSessionResetCommand } from "../../auto-reply/reply/session-reset-command.js";
 import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -102,7 +102,7 @@ describe("prepareChatSendUserTurn", () => {
       },
     });
     const ctx = finalizeInboundContext({ ...prepared.ctx });
-    const prompt = buildInboundUserContextPrefix(ctx);
+    const prompt = buildInboundUserContext(ctx).text;
     if (verified && !synthetic) {
       expect(requesterProfile(prompt)).toEqual({ id: profileId, display_name: "Ada" });
     } else {
@@ -167,14 +167,14 @@ describe("prepareChatSendUserTurn", () => {
           },
         );
         const ctx = finalizeInboundContext({ ...prepared.ctx });
-        expect(requesterProfile(buildInboundUserContextPrefix(ctx))).toEqual({
+        expect(requesterProfile(buildInboundUserContext(ctx).text)).toEqual({
           id: profile.id,
           display_name: "Queued Ada",
         });
         expect(readSessionInputProfileId(ctx)).toBe(profile.id);
         admitted.release();
         expect(getRequesterProfile(ctx)).toBeUndefined();
-        expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
+        expect(buildInboundUserContext(ctx).text).not.toContain("requester_profile");
       } finally {
         admitted.release();
       }

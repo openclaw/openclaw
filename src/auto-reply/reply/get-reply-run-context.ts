@@ -57,7 +57,7 @@ import { hasInboundMedia } from "./inbound-media.js";
 import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 import {
   buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
+  buildInboundUserContext,
   formatActiveGoalContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
@@ -457,22 +457,23 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     return prompt ? `${markInboundContextLabel("PR attribution:")}\n${prompt}` : "";
   };
   // Synthetic turns retain routing facts without inventing user-role inbound context.
-  const buildInboundContextState = () => ({
-    activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
-    inboundUserContext: isInternalEvent
-      ? ""
-      : [
-          attributionPrompt(),
-          buildInboundUserContextPrefix(
-            inboundUserContextSessionCtx,
-            envelopeOptions,
-            inboundContextSessionEntry,
-          ),
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-  });
-  let { activeGoalContext, inboundUserContext } = buildInboundContextState();
+  const buildInboundContextState = () => {
+    const context = isInternalEvent
+      ? undefined
+      : buildInboundUserContext(
+          inboundUserContextSessionCtx,
+          envelopeOptions,
+          inboundContextSessionEntry,
+        );
+    return {
+      activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
+      hasInboundHistory: context?.hasHistory ?? false,
+      inboundUserContext: isInternalEvent
+        ? ""
+        : [attributionPrompt(), context?.text].filter(Boolean).join("\n\n"),
+    };
+  };
+  let { activeGoalContext, inboundUserContext, hasInboundHistory } = buildInboundContextState();
   const refreshInboundContextAfterAdmissionWait = () => {
     if (isInternalEvent) {
       return;
@@ -481,7 +482,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       sessionEntryHandle?.getCurrent() ??
       (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
       sessionEntry;
-    ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
+    ({ activeGoalContext, inboundUserContext, hasInboundHistory } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   function formatRoomEventLine(context: TemplateContext, body: string): string {
@@ -525,18 +526,19 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     );
   }
 
-  const deliveryDirective =
+  const usesOptionalRoomParticipation =
     inboundEventKind === "room_event" ||
     (inboundEventKind === "user_request" &&
       sourceReplyDeliveryMode === "message_tool_only" &&
       promptSessionCtx.SenderIsBot === true &&
-      terminalReplyExpectation === "optional")
-      ? sourceReplyDeliveryMode === "message_tool_only"
-        ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
-        : ROOM_EVENT_PARTICIPATION_RULE
-      : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
-        ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
-        : undefined;
+      terminalReplyExpectation === "optional");
+  const deliveryDirective = usesOptionalRoomParticipation
+    ? sourceReplyDeliveryMode === "message_tool_only"
+      ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+      : ROOM_EVENT_PARTICIPATION_RULE
+    : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
+      ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
+      : undefined;
 
   // The current event itself is the user turn body; the context block carries
   // only the marker, the room backlog, and the reply-policy directive so no
@@ -648,8 +650,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ]
       .filter((text): text is string => Boolean(text?.trim()))
       .map((text) => ({ kind: "conversation-data", text }));
-    // Close thread context without overriding room events' optional-response policy.
-    if (additions.threadContextNote?.trim() && inboundEventKind !== "room_event") {
+    // Close rendered history/thread context without changing ambient participation policy.
+    if (
+      (additions.threadContextNote?.trim() ||
+        (!isBareSessionReset && hasInboundHistory && inboundUserContextPromptJoiner !== " ")) &&
+      !usesOptionalRoomParticipation
+    ) {
       sourceContext.push({ kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER });
     }
     const annotateBody = (body: string) =>

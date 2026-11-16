@@ -13,6 +13,7 @@ import {
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
+import type { buildInboundUserContext } from "./inbound-meta.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 
@@ -45,6 +46,11 @@ export async function cleanupPreparedReplyFixtures() {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   replyRunTempDirs.cleanup();
+}
+
+export function createInboundUserContextMock(builder: typeof buildInboundUserContext) {
+  return (text: string, hasHistory = false) =>
+    vi.mocked(builder).mockReturnValueOnce({ text, hasHistory });
 }
 
 export function jsonContext(label: string, value: unknown) {

@@ -72,6 +72,7 @@ import {
   cleanupPreparedReplyFixtures,
   createInboundBody,
   jsonContext,
+  createInboundUserContextMock,
   createInboundTurn,
   createPreparedReplyTurn as turn,
   createSessionBody,
@@ -86,7 +87,7 @@ import {
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import {
   buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
+  buildInboundUserContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -102,6 +103,8 @@ import {
 } from "./source-reply-delivery-runtime.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
+
+const mockInboundUserContext = createInboundUserContextMock(buildInboundUserContext);
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
@@ -307,7 +310,7 @@ vi.mock("./groups.js", async (importOriginal) => ({
 vi.mock("./inbound-meta.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./inbound-meta.js")>()),
   buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
-  buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
+  buildInboundUserContext: vi.fn().mockReturnValue({ text: "", hasHistory: false }),
   formatActiveGoalContext: vi.fn().mockReturnValue(undefined),
   refreshActiveGoalContext: (context: unknown) => context,
   resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
@@ -837,7 +840,7 @@ describe("runPreparedReply media-only handling", () => {
     resetPreparedReplySessionStore();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
-    vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
+    vi.mocked(buildInboundUserContext).mockReset().mockReturnValue({ text: "", hasHistory: false });
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     vi.mocked(hasControlCommand).mockReturnValue(false);
     resolveCurrentTurnImagesMock.mockReset().mockResolvedValue({});
@@ -1001,9 +1004,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("keeps addressed message-tool delivery hints out of persisted transcript rows", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
-    );
+    mockInboundUserContext("Current message:\nchat_id=-100123\ninbound_event_kind: user_request");
 
     await runPrepared({
       opts: { sourceReplyDeliveryMode: "message_tool_only" },
@@ -1134,7 +1135,7 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it("rejects blank pending inbound history", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+    mockInboundUserContext(
       jsonContext("Chat history since last reply:", [
         { sender: "Alice", timestamp_ms: 1_700_000_000_000, body: "" },
       ]),
@@ -1160,7 +1161,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("allows webchat pure-image turns when image content is carried outside MediaPath", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+    mockInboundUserContext(
       jsonContext("Conversation info:", { provider: "webchat", chat_id: "webchat:local" }),
     );
 
@@ -1429,10 +1430,10 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
       entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
     );
-    vi.mocked(inboundMeta.buildInboundUserContextPrefix).mockImplementation(
-      (_ctx, _envelope, entry) =>
-        entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
-    );
+    vi.mocked(inboundMeta.buildInboundUserContext).mockImplementation((_ctx, _envelope, entry) => ({
+      text: entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
+      hasHistory: false,
+    }));
     const sessionStore = { "session-key": activeEntry };
     const target = captureSessionTarget({
       storeScope: "/tmp/openclaw-session-store.json",
@@ -1681,7 +1682,7 @@ describe("runPreparedReply media-only handling", () => {
     }
   });
   it("runs bare mention replies when the reply target is the current-turn context", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+    mockInboundUserContext(
       jsonContext("Reply target of current user message:", {
         sender_label: "Bot",
         body: "quoted status body",
@@ -1716,11 +1717,12 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("runs room events as contextual events instead of direct user prompts", async () => {
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+    mockInboundUserContext(
       [
         "Conversation info:\nroom metadata",
         "Conversation context (chronological, selected for current message):\n#35675 obviyus ->#35674: Are you fr fr",
       ].join("\n\n"),
+      true,
     );
 
     await runPrepared({
@@ -1822,9 +1824,7 @@ describe("runPreparedReply media-only handling", () => {
       signal: operatorController.signal,
     });
     const isUserRequest = kind === "user_request";
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      isUserRequest ? "user request context" : "room context",
-    );
+    mockInboundUserContext(isUserRequest ? "user request context" : "room context");
     await runPrepared({
       ...(mode === "interrupt"
         ? {}
@@ -1892,7 +1892,7 @@ describe("runPreparedReply media-only handling", () => {
       const eventPrompt = "Check the completed background task.";
       const syntheticConversationInfo =
         'Conversation info:\n```json\n{"chat_id":"discord:channel-123"}\n```';
-      vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(syntheticConversationInfo);
+      mockInboundUserContext(syntheticConversationInfo);
 
       await runPrepared({
         opts: { internalEventExecution: { onStarted: vi.fn(), onTerminal: vi.fn() } },
@@ -1915,7 +1915,7 @@ describe("runPreparedReply media-only handling", () => {
       expect(call?.commandBody).toContain(eventPrompt);
       expect(call?.followupRun.prompt).toContain(eventPrompt);
       expect(call?.followupRun.prompt).not.toContain(syntheticConversationInfo);
-      expect(buildInboundUserContextPrefix).not.toHaveBeenCalled();
+      expect(buildInboundUserContext).not.toHaveBeenCalled();
       expect(call?.sessionCtx).toMatchObject({
         OriginatingChannel: "discord",
         OriginatingTo: "discord:channel-123",

@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
@@ -36,13 +36,13 @@ export function buildChatSendReplyInjectionText(params: {
   body: string;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  sessionEntry?: Parameters<typeof buildInboundUserContextPrefix>[2];
+  sessionEntry?: Parameters<typeof buildInboundUserContext>[2];
 }): string {
-  const prefix = buildInboundUserContextPrefix(
+  const prefix = buildInboundUserContext(
     params.ctx,
     resolveEnvelopeFormatOptions(params.cfg),
     params.sessionEntry,
-  );
+  ).text;
   return prefix ? `${prefix}\n\n${params.body}` : params.body;
 }
 

@@ -1,6 +1,6 @@
 /**
  * Provenance marker appended to every OpenClaw-injected inbound context header
- * (see `buildInboundUserContextPrefix`). Strippers key on this marker rather
+ * (see `buildInboundUserContext`). Strippers key on this marker rather
  * than on label text so detection is label-agnostic and never collides with
  * user-typed headings. Fixed (not per-turn random): strippers run on stored
  * text with no out-of-band value, and forging it only strips the forger's own

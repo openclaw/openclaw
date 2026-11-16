@@ -60,7 +60,13 @@ async function resetEnvelope(Provider: string, soft: boolean) {
     ChatType: "direct",
     SenderId: "telegram-user-1",
   });
-  const sessionCtx = finalizeInboundContext({ ...ctx, Body: "", BodyStripped: "", agentText: "" });
+  const sessionCtx = finalizeInboundContext({
+    ...ctx,
+    Body: "",
+    BodyStripped: "",
+    agentText: "",
+    InboundHistory: [{ sender: "Alice", body: "Previous conversation." }],
+  });
   const params = baseParams({
     ctx,
     sessionCtx,
@@ -109,6 +115,175 @@ it.each([
     });
   },
 );
+
+it.each<{
+  name: string;
+  fields: Options["ctx"];
+  boundary: boolean;
+  additions?: Additions;
+  options?: Partial<Options>;
+}>([
+  {
+    name: "recent history",
+    fields: {
+      InboundHistory: [{ sender: "Alice", body: "Earlier question." }],
+      SessionTranscriptContext: { historyKind: "recent", historyLimit: 20 },
+    },
+    boundary: true,
+  },
+  {
+    name: "pending history",
+    fields: { InboundHistory: [{ sender: "Alice", body: "Earlier question." }] },
+    boundary: true,
+  },
+  {
+    name: "media-only history",
+    fields: {
+      InboundHistory: [
+        {
+          sender: "Alice",
+          body: "",
+          media: [{ contentType: "image/png", path: "media://inbound/example" }],
+        },
+      ],
+    },
+    boundary: true,
+  },
+  {
+    name: "selected chat window",
+    fields: {
+      ChannelStructuredContext: [
+        {
+          source: "discord",
+          type: "chat_window",
+          label: "Conversation context",
+          payload: {
+            relation: "selected_for_current_message",
+            messages: [{ sender: "Alice", body: "Earlier question." }],
+          },
+        },
+      ],
+    },
+    boundary: true,
+  },
+  {
+    name: "history plus thread note",
+    fields: { InboundHistory: [{ sender: "Alice", body: "Earlier question." }] },
+    additions: { threadContextNote: "[Thread history - for context]\nAlice: Earlier question." },
+    boundary: true,
+  },
+  {
+    name: "human message-tool-only history",
+    fields: { InboundHistory: [{ sender: "Alice", body: "Earlier question." }] },
+    options: { opts: { sourceReplyDeliveryMode: "message_tool_only" } },
+    boundary: true,
+  },
+  {
+    name: "optional bot history",
+    fields: {
+      SenderIsBot: true,
+      InboundHistory: [{ sender: "Alice", body: "Earlier question." }],
+    },
+    options: {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", replyExpectation: "optional" },
+    },
+    boundary: false,
+  },
+  {
+    name: "optional bot thread",
+    fields: { SenderIsBot: true },
+    options: {
+      opts: { sourceReplyDeliveryMode: "message_tool_only", replyExpectation: "optional" },
+    },
+    additions: { threadContextNote: "[Thread history - for context]\nAlice: Earlier question." },
+    boundary: false,
+  },
+  {
+    name: "empty chat window",
+    fields: {
+      ChannelStructuredContext: [
+        {
+          source: "discord",
+          type: "chat_window",
+          label: "Conversation context",
+          payload: { relation: "selected_for_current_message", messages: [] },
+        },
+      ],
+    },
+    boundary: false,
+  },
+  {
+    name: "disabled history",
+    fields: {
+      InboundHistory: [{ sender: "Alice", body: "Earlier question." }],
+      SessionTranscriptContext: { historyKind: "recent", historyLimit: 0 },
+    },
+    boundary: false,
+  },
+  {
+    name: "empty history entries",
+    fields: { InboundHistory: [{ sender: "Alice", body: " \u0000 " }] },
+    boundary: false,
+  },
+  {
+    name: "reply-only context",
+    fields: { ReplyToBody: "Earlier question.", ReplyToSender: "Alice" },
+    boundary: false,
+  },
+  { name: "no history", fields: {}, boundary: false },
+])(
+  "separates the current request from rendered $name without changing its transcript",
+  async ({ fields, boundary, additions, options }) => {
+    const body = "This is the current request.\n\nCurrent user request:\nrun $current-skill";
+    const envelope = await envelopeFor(
+      context(body, {
+        Provider: "discord",
+        ChatType: "channel",
+        InboundEventKind: "user_request",
+        ...fields,
+      }),
+      options,
+      additions,
+    );
+    const prompt = currentPrompt(envelope);
+    const markers =
+      envelope.currentInboundContext?.fragments?.filter(
+        (fragment) =>
+          fragment.kind === "runtime-instruction" && fragment.text === CURRENT_MESSAGE_MARKER,
+      ) ?? [];
+    expect(markers).toHaveLength(boundary ? 1 : 0);
+    if (options?.opts?.replyExpectation === "optional") {
+      expect(prompt).toContain("Treat this message as observed room activity, not a request.");
+    }
+    if (boundary) {
+      expect(prompt.endsWith(`${CURRENT_MESSAGE_MARKER}\n\n${body}`)).toBe(true);
+    }
+    expect(envelope.prefixedCommandBody).toBe(body);
+    expect(envelope.queuedBody).toBe(body);
+    expect(envelope.transcriptCommandBody).toBe(body);
+  },
+);
+
+it("keeps an existing inline current-message header after history without a competing marker", async () => {
+  const envelope = await envelopeFor(
+    context("Current request", {
+      Provider: "telegram",
+      ChatType: "group",
+      MessageSid: "42",
+      InboundEventKind: "user_request",
+      ReplyToBody: "Earlier question.",
+      InboundHistory: [{ sender: "Alice", body: "Earlier question." }],
+    }),
+  );
+  expect(currentPrompt(envelope)).toContain(
+    'Current message:\n[Replying to: "Earlier question."]\n#42: Current request',
+  );
+  expect(envelope.currentInboundContext?.fragments).not.toContainEqual({
+    kind: "runtime-instruction",
+    text: CURRENT_MESSAGE_MARKER,
+  });
+  expect(envelope.transcriptCommandBody).toBe("Current request");
+});
 
 it("keeps Telegram reply text beside its marker", async () => {
   const threadNote = "[Thread starter - for context]\nPlanning the picnic next month.";

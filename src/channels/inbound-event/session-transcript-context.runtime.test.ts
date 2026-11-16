@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildInboundUserContext } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
@@ -74,7 +74,7 @@ describe("session transcript inbound context", () => {
         timestamp: index,
       })),
     });
-    const prompt = buildInboundUserContextPrefix(ctx);
+    const prompt = buildInboundUserContext(ctx).text;
     expect(prompt.match(/native-line-\d{2}/g)).toEqual(
       Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
     );
@@ -185,7 +185,7 @@ describe("session transcript inbound context", () => {
       }),
     });
 
-    const prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
+    const prompt = buildInboundUserContext(ctx, { timezone: "UTC" }).text;
 
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "msteams",
