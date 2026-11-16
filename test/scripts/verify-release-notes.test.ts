@@ -3,9 +3,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -158,6 +160,171 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it.each(["missing", "docs-mirror"])(
+    "verifies pinned initial 11.4 notes with %s working-tree notes",
+    (state) => {
+      const version = "2026.11.4";
+      const { cwd, base } = seedRepository(
+        "openclaw-pinned-source-",
+        undefined,
+        createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version),
+      );
+      splitChangelog({ rootDir: cwd });
+      expect(runVerifier(cwd, { base, version }).status).toBe(0);
+      const sourceRef = commitAll(cwd, "docs: initial release record");
+      git(cwd, ["tag", "initial-source"]);
+      const entry = join(cwd, `CHANGELOG/${version}.md`);
+      const initial = readFileSync(entry, "utf8");
+      if (state === "missing") {
+        rmSync(entry);
+      } else {
+        writeFileSync(
+          entry,
+          `## ${version}\n\n<!-- openclaw-docs-mirror-v1 {} -->\nReader prose.\n`,
+        );
+      }
+      const before = git(cwd, ["diff"]);
+      const defaults = runVerifier(cwd, { base, version, write: false });
+      expect(defaults.status).not.toBe(0);
+      expect(defaults.stderr).toContain(
+        state === "missing" ? "Missing changelog release section" : "docs-publication workflow",
+      );
+      for (const alias of ["notes-link", "root-link"]) {
+        const link = join(cwd, alias);
+        symlinkSync(alias === "root-link" ? cwd : join(cwd, "CHANGELOG"), link, "dir");
+        for (const flag of ["--manifest", "--github-snapshot"]) {
+          const output = join(
+            link,
+            ...(alias === "root-link" ? ["CHANGELOG"] : []),
+            `${version}.md`,
+          );
+          const rejected = runVerifier(cwd, {
+            base,
+            version,
+            write: false,
+            extraArgs: ["--source-ref", "initial-source", flag, output],
+          });
+          expect(rejected.status).not.toBe(0);
+          expect(rejected.stderr).toContain("source artifact must not be an output path");
+        }
+        rmSync(link);
+      }
+      expect(git(cwd, ["diff"])).toBe(before);
+      const preload = join(cwd, "move-source-tag.mjs");
+      writeFileSync(
+        preload,
+        `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.execFileSync;
+cp.execFileSync = function(command, args, options) {
+  const result = original.call(this, command, args, options);
+  if (command === 'git' && args.includes('initial-source^{commit}')) {
+    original.call(this, 'git', ['update-ref', 'refs/tags/initial-source', '${base}']);
+  }
+  return result;
+};
+syncBuiltinESMExports();
+`,
+      );
+      const manifest = join(cwd, "proposal.json");
+      const result = runVerifier(cwd, {
+        base,
+        version,
+        manifest,
+        write: false,
+        extraArgs: ["--source-ref", "initial-source"],
+        preload,
+      });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      for (const output of [
+        JSON.parse(result.stdout),
+        JSON.parse(readFileSync(manifest, "utf8")),
+      ]) {
+        expect(output.changelogSource).toEqual({
+          ref: sourceRef,
+          sourcePath: `CHANGELOG/${version}.md`,
+          recordPath: `CHANGELOG/records/${version}.md`,
+          format: "initial",
+        });
+        expect(output.errors ?? []).toEqual([]);
+      }
+      expect(git(cwd, ["diff"])).toBe(before);
+      expect(git(cwd, ["rev-parse", "initial-source"])).toBe(base);
+      expect(git(cwd, ["show", `${sourceRef}:CHANGELOG/${version}.md`])).toContain("0 unique PRs");
+      writeFileSync(entry, initial);
+      const restored = runVerifier(cwd, { base, version, write: false });
+      expect(restored.status, restored.stderr || restored.stdout).toBe(0);
+      expect(JSON.parse(restored.stdout)).not.toHaveProperty("changelogSource");
+    },
+  );
+
+  it.each([
+    { args: ["--source-ref", "absent"], error: "Needed a single revision" },
+    { args: ["--source-ref", "-bad"], error: "Invalid changelog Git ref" },
+    { args: ["--source-ref", "HEAD:CHANGELOG.md"], error: "Needed a single revision" },
+    { args: ["--source-ref"], error: "missing value" },
+    { args: ["--source-ref", "HEAD", "--version"], error: "missing value for --version" },
+    {
+      args: ["--source-ref", "HEAD", "--version", "2026.11.4"],
+      error: "Missing changelog release section",
+    },
+    { args: ["--source-ref", "HEAD", "--version", "../bad"], error: "Invalid changelog version" },
+    { args: ["--source-ref", "HEAD", "--write-ledger"], error: "cannot be combined" },
+  ])("rejects invalid pinned source invocation $args", ({ args, error }) => {
+    const { cwd } = seedRepository("openclaw-source-ref-invalid-");
+    const before = git(cwd, ["status", "--porcelain"]);
+    const result = runVerifier(cwd, { write: false, extraArgs: args });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(error);
+    expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+  });
+
+  it("rejects a selected immutable docs mirror even with initial working-tree notes", () => {
+    const { cwd, changelog } = seedRepository("openclaw-source-ref-mirror-");
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog + "\n<!-- openclaw-docs-mirror-v1 {} -->\n");
+    commitAll(cwd, "docs: mirror");
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+    const result = runVerifier(cwd, { write: false, extraArgs: ["--source-ref", "HEAD"] });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("docs-publication workflow");
+    expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+  });
+
+  it.each(["--manifest", "--github-snapshot"])(
+    "rejects %s overwriting pinned-source artifact paths",
+    (flag) => {
+      const { cwd } = seedRepository("openclaw-source-ref-output-");
+      splitChangelog({ rootDir: cwd });
+      commitAll(cwd, "docs: split");
+      const before = git(cwd, ["status", "--porcelain"]);
+      for (const file of [
+        "CHANGELOG.md",
+        "CHANGELOG/2026.7.1.md",
+        "CHANGELOG/records/2026.7.1.md",
+      ]) {
+        const result = runVerifier(cwd, {
+          write: false,
+          extraArgs: ["--source-ref", "HEAD", flag, join(cwd, file)],
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("source artifact must not be an output path");
+      }
+      expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+      for (const alias of [symlinkSync, linkSync]) {
+        const output = join(cwd, "alias.json");
+        alias(join(cwd, "CHANGELOG.md"), output);
+        const result = runVerifier(cwd, {
+          write: false,
+          extraArgs: ["--source-ref", "HEAD", flag, output],
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("source artifact must not be an output path");
+        rmSync(output);
+      }
+      expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+    },
+  );
+
   it("preserves concurrent edits during ledger generation", () => {
     const artifact = "CHANGELOG/2026.7.1.md";
     const { cwd, base } = seedRepository("openclaw-notes-concurrent-");

@@ -101,6 +101,17 @@ of this skill; initial generation must never overwrite them.
      --write-ledger
    ```
 
+   For a read-only historical audit, add `--source-ref <tag-or-sha>` to select
+   the immutable initial notes through the shared release-changelog resolver.
+   It resolves the supplied ref once and records the exact commit, entry and
+   record paths in `changelogSource` in the manifest and JSON result. The default
+   remains working-tree notes; `--target` alone does not select notes. A selected
+   docs mirror still fails the initial-format guard. `--source-ref` cannot be
+   combined with `--write-ledger`, and manifest/snapshot outputs cannot alias
+   source artifact paths. This produces an accounting proposal, not approval of
+   final counts, editorial content or credits; never initialize or copy notes
+   to manufacture a historical source.
+
    For beta generation, use `--version YYYY.M.PATCH-beta.N` and omit `--base`
    on the first inventory run. Start an exact-version section with Highlights,
    Changes and Fixes using the shared writer; generate the delta manifest, then

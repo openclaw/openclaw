@@ -1,0 +1,2 @@
+# Read-only pinned release source CLI regressions: missing and docs-mirrored working trees, once-resolved source provenance, invalid refs/versions, historical-write rejection, and artifact/alias collision protection. Existing historical recovery cases remain intact.
+167

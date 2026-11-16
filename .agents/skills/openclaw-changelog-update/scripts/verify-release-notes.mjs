@@ -115,6 +115,7 @@ Options:
   --main-ref <ref>      Canonical mainline used to replace backport PRs.
   --release-branch <ref>
                         Ref whose history must contain the generation target.
+  --source-ref <ref>    Read initial notes from an immutable Git commit; read-only.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --release-provenance <sha -> #PR[, #PR]>
@@ -144,6 +145,7 @@ export function parseArgs(argv) {
     noGithubSnapshot: false,
     regularStableVersion: undefined,
     refreshGithubSnapshot: false,
+    sourceRef: /** @type {string | undefined} */ (undefined),
     seedRef: /** @type {string | undefined} */ (undefined),
     shippedRefs: [],
     writeLedger: false,
@@ -170,6 +172,7 @@ export function parseArgs(argv) {
     ["--release-branch", "releaseBranch"],
     ["--manifest", "manifestPath"],
     ["--regular-stable-version", "regularStableVersion"],
+    ["--source-ref", "sourceRef"],
     ["--seed-ref", "seedRef"],
   ]);
 
@@ -222,6 +225,9 @@ export function parseArgs(argv) {
     Boolean(options.historicalIssueSnapshotPath) !== Boolean(options.historicalIssueSnapshotSha256)
   ) {
     fail("historical issue snapshot requires both path and sha256");
+  }
+  if (options.sourceRef && options.writeLedger) {
+    fail("--source-ref cannot be combined with --write-ledger");
   }
   const uniqueShippedRefs = new Set(options.shippedRefs);
   if (uniqueShippedRefs.size !== options.shippedRefs.length) {
@@ -2993,6 +2999,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   const unlinkedCommits = directCommits.filter((commit) => commit.references.length === 0);
   return {
     schemaVersion: 3,
+    changelogSource: options.changelogSource,
     base: options.base,
     target: options.target,
     mergeBase: source.mergeBase,
@@ -3071,6 +3078,29 @@ function writeFileAtomic(filePath, contents) {
   }
 }
 
+function canonicalArtifactPath(file) {
+  let ancestor = path.resolve(file);
+  const missing = [];
+  while (!existsSync(ancestor)) {
+    missing.unshift(path.basename(ancestor));
+    ancestor = path.dirname(ancestor);
+  }
+  return path.join(realpathSync(ancestor), ...missing);
+}
+
+function assertSeparateOutput(input, output, message) {
+  if (canonicalArtifactPath(input) === canonicalArtifactPath(output)) {
+    fail(message);
+  }
+  if (existsSync(input) && existsSync(output)) {
+    const original = statSync(input);
+    const destination = statSync(output);
+    if (original.dev === destination.dev && original.ino === destination.ino) {
+      fail(message);
+    }
+  }
+}
+
 function loadOrInitializeReleaseChangelog(rootDir, version, writeLedger) {
   const existing = findReleaseChangelog({ rootDir, version });
   if (existing || !writeLedger) {
@@ -3146,7 +3176,6 @@ function main() {
   }
   if (options.historicalIssueSnapshotPath) {
     const input = realpathSync(options.historicalIssueSnapshotPath);
-    const identity = statSync(input);
     const base = git(["rev-parse", options.base + "^{commit}"]);
     const target = git(["rev-parse", options.target + "^{commit}"]);
     const outputs = [
@@ -3162,15 +3191,7 @@ function main() {
         : []),
     ];
     for (const output of outputs.filter(Boolean)) {
-      if (existsSync(output)) {
-        const destination = statSync(output);
-        if (
-          realpathSync(output) === input ||
-          (identity.dev === destination.dev && identity.ino === destination.ino)
-        ) {
-          fail("historical issue snapshot must not be an output path");
-        }
-      }
+      assertSeparateOutput(input, output, "historical issue snapshot must not be an output path");
     }
   }
   const historicalEvidence = options.historicalIssueSnapshotPath
@@ -3181,11 +3202,26 @@ function main() {
         target: git(["rev-parse", options.target + "^{commit}"]),
       })
     : undefined;
-  const releaseSource = loadOrInitializeReleaseChangelog(
-    rootDir,
-    options.version,
-    options.writeLedger,
-  );
+  const releaseSource = options.sourceRef
+    ? loadReleaseChangelog({ rootDir, version: options.version, ref: options.sourceRef })
+    : loadOrInitializeReleaseChangelog(rootDir, options.version, options.writeLedger);
+  if (options.sourceRef) {
+    options.changelogSource = {
+      ref: releaseSource.ref,
+      sourcePath: releaseSource.sourcePath,
+      recordPath: releaseSource.recordPath,
+      format: releaseSource.format,
+    };
+    for (const output of [options.manifestPath, options.githubSnapshotPath].filter(Boolean)) {
+      for (const input of [
+        "CHANGELOG.md",
+        "CHANGELOG/" + releaseSource.version + ".md",
+        "CHANGELOG/records/" + releaseSource.version + ".md",
+      ]) {
+        assertSeparateOutput(input, output, "source artifact must not be an output path");
+      }
+    }
+  }
   if (releaseSource.format !== "initial") {
     fail("docs-mirrored release notes must be verified by the docs-publication workflow");
   }
@@ -3502,6 +3538,7 @@ function main() {
   }
 
   const result = {
+    changelogSource: options.changelogSource,
     workflowRuns,
     recoveredIssues: source.recoveredIssues,
     base: options.base,
