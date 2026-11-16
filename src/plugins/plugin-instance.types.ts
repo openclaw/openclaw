@@ -77,8 +77,10 @@ export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginI
   ): void;
   loadModule(source: string): unknown;
   hasModuleSource(source: string): boolean | undefined;
-  bindModuleLoaderRecovery(capture: () => PluginModuleLoaderRecovery): void;
-  captureModuleLoaderRecovery(): PluginModuleLoaderRecovery;
+  bindModuleLoaderRecovery(
+    capture: () => PluginModuleLoaderRecovery | Promise<PluginModuleLoaderRecovery>,
+  ): void;
+  captureModuleLoaderRecovery(): Promise<PluginModuleLoaderRecovery>;
 }
 
 /** Current-call helpers retain the instance itself, not a registry or plugin-id lookup. */

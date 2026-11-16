@@ -225,7 +225,38 @@ export type PluginRecoverySource = {
   disposeAsync: () => Promise<void>;
 };
 
-function copyRecoverySource({
+function copyRecoverySource(
+  ...args: Parameters<typeof copyRecoverySourceSteps>
+): PluginRecoverySource {
+  const steps = copyRecoverySourceSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      fs.cpSync(...step.value);
+      step = steps.next();
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+async function copyRecoverySourceAsync(
+  ...args: Parameters<typeof copyRecoverySourceSteps>
+): Promise<PluginRecoverySource> {
+  const steps = copyRecoverySourceSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      await fs.promises.cp(...step.value);
+      step = steps.next();
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+
+function* copyRecoverySourceSteps({
   rootDir,
   sourceRoot,
   capturedRoot,
@@ -239,7 +270,7 @@ function copyRecoverySource({
   boundaryRoot: string;
   sources: ReadonlyMap<string, string>;
   native?: PluginNativeRecovery;
-}): PluginRecoverySource {
+}): Generator<Parameters<typeof fs.cpSync>, PluginRecoverySource, void> {
   let native = suppliedNative;
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
@@ -249,39 +280,43 @@ function copyRecoverySource({
       path.join(directory, path.relative(boundaryRoot, filename));
     const fileReferenceTargets = new Map<string, PluginNativeArtifactFact>();
     // Keep dependency links within the new capture without reopening installed packages.
-    fs.cpSync(boundaryRoot, recovery.directory, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: (from, to) => {
-        const fact = native?.references.get(from);
-        if (!fact) {
-          if (fs.lstatSync(from).isSymbolicLink()) {
-            const target = fs.readlinkSync(from);
-            const relative = path.isAbsolute(target)
-              ? relativePluginPathInsideRootSync(boundaryRoot, target)
-              : undefined;
-            if (relative !== undefined) {
-              // Windows junctions store absolute targets. A verbatim copy would
-              // point at the seed after custody disposes it, then fail on fork.
-              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
-              fs.symlinkSync(
-                path.relative(path.dirname(to), path.join(directory, relative)),
-                to,
-                fs.statSync(from).isDirectory() ? "junction" : "file",
-              );
-              return false;
+    yield [
+      boundaryRoot,
+      recovery.directory,
+      {
+        recursive: true,
+        verbatimSymlinks: true,
+        filter: (from, to) => {
+          const fact = native?.references.get(from);
+          if (!fact) {
+            if (fs.lstatSync(from).isSymbolicLink()) {
+              const target = fs.readlinkSync(from);
+              const relative = path.isAbsolute(target)
+                ? relativePluginPathInsideRootSync(boundaryRoot, target)
+                : undefined;
+              if (relative !== undefined) {
+                // Windows junctions store absolute targets. A verbatim copy would
+                // point at the seed after custody disposes it, then fail on fork.
+                fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+                fs.symlinkSync(
+                  path.relative(path.dirname(to), path.join(directory, relative)),
+                  to,
+                  fs.statSync(from).isDirectory() ? "junction" : "file",
+                );
+                return false;
+              }
             }
+            return true;
           }
-          return true;
-        }
-        const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-        if (linkPluginNativeReference(fact.capturedPath, to, retained) !== "symlink") {
-          fileReferenceTargets.set(to, retained);
-        }
-        native!.references.set(from, retained);
-        return false;
+          const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
+          if (linkPluginNativeReference(fact.capturedPath, to, retained) !== "symlink") {
+            fileReferenceTargets.set(to, retained);
+          }
+          native!.references.set(from, retained);
+          return false;
+        },
       },
-    });
+    ];
     const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
     for (const [target, fact] of fileReferenceTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
@@ -387,6 +422,19 @@ export function createPluginGenerationSourceLookup({
         assertModuleAvailable(captured);
       }
       return copyRecoverySource({
+        rootDir,
+        sourceRoot,
+        capturedRoot,
+        boundaryRoot,
+        sources: new Map(capturedPaths),
+        native: captureNativeRecovery?.(),
+      });
+    }),
+    captureRecoverySourceAsync: markPluginSourceCaptureOperation(() => {
+      for (const captured of new Set(capturedPaths.values())) {
+        assertModuleAvailable(captured);
+      }
+      return copyRecoverySourceAsync({
         rootDir,
         sourceRoot,
         capturedRoot,

@@ -95,7 +95,10 @@ function createSourceModuleRecovery(
 /** Transfers a recovery snapshot to a fresh instance and maps its original entry paths. */
 export function preparePluginModuleLoaderRecovery(
   params: PluginInstanceModuleLoaderParams,
-  artifact: Pick<ReturnType<typeof capturePluginGenerationArtifact>, "captureRecoverySource">,
+  artifact: Pick<
+    ReturnType<typeof capturePluginGenerationArtifact>,
+    "captureRecoverySource" | "captureRecoverySourceAsync"
+  >,
   bindInstance: (params: PluginInstanceModuleLoaderParams) => void,
 ): PluginModuleLoaderOwner["bindModuleLoader"] {
   const facts: RecoveryLoadFacts = {
@@ -106,10 +109,10 @@ export function preparePluginModuleLoaderRecovery(
     pluginSdkResolution: params.pluginSdkResolution,
     recoverySourceMap: params.recoverySourceMap,
   };
-  params.instance.bindModuleLoaderRecovery(() =>
+  params.instance.bindModuleLoaderRecovery(async () =>
     createSourceModuleRecovery(
       { ...facts, sourceDigest: params.instance.sourceDigest },
-      artifact.captureRecoverySource(),
+      await (artifact.captureRecoverySourceAsync?.() ?? artifact.captureRecoverySource()),
       bindInstance,
     ),
   );

@@ -77,7 +77,17 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
     const captureParent = path.dirname(capturedRoot());
     const capturesBefore = fs.readdirSync(captureParent);
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
-    recovery.capture(new Set([plugin.id]));
+    const foregroundCapture = Promise.resolve().then(() => {
+      const added = fs
+        .readdirSync(captureParent)
+        .filter((entry) => !capturesBefore.includes(entry));
+      expect(added.length).toBeLessThanOrEqual(1);
+      for (const entry of added) {
+        expect(fs.readdirSync(path.join(captureParent, entry))).toEqual([]);
+      }
+    });
+    await recovery.capture(new Set([plugin.id]));
+    await foregroundCapture;
     expect(fs.readdirSync(captureParent)).toHaveLength(capturesBefore.length + 1);
     const capture = posts.mock.calls.findIndex(
       ([value]) => isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
@@ -130,7 +140,7 @@ it("replaces a worker-backed plugin when its previous captured source is missing
     fs.rmSync(root, { recursive: true });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
     try {
-      expect(recovery.capture(new Set([plugin.id]))).toEqual([
+      expect(await recovery.capture(new Set([plugin.id]))).toEqual([
         `Plugin ${plugin.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
       ]);
       expect([...recovery.unavailablePluginIds]).toEqual([plugin.id]);

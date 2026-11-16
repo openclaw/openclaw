@@ -63,7 +63,9 @@ export class PluginInstance {
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;
   private setupCache?: PluginCache;
-  private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
+  private captureModuleRecovery?: () =>
+    | PluginModuleLoaderRecovery
+    | Promise<PluginModuleLoaderRecovery>;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
   private readonly retainedWork = new Set<object>();
@@ -540,11 +542,13 @@ export class PluginInstance {
     return this.moduleSourceExists && this.moduleSourceExists(source);
   }
 
-  bindModuleLoaderRecovery(capture: () => PluginModuleLoaderRecovery): void {
+  bindModuleLoaderRecovery(
+    capture: () => PluginModuleLoaderRecovery | Promise<PluginModuleLoaderRecovery>,
+  ): void {
     this.captureModuleRecovery = capture;
   }
 
-  captureModuleLoaderRecovery(): PluginModuleLoaderRecovery {
+  async captureModuleLoaderRecovery(): Promise<PluginModuleLoaderRecovery> {
     if (this.disposing || this.owner?.revoked || this.controller.signal.aborted) {
       throw new PluginInstanceUnavailableError(this.pluginId);
     }
