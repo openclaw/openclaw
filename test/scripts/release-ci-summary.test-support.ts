@@ -98,6 +98,8 @@ export function rawManifest({
   };
 }
 
+// Historical producer data remains useful for parsers, artifact I/O, and rejection tests.
+// Qualification/publication acceptance must use candidatePublicationFixture with P admission.
 export function trustedMainPackageFixture({
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
@@ -216,6 +218,8 @@ export function trustedMainPackageFixture({
   const client = {
     validateChildReuse: unsupported,
     getRunAttempt: unsupported,
+    getRunAttemptJobs: unsupported,
+    loadExecutionPlan: unsupported,
     verifyRetainedPublicationArtifacts: unsupported,
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
@@ -281,7 +285,7 @@ export function trustedMainPackageFixture({
   };
 }
 
-export function trustedMainFullFixture(targetSha?: string) {
+function trustedMainFullFixture(targetSha?: string) {
   const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",

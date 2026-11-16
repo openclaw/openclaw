@@ -272,8 +272,7 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
-      authenticated.qualification.kind !== "historical" &&
-        authenticated.qualification.candidateSha === sourceSha &&
+      authenticated.qualification.candidateSha === sourceSha &&
         authenticated.qualification.qualificationSha === producerSha &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",

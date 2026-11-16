@@ -278,6 +278,7 @@ async function createPublicationRetry(conclusion = "failure") {
   return {
     ...fixture,
     publisher: {
+      ...qualificationForDocker(fixture.manifest),
       publisherSha: toolingSha,
       publisherRunId: runId,
       publisherRunAttempt: String(fixture.run.run_attempt),
@@ -446,9 +447,30 @@ function publishPrepared(
   });
 }
 
+function qualificationForDocker(manifest: PreparedRelease["manifest"]) {
+  const qualification = candidatePublicationFixture({
+    candidateSha: manifest.sourceSha,
+    qualificationSha: manifest.toolingSha,
+    candidateVersion: manifest.version,
+    runId: "500",
+  });
+  qualification.manifest.publicationArtifacts.docker = {
+    preparedRunId: manifest.producer.runId,
+    preparedRunAttempt: manifest.producer.runAttempt,
+    preparedArtifactName: manifest.artifactName,
+    preparedManifestSha256: hash(JSON.stringify(manifest, null, 2) + "\n"),
+  };
+  return {
+    publisherSha: qualification.p,
+    publisherFullRef: qualification.publisherFullRef,
+    fullReleaseManifest: qualification.manifest,
+    evidenceClient: qualification.client,
+  };
+}
+
 function verifyPrepared(fixture: Awaited<ReturnType<typeof createPreparedRelease>>) {
   return verifyDockerReleaseProducer(fixture.manifest, {
-    publisherSha: toolingSha,
+    ...qualificationForDocker(fixture.manifest),
     readApi: fixture.readApi,
   });
 }
@@ -727,7 +749,26 @@ describe("prepared Docker publication", () => {
     fixture.manifest.producer.workflowRef = workflowRef("docker-image-refresh");
     fixture.run.path = workflowPath("docker-image-refresh");
     fixture.run.event = "schedule";
-    expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
+    expect(
+      (
+        await verifyDockerReleaseProducer(fixture.manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        })
+      ).manifest,
+    ).toBe(fixture.manifest);
+  });
+
+  it("rejects supplied FRV without authenticated admission instead of using ancestry", async () => {
+    const fixture = await createPreparedRelease(false);
+    const qualification = qualificationForDocker(fixture.manifest);
+    await expect(
+      verifyDockerReleaseProducer(fixture.manifest, {
+        ...qualification,
+        fullReleaseManifest: { ...qualification.fullReleaseManifest, sourceAdmission: undefined },
+        readApi: fixture.readApi,
+      }),
+    ).rejects.toThrow(/requires authenticated P admission/u);
   });
 
   it("rejects missing provenance and mismatched source labels in actual OCI bytes", async () => {
