@@ -1796,6 +1796,7 @@ const startupEnglish = {
       menuDisplay: "Display",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
+      viewAllSessions: "View all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
