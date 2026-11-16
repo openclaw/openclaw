@@ -57,6 +57,8 @@ type HarnessCompletionSourceAdmission = {
   scope: AgentHarnessCompletionScope;
   sourceSessionKey: string;
   sourceRunId: string;
+  requesterSessionId: string;
+  requesterLifecycleRevision?: string;
   assertCurrent: () => void;
 };
 const sourceAdmissions = resolveGlobalSingleton(
@@ -69,6 +71,8 @@ export async function withAgentHarnessCompletionAdmission<T>(
     scope: AgentHarnessCompletionScope;
     sourceSessionKey: string;
     sourceRunId: string;
+    requesterSessionId: string;
+    requesterLifecycleRevision?: string;
     isSourceCurrent: () => boolean;
   },
   operation: () => Promise<T>,
@@ -90,6 +94,8 @@ export async function withAgentHarnessCompletionAdmission<T>(
 export function assertHarnessCompletionSourceAdmission(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
+  requesterSessionId: string;
+  requesterLifecycleRevision?: string;
   sourceSessionKey: string;
   sourceRunId: string;
 }): () => void {
@@ -98,6 +104,8 @@ export function assertHarnessCompletionSourceAdmission(params: {
     !admission ||
     admission.scope.requesterSessionKey !== params.requesterSessionKey ||
     admission.scope.requesterAgentId !== params.requesterAgentId ||
+    admission.requesterSessionId !== params.requesterSessionId ||
+    admission.requesterLifecycleRevision !== params.requesterLifecycleRevision ||
     admission.sourceSessionKey !== params.sourceSessionKey ||
     admission.sourceRunId !== params.sourceRunId
   ) {

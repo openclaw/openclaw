@@ -128,6 +128,8 @@ export function captureRequesterSettleRunIdentity(entry: SubagentRunRecord) {
     controllerSessionKey: entry.controllerSessionKey,
     controllerStorePath: entry.controllerStorePath,
     requesterTurnRunId: entry.requesterTurnRunId,
+    completionRequesterSessionId: entry.completionRequesterSessionId,
+    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
   };
 }
 

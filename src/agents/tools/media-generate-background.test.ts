@@ -194,8 +194,11 @@ it("wakes the original conversation with generated attachments and visible-reply
     ...completed,
     attachments,
   });
-  // The completion goes to the requester chat by key; no captured session id is passed.
-  expect(announce.mock.lastCall?.[0]).not.toHaveProperty("completionRequesterSessionId");
+  expect(announce.mock.lastCall?.[0]).toMatchObject({
+    completionRequesterSessionId: completed.handle.requesterTranscript?.sessionId,
+    completionRequesterLifecycleRevision:
+      completed.handle.requesterTranscript?.lifecycleRevision ?? undefined,
+  });
   expectFallbackMediaAnnouncement({
     deliverAnnouncementMock: announce,
     requesterSessionKey: completed.handle.requesterSessionKey,

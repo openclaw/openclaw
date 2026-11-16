@@ -412,6 +412,8 @@ it.each([
   const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
   if (ending === "private") {
     fixture.params.completionTarget = "parent";
+    fixture.params.completionRequesterSessionId = "requester-session";
+    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
   }
   if (ending === "child") {
     fixture.params.requesterIsSubagent = true;

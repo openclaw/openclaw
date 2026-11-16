@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
-import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
@@ -73,7 +72,9 @@ async function recordRequiredCompletionFailure(
     entry.expectsCompletionMessage !== true ||
     entry.completionTarget !== "parent" ||
     entry.execution.status !== "terminal" ||
-    entry.pauseReason === "sessions_yield"
+    entry.pauseReason === "sessions_yield" ||
+    !entry.completionRequesterSessionId ||
+    !entry.completionRequesterLifecycleRevision
   ) {
     return;
   }
@@ -94,22 +95,15 @@ async function recordRequiredCompletionFailure(
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
   // This records a failed obligation, without borrowing its retired execution authority.
-  // The notice goes to the requester chat as it is now; a deleted requester gets none.
-  const requester = {
-    agentId: entry.requesterAgentId,
-    sessionKey: entry.requesterSessionKey,
-    storePath: entry.requesterStorePath,
-  };
-  const current = await readSessionEntryReadOnlyInWorker(requester);
-  if (!current?.sessionId) {
-    return;
-  }
+  // A deleted/reset requester refuses the append; never redirect it to a replacement.
   await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
-        ...requester,
-        sessionId: current.sessionId,
-        expectedLifecycleRevision: current.lifecycleRevision,
+        agentId: entry.requesterAgentId,
+        sessionKey: entry.requesterSessionKey,
+        storePath: entry.requesterStorePath,
+        sessionId: entry.completionRequesterSessionId,
+        expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
       },
       {
         kind: "custom",

@@ -73,8 +73,11 @@ describe("requester pause notices", () => {
       settledEntry: child,
       completeBatch: () => void consumeSubagentPauseNotice(child),
     });
-    // A replacement session of the same chat keeps the turnover owed and receives it.
     await expectWake(false, 1, params);
+    if (replacedSession) {
+      expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
+      return;
+    }
     expect(child.requesterSettleWake).toMatchObject({
       status: "pending",
       pauseNotice: { acknowledgment: "TURNOVER" },

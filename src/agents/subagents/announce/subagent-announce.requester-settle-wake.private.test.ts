@@ -77,11 +77,39 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (scenario.frozen) {
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     }
-    // The chat key is the address: a reset or a replacement session still receives the results.
-    expect(await wake()).toBe(true);
+    expect(await wake()).toBe(!current);
+    if (current) {
+      expect(deliverSpy).not.toHaveBeenCalled();
+      expect(recordGatewaySessionRunFailure).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          target: expect.objectContaining({
+            sessionKey: REQUESTER,
+            sessionId: current.sessionId,
+            expectedLifecycleRevision: current.lifecycleRevision,
+          }),
+          notice: expect.stringContaining("previous session"),
+        }),
+      );
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: expect.objectContaining({ sessionKey: REQUESTER, sessionId: current.sessionId }),
+          ...(current.lifecycleRevision ? { lifecycleRevision: current.lifecycleRevision } : {}),
+        }),
+      );
+      expect(completeBatchSpy).toHaveBeenCalledWith(
+        ["run-b"],
+        expect.anything(),
+        expect.objectContaining({
+          delivered: false,
+          reason: "completion_handoff_unavailable",
+          disposition: "intentional_non_delivery",
+        }),
+      );
+      return;
+    }
     const call = deliveredCallArg();
     expect(recordGatewaySessionRunFailure).not.toHaveBeenCalled();
-    expect(onUpdate).not.toHaveBeenCalled();
+    expect(call.completionRequesterSessionId).toBe("sess-main");
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded && marked ? undefined : "parent");
     if (yielded && single) {
@@ -109,5 +137,23 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     expect(deliveredCallArg().triggerMessage).toContain(
       "send it through an available, permitted messaging tool",
     );
+  });
+
+  it("keeps the held results owed when the replacement notice cannot be persisted", async () => {
+    const children = settledPrivateChildren({ yielded: true });
+    const onUpdate = vi.fn();
+    onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
+    setSessionStore({ [REQUESTER]: { sessionId: "new-parent" } });
+    vi.mocked(recordGatewaySessionRunFailure).mockImplementationOnce(async () => {
+      throw new Error("notice unavailable");
+    });
+    expect(await wake()).toBe(false);
+    expect(completeBatchSpy).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(children.every((child) => child.requesterSettleWake !== undefined)).toBe(true);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(await wake()).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+    expect(onUpdate).toHaveBeenCalledOnce();
   });
 });

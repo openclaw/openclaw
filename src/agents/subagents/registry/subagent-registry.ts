@@ -570,7 +570,8 @@ const publicApi = createSubagentRegistryPublicApi({
 
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
-export const listCollectorRunsForRequester = publicApi.listCollectorRunsForRequester;
+export const listCollectorRunsForRequesterIncarnation =
+  publicApi.listCollectorRunsForRequesterIncarnation;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;

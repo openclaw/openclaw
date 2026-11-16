@@ -139,8 +139,7 @@ export function createRequesterSettleCases() {
     settleCase(
       "does not record a canceled partial answer as a visible final",
       { payloads: [{ text: "partial answer" }] },
-      // The settle turn is bound to the requester chat, so a canceled turn leaves the wake owed.
-      { ...localOnly, status: "timeout", expected: missingRequesterFinal },
+      { ...localOnly, status: "timeout", expected: deliveredRequesterFinal },
     ),
     settleCase(
       "records a non-yielded visible final without requiring a reply",

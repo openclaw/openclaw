@@ -490,10 +490,11 @@ describe("subagent registry query regressions", () => {
     },
   );
 
-  it("preserves requester registration order without scanning unrelated runs", () => {
+  it("preserves requester registration order and incarnations without scanning unrelated runs", () => {
     const root = "agent:main:bucket-requester";
     const child = makeRun("bucket-child", {
       requesterSessionKey: root,
+      completionRequesterSessionId: "incarnation",
       childSessionKey: "shared-child",
       childAgentId: "main",
     });
@@ -502,7 +503,16 @@ describe("subagent registry query regressions", () => {
       childAgentId: "research",
       generation: 2,
     });
-    const sibling = makeRun("bucket-sibling", { requesterSessionKey: root });
+    const sibling = makeRun("bucket-sibling", {
+      requesterSessionKey: root,
+      completionRequesterSessionId: "incarnation",
+    });
+    const successor = makeRun("bucket-successor", {
+      childSessionKey: child.childSessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:another-requester",
+      generation: 3,
+    });
     const rows = [
       child,
       sibling,
@@ -514,13 +524,17 @@ describe("subagent registry query regressions", () => {
         subagentRuns.set(row.runId, row);
       }
       using scans = vi.spyOn(subagentRuns, "values");
-      const read = () => listSubagentRunsForRequester(root);
+      const read = () => listSubagentRunsForRequester(root, { requesterSessionId: "incarnation" });
       expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
       subagentRuns.set(child.runId, { ...child, task: "updated task" });
       expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      subagentRuns.set(successor.runId, successor);
+      expect(read()).toEqual([subagentRuns.get(sibling.runId)]);
+      subagentRuns.delete(successor.runId);
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
       expect(scans).not.toHaveBeenCalled();
     } finally {
-      for (const row of rows) {
+      for (const row of [...rows, successor]) {
         subagentRuns.delete(row.runId);
       }
     }

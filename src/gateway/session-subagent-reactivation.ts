@@ -29,8 +29,8 @@ export async function reactivateCompletedSubagentSession(params: {
     activeSessionAgentId: string;
     sessionEntry?: SessionEntry;
   };
-  /** A wake continues the task paused on this chat; without a paused task it stays a follow-up. */
-  continuesPausedTask?: true;
+  /** Continue only the task paused by this run; any other pause leaves the turn a follow-up. */
+  pausedRunId?: string;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
@@ -45,9 +45,9 @@ export async function reactivateCompletedSubagentSession(params: {
     (entry) => entry.pauseReason === "sessions_yield",
   );
   if (
-    params.continuesPausedTask &&
+    params.pausedRunId &&
     // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
-    (!paused || paused.killIntent || paused.killReconciliation)
+    (paused?.runId !== params.pausedRunId || paused.killIntent || paused.killReconciliation)
   ) {
     return false;
   }

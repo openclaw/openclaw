@@ -236,6 +236,8 @@ describe("live generated-media completion", () => {
         sendMessage,
         sourceTool: "image_generate",
         internalEvents: imageCompletionEvents(),
+        completionRequesterSessionId: "requester-session-dm",
+        completionRequesterLifecycleRevision: "media-lifecycle",
         requesterEntry: {
           sessionId: "requester-session-dm",
           lifecycleRevision: "media-lifecycle",
@@ -255,17 +257,19 @@ describe("live generated-media completion", () => {
         ...params,
         ...(owner === "replaced" ? { currentRequesterSessionId: "replacement" } : {}),
       });
-      // A replacement session of the requester chat receives the media completion.
-      const delivered = owner !== "retired";
       expect(result).toMatchObject(
-        delivered
+        owner === "current"
           ? { delivered: true, path: "direct" }
-          : { delivered: false, reason: "source_owner_changed" },
+          : {
+              delivered: false,
+              reason:
+                owner === "retired" ? "source_owner_changed" : "completion_handoff_unavailable",
+            },
       );
-      expect(callGateway).toHaveBeenCalledTimes(delivered ? 1 : 0);
-      if (delivered) {
+      expect(callGateway).toHaveBeenCalledTimes(owner === "current" ? 1 : 0);
+      if (owner === "current") {
         expectGatewayAgentParams(callGateway, {
-          expectedExistingSessionId: owner === "replaced" ? "replacement" : "requester-session-dm",
+          expectedExistingSessionId: "requester-session-dm",
           inputProvenance: expect.objectContaining({
             kind: "inter_session",
             sourceChannel: "internal",

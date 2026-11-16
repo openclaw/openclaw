@@ -144,11 +144,15 @@ describe("requester settle routing and session authority", () => {
             resolveGatewayContext: () => context,
           }),
       );
-      // The settle turn binds the requester chat as it is now, also after a reset or replacement.
-      expect(client.connect.scopes).toEqual(["operator.sessions.write"]);
+      const unbound = mode !== "current";
+      expect(client.connect.scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
       const registry = context.getGatewayMethodRegistry!();
       const authorization = authorizeGatewayMethod("agent", client, request, registry, context);
-      expect(authorization).toEqual({ error: null, sessionScope: "operator.sessions.write" });
+      if (unbound) {
+        expect(authorization.error).toMatchObject({ message: "missing scope: operator.write" });
+      } else {
+        expect(authorization).toEqual({ error: null, sessionScope: "operator.sessions.write" });
+      }
       expect(
         authorizeGatewayMethod("agent", client, { ...request }, registry, context).error,
       ).toMatchObject({

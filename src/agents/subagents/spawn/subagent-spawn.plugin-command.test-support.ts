@@ -118,15 +118,17 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
         }
         return { text: "review queued" };
       }
-      // The chat owns its children, so a reset keeps the stopped child collectable.
-      const afterReset = await native.collect({
-        ids: [expectDefined(childRunId, "accepted run")],
-        timeoutSeconds: 0,
+      expect(
+        await native.collect({
+          ids: [expectDefined(childRunId, "accepted run")],
+          timeoutSeconds: 0,
+        }),
+      ).toMatchObject({
+        errors: [{ runId: childRunId, error: "not_owner" }],
+        completed: [],
+        pending: [],
       });
-      expect(afterReset.errors ?? []).not.toContainEqual(
-        expect.objectContaining({ error: "not_owner" }),
-      );
-      return { text: "old child still owned" };
+      return { text: "old child refused" };
     });
     // The actual registrar reads the manifest record before loader publication.
     const api = builder.createApi(record, { config: bound.cfg });
@@ -296,7 +298,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
           activeSignal = undefined;
           expect(await invoke()).toEqual({
             shouldContinue: false,
-            reply: { text: "old child still owned" },
+            reply: { text: "old child refused" },
           });
         },
       );

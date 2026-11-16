@@ -95,7 +95,7 @@ it.each([
   "replaced-session",
   "replaced-revision",
 ] as const)(
-  "records a required failed completion in its current requester transcript (%s)",
+  "records a required failed completion in its original requester transcript (%s)",
   async (route) => {
     using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const expiry = route.startsWith("expiry-");
@@ -226,9 +226,8 @@ it.each([
       });
     }
     const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
-    // The notice goes to the requester chat as it is now, also after a reset or replacement.
     expect(notices).toEqual(
-      expiry
+      route.startsWith("replaced-") || expiry
         ? []
         : [
             expect.objectContaining({

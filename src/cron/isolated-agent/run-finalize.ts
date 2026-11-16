@@ -2,7 +2,7 @@
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
-import { listChatRunningSessions } from "../../agents/bash-tools.exec-notify.js";
+import { listRunningSessions } from "../../agents/bash-process-registry.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -286,11 +286,8 @@ export async function finalizeCronRun(params: {
   });
   // Subagents are awaited: their output is this run's output. Background commands are neither
   // awaited nor stopped, since they may be services; name the ones still running.
-  const runningCommandIds = listChatRunningSessions({
-    agentId: prepared.agentId,
-    sessionKey: prepared.runSessionKey,
-  })
-    .filter((session) => session.backgrounded)
+  const runningCommandIds = listRunningSessions()
+    .filter((session) => session.originRunId === params.runId && session.backgrounded)
     .map((session) => session.id);
   const runDiagnostics = mergeCronRunDiagnostics(
     prepared.preflightDiagnostics,

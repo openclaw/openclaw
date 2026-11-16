@@ -6,8 +6,8 @@ import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
 /**
  * Human replies inherit the retained child's native custody. A tool handoff result or a
- * background command exit continues the task paused on this chat, whichever run paused it;
- * other internal turns stay separate follow-ups.
+ * background command exit continues the task whose own run yielded; other internal turns stay
+ * separate follow-ups.
  */
 export async function prepareReplySubagentContinuation(
   turn: AgentTurnParams,
@@ -17,12 +17,14 @@ export async function prepareReplySubagentContinuation(
 ): Promise<void> {
   const entry = turn.getActiveSessionEntry();
   const provenance = turn.followupRun.run.inputProvenance;
-  const handoff =
+  const handoffRunId =
     provenance?.kind === "internal_system" &&
-    (provenance.sourceTool === "tool_handoff" || provenance.sourceTool === "exec");
+    (provenance.sourceTool === "tool_handoff" || provenance.sourceTool === "exec")
+      ? provenance.runId
+      : undefined;
   if (
     !turn.sessionKey ||
-    (provenance && provenance.kind !== "external_user" && !handoff) ||
+    (provenance && provenance.kind !== "external_user" && !handoffRunId) ||
     !(entry?.spawnedBy || entry?.subagentRole || (entry?.spawnDepth ?? 0) > 0)
   ) {
     return;
@@ -41,7 +43,8 @@ export async function prepareReplySubagentContinuation(
     sessionKey: turn.sessionKey,
     runId,
     // Handoff results continue the original task rather than restating it.
-    ...(handoff ? { continuesPausedTask: true as const } : { task: turn.followupRun.prompt }),
+    ...(handoffRunId ? {} : { task: turn.followupRun.prompt }),
+    ...(handoffRunId ? { pausedRunId: handoffRunId } : {}),
     gatewayContextResolver:
       readChannelContextGatewayContextResolver(turn.sessionCtx) ??
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
