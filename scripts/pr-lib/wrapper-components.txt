@@ -32,6 +32,7 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/clawhub-trust-error-details.ts
 packages/gateway-protocol/src/compiled/protocol.generated/predicates.js
 packages/gateway-protocol/src/compiled/protocol.generated/schema-presence.js
 packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-approval.js

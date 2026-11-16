@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import * as prompt from "./prompt.js";
 import { runTemplatesAddCommand } from "./templates-cli.runtime.js";

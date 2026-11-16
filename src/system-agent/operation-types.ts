@@ -1,5 +1,5 @@
 import type {
-  TemplatesAddApplyParams,
+  TemplatesAddReviewedApplyParams,
   TemplatesAddPlanParams,
 } from "../../packages/gateway-protocol/src/schema/templates.js";
 // Leaf contract for the parsed OpenClaw operation shape. Uses only type imports so
@@ -14,7 +14,7 @@ export type SystemAgentTemplateOperation =
       kind: "template-install";
       agentId: string;
       planIntegrity: string;
-    } & TemplatesAddApplyParams);
+    } & TemplatesAddReviewedApplyParams);
 
 /** Parsed OpenClaw operation before approval/execution. */
 export type SystemAgentOperation =

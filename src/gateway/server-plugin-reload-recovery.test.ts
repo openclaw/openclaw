@@ -77,7 +77,16 @@ it("joins host-local recovery cleanup without blocking foreground work", async (
     const capturesBefore = fs.readdirSync(captureParent);
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
     try {
-      expect(recovery.capture(new Set([plugin.id]))).toEqual([]);
+      // The real copy must yield before populating the new recovery directory.
+      const foregroundCapture = Promise.resolve().then(() => {
+        const added = fs
+          .readdirSync(captureParent)
+          .filter((entry) => !capturesBefore.includes(entry));
+        expect(added).toHaveLength(1);
+        expect(fs.readdirSync(path.join(captureParent, added[0]!))).toEqual([]);
+      });
+      expect(await recovery.capture(new Set([plugin.id]))).toEqual([]);
+      await foregroundCapture;
       const addedCaptures = fs
         .readdirSync(captureParent)
         .filter((entry) => !capturesBefore.includes(entry));
@@ -117,7 +126,7 @@ it("replaces a worker-backed plugin when its previous captured source is missing
     fs.rmSync(root, { recursive: true });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
     try {
-      expect(recovery.capture(new Set([plugin.id]))).toEqual([
+      expect(await recovery.capture(new Set([plugin.id]))).toEqual([
         `Plugin ${plugin.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
       ]);
       expect([...recovery.unavailablePluginIds]).toEqual([plugin.id]);
