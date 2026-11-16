@@ -65,7 +65,7 @@ export function renderComposerTextarea(
       }
     };
   });
-  const inputId = paneDomId(composer.paneId, "composer-input");
+  const inputId = paneDomId(composer.paneId, "input");
   return (
     <>
       {/* Safari AutoFill guesses a field's type from nearby page text unless a label
