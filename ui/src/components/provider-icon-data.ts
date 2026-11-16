@@ -135,7 +135,6 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   clawrouter: "ClawRouter",
   deepinfra: "DeepInfra",
   deepseek: "DeepSeek",
-  elevenlabs: "ElevenLabs",
   fal: "fal",
   "github-copilot": "GitHub Copilot",
   google: "Google",
