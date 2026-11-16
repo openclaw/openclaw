@@ -360,3 +360,45 @@ it("publishes provider tier restrictions through the model catalog projection", 
     });
   }
 });
+
+it("asks speed policy about the implicit OpenClaw runtime a row will use", async () => {
+  const provider = "example-router";
+  const ids = ["synthetic-priority-route", "synthetic-standard-route"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  // Bundled speed policies answer only for the runtime that maps the request.
+  pluginRegistry.providers.push({
+    pluginId: provider,
+    source: "test",
+    provider: {
+      id: provider,
+      label: "Example router",
+      auth: [],
+      resolveFastModeSupport: ({ modelId, runtimeId }) =>
+        runtimeId === "openclaw" ? modelId === ids[0] : undefined,
+    },
+  });
+  const context = createModelsListTestContext({
+    pluginRegistry,
+    cfg: { agents: { defaults: { model: `${provider}/${ids[0]}` } } },
+    catalog: ids.map((id) => ({ id, name: id, provider })),
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        [`${provider}:fixture`]: { type: "api_key", provider, key: "synthetic-api-key" },
+      },
+    },
+  });
+  const models = (await preparePublic(context)).read().models;
+  for (const [index, supportsFastMode] of [
+    [0, true],
+    [1, false],
+  ] as const) {
+    const row = models.find((candidate) => candidate.id === ids[index]);
+    expect(row?.agentRuntime).toMatchObject({
+      id: "openclaw",
+      source: "implicit",
+      cloudPlacementExecutionMode: "worker-turn",
+    });
+    expect(row?.supportsFastMode).toBe(supportsFastMode);
+  }
+});

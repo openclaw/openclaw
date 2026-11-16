@@ -99,6 +99,20 @@ it("uses model-picker changes and configured defaults as the environment authori
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
 });
+it("returns to the Gateway's implicit host runtime without pinning it", async () => {
+  const implicitHost = {
+    ...model,
+    agentRuntime: { ...nativeRuntime(), source: "implicit" as const },
+  };
+  const { context } = contextWith([implicitHost]);
+  const { control, find } = modelControl(context);
+  control.load(context, "main", true, { agent });
+  await waitForModelControl(control, context, "main", agent);
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBeUndefined();
+  expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
+});
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");
   const subscription = modelAccount("subscription", "Subscription account", "oauth");
