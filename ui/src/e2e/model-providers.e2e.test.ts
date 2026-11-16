@@ -426,6 +426,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("configures credentials, probes a provider, and changes default models", async () => {
+    const probeResponse = {
+      provider: "openai",
+      status: "ok",
+      latencyMs: 9_087,
+      results: [{ label: "Config API key", status: "ok", latencyMs: 87 }],
+    };
     const context = await recordedContext(1200);
     const page = await context.newPage();
     const config = {
@@ -457,7 +463,10 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           cases: [
             {
               match: { view: "configured" },
-              response: { models: configuredModels },
+              response: {
+                models: configuredModels,
+                providerOutcomes: [{ provider: "openai", status: "ready" }],
+              },
             },
             {
               match: { view: "all", agentId: "main", refresh: true },
@@ -473,6 +482,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
                     apiKeySupported: true,
                   },
                 ],
+                providerOutcomes: [{ provider: "openai", status: "ready" }],
               },
             },
           ],
@@ -490,12 +500,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             },
           ],
         },
-        "models.probe": {
-          provider: "openai",
-          status: "ok",
-          latencyMs: 9_087,
-          results: [{ label: "Config API key", status: "ok", latencyMs: 87 }],
-        },
+        "models.probe": probeResponse,
         ...emptyUsage(NOW),
       },
     });
@@ -586,6 +591,30 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       expect(await openaiCard.locator(".model-providers__probe-summary").textContent()).toBe(
         "Access verified",
       );
+      expect(await openaiCard.locator(".provider-row__status").textContent()).toBe("Ready");
+
+      // A failed check must not leave an unqualified green Ready in the summary.
+      await gateway.setMethodResponse("models.probe", {
+        provider: "openai",
+        status: "auth",
+        error: "401 from provider",
+        results: [{ label: "Config API key", status: "auth", error: "401 from provider" }],
+      });
+      const failedProbeCount = (await gateway.getRequests("models.probe")).length;
+      await gateway.deferNext("models.probe");
+      await testConnection.focus();
+      await page.keyboard.press("Enter");
+      await gateway.waitForRequest("models.probe", { after: failedProbeCount });
+      await gateway.resolveDeferred("models.probe");
+      await expect
+        .poll(() => openaiCard.locator(".provider-row__status").textContent())
+        .toBe("Authentication failed");
+      // The row keeps its detailed check with recovery guidance beside the badge.
+      expect(await openaiCard.locator(".model-providers__probe-summary").textContent()).toBe(
+        "Authentication failed",
+      );
+      // Later flows keep the passing check response they were written against.
+      await gateway.setMethodResponse("models.probe", probeResponse);
 
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       const defaultPatchCount = (await gateway.getRequests("config.patch")).length;

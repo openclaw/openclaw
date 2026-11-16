@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { beforeEach, expect, it } from "vitest";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildModelProviderCards } from "./data.ts";
@@ -211,6 +212,78 @@ it("keeps one signal per state: the row speaks for an only account, not beside o
     props({ cards: [card({ ...rejected, apiKey: { source: "config" }, profiles: [failing] })] }),
   );
   expect(accountStatus(failing.profileId, besideKey)).toBe("Sign-in expired");
+});
+
+it("reflects a failed connection check in the provider summary instead of Ready", () => {
+  const ready = card({
+    id: "openai",
+    displayName: "OpenAI",
+    catalogStatus: "ready",
+    modelCount: 36,
+    availableModelCount: 36,
+  });
+  const viewProps = props({ cards: [ready], configuredModels: [] });
+  const container = mount(viewProps);
+  const status = () => text(container.querySelector(".provider-row__status"));
+  expect(status()).toBe("Ready");
+  const failed: ModelsProbeResult = {
+    provider: "openai",
+    status: "auth",
+    error: "401 from provider",
+    results: [{ label: "openai (API key)", status: "auth", error: "401 from provider" }],
+  };
+  mount({ ...viewProps, probeResults: { openai: failed } }, container);
+  expect(status()).toBe("Authentication failed");
+  mount({ ...viewProps, probeResults: { openai: { ...failed, status: "billing" } } }, container);
+  expect(status()).toBe("Billing problem");
+  // One failing credential beside a passing one keeps a warning, not a green Ready.
+  mount(
+    {
+      ...viewProps,
+      probeResults: {
+        openai: {
+          provider: "openai",
+          status: "ok",
+          results: [
+            { label: "openai (config key)", status: "auth" },
+            { label: "openai (saved key)", status: "ok" },
+          ],
+        },
+      },
+    },
+    container,
+  );
+  expect(status()).toBe("Access verified with warnings");
+  // A passing check keeps the catalog-backed Ready badge.
+  mount(
+    {
+      ...viewProps,
+      probeResults: {
+        openai: {
+          provider: "openai",
+          status: "ok",
+          results: [{ label: "openai (API key)", status: "ok", latencyMs: 312 }],
+        },
+      },
+    },
+    container,
+  );
+  expect(status()).toBe("Ready");
+  // A rejected credential keeps its more specific existing signal.
+  mount(
+    {
+      ...viewProps,
+      cards: [card({ ...ready, catalogStatus: "auth-rejected" })],
+      probeResults: { openai: failed },
+    },
+    container,
+  );
+  expect(status()).toBe("Credentials rejected");
+  // The opened row still shows the detailed check with its recovery guidance.
+  mount({ ...viewProps, probeResults: { openai: failed } }, container);
+  expect(text(container.querySelector(".model-providers__probe"))).toContain(
+    "Authentication failed",
+  );
 });
 
 it("counts a provider's only unavailable model in the singular", () => {

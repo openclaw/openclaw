@@ -1,4 +1,4 @@
-import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import type { ModelAuthStatusProfile, ModelsProbeResult } from "../../api/types.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -114,7 +114,32 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
-export function renderProviderStatus(card: ModelProviderCard) {
+/**
+ * The summary badge for the latest connection check, when it disagrees with the catalog.
+ * Reuses the row's own check labels; a passing check leaves the catalog badge alone.
+ */
+function probeStatusBadge(probe: ModelsProbeResult | undefined) {
+  if (!probe) {
+    return undefined;
+  }
+  const failed = probe.status !== "ok";
+  const partial = probe.results.some((target) => target.status !== "ok");
+  if (!failed && !partial) {
+    return undefined;
+  }
+  return (
+    <SettingsStatus
+      kind={failed ? "danger" : "warn"}
+      label={t(
+        failed
+          ? `modelProviders.probe.status.${probe.status}`
+          : "modelProviders.probe.status.partial",
+      )}
+    />
+  );
+}
+
+export function renderProviderStatus(card: ModelProviderCard, probe?: ModelsProbeResult) {
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
@@ -127,6 +152,11 @@ export function renderProviderStatus(card: ModelProviderCard) {
   }
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);
+  }
+  // The latest live check is the most recent word on access; the opened row keeps its detail.
+  const probeBadge = probeStatusBadge(probe);
+  if (probeBadge) {
+    return probeBadge;
   }
   const attention = providerUsageAttention(card.usage);
   if (attention) {
