@@ -109,8 +109,6 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
-  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
-  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -417,8 +415,6 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
-    const previewAfterGroup = new Map<string, string>();
-    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -441,12 +437,8 @@ export function collapseCompletedTurnWork(
           }
           workRunIds.add(runId);
         }
-        if (precedingAnswerKey) {
-          previewAfterGroup.set(item.key, precedingAnswerKey);
-        }
       } else {
         answers.push(item);
-        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -491,7 +483,6 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
-      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));

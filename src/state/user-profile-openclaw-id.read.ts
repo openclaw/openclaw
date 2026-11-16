@@ -1,8 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { delegatedProfileProvider } from "./user-profile-delegation.js";
 import {
   openClawIdProfileProvider,
   type OpenClawIdUserProfiles,
@@ -11,7 +13,7 @@ import { userProfilesDb } from "./user-profiles-internal.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 // The provider-specific discriminator excludes every GitHub verified-email proof format.
-function readDisplayEmail(value: string | null): string | null {
+export function readOpenClawIdDisplayEmail(value: string | null): string | null {
   if (value === null) {
     return null;
   }
@@ -78,7 +80,7 @@ export function readOpenClawIdUserProfilesInDatabase(
                 {
                   id: profile.id,
                   displayName: profile.display_name,
-                  email: readDisplayEmail(identity.verified_email_json),
+                  email: readOpenClawIdDisplayEmail(identity.verified_email_json),
                 },
               ],
             ]
@@ -144,11 +146,41 @@ export function readOpenClawIdLinksOfProfileInDatabase(
       .orderBy("created_at"),
   ).rows.map((identity) => ({
     accountId: identity.subject,
-    email: readDisplayEmail(identity.verified_email_json),
+    email: readOpenClawIdDisplayEmail(identity.verified_email_json),
   }));
 }
 
 export const openClawIdUserProfileReadOperations = {
+  "userProfiles.openClawId.inviteCandidates": (_input: Record<string, never>, db) => ({
+    type: "userProfiles.openClawId.inviteCandidates" as const,
+    profiles:
+      !tableExists(db, "user_profiles") || !tableExists(db, "user_profile_identities")
+        ? []
+        : executeSqliteQuerySync(
+            db,
+            userProfilesDb(db)
+              .selectFrom("user_profiles")
+              .select(["id", "display_name as displayName"])
+              .where("id", "!=", GATEWAY_OWNER_PROFILE_ID)
+              .where("merged_into", "is", null)
+              .where((eb) =>
+                eb.not(
+                  eb.exists(
+                    eb
+                      .selectFrom("user_profile_identities")
+                      .select("profile_id")
+                      .whereRef("profile_id", "=", "user_profiles.id")
+                      .where("provider", "in", [
+                        openClawIdProfileProvider,
+                        delegatedProfileProvider,
+                      ]),
+                  ),
+                ),
+              )
+              .orderBy("display_name")
+              .orderBy("id"),
+          ).rows,
+  }),
   "userProfiles.openClawId.read": ({ accountIds }: { accountIds: readonly string[] }, db) => ({
     type: "userProfiles.openClawId.read" as const,
     profiles: readOpenClawIdUserProfilesInDatabase(db, accountIds),

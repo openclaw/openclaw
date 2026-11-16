@@ -394,7 +394,7 @@ describe("devices inventory rendering", () => {
 
   it("renders Gateway resources and uptime from system info", () => {
     const container = renderDevicesContainer({
-      presence: [{ host: "This computer", mode: "gateway", ts: 1000 }],
+      presence: [{ host: "studio-server", mode: "gateway", ts: 1000 }],
       gatewaySystemInfo: {
         ...deviceSystemInfo,
         uptimeMs: (11 * 24 + 4) * 3600000,
@@ -406,7 +406,9 @@ describe("devices inventory rendering", () => {
         diskAvailableBytes: 1.2 * 1024 ** 4,
       },
     });
-    const row = getSettingsRow(container, "This computer");
+    const row = getSettingsRow(container, "studio-server");
+    expect(row.textContent).toContain("Computer running OpenClaw");
+    expect(row.textContent).not.toContain("This computer");
     expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
     expect(row.querySelector(".device-resource--load")?.textContent).toContain("3.2");
     expect(row.textContent).toContain("1.2 TB free");
@@ -1020,7 +1022,7 @@ describe("devices access gating", () => {
     const row = getSettingsRow(container, "Device One");
     for (const name of ["remove", "editAlias"]) {
       expect(action(row, name).disabled).toBe(true);
-      expect(action(row, name).title).toContain("only admins");
+      expect(action(row, name).title).toContain("Admin access required");
       action(row, name).click();
     }
     const pendingNode = getSettingsRow(getSection(container, "Pending approval"), "Pending node");

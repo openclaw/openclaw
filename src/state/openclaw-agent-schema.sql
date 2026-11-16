@@ -639,6 +639,13 @@ CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
 CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
   ON context_engine_turn_outbox(engine_id, created_at);
 
+CREATE TABLE IF NOT EXISTS agent_tool_usage (
+  tool_id TEXT PRIMARY KEY NOT NULL,
+  score REAL NOT NULL CHECK (score >= 0),
+  updated_at INTEGER NOT NULL
+) STRICT;
+-- END AGENT TOOL USAGE
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,

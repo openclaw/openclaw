@@ -1,5 +1,4 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   asNullableObjectRecord as readRecord,
@@ -251,18 +250,7 @@ function extractToolPresentation(
   if (browserToolName !== "browser" || !tab || !target) {
     return {};
   }
-  const url = typeof tab.url === "string" ? truncateUtf16Safe(tab.url, 2_048) : "";
-  return {
-    browserTab: target,
-    preview: isHttpUrl(url)
-      ? {
-          kind: "browser-tab",
-          ...target,
-          url,
-          ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
-        }
-      : undefined,
-  };
+  return { browserTab: target };
 }
 
 function resolveToolCallId(
@@ -493,7 +481,7 @@ function extractToolCards(message: unknown): ToolCard[] {
           card.outputText === undefined &&
           !fallbackMatchedCards.has(card),
       );
-    // Browser previews trigger I/O. Nested content cannot override its tool
+    // Browser routes select the panel target. Nested content cannot override its tool
     // envelope, and a paired result cannot override the authoritative call.
     const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
     const browserToolName =

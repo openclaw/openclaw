@@ -1,0 +1,14 @@
+# Member-definition authority across transport admission, retained/recovered work,
+# required access-policy plugins, real Gateway activation/reload persistence,
+# delayed startup/reload-off activation, and canonical profile-merge write guards.
+# Includes the linked-owner grant regression's member-aware options signature
+# and explicit named-role fixture opt-in plus recovery helper imports/extraction
+# needed by the rebased line cap.
+# Main restack: explicit member catalogs in delegated ingress/MCP fixtures and
+# a transient policy recovery regression retaining the resolved membership role.
+# CI consumer fixtures: explicit member catalogs, runtime publication, and cleanup.
+# Publication: attested member capture/restoration, revocation, legacy/nonmember parity,
+# malformed-record isolation, task handoff, and accepted-snapshot retry preservation.
+# CI integration: committed member fixture snapshot and owned hot-reload recovery.
+# Historical member retries: original-grant continuity and actor/principal boundaries.
+1424

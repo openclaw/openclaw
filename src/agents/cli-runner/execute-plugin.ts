@@ -36,7 +36,6 @@ import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -159,10 +158,6 @@ async function createPluginToolPermissionHandler(params: {
         turnSourceTo: run.chatId ?? run.currentChannelId,
         turnSourceAccountId: run.agentAccountId,
         turnSourceThreadId: run.currentThreadTs,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: run.config,
-          agentId: run.agentId,
-        }),
       },
     });
     try {
@@ -561,6 +556,8 @@ export async function executePluginOwnedProcess(params: {
     assertCurrent();
     const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
+      // Warm transports retain their first turn's async context. Bind every host
+      // callback here so reused transports enter the current turn's source scope.
       const execution = params.execute({
         command,
         argv0: params.executionArgv0,
@@ -577,30 +574,33 @@ export async function executePluginOwnedProcess(params: {
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         useResume: params.useResume,
         abortSignal: signal,
-        assertCurrent,
-        ...(prepareCredentialUse ? { prepareCredentialUse } : {}),
+        assertCurrent: AsyncLocalStorage.bind(assertCurrent),
+        ...(prepareCredentialUse
+          ? { prepareCredentialUse: AsyncLocalStorage.bind(prepareCredentialUse) }
+          : {}),
         // Host-internal, not in the plugin SDK type, like the forwarded auth credential: a
         // native login can change after the check above, so the bundled Claude runtime
         // repeats it where saved turn context leaves, at prompt send and the prompt hook answer.
         ...(historyWriter?.bindsNativeLogin
           ? {
-              assertPrivateInputCurrent: () =>
+              assertPrivateInputCurrent: AsyncLocalStorage.bind(() =>
                 historyWriter.checkNativeLoginBoundary(historyWriter.replaysHistory),
+              ),
             }
           : {}),
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
         ...(liveSession ? { liveSession } : {}),
-        registerTurnStatus: (status: CliBackendTurnStatus) => {
+        registerTurnStatus: AsyncLocalStorage.bind((status: CliBackendTurnStatus) => {
           assertCurrent();
           const registration: ReplyBackendTurnStatus = bindCliTurnStatus(
             status,
             () => turnStatus === registration && assertionSucceeds(assertCurrent),
           );
           turnStatus = registration;
-        },
-        registerTurnInterrupt: (interrupt) => {
+        }),
+        registerTurnInterrupt: AsyncLocalStorage.bind((interrupt: CliBackendTurnInterrupt) => {
           assertCurrent();
           params.mcpCapture?.registerTurnInterrupt?.({
             interrupt: async (reason) => {
@@ -613,21 +613,24 @@ export async function executePluginOwnedProcess(params: {
               }
             },
           });
-        },
+        }),
         ...(detachReplyBackend
           ? {
-              registerMessageInjection: (injection: CliBackendMessageInjection) => {
-                messageInjection = injection;
-              },
+              registerMessageInjection: AsyncLocalStorage.bind(
+                (injection: CliBackendMessageInjection) => {
+                  messageInjection = injection;
+                },
+              ),
             }
           : {}),
-        // Warm transports retain their first turn's async context across plugin refreshes.
         requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
-        requestUserInput: createPluginUserInputHandler({
-          context: params.context,
-          abortSignal: signal,
-          onPendingInput: updatePendingApproval,
-        }),
+        requestUserInput: AsyncLocalStorage.bind(
+          createPluginUserInputHandler({
+            context: params.context,
+            abortSignal: signal,
+            onPendingInput: updatePendingApproval,
+          }),
+        ),
       });
       const executionIterator = execution[Symbol.asyncIterator]();
       iterator = executionIterator;

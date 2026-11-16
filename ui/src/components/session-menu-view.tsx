@@ -236,9 +236,9 @@ export function useSessionMenuEntries(
     </div>,
   );
   function groupOptions(): MenuEntry[] {
-    const terms = groupQuery().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = groupQuery().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     const groups = state.groups.filter((group) =>
-      terms.every((term) => group.toLocaleLowerCase().includes(term)),
+      terms.every((term) => group.toLocaleLowerCase().normalize("NFC").includes(term)),
     );
     const choices = groups.map((group) => ({
       label: group,

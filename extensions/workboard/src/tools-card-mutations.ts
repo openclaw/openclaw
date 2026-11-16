@@ -13,7 +13,11 @@ type WorkboardCardMutation = (
   scope: WorkboardMutationScope,
 ) => Promise<WorkboardCard>;
 
-export function createWorkboardCardMutations(store: WorkboardStore, ownerId: string) {
+export function createWorkboardCardMutations(
+  store: WorkboardStore,
+  ownerId: string,
+  runId: string | undefined,
+) {
   const readParams = async (rawParams: unknown, requireClaim = false) => {
     const record = asRecord(rawParams);
     const id = readStringParam(record, "id", { required: true });
@@ -29,7 +33,7 @@ export function createWorkboardCardMutations(store: WorkboardStore, ownerId: str
     if (requireClaim && !claim) {
       throw new Error("card must be claimed before lifecycle completion.");
     }
-    return { record, id, scope: { ownerId, token } };
+    return { record, id, scope: { ownerId, token, runId } };
   };
   const cardMutation =
     (mutate: WorkboardCardMutation, requireClaim = false) =>

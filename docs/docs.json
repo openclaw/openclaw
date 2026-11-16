@@ -1451,6 +1451,7 @@
                   {
                     "group": "App platforms",
                     "pages": [
+                      "install/boat",
                       "install/cloudflare",
                       "install/daytona",
                       "install/exe-dev",
@@ -1674,6 +1675,7 @@
               {
                 "group": "Agent runtime",
                 "pages": [
+                  "concepts/agents-and-templates",
                   "concepts/architecture",
                   "concepts/agent",
                   "concepts/agent-loop",

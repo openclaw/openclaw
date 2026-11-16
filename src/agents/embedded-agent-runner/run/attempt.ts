@@ -33,6 +33,10 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
+import {
+  createRunToolUsageRecorder,
+  isToolUsageRecordingEnabled,
+} from "../../tool-usage-recorder.js";
 import { log } from "../logger.js";
 import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
@@ -93,13 +97,20 @@ export async function runEmbeddedAttempt(
         ? AbortSignal.any([attempt.abortSignal, parentSignal])
         : parentSignal
       : attempt.abortSignal;
-    const result = await runWithAsyncWorkResources((onAcquired) =>
-      runEmbeddedAttemptOwned(
-        attempt,
-        (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
-        resourceAbortSignal,
-      ),
-    );
+    const run = (retainToolUsageCleanup?: (release: () => Promise<void>) => void) =>
+      runWithAsyncWorkResources((onAcquired) =>
+        runEmbeddedAttemptOwned(
+          attempt,
+          (release) => onAcquired({ release, releaseBeforeResultWhenIdle: true }),
+          resourceAbortSignal,
+          retainToolUsageCleanup,
+        ),
+      );
+    // Recording settles after tool resources, under the same retained work tree,
+    // without making its storage latency part of the foreground result.
+    const result = isToolUsageRecordingEnabled(attempt)
+      ? await runWithAsyncWorkResources((onAcquired) => run((release) => onAcquired({ release })))
+      : await run();
     modelExecution?.assertCurrent();
     return result;
   } finally {
@@ -112,6 +123,7 @@ async function runEmbeddedAttemptOwned(
   input: EmbeddedRunAttemptInternalParams,
   retainToolCleanup: (release: () => Promise<void>) => void,
   resourceAbortSignal: AbortSignal | undefined,
+  retainToolUsageCleanup?: (release: () => Promise<void>) => void,
 ): Promise<EmbeddedRunAttemptResult> {
   let params = input;
   const runAbortController = new AbortController();
@@ -191,6 +203,19 @@ async function runEmbeddedAttemptOwned(
     params.abortSignal,
   );
   try {
+    if (retainToolUsageCleanup) {
+      const recorder = createRunToolUsageRecorder({
+        agentId: sessionAgentId,
+        runId: params.runId,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        log,
+      });
+      params = { ...params, toolUsageRecorder: recorder };
+      if (recorder) {
+        retainToolUsageCleanup(() => recorder.settle());
+      }
+    }
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
         assertCurrent: () => {
@@ -263,6 +288,7 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          yieldResumesInPlace = options?.resumesInPlace === true;
           if (options?.terminal) {
             runAbortController.abort(options.terminal);
             abortTerminalYield?.(options.terminal);
@@ -304,6 +330,7 @@ async function runEmbeddedAttemptOwned(
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
+    let yieldResumesInPlace = false;
     let yieldAbortSettled: Promise<void> | null = null;
     let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
@@ -348,25 +375,32 @@ async function runEmbeddedAttemptOwned(
     const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
       preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
-    const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
-      prepareEmbeddedAttemptSystemPrompt({
-        activeContextEngine,
-        attempt: params,
-        setup,
-        bootstrap: preparedBootstrap,
-        capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        effectiveTools,
-        isRawModelRun,
-        modelToolsEnabled: toolsEnabled,
-        skillsPrompt,
-        codeModeActive: codeModeControlsEnabledForRun,
-        webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
-        toolSearchCatalogRef,
-        toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
-        deferredToolsDirectlyCallable: deferredDirectoryToolsCallable,
-        toolSearchRuntimeConfig,
-      }),
-    );
+    const prepareSystemPrompt = (
+      getUsageRanking: () =>
+        | import("../../tool-usage-ranking.js").ToolUsageRankingSnapshot
+        | undefined,
+    ) =>
+      prepare("attempt.system-prompt", () =>
+        prepareEmbeddedAttemptSystemPrompt({
+          getUsageRanking,
+          activeContextEngine,
+          attempt: params,
+          setup,
+          bootstrap: preparedBootstrap,
+          capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+          effectiveTools,
+          isRawModelRun,
+          modelToolsEnabled: toolsEnabled,
+          skillsPrompt,
+          codeModeActive: codeModeControlsEnabledForRun,
+          webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
+          toolSearchCatalogRef,
+          toolSearchDirectoryEnabled:
+            toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+          deferredToolsDirectlyCallable: deferredDirectoryToolsCallable,
+          toolSearchRuntimeConfig,
+        }),
+      );
     const sessionLock = await prepare("attempt.transcript-lifecycle", () =>
       prepareEmbeddedAttemptTranscriptLifecycle({
         attempt: params,
@@ -386,7 +420,7 @@ async function runEmbeddedAttemptOwned(
           toolBase: preparedToolBase,
           toolCatalog: preparedToolCatalog,
           bundleTools: preparedBundleTools,
-          systemPrompt: preparedSystemPrompt,
+          prepareSystemPrompt,
           sessionLock,
           runAbortSignal: runAbortController.signal,
           externalAbortController,
@@ -436,7 +470,10 @@ async function runEmbeddedAttemptOwned(
                 return;
               }
               // Keep sibling execution and authority live until their results settle.
-              params.replyOperation?.yield();
+              // An in-place resume continues this operation with the run's next turn.
+              if (!yieldResumesInPlace) {
+                params.replyOperation?.yield();
+              }
               queueSessionsYieldInterruptMessage(activeSession);
               runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
               yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
@@ -444,6 +481,7 @@ async function runEmbeddedAttemptOwned(
           },
         }),
       );
+      const preparedSystemPrompt = preparedSessionRuntime.systemPrompt;
       const promptToolPolicy = createPromptBuildToolPolicy({
         diagnosticIdentity: {
           agentId: sessionAgentId,

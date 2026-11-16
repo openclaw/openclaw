@@ -120,6 +120,10 @@ When shutdown begins, an active retention sweep finishes its current cleanup
 instead of draining the entire expired backlog. Remaining run records stay saved
 for cleanup after restart, including partially cleaned collector groups.
 
+Large eligible backlogs yield to other Gateway work between batches of runs.
+Each run's ownership is rechecked before acting; completion, cancellation, and
+retention decisions keep their normal order and deadlines.
+
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are
 exhausted, the run remains recorded with incomplete cleanup; inspect the warning

@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
@@ -271,23 +272,21 @@ describe("backup commands", () => {
       const backupDir = path.join(fixtureRoot, "archives-json");
       await fs.mkdir(backupDir);
       const runtime = createTestRuntime();
+      const missingTo = backupCreateCommand(runtime, { namespace: "x", json: true });
+      await expect(missingTo).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(missingTo).rejects.toThrow("require --to <location>.");
       await mockStateOnlyBackupPlan(stateDir);
       const sessions = path.join(stateDir, "sessions");
       await fs.mkdir(sessions);
       await fs.writeFile(path.join(sessions, "s.jsonl"), "volatile\n");
       backupWalkMock.mockImplementationOnce(walkBackupTar);
 
-      const result = await backupCreateCommand(runtime, {
-        output: backupDir,
-        json: true,
-      });
+      const result = await backupCreateCommand(runtime, { output: backupDir, json: true });
 
       const entries: string[] = [];
       await actualTar.t({
         file: result.archivePath,
-        onReadEntry: (entry) => {
-          entries.push(entry.path);
-        },
+        onReadEntry: (entry) => entries.push(entry.path),
       });
       expect(entries.some((entry) => entry.endsWith("/sessions/s.jsonl"))).toBe(false);
       expect(result.skippedVolatileCount).toBe(1);

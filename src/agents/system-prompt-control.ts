@@ -48,8 +48,11 @@ export function buildOpenClawControlSection({
           ? "For a chat update request, direct the user to `/update`. Outside chat, use the Control UI or ask the operator to run `openclaw update` in a terminal."
           : "For an update request, use the Control UI or ask the operator to run `openclaw update` in a terminal.",
       "Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator.",
-      "Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for installation changes or service control. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization.",
+      "Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.",
     ].join(" "),
+    hasExec
+      ? "For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals. Do not refuse solely because the work is on the Gateway host or no maintenance action exists."
+      : "",
     hasExec
       ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration. For updates there, use `openclaw update --yes`."
       : "",

@@ -617,7 +617,7 @@ async function prepareCliRunContextWithinReadFence(
   const canonicalWorkspace = resolveUserPath(
     resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
   );
-  const bootstrapWorkspaceDir = resolveRunBootstrapWorkspaceDir(
+  const bootstrapWorkspaceDir = await resolveRunBootstrapWorkspaceDir(
     { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
     params.bootstrapWorkspaceDir ?? canonicalWorkspace,
   );
@@ -1354,7 +1354,7 @@ async function prepareCliRunContextWithinReadFence(
             skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
-            bootstrapMode,
+            bootstrap: bootstrapRouting,
             bootstrapTruncationNotice,
             modelDisplay,
             agentId: sessionAgentId,

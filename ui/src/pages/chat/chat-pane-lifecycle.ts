@@ -14,6 +14,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -70,7 +71,6 @@ import { dismissConfirmedActionPopovers } from "./components/chat-message-confir
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
-import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import {
   admitInitialChatTurn,
   admitInitialTurnHandoff,
@@ -121,6 +121,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               launch: this.mcpAppLaunch,
               replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
+              openAppPanel: () => this.navigateMobileHost({ area: "panels", slot: "detail" }),
             }
           : null;
       },
@@ -136,8 +137,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   protected activateComposerPresentation(): void {
     if (this.selected && this.presented) {
       this.composerPresentation?.claim();
+      this.adoptCreatedComposer();
     }
   }
+
+  private readonly adoptCreatedComposer = () => {
+    const cleanup = this.composerPresentation?.adoptCreatedComposer();
+    if (cleanup) {
+      this.chatState.addCleanup(cleanup);
+    }
+  };
 
   public discardStagedAttachments(): void {
     // Explicit pane disposal is terminal. The DOM disconnect that follows must
@@ -383,12 +392,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.composerPersistence.restore({ preserveCurrent: true });
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
     restorePaneStagedAttachments(this.context, this.paneId, pageState, mountGatewayOwner);
-    if (creationComposer?.claimDraft()) {
-      pageState.chatMessage = creationComposer.draft;
-      pageState.chatMentions = creationComposer.mentions;
-      pageState.chatAttachments = creationComposer.attachments;
-      chatState.adoptAttachmentReads(creationComposer.reads, pageState);
-    }
     chatState.composerPersistence.start();
     if (sessionHandoff) {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
@@ -557,9 +560,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.composerPresentation = composerPresentation;
     pageState.captureComposerRecoveryOwner = () => composerPresentation.captureOwner();
     this.activateComposerPresentation();
-    if (creationComposer) {
-      chatState.addCleanup(connectCreatedComposerQueue(this.context, pageState, creationComposer));
-    }
+    // Template setup attaches its transcript before releasing draft custody.
+    // Adopt its ordinary one-shot transfer when setup completes, without remounting.
+    chatState.addCleanup(this.context.chatSubmissions.subscribeCreate(this.adoptCreatedComposer));
   }
 
   override synchronizeInputs(changes: ChatPaneInputChanges) {
@@ -639,10 +642,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       );
     }
     if (focusComposerChanged && this.focusComposer) {
-      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-      textarea?.focus({ preventScroll: true });
-      if (input && this.draft) {
-        this.showComposerPrefillAttention(input);
+      focusComposerInput(textarea, { preventScroll: true });
+      if (this.draft) {
+        this.showComposerPrefillAttention(textarea?.closest<HTMLElement>(".agent-chat__input"));
       }
     }
     this.retireArchivedPresentation();

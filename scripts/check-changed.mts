@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -1401,10 +1402,24 @@ export async function resolveChangedOxlintFileScope(
   if (!changedFiles.every((file) => isOxlintSourcePath(file, cwd) || rootTest(file))) {
     return undefined;
   }
-  // Declarations can affect consumers without import edges. Match the keyword
-  // so comments between declare and global/module cannot hide an augmentation.
-  const hasAmbientImpact = (file: string) =>
-    /\.d\.[cm]?ts$/u.test(file) || /\bdeclare\b/u.test(readFileSync(path.join(cwd, file), "utf8"));
+  // Declarations can affect consumers without import edges. Strip mode preserves
+  // offsets: erased matches stay conservative; comments and runtime strings do not.
+  const hasAmbientImpact = (file: string) => {
+    if (/\.d\.[cm]?ts$/u.test(file)) {
+      return true;
+    }
+    const source = readFileSync(path.join(cwd, file), "utf8");
+    const matches = [...source.matchAll(/\bdeclare\b/gu)];
+    if (matches.length === 0) {
+      return false;
+    }
+    try {
+      const stripped = nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
+      return matches.some(({ index }) => stripped.slice(index, index + 7) !== "declare");
+    } catch {
+      return true;
+    }
+  };
   if (changedFiles.some(hasAmbientImpact)) {
     return undefined;
   }

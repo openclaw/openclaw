@@ -462,6 +462,7 @@ export function createAgentsWaitTool(opts: {
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
+    repeatable: true,
     description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
     outputSchema: AgentsWaitOutputSchema,

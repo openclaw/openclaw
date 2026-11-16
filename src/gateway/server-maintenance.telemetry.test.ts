@@ -48,6 +48,11 @@ vi.mock("../agents/worktrees/service.js", () => ({
   },
 }));
 
+// mock-isolation: Telemetry timers own no tool-usage work; retention has its database-boundary proof.
+vi.mock("../config/sessions/tool-usage.js", () => ({
+  pruneRegisteredAgentToolUsage: async () => {},
+}));
+
 // mock-isolation: Worker-free timers reject accidental default manifest database sweeps.
 vi.mock("./worker-environments/local-workspace-gc.js", () => ({
   sweepLocalWorkspaceManifests: () => forbiddenDefaultAdapter("workspace manifest GC"),

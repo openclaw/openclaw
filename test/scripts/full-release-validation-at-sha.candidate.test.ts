@@ -29,6 +29,62 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("admits explicit main-provenance Q without substituting the frozen candidate", () => {
+    const f = createDispatchFixture({ candidateOwned: true, advanceMainAfterAdmission: true });
+    const result = f.run([
+      "--workflow-sha",
+      f.workflowSha,
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(dispatches(f)).toEqual([P, Q]);
+    const retained = f.record();
+    const admitted = JSON.parse(readFileSync(f.admissionReceiptPath, "utf8"));
+    const sent = f.readPayload().body;
+    expect(result.stdout).not.toContain("WARNING: Cross-revision diagnostics");
+    expect(retained.request).toMatchObject({
+      targetSha: f.targetSha,
+      workflowSha: f.workflowSha,
+      trustedWorkflowRef: "candidate",
+    });
+    expect(admitted.request).toMatchObject({
+      candidateSha: f.targetSha,
+      qualificationSha: f.workflowSha,
+      reviewed: true,
+    });
+    expect(sent.inputs.ref).toBe(f.targetSha);
+    expect(sent.inputs.expected_sha).toBe(f.targetSha);
+    expect(
+      JSON.parse(expectDefined(sent.inputs.trusted_workflow_json, "trusted workflow envelope"))
+        .trustedWorkflow.sha,
+    ).toBe(f.workflowSha);
+    expect(f.readCalls(f.gitCallsPath)).toContainEqual([
+      "show",
+      `${f.targetSha}:scripts/lib/upgrade-survivor-scenarios.json`,
+    ]);
+    retained.admission.request.qualificationSha = f.targetSha;
+    writeFileSync(f.requestPath(), `${JSON.stringify(retained)}\n`);
+    const reopened = f.run(["--reconcile-request", f.requestPath()], true);
+    expectDispatchFailure(
+      reopened,
+      "Qualification request must attest the exact reviewed C/Q tuple and transport",
+    );
+    expect(dispatches(f)).toEqual([P, Q]);
+  });
+
+  it("rejects independent Q without main provenance before admission", () => {
+    const f = createDispatchFixture({ candidateOwned: true });
+    runGit(f.checkout, ["checkout", "--detach", f.targetSha]);
+    runGit(f.checkout, ["commit", "--allow-empty", "-m", "untrusted qualification"]);
+    const qualificationSha = runGit(f.checkout, ["rev-parse", "HEAD"]);
+    const result = f.run(["--workflow-sha", qualificationSha]);
+    expectDispatchFailure(result, "not reachable from current origin/main");
+    expect(dispatches(f)).toEqual([]);
+  });
+
   it("rejects an incompatible publication selector before qualification or registry work", () => {
     const f = createDispatchFixture({ candidateOwned: true });
     const result = f.run([
@@ -130,7 +186,10 @@ describe("candidate-owned full release dispatch entry point", () => {
       "-f",
       `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
-    expectDispatchFailure(result, "Fresh publication qualification must use candidate-owned Q=C");
+    expectDispatchFailure(
+      result,
+      "Fresh publication qualification must use admitted candidate qualification",
+    );
     expect(dispatches(f)).toEqual([]);
     expect(f.readCalls(f.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET")).toEqual([]);
   });
@@ -155,6 +214,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     const advancedP = runGit(f.origin, ["rev-parse", "refs/heads/main"]);
     expect(advancedP).not.toBe(f.workflowSha);
     expect(result.stdout.match(/Admission P advanced with main/gu)).toHaveLength(3);
+    expect(result.stdout).not.toContain("WARNING: Cross-revision diagnostics");
     const retained = f.record();
     expect(retained.admission.workflowSha).toBe(advancedP);
     expect(retained.request.workflowSha).toBe(f.targetSha);

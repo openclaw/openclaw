@@ -264,6 +264,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       const append = (mutationAt: number | null | undefined) =>
         appendSessionManagerActor({
           actor,
+          toolUsageRecorder: writeAdmission.toolUsageRecorder,
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",

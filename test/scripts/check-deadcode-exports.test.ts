@@ -218,6 +218,12 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     ];
     expectEntries(scriptRootWorkspace.entry, sourceTestConsumers);
     expectEntries(scriptRootWorkspace.project, sourceTestConsumers);
+    const bootstrapConsumers = [
+      "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+      "src/gateway/worker-environments/node-bootstrap-runtime-chunks.ts!",
+    ];
+    expectEntries(scriptRootWorkspace.entry, bootstrapConsumers);
+    expectEntries(scriptRootWorkspace.project, bootstrapConsumers);
     expect(scriptRootWorkspace.entry).not.toContain("src/**/*.test.ts!");
     expect(
       scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
@@ -239,6 +245,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
         "test/vitest.codex-worker-authority.config.ts",
+        "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
       ],
     });
   });
@@ -267,6 +274,31 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
+  });
+
+  it("models the workflow planner without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers.yml;
+    const compiled = compile(source, file);
+    expect(compiled).toContain('"../../scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(compiled).toContain("planner.resolvePluginPrereleaseExtensionRuntimes");
+    const withoutConsumer = replaceFixture(
+      source,
+      `            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
+            }`,
+      "",
+    );
+    const remaining = compile(withoutConsumer, file);
+    expect(remaining).not.toContain("resolvePluginPrereleaseExtensionRuntimes");
+    expect(remaining).toContain("planner.assertPluginPrereleaseTestPlanComplete");
+    expect(
+      compile(
+        replaceFixture(source, 'targetPlanPath("plugin-prerelease-test-plan")', '"other"'),
+        file,
+      ),
+    ).not.toContain("plugin-prerelease-test-plan.mts");
   });
 
   it("models named Solid lazy consumers without retaining a deleted loader", () => {

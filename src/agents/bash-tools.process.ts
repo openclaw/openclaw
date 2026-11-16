@@ -1,4 +1,4 @@
-import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
@@ -31,10 +31,16 @@ import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
   EXEC_RETENTION_CAP_NOTE,
   appendExecTimeoutRetryGuidance,
+  describeExitWake,
+  hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
-import { processSchema } from "./bash-tools.schemas.js";
+import {
+  isProcessObservationAction,
+  PROCESS_OBSERVATION_REPEATABLE,
+  processSchema,
+} from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
@@ -266,7 +272,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
-      ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
+      ...(hasExitWake(session) ? {} : { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP }),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
       idleMs,
@@ -287,10 +293,8 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    interruptible: (args) => {
-      const action = asNonArrayRecord(args).action;
-      return action === "list" || action === "poll" || action === "log";
-    },
+    interruptible: isProcessObservationAction,
+    repeatable: PROCESS_OBSERVATION_REPEATABLE,
     outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCallerCurrent = () => {
@@ -481,11 +485,14 @@ export function createProcessTool(
             const hasNewOutput = output.length > 0;
             const retryInMs = recordPollRetrySuggestion(sessionId, hasNewOutput);
             const runtime = describeRunningSession(scopedSession);
+            const exitWake = hasNewOutput ? undefined : describeExitWake(scopedSession);
+            const exitWakeHint = exitWake ? ` ${exitWake} instead of polling.` : "";
             const text =
               aggregateOutputNote +
               retainedOutputNote +
               (output || "(no new output)") +
-              (buildInputWaitHint(runtime.waitingForInput) || "\n\nProcess still running.") +
+              (buildInputWaitHint(runtime.waitingForInput) ||
+                `\n\nProcess still running.${exitWakeHint}`) +
               (runtime.followUp ? `\n\n${runtime.followUp}` : "");
             return attachInternalToolResultAcknowledgement(
               textResult(text, {
