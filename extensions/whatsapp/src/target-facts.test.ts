@@ -114,18 +114,21 @@ describe("resolveWhatsAppTargetFacts", () => {
     );
   });
 
-  it("uses LID forward mappings when auth context is available", () => {
-    const authDir = tempDirs.make("openclaw-wa-target-facts-");
-    fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify(987654));
-    const resolution = resolveWhatsAppTargetFacts({
-      target: "+15555550000",
-      lidOptions: { authDir },
-    });
-    expect(resolution).toMatchObject({
-      ok: true,
-      facts: { wireDelivery: { jid: "987654@lid", shouldSendComposingPresence: true } },
-    });
-  });
+  it.each(["+15555550000", "15555550000@s.whatsapp.net"])(
+    "maps %s to a LID with auth context",
+    (target) => {
+      const authDir = tempDirs.make("openclaw-wa-target-facts-");
+      fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify(987654));
+      const resolution = resolveWhatsAppTargetFacts({
+        target,
+        lidOptions: { authDir },
+      });
+      expect(resolution).toMatchObject({
+        ok: true,
+        facts: { wireDelivery: { jid: "987654@lid", shouldSendComposingPresence: true } },
+      });
+    },
+  );
 
   it.each([
     ["device LID", "277038292303944:4@lid", "277038292303944@lid"],

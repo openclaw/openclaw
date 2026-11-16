@@ -48,9 +48,13 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe("+41796666864");
   });
 
-  it("normalizes LID JIDs to E.164", () => {
-    expect(normalizeWhatsAppTarget("123456789@lid")).toBe("+123456789");
-    expect(normalizeWhatsAppTarget("123456789@LID")).toBe("+123456789");
+  it.each([
+    ["123456789@lid", "123456789@lid"],
+    ["123456789:4@LID", "123456789@lid"],
+    ["123456789:4@HOSTED.LID", "123456789@hosted.lid"],
+    ["123456789:4@hosted", "+123456789"],
+  ])("normalizes direct identity %s", (target, expected) => {
+    expect(normalizeWhatsAppTarget(target)).toBe(expected);
   });
 
   it("rejects invalid targets", () => {

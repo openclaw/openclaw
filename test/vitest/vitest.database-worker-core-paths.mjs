@@ -1055,6 +1055,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/transcripts-tool.discord-lifecycle.integration.test.ts",
   "test/transcripts-tool.discord-provider.integration.test.ts",
   "test/twitch-message-tool-delivery.test.ts",
+  "test/whatsapp-message-action-targets.test.ts",
   "test/helpers/gateway-status-acquisition.test.ts",
   "src/agents/harness/acp-native-approval-effect.process.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",

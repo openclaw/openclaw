@@ -1,14 +1,13 @@
-import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
   normalizeWhatsAppTarget,
+  parseWhatsAppTarget,
 } from "./normalize-target.js";
 import { toWhatsappJid, toWhatsappJidWithLid, type JidToE164Options } from "./targets-runtime.js";
 
 const TARGET_FORMAT_HINT = "<E.164|group JID|newsletter JID>";
-const DIRECT_WIRE_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid)$/i;
 
 type WhatsAppTargetChatType = "direct" | "group" | "channel";
 
@@ -64,7 +63,7 @@ function authorizeDirectTarget(params: {
   }
 
   const normalizedAllowFrom = allowFrom
-    .map((entry) => normalizeTargetForFacts(entry)?.normalizedTarget ?? null)
+    .map((entry) => normalizeWhatsAppTarget(entry))
     .filter((entry): entry is string => Boolean(entry));
   if (normalizedAllowFrom.length === 0 || normalizedAllowFrom.includes(params.normalizedTarget)) {
     return { allowed: true };
@@ -78,58 +77,6 @@ function authorizeDirectTarget(params: {
   };
 }
 
-function stripWhatsAppTargetPrefix(value: string): string {
-  let candidate = value.trim();
-  for (;;) {
-    const before = candidate;
-    candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) {
-      return candidate;
-    }
-  }
-}
-
-function normalizeTargetForFacts(rawTarget: string): {
-  normalizedTarget: string;
-  preserveJidAsAuthorizedTarget: boolean;
-} | null {
-  const match = stripWhatsAppTargetPrefix(rawTarget).match(DIRECT_WIRE_JID_RE);
-  const localPart = match?.[1];
-  const server = match?.[2]?.toLowerCase();
-  if (localPart && server) {
-    const normalizedTarget =
-      server === "lid" || server === "hosted.lid"
-        ? `${localPart}@${server}`
-        : normalizeE164(localPart);
-    return normalizedTarget.length > 1
-      ? { normalizedTarget, preserveJidAsAuthorizedTarget: server !== "s.whatsapp.net" }
-      : null;
-  }
-  const normalizedTarget = normalizeWhatsAppTarget(rawTarget);
-  if (normalizedTarget) {
-    return { normalizedTarget, preserveJidAsAuthorizedTarget: false };
-  }
-  return null;
-}
-
-function wireJidFor(params: {
-  rawTarget: string;
-  normalizedTarget: string;
-  chatType: WhatsAppTargetChatType;
-  lidOptions: JidToE164Options | undefined;
-}): string {
-  if (params.chatType !== "direct") {
-    return params.normalizedTarget;
-  }
-  const strippedRawTarget = stripWhatsAppTargetPrefix(params.rawTarget);
-  const targetForWire = strippedRawTarget.includes("@")
-    ? strippedRawTarget
-    : params.normalizedTarget;
-  return params.lidOptions
-    ? toWhatsappJidWithLid(targetForWire, params.lidOptions)
-    : toWhatsappJid(targetForWire);
-}
-
 export function resolveWhatsAppTargetFacts(
   params: ResolveWhatsAppTargetFactsParams,
 ): WhatsAppTargetFactsResolution {
@@ -138,11 +85,11 @@ export function resolveWhatsAppTargetFacts(
     return targetError();
   }
 
-  const targetFacts = normalizeTargetForFacts(rawTarget);
+  const targetFacts = parseWhatsAppTarget(rawTarget);
   if (!targetFacts) {
     return targetError();
   }
-  const { normalizedTarget } = targetFacts;
+  const { normalizedTarget, deliveryTarget } = targetFacts;
 
   const chatType = chatTypeFor(normalizedTarget);
   return {
@@ -156,14 +103,11 @@ export function resolveWhatsAppTargetFacts(
           ? authorizeDirectTarget({ normalizedTarget, allowFrom: params.allowFrom })
           : { allowed: true },
       wireDelivery: {
-        jid: wireJidFor({
-          rawTarget,
-          normalizedTarget,
-          chatType,
-          lidOptions: params.lidOptions,
-        }),
+        jid: params.lidOptions
+          ? toWhatsappJidWithLid(deliveryTarget, params.lidOptions)
+          : toWhatsappJid(deliveryTarget),
         shouldSendComposingPresence: chatType !== "channel",
-        preserveJidAsAuthorizedTarget: targetFacts.preserveJidAsAuthorizedTarget,
+        preserveJidAsAuthorizedTarget: deliveryTarget !== normalizedTarget,
       },
     },
   };
