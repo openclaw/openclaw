@@ -38,7 +38,6 @@ import {
 } from "./plugin-native-admission.js";
 import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
-  capturePluginPackageMetadata,
   capturePluginDependencies,
   resolvePluginModulePackageRoot,
   createPluginDependencyLookup,
@@ -139,6 +138,8 @@ export function* createPluginGenerationArtifactSteps(
     sourceCapture.outputRoot,
   );
   const metadataCapture = createPluginPackageMetadataCapture({
+    retainedManifest: (filename) =>
+      retained?.packageManifests.get(path.relative(directory, filename)),
     sourceForCaptured: (filename) => originalSources.get(filename),
     packageForFile,
     isRetainedReference: nativeAdmission.isRetainedReference,
@@ -578,14 +579,7 @@ export function* createPluginGenerationArtifactSteps(
       }
     }
     if (metadataOnly) {
-      const manifest = capturePluginPackageMetadata(
-        root,
-        destination,
-        copy,
-        nativeAdmission.isRetainedReference,
-        nativeAdmission.resolvePreparedSource,
-      );
-      metadataCapture.setManifest(path.join(destination, "package.json"), manifest ?? null);
+      metadataCapture.capturePackage(root, destination, copy);
     } else {
       yield* materializeSteps(entry);
     }
@@ -678,6 +672,7 @@ export function* createPluginGenerationArtifactSteps(
       ...sourceLookup,
       retainSourceCustody: markPluginSourceCaptureOperation(() => ({
         ...sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
+        packageManifests: metadataCapture.snapshot(directory),
         modules: new Map(inspectedModules),
       })),
       ...createPluginGenerationModuleLookup({
