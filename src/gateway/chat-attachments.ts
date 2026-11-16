@@ -277,8 +277,9 @@ function normalizeAttachment(att: ChatAttachment, idx: number): NormalizedAttach
   }
   let base64 = content.trim();
   // Inspect metadata only; never capture a multi-megabyte payload in a regex.
+  // Media-type parameters (for example ;charset=utf-8) are allowed before ;base64.
   const commaIndex = base64.startsWith("data:") ? base64.indexOf(",") : -1;
-  if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
+  if (commaIndex >= 0 && /^data:[^,]*;base64$/i.test(base64.slice(0, commaIndex))) {
     base64 = base64.slice(commaIndex + 1);
   }
   return { label, mime, base64 };

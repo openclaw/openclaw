@@ -293,6 +293,17 @@ describe("persistInboundImagesForTranscript", () => {
     },
   );
 
+  it.each([
+    ["media type parameters", `data:image/png;charset=utf-8;base64,${PNG_1x1}`],
+    ["uppercase BASE64 token", `data:image/png;name=dot.png;BASE64,${PNG_1x1}`],
+  ])("parses data URL attachment content with %s", async (_name, content) => {
+    const parsed = await parseMessageWithAttachments("Inspect", [pngAttachment({ content })], {
+      supportsImages: true,
+    });
+    expect(parsed.imageOrder).toEqual(["inline"]);
+    expect(parsed.images).toEqual([{ type: "image", data: PNG_1x1, mimeType: "image/png" }]);
+  });
+
   it.each(["authorization", "disk"])("preserves %s upload failure semantics", async (failure) => {
     const error =
       failure === "authorization"
