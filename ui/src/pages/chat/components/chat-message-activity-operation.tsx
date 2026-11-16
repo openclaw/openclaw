@@ -134,9 +134,21 @@ export function LifecycleOperations(props: {
         open: (child?.session?.listed && subagents?.onOpenSubagent) || subagents?.onOpenSession,
       };
     });
+  const running = () =>
+    props.operations.some(
+      (operation) =>
+        resolveToolCardOutcome(operation.group.card, operation.options.runActive) === "running",
+    );
   const verb = () => {
     const card = first().group.card;
     const outcome = resolveToolCardOutcome(card, first().options.runActive);
+    if (running()) {
+      return t(
+        props.kind === "launch"
+          ? "chat.toolCards.launch.subagent.running"
+          : "chat.toolCards.stoppingSubagent",
+      );
+    }
     return props.kind === "launch"
       ? t(
           "chat.toolCards.launch.subagent." +
@@ -154,6 +166,12 @@ export function LifecycleOperations(props: {
   const unnamedLabel = () => {
     if (entries().every((entry) => entry.name)) {
       return undefined;
+    }
+    if (running()) {
+      return t(
+        `chat.toolCards.${props.kind === "launch" ? "launching" : "stopping"}${props.operations.length === 1 ? "Agent" : "Agents"}`,
+        { count: String(props.operations.length) },
+      );
     }
     const card = first().group.card;
     const confirmed =

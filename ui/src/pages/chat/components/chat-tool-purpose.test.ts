@@ -133,22 +133,50 @@ it("uses names already available to chat rows without exposing unresolved routin
 });
 
 it.each([
-  [true, "cancelled", "Stopped"],
-  [true, "succeeded", "Stop subagent"],
-  [false, undefined, "Stop subagent"],
+  ...(
+    [
+      [true, "cancelled", "Stopped"],
+      [true, "succeeded", "Stop subagent"],
+      [false, undefined, "Stop subagent"],
+    ] as const
+  ).map(([killed, status, label]) => ({
+    name: "subagents",
+    args: { action: "cancel", runId: "run-secret" },
+    details: { found: true, killed, targetState: { state: "terminal", task: { status } } },
+    isError: false,
+    label,
+  })),
+  ...[
+    { label: "Stopped", receipt: {} },
+    { label: "Stopped", receipt: {}, withoutRunId: true },
+    { label: "Stop subagent", receipt: { abortedRunId: null } },
+    { label: "Stop subagent", receipt: { status: "noop", abortedRunId: null } },
+    { label: "Stop subagent", receipt: { status: "settling", abortedRunId: null } },
+    { label: "Stop subagent", receipt: { abortedRunId: "different-run" } },
+    { label: "Stop subagent", receipt: { ok: false } },
+    { label: "Stop subagent", receipt: {}, isError: true },
+    { label: "Session Settings agent:main:subagent:worker", receipt: {}, action: "patch" },
+    { label: "Session Settings", receipt: {}, sessionKey: "agent:main:dashboard:ordinary" },
+  ].map(({ label, receipt, isError, action, sessionKey, withoutRunId }) => ({
+    name: "sessions",
+    args: {
+      action: action ?? "stop",
+      sessionKey: sessionKey ?? "agent:main:subagent:worker",
+      ...(withoutRunId ? {} : { runId: "run-secret" }),
+    },
+    details: { ok: true, status: "aborted", abortedRunId: "run-secret", ...receipt },
+    isError: isError ?? false,
+    label,
+  })),
 ])(
-  "describes cancellation only when the target receipt confirms it",
-  async (killed, status, label) => {
-    const container = await mountCard(
-      {
-        id: "cancel",
-        name: "subagents",
-        args: { action: "cancel", runId: "run-secret" },
-        completed: true,
-        details: { found: true, killed, targetState: { state: "terminal", task: { status } } },
-      },
-      { expanded: false },
-    );
-    expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
+  "describes $name cancellation only when its own target receipt confirms it ($label)",
+  async ({ name, args, details, isError, label }) => {
+    for (const receipt of [{ details }, { outputText: JSON.stringify(details) }]) {
+      const container = await mountCard(
+        { id: "cancel", name, args, completed: true, isError, ...receipt },
+        { expanded: false },
+      );
+      expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
+    }
   },
 );

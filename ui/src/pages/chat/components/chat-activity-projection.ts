@@ -252,7 +252,8 @@ export function segmentActivityGroup<State extends ActivityStructure>(
   }> = [];
   const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
     const operation = item.operation?.group;
-    const launch = operation && resolveSessionLaunchPresentation(operation.card);
+    const outcome = operation && resolveToolCardOutcome(operation.card, options.runActive);
+    const launch = operation && resolveSessionLaunchPresentation(operation.card, outcome);
     const permission =
       operation &&
       readNodePermissionRequest(asNullableRecord(operation.card.details)?.permissionMissing);
@@ -265,6 +266,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
           : undefined;
     const previous = result.at(-1);
     const coalescible =
+      outcome === "running" ||
       launch?.phase === "succeeded" ||
       Boolean(operation && readSubagentCancellation(operation.card)?.stopped);
     const action = operation && state.actionOrder.get(operation.card);

@@ -17,7 +17,7 @@ const enChatToolLabels = {
       executionDetails: "Execution details",
       launch: {
         subagent: {
-          running: "Launching subagent",
+          running: "Launching",
           succeeded: "Launched",
           failed: "Couldn't launch subagent",
           interrupted: "Subagent launch interrupted",
@@ -41,6 +41,10 @@ const enChatToolLabels = {
       askedQuestion: "Asked you a question",
       askingQuestions: "Asking you questions",
       askedQuestions: "Asked you questions",
+      launchingAgent: "Launching an agent",
+      launchingAgents: "Launching {count} agents",
+      stoppingAgent: "Stopping an agent",
+      stoppingAgents: "Stopping {count} agents",
       launchedAgent: "Launched an agent",
       launchedAgents: "Launched {count} agents",
       stoppedAgent: "Stopped an agent",
@@ -48,7 +52,7 @@ const enChatToolLabels = {
       lifecycleMoreCount: "{count} more",
       questionRequest: "Question request",
       interrupted: "interrupted",
-      stoppingSubagent: "Stopping subagent",
+      stoppingSubagent: "Stopping",
       stoppedSubagent: "Stopped",
       stopSubagent: "Stop subagent",
       readChat: "Read chat",

@@ -122,10 +122,30 @@ export function resolveSessionLaunchPresentation(
 }
 
 /** A cancellation request and its own receipt, independent of later child activity. */
-export function readSubagentCancellation(card: LaunchCard) {
+export function readSubagentCancellation(card: LaunchCard & Pick<ToolCard, "isError">) {
   const call = unwrapToolCallForDisplay(card);
   const args = asRecord(call.args);
-  if (call.name.trim().toLowerCase() !== "subagents" || args?.action !== "cancel") {
+  const name = call.name.trim().toLowerCase();
+  if (name === "sessions" && args?.action === "stop") {
+    const sessionKey = text(args.sessionKey);
+    if (!sessionKey || !isSubagentSessionKey(sessionKey)) {
+      return null;
+    }
+    const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+    const runId = text(args.runId);
+    const abortedRunId = text(result.abortedRunId);
+    return {
+      runId,
+      sessionKey,
+      stopped:
+        card.isError !== true &&
+        result.ok === true &&
+        result.status === "aborted" &&
+        abortedRunId !== undefined &&
+        (runId === undefined || abortedRunId === runId),
+    };
+  }
+  if (name !== "subagents" || args?.action !== "cancel") {
     return null;
   }
   const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };

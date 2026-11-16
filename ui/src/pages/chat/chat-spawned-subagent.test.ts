@@ -220,7 +220,7 @@ describe("a launched subagent", () => {
   it.each([
     { runActive: false, status: undefined, expected: "Subagent launch outcome unknown" },
     { runActive: true, status: "failed" as const, expected: "Couldn't launch subagent" },
-    { runActive: true, status: "running" as const, expected: "Launching subagent" },
+    { runActive: true, status: "running" as const, expected: "Launching" },
   ])(
     "uses the recorded launch outcome with an incomplete raw card ($expected)",
     async ({ runActive, status, expected }) => {
@@ -374,7 +374,7 @@ describe("a launched subagent", () => {
   });
 });
 
-it("coalesces only adjacent confirmed lifecycle calls without changing the first row", async () => {
+it("coalesces adjacent active and confirmed lifecycle calls without changing the first row", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const root = createActivityGroupHarness(container);
   onTestFinished(() => {
@@ -382,21 +382,42 @@ it("coalesces only adjacent confirmed lifecycle calls without changing the first
     container.remove();
   });
   const opened = new Map<string, boolean>();
-  const call = (id: string) => [
+  const call = (id: string, completed = true) => [
     createToolCall(id, "sessions_spawn", { label: "Cinder", task: "Work" }),
-    createToolResultBlock(id, "sessions_spawn", accepted("agent:main:subagent:" + id)),
+    ...(completed
+      ? [createToolResultBlock(id, "sessions_spawn", accepted("agent:main:subagent:" + id))]
+      : []),
   ];
-  const render = (content: unknown[]) =>
+  const render = (content: Record<string, unknown>[]) =>
     root.render(
       [
-        createToolGroup("lifecycle", [
-          createMessageEntry("entry", createAssistantMessage(content, { runId: "parent" })),
-        ]),
+        createToolGroup(
+          "lifecycle",
+          content.flatMap((block) => {
+            if (block.type !== "toolcall") {
+              return [];
+            }
+            const result = content.find(
+              (item) => item.type === "tool_result" && item.id === block.id,
+            );
+            return [
+              createMessageEntry(
+                "entry:" + String(block.id),
+                createAssistantMessage([block, ...(result ? [result] : [])], {
+                  runId: "parent",
+                  __openclawToolStreamLive: true,
+                  __openclawToolStreamResultReceived: Boolean(result),
+                }),
+              ),
+            ];
+          }),
+        ),
       ],
       {
         showReasoning: false,
         showToolCalls: true,
         runActive: true,
+        subagents: { subagentSessions: [child("a", { label: "A" }), child("b", { label: "B" })] },
         isToolExpanded: (id) => opened.get(id) ?? false,
         onToggleToolExpanded: (id, expanded) => opened.set(id, !expanded),
       },
@@ -406,6 +427,14 @@ it("coalesces only adjacent confirmed lifecycle calls without changing the first
   const first = container.querySelector<HTMLButtonElement>(".chat-tool-row")!;
   const toggle = first.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")!;
   toggle.focus();
+  for (const firstCompleted of [false, true]) {
+    render([...call("a", firstCompleted), ...call("b", false)]);
+    await settleToolBridges(container);
+    expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(1);
+    expect(container.querySelector(".chat-tool-row")).toBe(first);
+    expect(document.activeElement).toBe(toggle);
+    expect(first.textContent).toBe("Launching Cinder and Cinder");
+  }
   render([...call("a"), ...call("b")]);
   await settleToolBridges(container);
   expect(container.querySelector(".chat-tool-row")).toBe(first);
@@ -424,6 +453,39 @@ it("coalesces only adjacent confirmed lifecycle calls without changing the first
     "Launched Cinder",
   ]);
   expect(container.textContent).not.toContain("Waited");
+  render([
+    ...call("a"),
+    ...call("failed", false),
+    createToolResultBlock("failed", "sessions_spawn", "Launch denied", { isError: true }),
+    ...call("c", false),
+  ]);
+  await settleToolBridges(container);
+  expect([...container.querySelectorAll(".chat-tool-row")].map((row) => row.textContent)).toEqual([
+    "Launched Cinder",
+    "Couldn't launch subagent Cinder",
+    "Launching Cinder",
+  ]);
+
+  render(
+    ["a", "b"].flatMap((id) => [
+      createToolCall("stop-" + id, "sessions", {
+        action: "stop",
+        sessionKey: "agent:main:subagent:" + id,
+        runId: "run-" + id,
+      }),
+      createToolResultBlock(
+        "stop-" + id,
+        "sessions",
+        JSON.stringify({ ok: true, abortedRunId: "run-" + id, status: "aborted" }),
+        { isError: false },
+      ),
+    ]),
+  );
+  await settleToolBridges(container);
+  expect([...container.querySelectorAll(".chat-tool-row")].map((row) => row.textContent)).toEqual([
+    "Stopped A and B",
+  ]);
+  expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
 });
 
 it.each(["launch", "failed stop", "skipped stop", "confirmed stop"] as const)(
@@ -497,12 +559,14 @@ it.each(["launch", "failed stop", "skipped stop", "confirmed stop"] as const)(
 );
 
 it.each([
-  ["sessions_spawn", 1, "Launched an agent"],
-  ["sessions_spawn", 3, "Launched 3 agents"],
-  ["subagents", 2, "Stopped 2 agents"],
+  ["sessions_spawn", 1, "Launched an agent", false],
+  ["sessions_spawn", 3, "Launched 3 agents", false],
+  ["sessions_spawn", 3, "Launching 3 agents", true],
+  ["subagents", 2, "Stopped 2 agents", false],
+  ["subagents", 2, "Stopping 2 agents", true],
 ] as const)(
   "counts unnamed %s lifecycle events by identity (%s)",
-  async (name, count, expected) => {
+  async (name, count, expected, running) => {
     const container = document.body.appendChild(document.createElement("div"));
     const root = createActivityGroupHarness(container);
     onTestFinished(() => {
@@ -517,26 +581,33 @@ it.each([
           name,
           name === "sessions_spawn" ? { task: "Work" } : { action: "cancel", runId: id },
         ),
-        createToolResultBlock(
-          id,
-          name,
-          name === "sessions_spawn"
-            ? accepted("agent:main:subagent:" + id)
-            : JSON.stringify({
-                found: true,
-                killed: true,
-                targetState: { task: { status: "cancelled" } },
-              }),
-        ),
+        ...(running
+          ? []
+          : [
+              createToolResultBlock(
+                id,
+                name,
+                name === "sessions_spawn"
+                  ? accepted("agent:main:subagent:" + id)
+                  : JSON.stringify({
+                      found: true,
+                      killed: true,
+                      targetState: { task: { status: "cancelled" } },
+                    }),
+              ),
+            ]),
       ];
     }).flat();
     root.render(
       [
         createToolGroup("unnamed", [
-          createMessageEntry("unnamed-entry", createAssistantMessage(content, { runId: "parent" })),
+          createMessageEntry(
+            "unnamed-entry",
+            createAssistantMessage(content, { runId: "parent", __openclawToolStreamLive: running }),
+          ),
         ]),
       ],
-      { showReasoning: false, showToolCalls: true },
+      { showReasoning: false, showToolCalls: true, runActive: running },
     );
     await settleToolBridges(container);
     expect(container.querySelector(".chat-tool-row")?.textContent?.trim()).toBe(expected);
