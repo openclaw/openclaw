@@ -563,7 +563,7 @@ function runSlackTrace(
     steps?: readonly DeliveryTraceStep[];
     configure?: Parameters<typeof setupSlackTrace>[2];
     record?: (call: RecordedWireCall) => void;
-    beforeStep?: (step: DeliveryTraceInStep) => void;
+    beforeStep?: (step: DeliveryTraceInStep) => void | Promise<void>;
     normalize?: boolean;
   } = {},
 ) {
@@ -592,7 +592,7 @@ function runSlackTrace(
         return dispatch;
       }
       return async (step) => {
-        beforeStep(step);
+        await beforeStep(step);
         await dispatch(step);
       };
     },
@@ -836,20 +836,17 @@ describe("slack delivery trace goldens", () => {
         { kind: "advance", ms: 2000 },
         { kind: "final", text: "All files checked." },
       ),
-      beforeStep: (step) => {
-        if (
-          step.kind === "partial" &&
-          step.text === "Checking the first file." &&
-          method === "start"
-        ) {
-          traceState.rejectStartStreamCode = code;
-        }
-        if (
-          step.kind === "partial" &&
-          step.text === "Checking the second file." &&
-          method === "append"
-        ) {
-          traceState.rejectStreamCode = code;
+      beforeStep: async (step) => {
+        if (step.kind === "partial") {
+          if (step.text === "Checking the first file." && method === "start") {
+            traceState.rejectStartStreamCode = code;
+          }
+          if (step.text === "Checking the second file." && method === "append") {
+            await traceState.turn?.replyOptions?.onReasoningStream?.({
+              text: "Waiting for checks.",
+            });
+            traceState.rejectStreamCode = code;
+          }
         }
       },
     });
@@ -859,6 +856,11 @@ describe("slack delivery trace goldens", () => {
         data: expect.objectContaining({ result: { ok: false, error: code } }),
       }),
     );
+    if (method === "append") {
+      expect(wirePayloads(events, "chat.appendStream").at(-1)).toMatchObject({
+        chunks: expect.arrayContaining([{ type: "markdown_text", text: "Waiting for checks." }]),
+      });
+    }
     const posts = wirePayloads(events, "chat.postMessage");
     const edits = wirePayloads(events, "chat.update");
     expect(posts).toContainEqual(
