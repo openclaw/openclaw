@@ -457,7 +457,7 @@ export class SqliteIntegrityError extends Error {
   ) {
     super(
       cause === undefined
-        ? `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`
+        ? `${message}. Stop the Gateway and preserve the database and any existing -wal and -shm sidecars before attempting repairs. Doctor only repairs supported cases; run "openclaw doctor --fix" while the Gateway is stopped. If the database remains invalid, restore a verified backup or have the database owner reconcile the affected records before restarting.`
         : message,
       cause === undefined ? undefined : { cause },
     );

@@ -1,0 +1,2 @@
+# Snapshot refusal preserves both Workboard child-table findings and source artifacts with actionable recovery guidance.
+23

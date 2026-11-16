@@ -102,7 +102,23 @@ describe.each(["fresh", "retained"] as const)("%s image integrity", (acquisition
       const { directory, sourcePath, source, options } = fixture();
       using _ = source;
       if (corruption === "foreign-key") {
-        source.exec("PRAGMA foreign_keys = OFF; INSERT INTO children VALUES (99);");
+        source.exec(`
+          PRAGMA foreign_keys = OFF;
+          CREATE TABLE workboard_cards (id TEXT PRIMARY KEY);
+          CREATE TABLE workboard_card_events (
+            id TEXT PRIMARY KEY,
+            card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE
+          );
+          CREATE TABLE workboard_card_labels (
+            card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            label TEXT NOT NULL,
+            PRIMARY KEY(card_id, ordinal)
+          );
+          INSERT INTO workboard_card_events(rowid, id, card_id) VALUES (39835, 'event', 'missing');
+          INSERT INTO workboard_card_labels(rowid, card_id, ordinal, label)
+            VALUES (3461, 'missing', 0, 'one'), (3462, 'missing', 1, 'two'), (3463, 'missing', 2, 'three');
+        `);
       } else {
         source.enableDefensive?.(false);
         const [name, sql] =
@@ -119,12 +135,11 @@ describe.each(["fresh", "retained"] as const)("%s image integrity", (acquisition
       }
       const before = familyBytes(sourcePath);
       const invoked = vi.fn();
-      await expect(
-        createSnapshot({
-          ...options,
-          ...(callback ? { [callback]: invoked } : {}),
-        }),
-      ).rejects.toThrow(
+      const snapshot = createSnapshot({
+        ...options,
+        ...(callback ? { [callback]: invoked } : {}),
+      });
+      await expect(snapshot).rejects.toThrow(
         callback
           ? /integrity_check failed/iu
           : /integrity_check failed|foreign_key_check failed|malformed database schema/iu,
@@ -134,6 +149,14 @@ describe.each(["fresh", "retained"] as const)("%s image integrity", (acquisition
       }
       expect(familyBytes(sourcePath)).toEqual(before);
       expect(fs.readdirSync(directory).toSorted()).toEqual(sourceFiles);
+      if (corruption === "foreign-key") {
+        await expect(snapshot).rejects.toThrow(
+          /workboard_card_events row 39835 references workboard_cards.*workboard_card_labels row 3461 references workboard_cards.*workboard_card_labels row 3462 references workboard_cards.*workboard_card_labels row 3463 references workboard_cards/u,
+        );
+        await expect(snapshot).rejects.toThrow(
+          /preserve the database and any existing -wal and -shm sidecars before attempting repairs.*Doctor only repairs supported cases.*verified backup.*database owner/u,
+        );
+      }
     },
   );
 
