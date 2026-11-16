@@ -557,7 +557,7 @@ export function projectChatTranscript(
       return {
         kind: "notice",
         sessionKey: props.sessionKey,
-        agentId: props.agentId,
+        agentId: props.currentAgentId ?? props.fullMessageAgentId,
         item,
         modelCatalog: props.modelCatalog,
         onPermissionRetry: actions.onPermissionRetry,

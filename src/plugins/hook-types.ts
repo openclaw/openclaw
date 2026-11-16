@@ -821,4 +821,3 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   conversationAccessAllowed?: true;
   source: string;
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

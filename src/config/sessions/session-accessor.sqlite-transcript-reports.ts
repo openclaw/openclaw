@@ -425,7 +425,7 @@ export async function appendSessionTranscriptReport(
     customTypes: [...report.customTypes],
   };
   const selectReport = report.selectReport;
-  return withReportWorker(
+  return withReportWorker<{ appended: boolean }>(
     scope,
     "append",
     async (operation, assertCurrent, publish) => {

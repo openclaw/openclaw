@@ -1,4 +1,5 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createWorkerTranscriptCommitter } from "../../gateway/worker-environments/transcript-commit.js";
 import {
   createRequest,
@@ -93,6 +94,27 @@ async function fixture() {
 }
 
 describe("memory transcript reports and edits", () => {
+  it("reports actual assistant appends and duplicate suppression without opening SQLite", async () => {
+    const { hydrate } = await fixture();
+    const report = {
+      kind: "assistant" as const,
+      message: {
+        ...makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] }),
+        responseId: "memory-response",
+      },
+    };
+    await expect(appendSessionTranscriptReport(scope, report)).resolves.toEqual({
+      ok: true,
+      value: { appended: true },
+    });
+    const before = await hydrate();
+    await expect(appendSessionTranscriptReport(scope, report)).resolves.toEqual({
+      ok: true,
+      value: { appended: false },
+    });
+    expect((await hydrate()).eventJson).toEqual(before.eventJson);
+  });
+
   it("reselects a mixed-case session report after an intervening append and preserves prepared bytes", async () => {
     const { storage, hydrate, custom } = await fixture();
     const reportScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-RePoRtS" };
