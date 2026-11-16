@@ -457,6 +457,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             privateCompletion: options?.privateCompletion,
             replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
+            subagentCompletions: options?.subagentCompletions,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,

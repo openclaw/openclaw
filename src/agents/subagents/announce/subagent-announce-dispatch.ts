@@ -2,6 +2,7 @@ import type { AgentRunRequest } from "../../../gateway/server-methods/agent-requ
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type { SubagentCompletion } from "../../../shared/subagent-completion.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
@@ -63,6 +64,7 @@ export type SubagentAnnounceDirectParams = {
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
+  subagentCompletions?: readonly SubagentCompletion[];
   /** Exact producer-owned outputs admitted as inputs to the completion turn. */
   inputAttachments?: AgentRunRequest["attachments"];
   expectsCompletionMessage: boolean;
