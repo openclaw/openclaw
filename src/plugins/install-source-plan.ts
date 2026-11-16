@@ -7,6 +7,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
+import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
@@ -99,7 +100,7 @@ export function resolvePluginInstallSourcePlan(params: {
     return fileSpec;
   }
   const normalized = fileSpec?.path ?? params.raw;
-  const resolved = resolveUserPath(normalized);
+  const resolved = resolveUserFilesystemPath(normalized);
   if (fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
     const bundled =
@@ -122,7 +123,11 @@ export function resolvePluginInstallSourcePlan(params: {
   if (npmPackPath !== null) {
     return npmPackPath
       ? sourcePlan(
-          { source: "npm-pack", archivePath: resolveUserPath(npmPackPath), mode: params.mode },
+          {
+            source: "npm-pack",
+            archivePath: resolveUserFilesystemPath(npmPackPath),
+            mode: params.mode,
+          },
           params.raw,
           "npm-pack",
         )

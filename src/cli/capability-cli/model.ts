@@ -17,6 +17,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -188,7 +189,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
           const imageFiles = await Promise.all(
             (files ?? []).map(async (filePath) => {
-              const resolvedPath = path.resolve(filePath);
+              const resolvedPath = resolveFilesystemPath(filePath);
               const buffer = await fs.readFile(resolvedPath);
               const mimeType = normalizeMimeType(
                 await detectMime({

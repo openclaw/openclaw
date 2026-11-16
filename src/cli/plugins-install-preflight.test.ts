@@ -69,6 +69,45 @@ describe("plugin install mutation-free preflight", () => {
     expect(fixture.runtimeErrors.at(-1)).toContain("path install disabled in test");
   });
 
+  it.skipIf(process.platform === "win32").each([{ flags: [] }, { flags: ["--link"] }])(
+    "installs the plugin a symlinked parent's `..` leads to, keeping its final link $flags",
+    async ({ flags }: { flags: string[] }) => {
+      const root = fs.realpathSync(tempDirs.make("plugin-symlink-parent-"));
+      fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "physical", "plugin-real"));
+      fs.symlinkSync("plugin-real", path.join(root, "physical", "plugin-b"));
+      fs.mkdirSync(path.join(root, "plugin-b"));
+      fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"));
+
+      await expect(install(`${root}/selected/../plugin-b`, ...flags)).rejects.toThrow("__exit__:1");
+      expect(fixture.installPluginFromPathMock).toHaveBeenCalledWith(
+        expect.objectContaining({ path: path.join(root, "physical", "plugin-b") }),
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "plans the local Git repository a symlinked parent's `..` leads to",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-git-symlink-parent-"));
+      fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
+      fs.mkdirSync(path.join(root, "physical", "repo"));
+      fs.mkdirSync(path.join(root, "repo"));
+      fs.symlinkSync(path.join(root, "physical", "nested"), path.join(root, "selected"));
+      // Local Git sources must be relative (`./`, `../` or `~/`).
+      const selected = path.relative(process.cwd(), path.join(root, "selected"));
+
+      expect(
+        resolvePluginInstallSourcePlan({ raw: `git:${selected}/../repo`, mode: "install" }),
+      ).toMatchObject({
+        request: {
+          source: "git",
+          spec: `git:${pathToFileURL(path.join(root, "physical", "repo")).href}`,
+        },
+      });
+    },
+  );
+
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {
     fixture.resolveMarketplaceInstallShortcutMock.mockResolvedValue({
       ok: true,
