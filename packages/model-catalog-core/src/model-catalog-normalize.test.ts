@@ -571,6 +571,7 @@ it("drops unknown v3 keys and degrades unknown values to the narrowest field", (
         inference: { chat: false },
         pricing: { ...knownPrice, unit: "image", perImage: 0.04 },
       }),
+      row("unlikely", { inference: { chat: true, chatEvidence: "unlikely" } }),
       row("future-status", { pricing: { status: "tiered" } }),
       row("eur", { pricing: { ...priced, currency: "EUR" } }),
       row("negative", { pricing: { ...priced, input: -1 } }),
@@ -599,6 +600,7 @@ it("drops unknown v3 keys and degrades unknown values to the narrowest field", (
   expect(bundle.models).toEqual([
     row("chat", { inference: { chat: true } }),
     row("per-image", { inference: { chat: false }, pricing: unknownPrice }),
+    row("unlikely", { inference: { chat: true, chatEvidence: "unlikely" } }),
     row("future-status", { pricing: unknownPrice }),
     row("eur", { pricing: unknownPrice }),
     row("negative", { pricing: unknownPrice }),
@@ -616,7 +618,7 @@ it("drops unknown v3 keys and degrades unknown values to the narrowest field", (
   expect(warn).not.toHaveBeenCalled();
   // The publisher schema stays strict, and frozen v2 readers still reject the same envelope.
   expect(newer.models[0]).toHaveProperty("futureRow");
-  for (const model of [newer.models[0], newer.models[6]]) {
+  for (const model of [newer.models[0], newer.models[7]]) {
     expect(() => parseV3({ ...validBundleV2, schemaVersion: 3, models: [model] })).toThrow();
   }
   expect(() => sanitizeV2({ ...newer, schemaVersion: 2, models: [row("chat")] })).toThrow();

@@ -326,6 +326,7 @@ export async function admitScheduledOccurrence(
           sessionKey: parentSessionKey,
           sessionId: live.sessionId,
           lifecycleRevision: live.lifecycleRevision ?? null,
+          exactLifecycle: true,
         });
       }
       // A child working in its parent's workspace must also stop work that never

@@ -7,6 +7,7 @@ import {
   requireRegisteredProvider,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { assert, describe, expect, it, vi } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
@@ -153,6 +154,27 @@ describe("tencent provider plugin", () => {
       expect(await provider.augmentModelCatalog?.(context)).toEqual(expectedAugmented);
     },
   );
+
+  it("keeps listed ids the catalog does not describe out of default pickers", async () => {
+    const provider = await getProvider();
+    // Shape of the incident listing (#198288): ids only, a speech model among chat models.
+    const rows = ["hy3", "VendorSpeech-2", "hy-next"].map((id) => ({ id, object: "model" }));
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data: rows }));
+    try {
+      const listed = await runSingleProviderCatalog(provider);
+      const unlikely = { chat: true, chatEvidence: "unlikely" };
+      expect(Object.fromEntries(listed.models.map((model) => [model.id, model.inference]))).toEqual(
+        {
+          hy3: undefined,
+          "VendorSpeech-2": unlikely,
+          "hy-next": unlikely,
+        },
+      );
+    } finally {
+      fetch.mockRestore();
+      clearLiveCatalogCacheForTests();
+    }
+  });
 
   it.each(["tencent-tokenhub", "tencent-tokenplan"] as const)(
     "%s preserves model-specific reasoning policy and rejects inherited overrides",
