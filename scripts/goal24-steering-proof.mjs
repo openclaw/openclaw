@@ -27,10 +27,7 @@ export function admit(report, exitCode, original = false) {
     assert.equal(entry.status, failed ? "failed" : "passed", "unexpected steering outcome");
     if (failed) {
       const errors = entry.failureMessages.join("\n");
-      assert.match(
-        errors,
-        /expected \[\] to deeply equal \[ 'oh wait, use the corrected requirements' \]/,
-      );
+      assert.match(errors, /^AssertionError: expected \[\] to deeply equal \[ Array\(1\) \]\n/);
       assert.match(errors, /agent-runner-steer-adoption\.worker\.test\.ts:99:\d+/);
       const diagnostics = errors
         .split("\n")

@@ -169,6 +169,8 @@ jobs:
           retention-days: 7
 
   steering-causal:
+    # Both module variants collected in run 43976840532; replay admission locally.
+    if: ${{ false }}
     name: steering-causal
     runs-on: ubuntu-24.04
     timeout-minutes: 40

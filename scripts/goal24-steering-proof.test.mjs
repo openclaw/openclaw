@@ -15,7 +15,7 @@ const report = (original) => ({
         failureMessages:
           original && name === "optional-human"
             ? [
-                "AssertionError: expected [] to deeply equal [ 'oh wait, use the corrected requirements' ]\n    at /source/src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts:99:27",
+                "AssertionError: expected [] to deeply equal [ Array(1) ]\n    at /source/src/auto-reply/reply/agent-runner-steer-adoption.worker.test.ts:99:27",
               ]
             : [],
       })),
