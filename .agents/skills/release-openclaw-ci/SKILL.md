@@ -512,10 +512,12 @@ Check the report before retrying a failed publication: preserve the verified
 draft/published release state, and identify exact orphaned plugin/ClawHub children
 before cancellation. Preflight is read-only and does not authorize publication,
 cancel children, or prove a repository secret from local credentials. Bootstrap
-candidates need a read-only `npm whoami` probe using the repository's actual
-`NPM_TOKEN`; follow the secret-isolated step in
-[bootstrap token probe](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token)
-and retain its run URL. Do not rotate credentials as part of a diagnostic check.
+candidates need a credential-owner handoff for the repository's actual
+`NPM_TOKEN`; follow
+[bootstrap credential readiness](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token)
+and record the owner's assessment and verification limitations. No standalone
+repository-token probe workflow exists; do not dispatch publication as a probe
+or retrieve or rotate credentials as part of this diagnostic check.
 
 ## Dispatch
 

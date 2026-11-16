@@ -486,11 +486,19 @@ verify packaging after publish; it does not authorize republishing.
 
 ## Check the bootstrap token
 
-Before publishing a never-published npm package, check the repository's actual
-`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
-token to a private temporary npmrc, and run `npm whoami` against
-`https://registry.npmjs.org` with that file and an otherwise clean environment.
-Suppress account output, remove the temporary file, and retain the run URL.
-Never print or upload the token. A local login or secret update time is not a
-substitute for this check. Successful authentication does not establish package
-permissions or approve publication; failures go to the credential owner.
+No standalone workflow currently probes the repository's `NPM_TOKEN`. The
+`plugin-npm.token-liveness` warning records that limitation; it is not a command
+to dispatch an undocumented job or use publication as an authentication probe.
+
+Before bootstrap dispatch, ask the repository `NPM_TOKEN` credential owner to
+confirm credential readiness and scope/package-creation access through their
+established credential-management process. Record the owner's assessment and
+any verification limitations in release evidence. Keep token liveness unverified
+unless there is evidence for the actual repository token: a local npm login or
+secret update time is not a substitute. Do not retrieve, print, upload, or rotate
+credentials as part of this read-only preflight.
+
+Credential readiness does not approve publication. The existing protected
+`plugin-npm-release.yml` bootstrap path still requires its exact package,
+artifact, parent approval, and runtime authority checks; follow
+[first-package registry preparation](first-package.md) with the release owner.
