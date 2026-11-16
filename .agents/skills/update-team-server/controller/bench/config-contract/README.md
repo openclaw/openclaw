@@ -47,10 +47,12 @@ The existing retained-continuity allocation sampler includes collected objects a
 64 KiB intervals; it estimates V8 allocation, not exact native or peak allocation.
 
 Separate V8 CPU profiles cover the baseline CLI and both fixed pipeline processes.
-Separate `strace` samples assert zero agent-database opens, zero database write
+Separate `strace` samples assert zero agent-database opens, zero canonical state database write
 opens, and zero workspace traversal for the fixed admission path. Read-only shared
 state access and workspace plugin-directory metadata probes are counted separately;
-they are not database migrations or workspace scans. The
+they are not database migrations or workspace scans. The existing read-only locator
+may write temporary custody databases in its task cache; those are reported separately.
+The
 output includes the source SHA, worker and library hashes, runtime, and observed
 host load. Keep compact results; delete the synthetic namespace, unmount btrfs, and
 remove the task-owned image/container after collection.
