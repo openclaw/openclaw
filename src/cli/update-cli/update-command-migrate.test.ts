@@ -15,7 +15,10 @@ import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-d
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
 import { defaultRuntime } from "../../runtime.js";
+import { completeDeletion } from "../../state/agent-deletion-journal.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
@@ -34,6 +37,64 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it.each(["current", "old-schema", "wrong-owner", "unregistered-old-schema"] as const)(
+  "verifies startup stores before accepting native migration (%s)",
+  async (condition) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ agents: { entries: { main: {} } } });
+      const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+      const heldDir = state.agentDir("retired");
+      const heldPath = path.join(heldDir, "openclaw-agent.sqlite");
+      for (const [agentId, pathname] of [
+        ["main", agentPath],
+        ["retired", heldPath],
+      ] as const) {
+        openOpenClawAgentDatabase({ agentId, path: pathname, env: state.env });
+      }
+      let inspectedPath = agentPath;
+      if (condition === "unregistered-old-schema") {
+        inspectedPath = path.join(state.agentDir("discovered"), "openclaw-agent.sqlite");
+        const target = { agentId: "discovered", path: inspectedPath, env: state.env };
+        openOpenClawAgentDatabase(target);
+        unregisterOpenClawAgentDatabase(target);
+      }
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      {
+        using held = new DatabaseSync(heldPath);
+        held.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+      }
+      completeDeletion(state, "retired", state.path("retired-workspace"));
+      await closeOpenClawStateDatabaseAsync();
+      const heldBytes = await fs.readFile(heldPath);
+      const heldTime = (await fs.stat(heldPath)).mtimeMs;
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {
+        using database = new DatabaseSync(inspectedPath);
+        if (condition === "old-schema" || condition === "unregistered-old-schema") {
+          database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        } else if (condition === "wrong-owner") {
+          database.exec("UPDATE schema_meta SET agent_id='another' WHERE meta_key='primary'");
+        }
+      });
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const backupRoot = state.path("startup-verification", "native");
+      if (condition === "current") {
+        await updateMigrateCommand(backupRoot);
+        expect(output).toHaveBeenCalledWith(expect.objectContaining({ status: "migrated" }));
+      } else {
+        await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
+          "Doctor did not complete the candidate database migrations",
+        );
+        expect(output).not.toHaveBeenCalled();
+      }
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt.status).toBe(condition === "current" ? "migrated" : "failed");
+      expect((await fs.stat(receipt.backup.directory)).isDirectory()).toBe(true);
+      expect(await fs.readFile(heldPath)).toEqual(heldBytes);
+      expect((await fs.stat(heldPath)).mtimeMs).toBe(heldTime);
+    });
+  },
+);
 
 it("retires verified migration originals only after a later native update is accepted", async () => {
   await withOpenClawTestState(

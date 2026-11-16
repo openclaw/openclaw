@@ -546,7 +546,7 @@ ${overflowTable}`,
         await page.locator(".sidebar-brand__search").click();
         await page
           .locator("openclaw-command-palette")
-          .getByPlaceholder("Search or start a task…")
+          .getByPlaceholder("Search…")
           .fill("Ask OpenClaw");
         await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
       }

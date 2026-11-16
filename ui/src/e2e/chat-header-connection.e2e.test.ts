@@ -111,7 +111,10 @@ suite.define(() => {
                 return { x, y, width, height };
               }),
             );
-        const footer = page.locator(".chat-group.user .chat-group-footer__meta").first();
+        // Earlier user rows can leave the virtualizer; keep measuring the cached tail.
+        const footer = page
+          .locator(".chat-pane-cache__pane--visible .chat-group.user .chat-group-footer__meta")
+          .last();
         const footerGeometry = () =>
           footer.evaluate((element) => {
             const box = element.getBoundingClientRect();
@@ -121,6 +124,7 @@ suite.define(() => {
         await header.locator(".chat-pane__workspace-chip").waitFor();
         await header.locator(".session-color-dot").waitFor();
         await header.locator(".chat-header-session-menu__trigger").waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         const settled = await geometry();
         const settledFooter = await footerGeometry();
         const boundary = page.locator(".chat-history-boundary__action").first();
@@ -140,6 +144,7 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await gateway.waitForRequest("connect");
         await conversation.waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await capture("boot");
         expect(await status.count()).toBe(0);

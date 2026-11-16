@@ -167,6 +167,54 @@ it.each<TimingCase>([
   );
 });
 
+const processStart = logLine(`[test] starting ${config}`);
+const processEnd = logLine("[test] passed 1 Vitest shard in 4.50s");
+function toolingProcessLog(nativeSeconds?: number) {
+  return toolingLog(12, nativeSeconds, file, {
+    testFiles: ["1 passed (1)", "1 passed (1)"],
+    durations: ["2.51s", "2.50s"],
+  })
+    .replace(/(\] begin\n)/u, `$1${processStart}\n`)
+    .replace(/(\n[^\n]+\] end)/u, `\n${processEnd}$1`);
+}
+
+it.each<[string, number | undefined, (text: string) => string]>([
+  ["duplicate reporters", 5, (text) => text],
+  ["no process start", 12, replace(`${processStart}\n`, "")],
+  ["no process completion", 12, replace(`${processEnd}\n`, "")],
+  ["repeated process", 12, replace(processStart, `${processStart}\n${processStart}`)],
+  ["wrong config", 12, replace(processStart, logLine("[test] starting other.config.ts"))],
+  ["reordered completion", 12, replace(processStart, `${processEnd}\n${processStart}`)],
+  ["multiple shards", 12, replace(processEnd, logLine("[test] passed 2 Vitest shards in 4.50s"))],
+  ["failed", undefined, replace("end (exit 0)", "end (exit 1)")],
+  ["unfinished", undefined, replace(/\n[^\n]+$/u, "")],
+  ["invalid timestamp", 12, replace("01:00:05Z", "01:99:05Z")],
+  ["reversed timestamps", 12, replace("01:00:05Z", "00:59:59Z")],
+  ["nested end", undefined, replace(/(01:00:05Z )/u, "$1[shard:nested] ")],
+  [
+    "foreign file",
+    12,
+    replace(
+      processEnd,
+      `${logLine("✓ tooling other.test.ts > nested case 9000ms")}\n${processEnd}`,
+    ),
+  ],
+])("uses the complete singleton process wall: %s", (_label, expected, mutate) => {
+  expect(weights(mutate(toolingProcessLog()))).toEqual(
+    expected === undefined ? {} : { [file]: expected },
+  );
+});
+
+it("retains native file time and separates multiple runtime processes", () => {
+  expect(weights(toolingProcessLog(3))).toEqual({ [file]: 3 });
+  const text = [
+    "2026-09-20T01:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all",
+    toolingProcessLog(),
+    toolingProcessLog().replace(/\[shard:/gu, "[shard:bun:"),
+  ].join("\n");
+  expect(weights(text)).toEqual({ [`bun-all:${file}`]: 24 });
+});
+
 it("seeds one explicit run, retains absent files in partial PRs, and respects the write threshold", () => {
   const seed = refitTestTimings([run(1)], undefined, { seedTooling: true }).timings;
   expect(seed.toolingFileSeconds.blacksmith).toEqual({ [file]: 200 });

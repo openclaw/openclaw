@@ -70,11 +70,11 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
-const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const reasoningReplayIdentity = { sessionId: "session-a" };
 
 type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
 type RequestOptions = Parameters<
-  ReturnType<LifecycleParams["createClient"]>["responses"]["create"]
+  Awaited<ReturnType<LifecycleParams["createClient"]>>["responses"]["create"]
 >[1];
 
 function startLifecycle(
@@ -323,7 +323,6 @@ describe("convertResponsesMessages", () => {
       expect(JSON.stringify(first)).toBe(golden);
       for (const [target, options] of [
         [model, { ...reasoningReplayIdentity, sessionId: "other" }],
-        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
         [{ ...model, id: "other-model" }, reasoningReplayIdentity],
         [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
       ] as const) {

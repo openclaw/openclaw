@@ -397,9 +397,10 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
-  /* Circular defaults avoid the reported WebKit 27.3 superellipse paint failure.
-     Themes can still override this shared corner family for the input and its notices. */
-  --chat-composer-corner-shape: round;
+  /* The composer draws the same superellipse as the app's other surfaces; engines
+     without corner-shape keep the circular radius. Themes can still override this
+     shared corner family for the input and its notices. */
+  --chat-composer-corner-shape: superellipse(1.5);
 
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
@@ -616,6 +617,15 @@
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
     corner-shape: superellipse(1.5);
+  }
+}
+
+/* WebKit 27.3 beta stops painting a superellipse composer in narrow layouts
+   while leaving it clickable (#193621), so only that engine gives the shape
+   up. -webkit-nbsp-mode is a WebKit-only property. Remove once WebKit paints it. */
+@supports (-webkit-nbsp-mode: space) {
+  :root {
+    --chat-composer-corner-shape: round;
   }
 }
 

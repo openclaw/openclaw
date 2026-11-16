@@ -228,6 +228,7 @@ export const preservedModuleBuildSources = [
   "src/cli/one-shot-exit.ts",
   "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
+  "src/cli/run-main-service-installation.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
   "src/infra/worker-native-lifecycle.ts",

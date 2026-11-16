@@ -45,6 +45,7 @@ import {
   type ExactStateRetirement,
 } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot, type ExactStateSnapshot } from "./snapshot-exact-state.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import {
   clearExactRestoreReceipt,
   readExactRestoreReceipt,
@@ -467,7 +468,11 @@ async function restoreSnapshot(
   }
   let parent: string;
   try {
-    parent = await requireGit(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions);
+    parent = await requireGit(
+      record.repoRoot,
+      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, snapshot)],
+      gitOptions,
+    );
   } catch (error) {
     const shallow = await runGit(
       record.repoRoot,

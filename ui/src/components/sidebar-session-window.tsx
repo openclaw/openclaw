@@ -177,7 +177,13 @@ export function createSidebarSessionWindow(
           return;
         }
         if (layout !== nextLayout) {
-          measured.clear();
+          // Mounted rows remain observed. Dropping their measurements can lose
+          // a resize already delivered, or wait forever for an unchanged size.
+          for (const key of measured.keys()) {
+            if (!mounted.has(key)) {
+              measured.delete(key);
+            }
+          }
         }
         layout = nextLayout;
         viewportHeight = nextHeight;

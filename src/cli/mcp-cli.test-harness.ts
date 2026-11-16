@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { vi } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
 type CreateSessionMcpRuntime =
@@ -125,9 +126,7 @@ export function resetMcpCliTestState(): void {
 export async function cleanupMcpCliTestState(): Promise<void> {
   try {
     vi.restoreAllMocks();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    cleanupTempDirs(tempDirs);
   } finally {
     process.exitCode = previousExitCode;
   }

@@ -1,5 +1,5 @@
-import os from "node:os";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveClaudeCliProjectsDir } from "../../agents/command/claude-cli-project-dir.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
@@ -17,14 +17,14 @@ import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js
 import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { createSessionActorTranscriptReader } from "../session-transcript-memory-reader.js";
+import type { SessionTranscriptReadScope } from "../session-transcript-read.types.js";
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 
+// History workers do not inherit the Gateway environment, so resolve Claude's
+// projects root (including CLAUDE_CONFIG_DIR) here.
 function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
   return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
-    ? {
-        ...input,
-        cliHistoryHomeDir: process.env.HOME || os.homedir(),
-      }
+    ? { ...input, cliHistoryProjectsDir: resolveClaudeCliProjectsDir() }
     : input;
 }
 
@@ -151,18 +151,36 @@ export type ChatHistoryMessageProjector = {
   project: (messages: unknown[]) => Promise<unknown[]>;
 };
 
+/** Full reads reconstruct the inventory; older pages and cursor deltas never rescan it. */
+async function readChatHistorySkillLoads(
+  scope: SessionTranscriptReadScope,
+  page: { messageId?: string; offset?: number } = {},
+) {
+  if (!scope.sessionId || !scope.storePath || page.messageId || (page.offset ?? 0) > 0) {
+    return undefined;
+  }
+  return (
+    await sessionTranscriptReaders.readSessionTranscriptSummaryAsync(scope, { kind: "skills-used" })
+  ).loads;
+}
+
 /** Enrich only the admitted display copy, then budget the bytes actually sent. */
 export async function readChatHistoryPage(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
   displayProjector?: ChatHistoryMessageProjector,
-) {
+): Promise<ChatHistoryPage> {
   const page = await readChatHistoryPageUnprojected(
     displayProjector ? { ...input, deferChannelUserDisplay: true } : input,
     signal,
   );
+  const skillsUsed = await readChatHistorySkillLoads(chatHistoryScope(input), input);
   if (!displayProjector || page.encodedResponse) {
-    return page;
+    return {
+      ...page,
+      skillsUsed,
+      ...(page.encodedResponse ? { encodedResponse: { ...page.encodedResponse, skillsUsed } } : {}),
+    };
   }
   const messages = sanitizeChatHistoryMessages(
     await displayProjector.project(page.messages),
@@ -170,5 +188,11 @@ export async function readChatHistoryPage(
     { toolResultMaxChars: input.toolResultMaxChars },
   );
   signal?.throwIfAborted();
-  return encodeChatHistoryResponsePage({ ...page, messages }, prepareChatHistoryParams(input));
+  return {
+    ...encodeChatHistoryResponsePage(
+      { ...page, messages, skillsUsed },
+      prepareChatHistoryParams(input),
+    ),
+    skillsUsed,
+  };
 }

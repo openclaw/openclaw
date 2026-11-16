@@ -201,10 +201,10 @@ it("keeps accepted input outside the active transcript and applies its hook once
   receipt.finish("interrupted");
   expect(() => receipt.run(() => {})).toThrow("ownership ended");
   const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope());
-  expect(readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
+  expect(await readForeign()).toEqual(new Map([[receipt.inputId, receipt.message.idempotencyKey]]));
   committedReplay.finish("interrupted");
   await committedReplay.settled?.();
-  expect(readForeign()).toEqual(new Map());
+  expect(await readForeign()).toEqual(new Map());
 });
 
 it("keeps requester facts with exact accepted custody through projection edits", async () => {

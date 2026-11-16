@@ -3,7 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
-import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  hasBuildArtifactAffectingChange,
+  resolveChangedNodeTestTargets,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
@@ -106,6 +109,92 @@ function createErasedCoreSourceFixture() {
 
 describe("CI changed Node test plan", () => {
   it.each([
+    [
+      "qa/scenarios/runtime/cloud-worker-admission-authority.yaml",
+      ["extensions/qa-lab/src/coverage-report.test.ts"],
+    ],
+    ["taxonomy.yaml", ["extensions/qa-lab/src/coverage-report.test.ts"]],
+    ["apps/macos/Sources/OpenClaw/DebugSettings.swift", ["test/scripts/native-app-i18n.test.ts"]],
+    ["apps/ios/WatchApp/Sources/WatchInboxView.swift", ["test/scripts/native-app-i18n.test.ts"]],
+    [
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    [
+      "apps/android/app/src/main/java/ai/openclaw/app/Screen.kt",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    ["apps/android/app/src/play/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
+    [
+      "apps/android/app/src/thirdParty/res/values/strings.xml",
+      ["test/scripts/native-app-i18n.test.ts"],
+    ],
+    ["apps/android/wear/src/main/res/values/strings.xml", ["test/scripts/native-app-i18n.test.ts"]],
+    ["apps/macos/README.md", []],
+    ["apps/android/app/src/test/Screen.kt", []],
+  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
+    const readers = [
+      "extensions/qa-lab/src/coverage-report.test.ts",
+      "extensions/github-copilot/replay-policy.test.ts",
+      "test/scripts/native-app-i18n.test.ts",
+    ];
+    const cwd = createSourceFixture("changed-inventory-owner-", {
+      [input]: "export {};\n",
+      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
+      "src/other/unrelated.test.ts": "export {};\n",
+      "test/scripts/unrelated.test.ts": "export {};\n",
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    const targets = resolveChangedNodeTestTargets([input], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.toSorted()).toEqual([...owners].toSorted());
+  });
+
+  it("retains the three-hop Copilot replay consumer without widening import depth", () => {
+    const consumer = "extensions/github-copilot/replay-policy.test.ts";
+    const source = "src/plugins/provider-replay-helpers.ts";
+    const cwd = createSourceFixture("changed-replay-consumer-", {
+      [source]: "export const policy = {};\n",
+      "src/plugin-sdk/provider-model-shared.ts":
+        'export * from "../plugins/provider-replay-helpers.js";\n',
+      "extensions/github-copilot/replay-policy.ts":
+        'import "../../src/plugin-sdk/provider-model-shared.js";\n',
+      [consumer]: 'import "./replay-policy.js";\n',
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    expect(
+      resolveChangedNodeTestTargets([source], {
+        cwd,
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      }),
+    ).toEqual([consumer]);
+  });
+
+  it("packs the native inventory reader without a whole tooling family", () => {
+    const reader = "test/scripts/native-app-i18n.test.ts";
+    const shards = createChangedNodeTestShards(
+      ["apps/macos/Sources/OpenClaw/DebugSettings.swift"],
+      {
+        selectionMode: "aggressive",
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyRuntimeTests: false,
+      },
+    );
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(reader);
+    const owners = shards?.filter((shard) => selectedFiles([shard]).includes(reader));
+    expect(owners).toHaveLength(1);
+    expect(owners?.[0]?.requiresDist).toBe(false);
+    expect(selectedFiles(owners ?? [])).toEqual([reader]);
+  });
+
+  it.each([
     ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
     ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
   ])("keeps the declared file reader when %s changes", (input, reader) => {
@@ -185,7 +274,11 @@ describe("CI changed Node test plan", () => {
     },
     {
       source: "extensions/anthropic/openclaw.plugin.json",
-      targets: ["src/agents/model-ref-shared.test.ts"],
+      targets: [
+        "src/agents/model-ref-shared.test.ts",
+        "src/plugins/bundled-plugin-icons.test.ts",
+        "src/plugins/bundled-plugin-categories.test.ts",
+      ],
       areas: ["extensions/anthropic", "src/config"],
     },
     {
@@ -1016,5 +1109,36 @@ describe("CI changed Node test plan", () => {
         "test/scripts/ci-node-test-plan.commands.test.ts",
       ]),
     );
+  });
+  it.each([
+    [
+      "extensions/new-provider/openclaw.plugin.json",
+      ["src/plugins/bundled-plugin-icons.test.ts", "src/plugins/bundled-plugin-categories.test.ts"],
+    ],
+    ["extensions/new-provider/assets/icon.png", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/activity.svg", ["src/plugins/bundled-plugin-icons.test.ts"]],
+    ["extensions/new-provider/assets/README.md", []],
+  ] as const)("keeps bounded inventory owners for %s in aggressive PRs", (input, owners) => {
+    const readers = [
+      "src/plugins/bundled-plugin-icons.test.ts",
+      "src/plugins/bundled-plugin-categories.test.ts",
+    ];
+    const cwd = createSourceFixture("changed-inventory-owner-", {
+      [input]: "export {};\n",
+      ...Object.fromEntries(readers.map((file) => [file, "export {};\n"])),
+      "src/other/unrelated.test.ts": "export {};\n",
+      "test/scripts/unrelated.test.ts": "export {};\n",
+      "extensions/other-provider/unrelated.test.ts": "export {};\n",
+    });
+    if (input.endsWith("activity.svg")) {
+      rmSync(path.join(cwd, input));
+    }
+    const targets = resolveChangedNodeTestTargets([input], {
+      cwd,
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(targets.toSorted()).toEqual([...owners].toSorted());
   });
 });

@@ -56,7 +56,7 @@ function expectReplyParts(payload: unknown, ...parts: string[]) {
 
 const expiredGuidance = [
   "expired without a decision",
-  "approve it in the Control UI or OpenClaw apps",
+  "approve it in the OpenClaw app",
   "Retrying alone does not approve the change",
 ];
 const failedGuidance = ["application status is unconfirmed", "before retrying"];

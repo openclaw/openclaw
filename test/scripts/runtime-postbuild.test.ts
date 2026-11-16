@@ -601,11 +601,11 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
-  it.each(["//#region", "//"])(
+  it.each(["//#region ", "// ", "//!"])(
     "does not treat source-owned implementations as runtime wrappers (%s)",
     async (label) => {
       const f = await runtimeFixture({
-        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label} src/infra/owner.ts\nexport const current = value;\n`,
+        "owner.runtime-Impl123.mjs": `import { value } from "./owner.runtime-Other456.mjs";\n${label}src/infra/owner.ts\nexport const current = value;\n`,
         "owner.runtime-Other456.mjs": "export const value = true;\n",
         "owner.runtime.js": 'export * from "./owner.runtime-Stale.js";\n',
       });

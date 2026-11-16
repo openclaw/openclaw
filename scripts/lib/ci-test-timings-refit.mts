@@ -52,15 +52,28 @@ function normalizeTimingLog(text: string): string {
 }
 
 function timingNamespace(key: string): string {
+  const owner = /"OPENCLAW_CI_TEST_RUNTIME","(node|bun)"/u.exec(key)?.[1];
+  const policy = /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1];
+  if (owner && policy) {
+    return `${policy}:${owner}`;
+  }
   return (
-    /^(bun-all|bun-native|node-subset|dual-all|bun):/u.exec(key)?.[1] ??
+    /^(bun-all:(?:node|bun)|dual-all:bun|bun-all|bun-native|node-subset|dual-all|bun):/u.exec(
+      key,
+    )?.[1] ??
     /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1] ??
     "node"
   );
 }
 
-function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[] {
+function splitRuntimeTimingLogs(
+  text: string,
+): { text: string; prefix: string; runtime?: string }[] {
   const policy = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY");
+  const owner = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME");
+  if (owner === null || (owner && owner !== "node" && owner !== "bun")) {
+    return [];
+  }
   if (policy !== "bun-all" && policy !== "dual-all") {
     return [{ text, prefix: "" }];
   }
@@ -78,7 +91,7 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
         return [line];
       }
       const runtime = /^(?:bun:|bun-native:|node-subset:)/u.exec(shard[1]!)?.[0] ?? "";
-      if (!(runtime ? includeBun : includeNode)) {
+      if (!(runtime && !(owner && runtime === "node-subset:") ? includeBun : includeNode)) {
         return [];
       }
       return [line.replace(`[shard:${runtime}`, "[shard:")];
@@ -112,6 +125,12 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
       })
       .join("\n");
   };
+  // A split leg is not the historical serial envelope. Only dual-all
+  // has a full Node pass that can reuse the original Node costs.
+  if (owner) {
+    const prefix = owner === "node" && policy === "dual-all" ? "" : `${policy}:${owner}:`;
+    return [{ text: collapse(owner === "node", owner === "bun"), prefix, runtime: owner }];
+  }
   return policy === "bun-all"
     ? [{ text: collapse(true, true), prefix: "bun-all:" }]
     : [
@@ -492,6 +511,7 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
   const jobWorkers = readJobWorkerCeiling(text);
   if (
     ciTimingRunnerProfile(labels) !== "github" ||
+    readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME") ||
     readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual-all" ||
     resources?.requestedPlans !== 1 ||
     resources.admittedPlans !== 1 ||
@@ -921,21 +941,26 @@ function readToolingLog(text: string, samples: Samples, workerCeilings?: WorkerC
       singletonSummary: boolean;
       durationCount: number;
       durationSeconds: number | undefined;
+      started: number;
+      processConfigs: string[];
+      completedProcesses: number[];
       workers: number | null | undefined;
     }
   >();
   for (const line of text.split("\n")) {
-    const event = /\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
+    const event =
+      /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))$/u.exec(line);
     if (event) {
+      const timestamp = Date.parse(event[1]!);
       const matches = descriptors.filter(
-        (group) => (group.timing_key ?? group.shard_name) === event[1],
+        (group) => (group.timing_key ?? group.shard_name) === event[2],
       );
       const descriptor = matches.length === 1 ? matches[0] : undefined;
       if (!descriptor || !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(descriptor.shard_name)) {
         continue;
       }
       const shard = descriptor.shard_name;
-      if (event[2] === "begin") {
+      if (event[3] === "begin") {
         active.set(shard, {
           cases: new Map(),
           files: new Map(),
@@ -952,6 +977,9 @@ function readToolingLog(text: string, samples: Samples, workerCeilings?: WorkerC
           singletonSummary: false,
           durationCount: 0,
           durationSeconds: undefined,
+          started: timestamp,
+          processConfigs: [],
+          completedProcesses: [],
           workers: intersectWorkerCeilings(
             jobWorkers,
             parseWorkerCeiling(descriptor.env?.OPENCLAW_VITEST_MAX_WORKERS),
@@ -959,24 +987,37 @@ function readToolingLog(text: string, samples: Samples, workerCeilings?: WorkerC
         });
       } else {
         const invocation = active.get(shard);
-        if (event[3] === "0" && invocation?.complete) {
+        if (event[4] === "0" && invocation?.complete) {
           const files = new Map([...invocation.cases, ...invocation.files]);
           const singletonFile = invocation.singletonFile;
+          const elapsed = (timestamp - invocation.started) / 1000;
+          const completeProcess =
+            invocation.processConfigs.length === 1 &&
+            invocation.processConfigs[0] === "test/vitest/vitest.tooling.config.ts" &&
+            invocation.completedProcesses.length === 1 &&
+            invocation.completedProcesses[0] === 1 &&
+            Number.isFinite(elapsed) &&
+            elapsed > 0;
+          const singletonSeconds = completeProcess
+            ? elapsed
+            : invocation.fileSummaryCount === 1 &&
+                invocation.singletonSummary &&
+                invocation.durationCount === 1
+              ? invocation.durationSeconds
+              : undefined;
           if (
             singletonFile !== undefined &&
             files.size === 1 &&
             files.has(singletonFile) &&
             !invocation.files.has(singletonFile) &&
-            invocation.fileSummaryCount === 1 &&
-            invocation.singletonSummary &&
-            invocation.durationCount === 1 &&
-            invocation.durationSeconds !== undefined &&
-            Number.isFinite(invocation.durationSeconds) &&
-            invocation.durationSeconds > 0
+            singletonSeconds !== undefined &&
+            Number.isFinite(singletonSeconds) &&
+            singletonSeconds > 0
           ) {
             // A complete one-file invocation includes startup and suite hooks;
-            // concurrent case sums can overstate its wall. Native file time wins.
-            files.set(singletonFile, invocation.durationSeconds);
+            // concurrent case sums and duplicate reporters can overstate its wall.
+            // Native file time wins; older logs can use an unambiguous summary.
+            files.set(singletonFile, singletonSeconds);
           }
           for (const [file, duration] of files) {
             // Tooling fixtures print nested reporters. Only this shard's
@@ -1001,6 +1042,16 @@ function readToolingLog(text: string, samples: Samples, workerCeilings?: WorkerC
     const invocation = row && active.get(row[1]!);
     if (!invocation) {
       continue;
+    }
+    const processStart = /^\[test\] starting (\S+)$/u.exec(row[2]!);
+    if (processStart) {
+      invocation.processConfigs.push(processStart[1]!);
+    }
+    const processEnd = /^\[test\] passed (\d+) Vitest shards? in [\d.]+s$/u.exec(row[2]!);
+    if (processEnd) {
+      invocation.completedProcesses.push(
+        invocation.processConfigs.length === 1 ? Number(processEnd[1]) : 0,
+      );
     }
     const file =
       /^✓\s+(?:\|tooling\||tooling)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\(\d+ tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
@@ -1267,7 +1318,10 @@ export function refitTestTimings(
             for (const [identity, values] of runtime[profile]) {
               const observation = descriptors.get(identity)!;
               if (runtimeLog.prefix) {
-                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.slice(0, -1);
+                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.split(":")[0]!;
+                if (runtimeLog.runtime) {
+                  observation.env.OPENCLAW_CI_TEST_RUNTIME = runtimeLog.runtime;
+                }
               }
               const key = runtimePlacementTimingIdentity(observation);
               runtimeDescriptors.set(key, observation);

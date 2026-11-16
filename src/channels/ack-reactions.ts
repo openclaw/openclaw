@@ -102,12 +102,10 @@ export function removeAckReactionAfterReply(params: {
     return;
   }
   // Only remove if the send actually succeeded; failed sends are already reported by the handle.
-  void params.ackReactionPromise.then((didAck) => {
-    if (!didAck) {
-      return;
-    }
-    params.remove().catch((err: unknown) => params.onError?.(err));
-  });
+  void params.ackReactionPromise
+    .then((didAck) => (didAck ? params.remove() : undefined))
+    .catch((err: unknown) => params.onError?.(err))
+    .catch((err: unknown) => console.warn(`[ack] removal error callback failed: ${String(err)}`));
 }
 
 export function removeAckReactionHandleAfterReply(params: {

@@ -5,6 +5,8 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -35,6 +37,7 @@ export type MessageRenderOptions = {
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
+  toolMessageSource?: ChatToolMessageSource;
   /** Saved transcript text can render before live resource admission. */
   mediaReadAllowed?: boolean;
   canvasPluginSurfaceUrl?: string | null;
@@ -69,13 +72,14 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** First visible message of the containing group/frame; null means none. */
   firstBubbleKey?: string | null;
   showToolCalls?: boolean;
-  isToolMessageExpanded?: (messageId: string) => boolean | undefined;
+  inlineCommands?: InlineCommandPresentation;
+  isToolMessageExpanded?: (messageId: string, card?: ToolCard) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
   assistantMessageDisclosure?: AssistantMessageDisclosure;
   messageActions?: MessageActionDetails | null;
-  isToolExpanded?: (toolCardId: string) => boolean;
+  isToolExpanded?: (toolCardId: string, card?: ToolCard) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
   subagents?: ToolRenderOptions["subagents"];

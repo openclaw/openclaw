@@ -22,8 +22,7 @@ import {
   type PluginInstallLogger,
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
-import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
+import { resolvePackageExtensionEntries } from "./manifest.js";
 import {
   emitPluginAuditSecurityEvent,
   emitPluginInstallSecurityEvent,
@@ -38,10 +37,6 @@ export async function loadPluginInstallRuntime() {
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
-type PluginCompatibilityRuntime = Pick<
-  PluginInstallRuntime,
-  "checkMinHostVersion" | "resolveCompatibilityHostVersion"
->;
 
 export const defaultLogger: PluginInstallLogger = {};
 
@@ -51,57 +46,6 @@ export function formatUnresolvedOpenClawPeerLinkError(packageName: string): stri
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
-export function validateOpenClawPackageInstallCompatibility(params: {
-  runtime: PluginCompatibilityRuntime;
-  pluginId: string;
-  packageMetadata?: OpenClawPackageManifest;
-}): PluginInstallFailureResult | null {
-  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
-  const minHostVersionCheck = params.runtime.checkMinHostVersion({
-    currentVersion: currentHostVersion,
-    minHostVersion: params.packageMetadata?.install?.minHostVersion,
-  });
-  if (!minHostVersionCheck.ok) {
-    if (minHostVersionCheck.kind === "invalid") {
-      return {
-        ok: false,
-        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
-        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
-      };
-    }
-    if (minHostVersionCheck.kind === "unknown_host_version") {
-      return {
-        ok: false,
-        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
-        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
-      };
-    }
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
-    };
-  }
-
-  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
-  if (!pluginApiRangeCheck.ok) {
-    return {
-      ok: false,
-      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
-    };
-  }
-  const pluginApiRange = pluginApiRangeCheck.range;
-  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-    };
-  }
-  return null;
-}
-
 export async function readOptionalPackageManifest(params: {
   runtime: PluginInstallRuntime;
   packageDir: string;

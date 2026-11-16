@@ -39,7 +39,10 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
+import {
+  isRequesterSettleWakeForRun,
+  owesRequesterCompletion,
+} from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   copySubagentRunRuntimeOwner,
@@ -116,7 +119,6 @@ type YieldWaitSource = "waiting" | "resume" | undefined;
 function resolveYieldWaitingChild(
   sessionKey: string,
   agentId: string,
-  session: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">,
   runId: string,
   visited: Set<string>,
 ): YieldWaitSource {
@@ -124,24 +126,22 @@ function resolveYieldWaitingChild(
   for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
     if (
       resolveRecordedRequester(child) !== agentId ||
-      child.completionRequesterSessionId !== session.sessionId ||
-      child.completionRequesterLifecycleRevision !== session.lifecycleRevision ||
       child.requesterSettleWake?.requesterYieldBatch !== true ||
       (child.requesterSettleWake.requesterRunId &&
         child.requesterSettleWake.requesterRunId !== runId)
     ) {
       continue;
     }
-    const childSource = isYieldedSubagentRun(child)
-      ? owesRequesterCompletion(child)
-        ? resolveSubagentYieldWaitSource(child, visited)
-        : undefined
-      : owesRequesterCompletion(child) &&
-          (isSubagentRunLive(child) ||
-            (child.execution.status === "terminal" &&
-              !subagentRuns.isCompletionAuthorityRetired(child)))
-        ? "waiting"
-        : "resume";
+    const childSource = subagentRuns.isCompletionAuthorityRetired(child)
+      ? "resume"
+      : isYieldedSubagentRun(child)
+        ? owesRequesterCompletion(child)
+          ? resolveSubagentYieldWaitSource(child, visited)
+          : undefined
+        : owesRequesterCompletion(child) &&
+            (isSubagentRunLive(child) || child.execution.status === "terminal")
+          ? "waiting"
+          : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.
     if (childSource === "resume") {
       return childSource;
@@ -165,13 +165,7 @@ export function resolveSubagentYieldWaitSource(
   }
   const authority = getRecordedSubagentChildAuthority(entry);
   return authority.status === "verified"
-    ? resolveYieldWaitingChild(
-        entry.childSessionKey,
-        authority.childAgentId,
-        authority.sessionIdentity,
-        entry.runId,
-        visited,
-      )
+    ? resolveYieldWaitingChild(entry.childSessionKey, authority.childAgentId, entry.runId, visited)
     : undefined;
 }
 
@@ -205,6 +199,7 @@ export function resolveSessionYieldWait(
     | "sessionId"
     | "lifecycleRevision"
     | "lifecycleRunId"
+    | "lastRunId"
     | "activeWriterRunId"
     | "archivedAt"
     | "incognito"
@@ -216,6 +211,24 @@ export function resolveSessionYieldWait(
 ): YieldWaitSource | "unreachable" {
   if (session.archivedAt !== undefined || session.incognito) {
     return undefined;
+  }
+  const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
+  if (interruptedRunId?.startsWith("announce:")) {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      if (
+        !subagentRuns.isCompletionAuthorityRetired(child) &&
+        isRequesterSettleWakeForRun({
+          entry: child,
+          runId: interruptedRunId,
+          requesterSessionKey: sessionKey,
+          requesterAgentId: agentId,
+          runsById: subagentRuns,
+        })
+      ) {
+        // The retained input owns this continuation; a separate restart turn would duplicate it.
+        return "waiting";
+      }
+    }
   }
   const ownWait = getLatestLiveSubagentRunByChildSessionKey(
     sessionKey,
@@ -242,7 +255,7 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   return (
-    resolveYieldWaitingChild(sessionKey, agentId, session, session.lifecycleRunId, new Set()) ??
+    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
     "unreachable"
   );
 }

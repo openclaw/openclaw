@@ -167,9 +167,12 @@ export async function buildTemplateAddPlan(params: {
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
+  const admittedWorkspace =
+    context.admittedWorkspace === undefined
+      ? undefined
+      : canonicalWorkspacePath(context.admittedWorkspace);
   const workspaceBlocked =
-    configuredWorkspaceConflict ||
-    (workspaceExistsOnDisk && context.admittedWorkspace !== workspace);
+    configuredWorkspaceConflict || (workspaceExistsOnDisk && admittedWorkspace !== workspace);
   const workspaceCollisionMessage = configuredWorkspaceConflict
     ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
     : `Workspace ${JSON.stringify(workspace)} already exists.`;
@@ -418,6 +421,7 @@ export async function buildTemplateAddPlan(params: {
   );
   const bundledSkillNames = new Set<string>();
   const bundledSkillTargets = new Set<string>();
+  const bundledPluginTargets = new Map<string, string>();
   for (const pkg of templateDependencyInventory(params.manifest)) {
     const collection = pkg.kind === "skill" ? "skills" : "plugins";
     const index = params.manifest[collection].findIndex((entry) =>
@@ -441,6 +445,7 @@ export async function buildTemplateAddPlan(params: {
         skillNames: bundledSkillNames,
         skillTargets: bundledSkillTargets,
         referencedSkillTargets,
+        pluginTargets: bundledPluginTargets,
       });
       actions.push(planned.action);
       capabilityChanges.push(planned.capabilityChange);
@@ -478,6 +483,9 @@ export async function buildTemplateAddPlan(params: {
           )
         : undefined;
     if (diagnostic) {
+      if (!preflight.ok && preflight.allowlistPluginId) {
+        diagnostic.allowlistPluginId = preflight.allowlistPluginId;
+      }
       blockers.push(diagnostic);
     }
     if (preflight.ok && preflight.requirements) {
@@ -630,8 +638,10 @@ export async function buildTemplateAddPlan(params: {
     agentId: finalId,
   });
 
-  // Strict v1 validation permits only deterministic main or isolated targets.
-  for (const job of params.manifest.automations) {
+  // Keep the declared execution session independent from delivery. Templates can only
+  // announce to the last channel, which the scheduler rejects on multi-channel hosts,
+  // so channel delivery remains an owner choice after Add.
+  for (const { delivery: _ignoredDelivery, ...job } of params.manifest.automations) {
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -641,9 +651,6 @@ export async function buildTemplateAddPlan(params: {
         ...job,
         agentId: finalId,
         expectedState: "absent",
-        ...(job.delivery?.channel === "last"
-          ? { deliveryResolution: "local-channel-state:last" }
-          : {}),
       },
       blocked: false,
     });

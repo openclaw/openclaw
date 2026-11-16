@@ -285,7 +285,13 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
           ...fixturePreloadEnv(preload, "node"),
           ...(route === "built-source"
-            ? { CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192", RUNNER_TEMP: directory }
+            ? {
+                // This CI runner must not reuse a local cache slot before cleanup is observed.
+                CI: "1",
+                OPENCLAW_VITEST_WORKER_CACHE: undefined,
+                CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192",
+                RUNNER_TEMP: directory,
+              }
             : {}),
           ...(route === "batch"
             ? {

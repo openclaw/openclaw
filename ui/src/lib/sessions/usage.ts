@@ -12,13 +12,16 @@ export type SessionUsageQuery = {
   creatorKey?: string;
   query?: string;
   selectedDays?: string[];
-  selectedHours?: number[];
   selectedSessions?: string[];
-  recentKeys?: string[];
   offset?: number;
   sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
   sortDirection?: "asc" | "desc";
 };
+
+/** Whole-history reads (one session's lifetime total) replace the calendar window. */
+type SessionUsageRequestQuery =
+  | SessionUsageQuery
+  | (Omit<SessionUsageQuery, "startDate" | "endDate"> & { range: "all" });
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
   const offsetFromUtcMinutes = -timezoneOffsetMinutes;
@@ -43,7 +46,7 @@ function buildSessionUsageDateParams(timeZone: "local" | "utc") {
 
 export function requestSessionUsage(
   client: SessionRequestClient,
-  query: SessionUsageQuery,
+  query: SessionUsageRequestQuery,
   options?: {
     key?: string;
     projection?: "overview";
@@ -54,8 +57,9 @@ export function requestSessionUsage(
 ): Promise<SessionsUsageResult> {
   const key = options?.key;
   const params = {
-    startDate: query.startDate,
-    endDate: query.endDate,
+    ...("range" in query
+      ? { range: query.range }
+      : { startDate: query.startDate, endDate: query.endDate }),
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
     ...buildSessionUsageDateParams(query.timeZone),
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
@@ -67,10 +71,8 @@ export function requestSessionUsage(
           ...(options?.projection ? { projection: options.projection } : {}),
           ...(query.query ? { query: query.query } : {}),
           ...(query.selectedDays?.length ? { selectedDays: query.selectedDays } : {}),
-          ...(query.selectedHours?.length ? { selectedHours: query.selectedHours } : {}),
           ...(query.selectedSessions?.length ? { selectedSessions: query.selectedSessions } : {}),
           ...(query.offset ? { offset: query.offset } : {}),
-          ...(query.recentKeys ? { recentKeys: query.recentKeys } : {}),
           ...(query.sort ? { sort: query.sort } : {}),
           ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
         }),

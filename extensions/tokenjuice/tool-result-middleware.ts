@@ -91,14 +91,27 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
         },
         { cwd },
       );
-      return next
-        ? {
-            result: Object.assign({}, current, {
-              content: next.content ?? current.content,
-              details: next.details ?? current.details,
-            }),
-          }
-        : undefined;
+      if (!next) {
+        return undefined;
+      }
+      const nextDetails = next.details ?? details;
+      return {
+        result: Object.assign({}, current, {
+          content: next.content ?? current.content,
+          // Code Mode returns shell details rather than content. Mirror only the
+          // delivered compacted text, never the raw aggregate removed above.
+          details:
+            next.content && isRecord(nextDetails)
+              ? {
+                  ...nextDetails,
+                  aggregated: next.content
+                    .filter((block) => block.type === "text")
+                    .map((block) => block.text)
+                    .join("\n"),
+                }
+              : nextDetails,
+        }),
+      };
     } finally {
       retainedRuleScopes.add(cwd);
       if (retainedRuleScopes.size >= 128) {

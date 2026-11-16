@@ -78,7 +78,7 @@ shell-completion metadata.
 
 | Task                          | Command                                                                                       | Notes                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local by default                                      |
+| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Local unless a Gateway is running                     |
 | Run a model prompt on images  | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple images                   |
 | Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
 | Describe an image file or URL | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
@@ -101,6 +101,11 @@ shell-completion metadata.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
+- `model run` without `--local` or `--gateway` runs locally only when no Gateway owns the state directory. When a local Gateway is running, the CLI runs it through that Gateway instead (`transport: "gateway"` in the JSON envelope), because the Gateway owns the shared credentials and their OAuth refresh. A local run beside it could refresh a token the Gateway would then keep reading in its stale form.
+- `model run --local` refuses while a Gateway owns the state directory, and makes no provider call. Omit `--local` to run it through the Gateway, or stop the Gateway first.
+- While a Gateway owns the state directory, a local command never refreshes or stores a shared sign-in. This covers `image *`, `audio *`, `video *`, `web *`, `embedding *`, and local `tts convert`. A sign-in that is still valid is used as is, and the Gateway refreshes it on its next turn. An expired sign-in is refused before any change: the error names the Gateway and says to run the work through the Gateway, retry after the Gateway's next turn refreshes the sign-in, or stop the Gateway. With no Gateway running, these commands refresh and run locally as before.
+- `model auth login` follows `openclaw models auth login`: with a Gateway running, the sign-in runs through that Gateway. `model auth logout` follows `openclaw models auth logout`: it refuses while a Gateway owns the state directory; stop the Gateway first.
+- A local `model run` holds the state directory for its duration, so concurrent local runs on one state directory fail instead of running side by side. Run them one at a time, or start the Gateway and let the runs go through it.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
@@ -136,7 +141,7 @@ openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-6-astra --json
 ```
 
-Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface:
+Use full `<provider/model>` refs with `--local` to smoke-test one provider without starting the Gateway or loading the agent tool surface (stop a running Gateway first):
 
 ```bash
 openclaw infer model run --local --model anthropic/claude-sonnet-4-6 --prompt "Reply with exactly: pong" --json

@@ -61,6 +61,8 @@ import {
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
 import {
+  estimateToolResultReductionPotential,
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   resolveCacheTtlPruningSettings,
   resolveLiveToolResultMaxChars,
@@ -460,6 +462,17 @@ export function installEmbeddedAttemptContextGuards(input: {
         (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
       const decision = resolveProjectedRequestPressure({
         ...request,
+        // Provider projections may contain text that the transcript owner cannot rewrite.
+        estimateRecoverableToolResultChars: () =>
+          estimateToolResultReductionPotential({
+            messages: projectToolResultMessages({
+              messages: input.sessionManager.buildSessionContext().messages,
+              projectionState: input.toolResultPromptProjectionState,
+              recovering: true,
+            }).messages,
+            contextWindowTokens: contextTokenBudget,
+            maxCharsOverride: toolResultMaxChars,
+          }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: deferThreshold
           ? 0
@@ -473,7 +486,6 @@ export function installEmbeddedAttemptContextGuards(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
       });

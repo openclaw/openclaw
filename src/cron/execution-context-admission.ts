@@ -17,6 +17,7 @@ import { prepareSessionGenerationFacts } from "../config/sessions/session-delive
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
@@ -32,6 +33,7 @@ import {
   type ScheduledRequesterRef,
 } from "./execution-context.js";
 import { cronExecutionActor, hasTransferredCronOwner } from "./human-owner.js";
+import { readCronOperatorSnapshot } from "./operator-source-snapshot.js";
 import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
@@ -121,7 +123,10 @@ export async function checkRequesterOwner(
         } catch {
           return false;
         }
-        return !current.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+        return (
+          !isNamedOperatorRoleEnforcementEnabled(current) ||
+          requester.profileId === GATEWAY_OWNER_PROFILE_ID
+        );
       });
     }
     case "unknown":
@@ -130,27 +135,20 @@ export async function checkRequesterOwner(
   return NOT_OWNER;
 }
 
-type ScheduledParentLink = Readonly<{
-  sessionKey: string;
-  sessionId: string;
-  lifecycleRevision?: string;
-}>;
-
 /**
- * The stored parent link, with the builder's principal precedence: the operator
- * source names the exact incarnation, then the creating conversation. Shared with
- * the development replay.
+ * The stored parent key, with the builder's principal precedence: the operator source,
+ * then the creating conversation. Shared with the development replay.
  */
-export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink | undefined {
+export function scheduledParentKeyOf(job: CronStoredJob): string | undefined {
   if (job.operatorSource) {
     try {
       const source = decodeGatewayOperatorRecoverySource(job.operatorSource.source);
-      return source.kind === "gateway" ? job.sourceConversation : source;
+      return source.kind === "gateway" ? job.sourceConversation?.sessionKey : source.sessionKey;
     } catch {
       return undefined;
     }
   }
-  return job.sourceConversation;
+  return job.sourceConversation?.sessionKey;
 }
 
 async function readParent(parentSessionKey: string, storePath: string) {
@@ -225,6 +223,13 @@ export function assembleScheduledAdmissionFacts(
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
 ): ScheduledAdmissionFacts {
+  let operatorSnapshot: ReturnType<typeof readCronOperatorSnapshot>;
+  try {
+    operatorSnapshot = readCronOperatorSnapshot(params.job);
+  } catch {
+    // The context builder reports invalid stored authority and refuses execution.
+    operatorSnapshot = undefined;
+  }
   return {
     trigger: params.trigger,
     ...(params.trigger === "event" ? { ingress: ingressFor(params.ingressBoundary) } : {}),
@@ -237,7 +242,10 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
+      resolveCreatorSandbox(params.cfg, {
+        actor: cronExecutionActor(params.job),
+        openclawIdPrincipal: operatorSnapshot?.openclawIdPrincipal,
+      })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),
@@ -282,34 +290,24 @@ export async function admitScheduledOccurrence(
       if (!requesterOwner && principal.requester.kind !== "operator-source") {
         requesterOwner = await checkRequesterOwner(params.cfg, principal.requester);
       }
-      const parentState = classifyScheduledParent(principal.parent, parentRow);
+      const live = classifyScheduledParent(parentRow);
       const parentSessionKey = principal.parent.sessionKey;
-      // A reset parent keeps running as an unbound parent; a failed read never pauses.
-      if (parentState === "removed" || parentState === "archived") {
-        pause = { reason: parentState, parentSessionKey };
-      } else if (
-        parentState === "current" &&
-        !parentRow.missing &&
-        parentRow.worktree &&
-        !parentRow.worktree.exists
-      ) {
-        pause = {
-          reason: "worktree-missing",
-          parentSessionKey,
-          worktreePath: parentRow.worktree.path,
-        };
+      // A failed read never pauses.
+      if (typeof live === "string") {
+        pause = { reason: live, parentSessionKey };
+      } else if (live.worktree && !live.worktree.exists) {
+        pause = { reason: "worktree-missing", parentSessionKey, worktreePath: live.worktree.path };
       }
       // A child run takes its parent's persisted workspace binding and never runs
       // looser than its parent; in-session runs keep their own session's binding.
       const childPlacement =
         job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
-      if (parentState === "current" && !pause && childPlacement && parent.entry) {
+      if (typeof live !== "string" && !pause && childPlacement && parent.entry) {
         const entry = parent.entry;
-        const bindsWorkspace = Boolean(
-          !parentRow.missing && (parentRow.workspaceDir || parentRow.cwd || parentRow.worktree),
-        );
         childParent = {
-          ...(bindsWorkspace ? { binding: { sessionKey: parentSessionKey, entry } } : {}),
+          ...(live.workspaceDir || live.cwd || live.worktree
+            ? { binding: { sessionKey: parentSessionKey, entry } }
+            : {}),
           ...(entry.sandbox === "required" ? { sandbox: "required" as const } : {}),
           // Reads the lease at call time: it fails once the parent resets or the occurrence settles.
           assertCurrent: () => {
@@ -320,15 +318,14 @@ export async function admitScheduledOccurrence(
           },
         };
       }
-      if (parentState === "current") {
-        // A revisionless link holds the generation classification just validated.
-        const observedRevision = parentRow.missing ? undefined : parentRow.lifecycleRevision;
+      if (typeof live !== "string") {
+        // The link is key-only; this occurrence holds the incarnation it was admitted in.
         generation = await prepareSessionGenerationFacts({
           agentId: params.agentId,
           storePath,
-          sessionKey: principal.parent.sessionKey,
-          sessionId: principal.parent.sessionId,
-          lifecycleRevision: principal.parent.lifecycleRevision ?? observedRevision ?? null,
+          sessionKey: parentSessionKey,
+          sessionId: live.sessionId,
+          lifecycleRevision: live.lifecycleRevision ?? null,
         });
       }
       // A child working in its parent's workspace must also stop work that never
@@ -371,7 +368,10 @@ export async function admitScheduledOccurrence(
                 (job.operatorSource?.source.kind === "gateway"
                   ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
                   : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
-            : requesterOwner?.owner,
+            : // A fired condition can wait long for a run slot after admission, so the
+              // requester's owner bit is read again for each run, not reused.
+              (requesterOwner?.isOwner?.(selectLiveRuntimeConfig(run.cfg)) ??
+                requesterOwner?.owner),
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

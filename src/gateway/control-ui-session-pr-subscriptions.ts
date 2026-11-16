@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import { readPreparedSessionSharingChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -67,7 +68,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     refreshPending?: boolean;
   };
   const subscriptions = new Map<string, Map<string, Watched>>();
-  const replacements = new Set<Promise<void>>();
+  const replacements = new Set<Promise<unknown>>();
   type Replacement = { refreshSessionKeys?: ReadonlySet<string> };
   const replacementGenerations = new Map<string, Replacement>();
   const keyStates = new Map<string, WatchedKeyState>();
@@ -199,12 +200,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     watched.deliveredHash = undefined;
     watched.target = target;
     addControlUiSessionPrMembership(state, connId, sessionKey);
-    const replacement = scope
-      .track(() => loadSnapshot(target.identity))
-      .then(
-        () => undefined,
-        () => undefined,
-      );
+    const replacement = scope.track(() => loadSnapshot(target.identity)).catch(() => {});
     replacements.add(replacement);
     void replacement.finally(() => replacements.delete(replacement));
     return target;
@@ -262,9 +258,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         // poll results can never land after the refresh and revert its snapshot.
         await pending.promise;
         assertSourceCurrent();
-        return (await currentKeyState(cacheKey)) === state
-          ? loadSnapshot(cacheKey, refresh)
-          : UNAVAILABLE_SNAPSHOT;
+        return loadSnapshot(cacheKey, refresh);
       }
       const promise = scope
         .track(async () => {
@@ -341,7 +335,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
             )
               .then(pushedSnapshot)
               .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
-            if ((await currentKeyState(cacheKey)) === state) {
+            if (keyStates.get(cacheKey) === state) {
               assertSourceCurrent();
               prepared.publishSnapshot(state, snapshot, assertReadAuthority);
               // Shared equality does not acknowledge recipients that missed publication.
@@ -395,7 +389,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           if (!watched || isDelivered(watched)) {
             continue;
           }
-          const current = await currentWatcher(connId, sessionKey);
+          const pending = currentWatcher(connId, sessionKey);
+          const current = pending instanceof Promise ? await pending : pending;
           if (
             !current ||
             scope.isClosing ||
@@ -409,8 +404,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           }
           assertSourceCurrent();
           try {
-            // The shared cache can carry another viewer's target after preparation yields.
-            current.assertCurrent?.();
+            // Warm readers authorize synchronously through delivery; preparation yields.
+            if (pending instanceof Promise) {
+              current.assertCurrent?.();
+            }
             assertReadAuthority?.();
           } catch {
             if (current.ownGitHubProfileId) {
@@ -483,7 +480,9 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     ) {
       return;
     }
-    // One notification owns the concurrent reads; each watcher still authorizes its audience.
+    // The writer already compared sharing and lineage; only the root source can still change.
+    const unchanged =
+      !change.factsInvalidated && readPreparedSessionSharingChange(change) === "unchanged";
     const keys: string[] = [];
     for (const [key, state] of keyStates) {
       // A removed root may be immediately replaced under the same key. The next
@@ -494,6 +493,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
         change.facts?.kind === "removed";
       if (
         !removedRoot &&
+        (!unchanged ||
+          ("sessionKey" in change && change.sessionKey === state.target.params.sessionKey)) &&
         (!ownAuthorityChanged || state.target.ownGitHubProfileId) &&
         (state.target.taskReceipts || state.target.ownGitHubProfileId) &&
         state.connIds.size
@@ -654,7 +655,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       await Promise.all(
         Array.from(subscription, async ([sessionKey, watched]) => {
           const cacheKey = watched.target.identity;
-          const targetState = await currentKeyState(cacheKey);
+          const targetState = keyStates.get(cacheKey);
           if (!targetState) {
             return;
           }

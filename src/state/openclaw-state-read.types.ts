@@ -13,7 +13,7 @@ import type { CronRunReceiptCurrentReadCommand } from "../cron/store/run-receipt
 import type { PlacementGrantReadInput } from "../gateway/operator-approval-placement-grants.read.worker.js";
 import type { CronStandingGrantLookupInput } from "../gateway/operator-approval-standing-grants.types.js";
 import type { ListTerminalOperatorApprovalsInput } from "../gateway/operator-approval-store.types.js";
-import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestInput } from "../gateway/worker-environments/local-workspace-store.types.js";
 import type { WorkerPlacementConflictBinding } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { DevicePairingReadCommand } from "../infra/device-pairing-read.types.js";
@@ -150,7 +150,13 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
+  | {
+      type: "userProfiles.githubAttribution.resolve";
+      profileIds: readonly string[];
+      host?: string;
+      organizationDefaults?: string;
+      githubAvailability?: boolean;
+    }
   | { type: "userProfiles.catalog" }
   | {
       type: "userProfiles.catalogIdentity";

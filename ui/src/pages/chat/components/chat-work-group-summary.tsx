@@ -12,9 +12,7 @@ import {
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 
 type WorkGroupSummaryItem = {
   key: string;
@@ -22,11 +20,9 @@ type WorkGroupSummaryItem = {
   groups: readonly MessageGroup[];
 };
 type WorkGroupSummaryOptions = {
-  mediaReadAllowed?: boolean;
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
-  browserTabPreviews?: readonly BrowserTabPreview[];
   bubbleMode?: boolean;
 };
 
@@ -132,12 +128,6 @@ function WorkGroupSummaryBody(props: {
           <Icon name="chevronDown" />
         </span>
       </button>
-      <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <BrowserTabPreviews
-          previews={props.options.browserTabPreviews}
-          mediaReadAllowed={props.options.mediaReadAllowed}
-        />
-      </Show>
     </div>
   );
 }

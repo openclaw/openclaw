@@ -128,6 +128,8 @@ type ProviderConfiguredContext<TProvider, TFullConfig, TConfig> = {
   provider: TProvider;
   cfg: TFullConfig | undefined;
   providerConfig: TConfig;
+  /** True when an explicit provider id was configured; false during automatic selection. */
+  selectedExplicitly: boolean;
 };
 
 function prepareProviderCandidates<TFullConfig, TProvider extends AutoSelectableProvider>(
@@ -183,6 +185,7 @@ export function resolveConfiguredCapabilityProvider<
     replacement: "await resolveConfiguredCapabilityProviderAsync()",
   });
   const { configuredProviderId, providers } = prepareProviderCandidates(params);
+  const selectedExplicitly = configuredProviderId !== undefined;
   if (providers.length === 0) {
     return {
       ok: false,
@@ -205,7 +208,9 @@ export function resolveConfiguredCapabilityProvider<
     const providerConfig = params.resolveProviderConfig(
       providerConfigContext(params, provider, configuredProviderId),
     );
-    if (params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+    if (
+      params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig, selectedExplicitly })
+    ) {
       return { ok: true, configuredProviderId, provider, providerConfig };
     }
     if (configuredProviderId) {
@@ -238,6 +243,7 @@ export async function resolveConfiguredCapabilityProviderAsync<
   },
 ): Promise<ResolvedConfiguredProvider<TProvider, TConfig>> {
   const { configuredProviderId, providers } = prepareProviderCandidates(params);
+  const selectedExplicitly = configuredProviderId !== undefined;
   if (providers.length === 0) {
     return {
       ok: false,
@@ -260,7 +266,14 @@ export async function resolveConfiguredCapabilityProviderAsync<
     const providerConfig = await params.resolveProviderConfig(
       providerConfigContext(params, provider, configuredProviderId),
     );
-    if (await params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
+    if (
+      await params.isProviderConfigured({
+        provider,
+        cfg: params.cfg,
+        providerConfig,
+        selectedExplicitly,
+      })
+    ) {
       return { ok: true, configuredProviderId, provider, providerConfig };
     }
     if (configuredProviderId) {

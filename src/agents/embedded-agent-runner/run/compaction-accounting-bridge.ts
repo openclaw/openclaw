@@ -6,6 +6,7 @@ import type { CompactionRequestConstraints } from "../../sessions/compaction/req
 import type { CompactionAppendPersistenceAsync } from "../../sessions/session-compaction-persistence.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { EmbeddedAgentCompactResult } from "../types.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 
 /** Publish committed custody before model admission or handled hooks can bypass settlement. */
@@ -58,6 +59,8 @@ type CompactionAccountingRecorder = CompactionRequestConstraints & {
   };
   recordUsage?: (usage: NormalizedUsage) => void;
   recordCompaction?: (receipt: CompactionAccountingReceipt) => void;
+  /** Provider facts for a failed compaction; the public engine result carries only its reason. */
+  recordFailure?: (failure: NonNullable<EmbeddedAgentCompactResult["failure"]>) => void;
 };
 
 // Bind to the actual invocation context after watchdog projection. Public

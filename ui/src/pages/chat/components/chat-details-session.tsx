@@ -23,6 +23,7 @@ import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
+import { ChatDetailsSkills } from "./chat-details-skills.tsx";
 import type {
   ChatDetailsDesktopSectionId,
   ChatDetailsOutputs,
@@ -509,6 +510,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </>
                   )}
                 </Show>
+                <ChatDetailsSkills
+                  details={props.props!}
+                  presented={active()}
+                  desktop={props.desktop}
+                  expanded={sectionExpanded("skills")}
+                  onExpandedChange={(expanded) => changeSection("skills", expanded)}
+                />
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
                 </Show>

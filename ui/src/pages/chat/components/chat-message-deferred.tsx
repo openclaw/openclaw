@@ -1,6 +1,7 @@
 import { lazy, Show } from "solid-js";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
 import { widgetPreviewHeight } from "./widget-preview-layout.ts";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
@@ -12,10 +13,23 @@ const Attachments = lazy(() => import("./chat-message-attachments-solid.tsx"), {
 const Attachment = lazy(() => import("./chat-message-attachments-solid.tsx"), {
   export: "MessageAttachment",
 });
-const Preview = lazy(() => import("./widget-card-view.tsx"), { export: "ToolPreview" });
+const Preview = lazy(() => import("./widget-card-view.tsx"), { export: "AssistantViewPreview" });
 const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
+const PermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
+  export: "ChatPermissionCard",
+});
+
+export function ChatPermissionCard(
+  props: Parameters<typeof import("./chat-permission-card.tsx").ChatPermissionCard>[0],
+) {
+  return (
+    <ChatLazyBoundary>
+      <PermissionCard {...props} />
+    </ChatLazyBoundary>
+  );
+}
 
 const TemplatePluginReceipt = lazy(() => import("./chat-template-plugin-card.tsx"), {
   export: "ChatTemplatePluginCards",
@@ -63,27 +77,34 @@ export function ToolPreview(
   return (
     <ChatLazyBoundary
       fallback={
-        <Show
-          when={
-            props.preview?.kind === "canvas" &&
-            props.preview.surface === "assistant_message" &&
-            (props.options?.mediaReadAllowed === false ||
-              props.preview.mcpApp ||
-              !parseYouTubeVideoUrl(props.preview.url))
-              ? props.preview
-              : undefined
-          }
-        >
-          {(preview) => (
-            <div
-              class="chat-tool-card__preview"
-              aria-hidden="true"
-              style={{
-                "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
-              }}
-            />
-          )}
-        </Show>
+        <>
+          <Show
+            when={
+              props.preview?.kind === "canvas" &&
+              props.preview.surface === "assistant_message" &&
+              (props.options?.mediaReadAllowed === false ||
+                props.preview.mcpApp ||
+                !parseYouTubeVideoUrl(props.preview.url))
+                ? props.preview
+                : undefined
+            }
+          >
+            {(preview) => (
+              <div
+                class="chat-tool-card__preview"
+                aria-hidden="true"
+                style={{
+                  "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
+                }}
+              />
+            )}
+          </Show>
+          <Show when={props.options?.rawText}>
+            <div class="chat-tool-card__widget-raw" aria-hidden="true">
+              <div class="chat-tool-card__raw" />
+            </div>
+          </Show>
+        </>
       }
     >
       <Preview {...props} />
@@ -110,5 +131,17 @@ export function ChatTemplatePluginCards(
         <TemplatePluginReceipt {...props} />
       </ChatLazyBoundary>
     </Show>
+  );
+}
+
+const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
+  export: "ExpandedToolCardContent",
+});
+
+export function ExpandedToolCardContent(props: ToolCardContentProps) {
+  return (
+    <ChatLazyBoundary>
+      <ExpandedContent card={props.card} output={props.output} options={props.options} />
+    </ChatLazyBoundary>
   );
 }

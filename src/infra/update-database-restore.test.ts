@@ -898,3 +898,45 @@ it("refuses replacement while a foreign process owns state maintenance", async (
     }
   });
 });
+
+it("refuses restoration when Workboard changed after capture", async () => {
+  await withOpenClawTestState(
+    { layout: "split", prefix: "update-database-restore-workboard-", scenario: "minimal" },
+    async (state) => {
+      const workboard = path.join(state.stateDir, "plugins", "workboard", "workboard.sqlite");
+      await fs.mkdir(path.dirname(workboard), { recursive: true });
+      {
+        using db = new DatabaseSync(workboard);
+        db.exec("CREATE TABLE cards(title TEXT); INSERT INTO cards VALUES ('Card A');");
+      }
+      const fixture = await createRestoreFixture(state);
+      const paths = [
+        ...fixture.backup.databases.map((entry) => entry.path),
+        ...fixture.backup.missingPaths,
+      ];
+      expect(paths).toContain(workboard);
+      await fixture.close();
+      const expectedGenerations = await readUpdateDatabaseGenerationsIsolated(paths, {
+        env: state.env,
+      });
+      {
+        using db = new DatabaseSync(workboard);
+        db.exec("INSERT INTO cards VALUES ('Card after doctor')");
+      }
+      const displaced = await restoreUpdateDatabaseBackup({
+        backup: fixture.backup,
+        runId: fixture.run.runId,
+        env: state.env,
+        assertCurrent: () => undefined,
+        expectedGenerations,
+      });
+      expect(displaced).toBeNull();
+      expect(fixture.backup.restoreRefusal).toContain(workboard);
+      using live = new DatabaseSync(workboard, { readOnly: true });
+      expect(live.prepare("SELECT title FROM cards").all()).toEqual([
+        { title: "Card A" },
+        { title: "Card after doctor" },
+      ]);
+    },
+  );
+});

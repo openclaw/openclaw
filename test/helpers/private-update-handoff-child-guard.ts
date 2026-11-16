@@ -14,6 +14,7 @@ const { syncBuiltinESMExports } = require("node:module");
 const sqlite = require("node:sqlite");
 const expected = ${JSON.stringify(databasePath)};
 const root = ${JSON.stringify(fs.realpathSync(path.dirname(directory)))};
+Object.assign(process.env, { TMPDIR: root, TMP: root, TEMP: root });
 const relativePath = (from, to) => path.relative(path.toNamespacedPath(from), path.toNamespacedPath(to));
 const original = sqlite.DatabaseSync;
 sqlite.DatabaseSync = new Proxy(original, {

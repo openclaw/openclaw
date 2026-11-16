@@ -13,6 +13,7 @@ import {
   formatCollapsedToolSummaryText,
   resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
+  type ToolCardOutput,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
@@ -24,6 +25,7 @@ import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
+import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
@@ -105,6 +107,26 @@ function ToolRowLink(props: { kind: "file" | "subagent"; label: string; onOpen: 
   );
 }
 
+function ToolRowSummary(props: { card: ToolCard; toolLabel: string; running: boolean }) {
+  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card));
+  const displayLabel = () => formatCollapsedToolSummaryText(summary().label) ?? summary().label;
+  const displayName = () => distinctSummaryText(summary().name, displayLabel());
+  return (
+    <>
+      <Show when={!displayName() || summary().label !== props.toolLabel}>
+        <span class={["chat-tool-msg-summary__label", { "text-shimmer": props.running }]}>
+          {displayLabel()}
+        </span>
+      </Show>
+      <Show when={displayName()}>
+        <span class={["chat-tool-msg-summary__names", { "text-shimmer": props.running }]}>
+          {displayName()}
+        </span>
+      </Show>
+    </>
+  );
+}
+
 function ToolRowContent(props: {
   card: ToolCard;
   view: ToolCallView;
@@ -113,6 +135,7 @@ function ToolRowContent(props: {
   toolLabel: string;
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
+  inlineCommand?: boolean;
 }) {
   const verb = () => resolveToolRowVerb(props.view, props.outcome);
   const target = () =>
@@ -125,27 +148,13 @@ function ToolRowContent(props: {
       : props.outcome === "running" && (props.view.kind === "edit" || props.view.kind === "write")
         ? props.card.liveDiffStat
         : undefined;
-  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card), { lazy: true });
-  const displayLabel = () => formatCollapsedToolSummaryText(summary().label) ?? summary().label;
-  const displayName = () => distinctSummaryText(summary().name, displayLabel());
   return (
     <Switch
       fallback={
-        <>
-          <Show when={!displayName() || summary().label !== props.toolLabel}>
-            <span class={["chat-tool-msg-summary__label", { "text-shimmer": props.running }]}>
-              {displayLabel()}
-            </span>
-          </Show>
-          <Show when={displayName()}>
-            <span class={["chat-tool-msg-summary__names", { "text-shimmer": props.running }]}>
-              {displayName()}
-            </span>
-          </Show>
-        </>
+        <ToolRowSummary card={props.card} toolLabel={props.toolLabel} running={props.running} />
       }
     >
-      <Match when={props.view.title}>
+      <Match when={props.view.title && !props.inlineCommand}>
         <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
           {props.view.title}
         </span>
@@ -221,6 +230,9 @@ export function ToolCardRow(props: ToolCardProps) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const card = () => props.card;
+  const inline = () =>
+    props.options.inlineCommands &&
+    (view().kind === "command" || view().kind === "read" || view().kind === "search");
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
   const view = createMemo(() =>
     resolveToolCallView({ name: card().name, args: card().args, details: card().details }),
@@ -275,6 +287,7 @@ export function ToolCardRow(props: ToolCardProps) {
               toolLabel={display().label}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
+              inlineCommand={inline()}
             />
           }
         >
@@ -286,6 +299,19 @@ export function ToolCardRow(props: ToolCardProps) {
           )}
         </Show>
       </span>
+      <Show when={inline() && outcome() !== "failed" && outcome() !== "skipped"}>
+        <span class="chat-command-trail__status" role="status">
+          {t(
+            outcome() === "running"
+              ? "chat.toolCards.running"
+              : outcome() === "succeeded"
+                ? "chat.toolCards.completed"
+                : outcome() === "blocked"
+                  ? "chat.toolCards.blocked"
+                  : "chat.toolCards.outcomeUnknown",
+          )}
+        </span>
+      </Show>
       <Show when={!props.options.expanded}>
         <ToolOutcomeSummary card={card()} />
       </Show>
@@ -412,5 +438,52 @@ export function ToolMessageSummary(props: {
         <Icon name="chevronRight" />
       </span>
     </button>
+  );
+}
+
+/** The existing row import also supplies its ordinary card body. */
+export function ToolCardBody(
+  props: ToolCardProps & { displayCard: ToolCard; output?: ToolCardOutput },
+) {
+  const InlineToolPreview = dynamic(() => props.options.inlineCommands?.InlineToolPreview);
+  return (
+    <>
+      <ToolCardRow
+        card={props.displayCard}
+        options={props.options}
+        hasChildren={props.hasChildren}
+      />
+      <Show when={props.options.inlineCommands && !props.options.expanded && !props.hasChildren}>
+        <InlineToolPreview card={props.displayCard} output={props.output} options={props.options} />
+      </Show>
+      <Show when={props.options.expanded}>
+        <Show
+          when={props.hasChildren}
+          fallback={
+            <div class="chat-tool-msg-body">
+              <ExpandedToolCardContent
+                card={props.card}
+                output={props.output}
+                options={props.options}
+              />
+            </div>
+          }
+        >
+          <div class="chat-tool-children">
+            {props.children}
+            <details class="chat-tool-wrapper-details">
+              <summary>{t("chat.toolCards.toolInput")}</summary>
+              <div class="chat-tool-msg-body">
+                <ExpandedToolCardContent
+                  card={props.card}
+                  output={props.output}
+                  options={props.options}
+                />
+              </div>
+            </details>
+          </div>
+        </Show>
+      </Show>
+    </>
   );
 }

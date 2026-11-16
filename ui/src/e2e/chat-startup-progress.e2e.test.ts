@@ -120,7 +120,7 @@ suite.define(() => {
         .fill("Check the next workspace.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      const workingLabel = working.getByText("Working…", { exact: true });
+      const workingLabel = working.getByText("Working", { exact: true });
       await workingLabel.waitFor({ state: "attached" });
       expect(await workingLabel.getAttribute("class")).toContain("sr-only");
       // A late event from the previous run must not claim the next run's progress.
@@ -139,7 +139,7 @@ suite.define(() => {
           }),
       );
       expect(await working.isVisible()).toBe(true);
-      expect(await workingLabel.textContent()).toBe("Working…");
+      expect(await workingLabel.textContent()).toBe("Working");
       expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     } finally {
       await suite.closeBrowserContext(context);
@@ -267,7 +267,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await expect.poll(() => working.textContent()).toContain("Naming worktree…");
+      await expect.poll(() => working.textContent()).toContain("Naming worktree");
       const before = (await gateway.getRequests("chat.history")).length;
       await gateway.deferNext("chat.history");
       await gateway.emitGatewayEvent("session.message", {
@@ -291,7 +291,7 @@ suite.define(() => {
         state: "status",
         phase: "creating_worktree",
       });
-      await expect.poll(() => working.textContent()).toContain("Creating worktree…");
+      await expect.poll(() => working.textContent()).toContain("Creating worktree");
       await gateway.resolveDeferred("chat.history", { messages: [], sessionInfo, inFlightRun });
       // Capture the observed result before asserting so the red run leaves honest visual evidence.
       if (capture) {
@@ -300,8 +300,8 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working]),
         );
       }
-      await expect.poll(() => working.textContent()).not.toContain("Naming worktree…");
-      await expect.poll(() => working.textContent()).toContain("Creating worktree…");
+      await expect.poll(() => working.textContent()).not.toContain("Naming worktree");
+      await expect.poll(() => working.textContent()).toContain("Creating worktree");
       await gateway.emitChatFinal({
         runId,
         sessionKey,
@@ -365,7 +365,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
-      await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
+      await expect.poll(() => working.textContent()).toContain("Provisioning environment");
       const screenshot = async (fileName: string) => {
         if (artifactDir) {
           await writeFile(
@@ -376,15 +376,15 @@ suite.define(() => {
       };
       await screenshot("00-before.png");
       const states: Array<[WorkerEnvironmentStartStatus, string, string]> = [
-        [{ mode: "snapshot" }, "Starting from snapshot…", "01-snapshot.png"],
+        [{ mode: "snapshot" }, "Starting from snapshot", "01-snapshot.png"],
         [
           { mode: "cold", reason: "no-snapshot-yet", phase: "preparing" },
-          "Preparing cloud environment…",
+          "Preparing cloud environment",
           "02-preparing.png",
         ],
         [
           { mode: "cold", reason: "no-snapshot-yet", phase: "saving" },
-          "Saving snapshot…",
+          "Saving snapshot",
           "03-saving.png",
         ],
       ];

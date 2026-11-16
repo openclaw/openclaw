@@ -6,7 +6,7 @@ import { captureSessionActorStorageOwner } from "./session-actor-storage-binding
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 /** Current management metadata and evidence share the projection worker's read snapshot. */
 export async function readSessionMembersInWorker(
@@ -41,7 +41,7 @@ export async function readSessionMembersInWorker(
     { agentId: options.agentId, storePath: databasePath, env },
     ({ reader, continuation }) =>
       reader.readMembers({ sessionKey: resolved.sessionKey, env, continuation }),
-    { backing: true, dataOnly: true, lane: projectionLane },
+    { backing: true, dataOnly: true, lane: sessionStoreLane },
   );
 }
 
