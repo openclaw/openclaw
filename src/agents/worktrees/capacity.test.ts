@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
@@ -280,20 +284,44 @@ describe("worktree Git size estimates", () => {
     expect(spawned.filter((argv) => argv[1] === "maintenance" || argv[1] === "gc")).toEqual([]);
   });
 
+  it("hydrates missing objects while a shared ref writer is held", async ({ signal }) => {
+    const { clone, commit, missing } = await partialClone();
+    const refs = await git(clone, "show-ref");
+    const started = createDeferred();
+    const release = createDeferred();
+    const held = gitExec.enqueueGitRefMutation(clone, ".git", async () => {
+      started.resolve();
+      await release.promise;
+    });
+    await started.promise;
+    const pending = estimateWorktreeGitBytes(clone, commit);
+    try {
+      await expect(withinTest(pending, signal)).resolves.toBe(16_384);
+      for (const object of missing) {
+        expect((await runGit(clone, ["cat-file", "-e", object])).code).toBe(0);
+      }
+      expect(await git(clone, "show-ref")).toBe(refs);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, pending]);
+    }
+  });
+
   it.each(["cancel", "revoke"] as const)(
-    "keeps hydration behind queued ref writes and honors %s before fetching",
+    "honors %s before fetching through the transport queue",
     async (action) => {
       const { clone, commit, missing } = await partialClone();
       const started = createDeferred();
       const release = createDeferred();
       const discovered = createDeferred();
-      const held = gitExec.enqueueGitRefMutation(clone, ".git", async () => {
-        started.resolve();
-        await release.promise;
-      });
-      await started.promise;
+      let held: Promise<void> | undefined;
       const enqueue = gitExec.enqueueGitRefMutation;
-      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation(async (...args) => {
+        held ??= enqueue(args[0], args[1], async () => {
+          started.resolve();
+          await release.promise;
+        });
+        await started.promise;
         const queued = enqueue(...args);
         discovered.resolve();
         return queued;

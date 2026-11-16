@@ -18,6 +18,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import * as inventoryRuntime from "../config/sessions/session-store-target-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
@@ -160,6 +161,43 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
+  it("reads a first database created during target discovery", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const agentId = "cold";
+      const key = `agent:${agentId}:first-session`;
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { [agentId]: {} } },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const entry = { sessionId: "created-during-discovery", updatedAt: 1 };
+      const prepare = inventoryRuntime.prepareSessionStoreTargetInventoryRead;
+      using _ = vi
+        .spyOn(inventoryRuntime, "prepareSessionStoreTargetInventoryRead")
+        .mockImplementationOnce((...args) => {
+          const inventory = prepare(...args);
+          return {
+            ...inventory,
+            async withRead<T>(
+              operation: Parameters<typeof inventory.withRead<T>>[0],
+              assertCurrent?: () => void,
+              signal?: AbortSignal,
+            ) {
+              await replaceSessionEntry({ agentId, sessionKey: key, env }, entry);
+              return inventory.withRead(operation, assertCurrent, signal);
+            },
+          };
+        });
+      const observed = await withGatewaySessionStoreTarget(
+        { cfg, key, agentId, env },
+        (target, _members, assertCurrent) => {
+          assertCurrent();
+          return target.store[key];
+        },
+      );
+      expect(observed).toMatchObject(entry);
+    });
+  });
+
   it("rejects an unreadable canonical candidate instead of returning its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const alias = "agent:main:main";

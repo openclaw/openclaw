@@ -17,6 +17,20 @@ export type TemplateAddOutcomes = {
   }>;
 };
 
+/** Outcome shared by reviewed and chat-based Gateway Template Add. */
+export type GatewayTemplateAddApplyResult = {
+  agentId: string;
+  workspace?: string;
+  /** Operation receipts, not inferred from the proposed plan. Absent on early failure. */
+  outcomes?: TemplateAddOutcomes;
+  status: "complete" | "partial";
+  agentRetained?: true;
+  initializationPending?: true;
+  sessionKey?: string;
+  readiness: { ready: boolean; requirements: Array<{ kind: string; owner: string }> };
+  error?: { code: string; message: string };
+};
+
 /** Disclose actual operation receipts without prompts, credentials or internal owner facts. */
 export function projectTemplateAddOutcomes(
   result: StatelessTemplateAddResult,
