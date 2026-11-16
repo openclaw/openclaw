@@ -1672,7 +1672,6 @@
 ["src/agents/model-fallback.test.ts","./auth-profiles/source-check.js","790f450ab2eee62b196354c08f193dc48aeeca0423c9fe4fbde01fcfcf54014e",1]
 ["src/agents/model-fallback.test.ts","./provider-model-normalization.runtime.js","975734f5c064307911dd8c5808afc070d903d5a122918d0f830aeaa4a6302fe8",1]
 ["src/agents/model-runtime-choice.test.ts","./prepared-model-catalog.js","312007b4b9576ba99d7f54f4c0c80464768e25aace6b87ae41658d2c71bbbb1a",1]
-["src/agents/model-scan.probes.test.ts","@openclaw/ai","c19f0736091f7306e6fccb7bb0d636f47ab441c6b970f56624e87e118a8e9c6e",1]
 ["src/agents/model-scan.probes.test.ts","@openclaw/ai/providers","d33f70a034f7d0491fc5bc742f77c351e88e82ff526cb1ec4e2569921d3c5e61",1]
 ["src/agents/model-selection-manifest-workspace.test.ts","../plugins/manifest-contract-eligibility.js","7b191740e9f7bd5149038caca6c6847f1f341f9bc3ed44cf7d95755e44b37b10",1]
 ["src/agents/model-selection-manifest-workspace.test.ts","../plugins/runtime-state.js","2fdbf3b4dd6c19730db82846f376258d388c737340b3f22d0913033d73b2d0ec",1]
