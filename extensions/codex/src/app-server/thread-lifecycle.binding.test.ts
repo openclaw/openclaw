@@ -176,7 +176,6 @@ function createThreadLifecycleAppServerOptions(): LifecycleInput["appServer"] {
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
-    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
   };
 }

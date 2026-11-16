@@ -113,7 +113,9 @@ function upgradedText(stateDir: string): string {
 }
 
 const cases = [
+  { release: "2026.7.1", failStep: undefined },
   { release: "2026.7.1-blob", failStep: undefined },
+  { release: "2026.7.35", failStep: undefined },
   { release: "2026.8.35", failStep: undefined },
   { release: "2026.9.37", failStep: undefined },
   { release: "2026.10.10", failStep: undefined },

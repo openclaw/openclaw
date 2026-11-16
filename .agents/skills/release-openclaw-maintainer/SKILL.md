@@ -191,11 +191,19 @@ matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
-New test qualification freezes **Q=C**: the candidate's test workflow closure
-belongs to the candidate. Keep independently trusted **P** (admission, aggregate
-decision, verifier, and publisher) separate. A Q harness repair requires a new C/Q and newly bound
-evidence; P-only or infrastructure repairs can preserve the candidate. Missing
-qualification contracts need a deliberate backport, never future-main fallback.
+New test qualification defaults to **Q=C**. An explicit reviewed main-ancestor
+**Q** may instead be admitted through the candidate route while **C** retains
+source, package bytes, version, and baselines. Keep independently trusted **P**
+(admission, aggregate decision, verifier, and publisher) separate. A Q repair
+requires a new request, admission, and successful parent, not a new C unless
+product source changes. Missing contracts need a deliberate Q repair or candidate
+backport, never a moving-main fallback. Follow the
+[qualification-tooling recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
+and the CI skill's [C ≠ Q decision and command guide](../release-openclaw-ci/SKILL.md#repair-release-tooling-without-changing-the-product-c--q).
+Use new Q for workflow/harness/collector repairs, P for admission/verifier/publisher
+repairs, and new C only for changed product bytes. Reuse the explicitly qualified
+parent through the checklist's `--full-release-validation-run-id` and `--skip-dispatch`;
+its `--workflow-sha` still selects P, and its fresh qualification defaults to Q=C.
 
 Once a candidate is cut, its base is the operator's decision. Never re-cut
 (re-base the candidate on newer `main`) unless Peter explicitly asks for it in
@@ -210,14 +218,16 @@ Explicit operator-approved additions follow the
 record the changed scope and requalify the new candidate, never silently reuse
 invalidated proof. A manager's opportunity notification is not that approval.
 
-Release process improvements made during a release land on both branches.
+Release process improvements normally land on both branches, except independent
+qualification-only repairs as described below.
 Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
 normally merge to `main` first, then get cherry-picked (`-x`) directly onto the
 canonical release branch for the next candidate or patch, without a backport PR.
 Urgent release-first repairs follow [the new-fix route](#backports-and-new-fixes).
-A qualification repair needed for this release
-must land before freezing a new C/Q; never silently swap the harness for an
-already qualified candidate. Where `main`-only CI infrastructure is missing on the branch,
+A qualification-only repair can instead land
+in a reviewed independent Q and be newly admitted against unchanged C; no
+release-branch cherry-pick is required solely to update tooling. Never silently
+swap the harness or relabel an already qualified candidate's evidence. Where `main`-only CI infrastructure is missing on the branch,
 keep the branch's expression form and port only the logic. Product code on the
 release branch stays blocker-only per the rule above.
 
@@ -226,7 +236,8 @@ retrospective PR described below is the required open closeout deliverable, not
 an unresolved repair. List every PR created during the release (`gh pr list --author
 @me --state open` plus any PR bound to the session) and land or explicitly close
 each repair PR with a reason; confirm its fix is on `main` and, when it is release
-tooling, on the release branch. Also remove the release's temporary worktrees,
+tooling, on the release branch when the selected Q=C route requires it. Also
+remove the release's temporary worktrees,
 abandoned local cut branches, and stale `scripts/pr` worktrees. Then write the
 [retrospective](references/retrospective.md) and open its `openclaw/tideclaw`
 PR with the issue-ledger update; keep a findings notes file from the start of the

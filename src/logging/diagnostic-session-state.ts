@@ -13,25 +13,8 @@ export type SessionState = {
   state: SessionStateValue;
   queueDepth: number;
   activeQueuedTurn?: boolean;
-  toolCallHistory?: ToolCallRecord[];
-  toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
   reasoningSuppressedModels?: Map<string, string>;
-};
-
-export type ToolCallRecord = {
-  toolName: string;
-  argsHash: string;
-  toolCallId?: string;
-  runId?: string;
-  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure" | "argument-validation";
-  resultHash?: string;
-  // Keep the raw result identity while this bounded identity survives alias
-  // merges and lets the no-progress owner ignore diagnostic drift.
-  failureIdentityHash?: string;
-  noProgress?: true;
-  unknownToolName?: string;
-  timestamp: number;
 };
 
 export type SessionRef = {
@@ -138,15 +121,6 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
     target.lastLongRunningWarnAgeMs === undefined || source.lastLongRunningWarnAgeMs === undefined
       ? undefined
       : Math.max(target.lastLongRunningWarnAgeMs, source.lastLongRunningWarnAgeMs);
-  if (source.toolCallHistory?.length) {
-    target.toolCallHistory = [...(target.toolCallHistory ?? []), ...source.toolCallHistory];
-  }
-  if (source.toolLoopWarningBuckets?.size) {
-    const buckets = (target.toolLoopWarningBuckets ??= new Map());
-    for (const [bucket, count] of source.toolLoopWarningBuckets) {
-      buckets.set(bucket, Math.max(buckets.get(bucket) ?? 0, count));
-    }
-  }
   if (source.commandPollCounts?.size) {
     const counts = (target.commandPollCounts ??= new Map());
     for (const [command, value] of source.commandPollCounts) {

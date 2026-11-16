@@ -76,11 +76,10 @@ export async function addTemplateAgent(
   acknowledgeClawHubRisk: boolean,
 ) {
   const { source } = template;
-  const client = context.gateway.snapshot.client;
+  let client = context.gateway.snapshot.client;
   const scopeKey = gatewayPresentationScope(context.gateway).key;
-  const isCurrent = () =>
-    context.gateway.snapshot.client === client &&
-    gatewayPresentationScope(context.gateway).key === scopeKey;
+  const ownsScope = () => gatewayPresentationScope(context.gateway).key === scopeKey;
+  const isCurrent = () => context.gateway.snapshot.client === client && ownsScope();
   if (!client) {
     throw new Error(t("templatesCatalog.addFailed"));
   }
@@ -112,6 +111,7 @@ export async function addTemplateAgent(
     admitted: false,
   };
   let durable = false;
+  let setupComplete = false;
   // A retry continues the agent the Gateway admitted, whatever id it chose.
   let requestAgentId = agentId;
   let resolveAgent = template.resolveAgent;
@@ -122,6 +122,7 @@ export async function addTemplateAgent(
     agentId,
     exactKey: true,
   });
+  let displayPathname = target.options.pathname;
   const composer = new CreationComposer(
     context,
     agentId,
@@ -135,7 +136,7 @@ export async function addTemplateAgent(
     displayName: name,
     message: null,
     canDisplay: () =>
-      isCurrent() && context.router.getState().location.pathname === target.options.pathname,
+      ownsScope() && context.router.getState().location.pathname === displayPathname,
   });
   context.navigate("chat", target.options);
   const location = context.router.getState().location;
@@ -156,18 +157,33 @@ export async function addTemplateAgent(
     completeAgentCreation(context.agents.state, pending, { id: saved.agentId, name });
     void context.agents.refreshList();
   };
-  const admit = (ready: { agentId: string; sessionKey: string }) => {
-    if (creation.admitted || !isCurrent() || (!durable && !pending.isCurrent())) {
+  const admit = (ready: { agentId: string; sessionKey: string }, complete = false) => {
+    if (setupComplete || !isCurrent() || (!durable && !pending.isCurrent())) {
       return;
     }
+    durableAdmission(ready);
     const foreground = ownsForeground();
     composer.error = null;
     composer.recovery = undefined;
-    composer.accept({ key: ready.sessionKey, initialRun: { status: "idle" } });
+    composer.accept(
+      { key: ready.sessionKey, initialRun: { status: "idle" } },
+      complete ? undefined : { initializationPending: true },
+    );
+    setupComplete = complete;
     retainCreatedComposer(context, ready.sessionKey, composer);
     creation.admitted = true;
     completeAgentCreation(context.agents.state, pending, { id: ready.agentId, name });
     void context.agents.refreshList();
+    const canonical = sessionNavigationTarget({
+      context,
+      face: "chat",
+      sessionKey: ready.sessionKey,
+      agentId: ready.agentId,
+      exactKey: true,
+    });
+    const retargeted = ready.sessionKey !== creation.sessionKey;
+    displayPathname = canonical.options.pathname;
+    context.chatSubmissions.retargetCreate(creation, ready.sessionKey);
     if (foreground) {
       selectApplicationSession({
         selection: context.agentSelection,
@@ -175,31 +191,35 @@ export async function addTemplateAgent(
         sessionKey: ready.sessionKey,
         agentId: ready.agentId,
       });
-      if (ready.sessionKey !== creation.sessionKey) {
-        const canonical = sessionNavigationTarget({
-          context,
-          face: "chat",
-          sessionKey: ready.sessionKey,
-          agentId: ready.agentId,
-          exactKey: true,
-        });
+      if (retargeted) {
         context.replace("chat", canonical.options);
       }
     }
-    clearChat();
+    if (complete) {
+      clearChat();
+    } else {
+      context.chatSubmissions.notifyCreate();
+    }
+    composer.notify();
   };
   let applying = false;
   const apply = async () => {
     if (
       applying ||
-      !isCurrent() ||
-      creation.admitted ||
+      !ownsScope() ||
+      context.gateway.snapshot.phase !== "connected" ||
+      !context.gateway.snapshot.client ||
+      setupComplete ||
       (durable &&
         (!composer.canDisplay() ||
-          context.chatSubmissions.creationFor(creation.sessionKey) !== creation))
+          (context.chatSubmissions.creationFor(creation.sessionKey) !== creation &&
+            context.chatSubmissions.readSessionSetupComposer(creation.sessionKey) !== composer)))
     ) {
       return;
     }
+    // A settled setup keeps its input owner across a same-scope reconnect. Each
+    // explicit retry captures the current transport; in-flight results stay fenced.
+    client = context.gateway.snapshot.client;
     applying = true;
     const retry = durable;
     if (composer.recovery) {
@@ -273,7 +293,7 @@ export async function addTemplateAgent(
           if (result.initializationPending) {
             durableAdmission(saved);
           } else {
-            admit(saved);
+            admit(saved, true);
           }
         }
       }
@@ -325,7 +345,7 @@ export async function addTemplateAgent(
           showToast({ severity: "error", message: failure.message, durationMs: 12_000 });
         }
       } else if (isCurrent()) {
-        if (durable && !creation.admitted) {
+        if (durable && !setupComplete) {
           composer.error = formatUiError(error);
           composer.recovery = {
             error: composer.error,
@@ -348,7 +368,7 @@ export async function addTemplateAgent(
     } finally {
       unsubscribe();
       pending.clear();
-      if (!durable || creation.admitted || !isCurrent()) {
+      if (!durable || setupComplete || !isCurrent()) {
         clearChat();
       }
       composer.releaseDraft();
