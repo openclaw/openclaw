@@ -145,7 +145,12 @@ it.each(["before claiming", "while claimed"])(
       const writeFile = fs.writeFile.bind(fs);
       vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
         await writeFile(...args);
-        if (typeof args[0] === "string" && args[0].includes("heartbeat-migration")) {
+        // The archive write now goes through the exclusive FileHandle, so the
+        // content-addressed path is no longer the first writeFile argument.
+        const target = args[0];
+        if (typeof target !== "string") {
+          await retarget();
+        } else if (target.includes("heartbeat-migration")) {
           await retarget();
         }
       });
