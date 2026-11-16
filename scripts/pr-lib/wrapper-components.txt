@@ -497,6 +497,7 @@ src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
 src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
+src/agents/worktrees/storage-root.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
@@ -1419,6 +1420,7 @@ src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-config.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
+src/infra/update-doctor-migration-context.ts
 src/infra/update-doctor-result.ts
 src/infra/update-doctor-scan-receipts.ts
 src/infra/update-failure-facts-format.ts
@@ -2688,6 +2690,7 @@ src/agents/live-model-errors.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
+src/agents/sessions/tools/tool-contracts.ts
 src/agents/tools/chat-history-text.ts
 src/agents/usage.ts
 src/auto-reply/reply/history.ts

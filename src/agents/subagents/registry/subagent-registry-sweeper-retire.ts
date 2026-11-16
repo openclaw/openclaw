@@ -96,7 +96,11 @@ export async function retireSupersededSubagentRun(params: {
       if (!canRetire(current)) {
         return { value: false };
       }
-      return { value: true, postimages: new Map([[params.runId, null]]) };
+      return {
+        value: true,
+        postimages: new Map([[params.runId, null]]),
+        removalReason: "superseded",
+      };
     },
     { runs: params.runs, assertCurrent: params.assertCurrent },
   );

@@ -62,6 +62,7 @@ import {
 } from "./packages.js";
 import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
+import { measureTemplateAddStage } from "./timings.js";
 import { TEMPLATE_OUTPUT_STABILITY, type TemplateAddPlan } from "./types.js";
 import { createTemplateWorkspaceFiles, type PersistedTemplateWorkspaceFile } from "./workspace.js";
 
@@ -511,10 +512,14 @@ export async function applyTemplateAddPlanStateless(
         await mkdir(workspace);
         workspaceCreated = true;
       }
-      const instructions = await createTemplateWorkspaceFiles(plan, {
-        ...stageOptions(),
-        resume: preparing?.workspaceAdditions,
-      });
+      const instructions = await measureTemplateAddStage(
+        "workspace.write",
+        async () =>
+          await createTemplateWorkspaceFiles(plan, {
+            ...stageOptions(),
+            resume: preparing?.workspaceAdditions,
+          }),
+      );
       workspaceFiles = instructions.files;
       rollbackWorkspaceFiles = instructions.rollback;
       workspaceBeforeExposure = await workspaceIdentity(workspace);
@@ -634,11 +639,16 @@ export async function applyTemplateAddPlanStateless(
       await options.onAgentConfigured(configuredCheckpoint);
       await assertConfigured(configuredCheckpoint);
     }
-    if (options.waitForAgentRuntime) {
-      const outcome = await options.waitForAgentRuntime(
-        configuredRetry
-          ? { agentId: plan.agent.finalId, config: options.admittedAgent!.config }
-          : undefined,
+    const waitForAgentRuntime = options.waitForAgentRuntime;
+    if (waitForAgentRuntime) {
+      const outcome = await measureTemplateAddStage(
+        "runtime.activate",
+        async () =>
+          await waitForAgentRuntime(
+            configuredRetry
+              ? { agentId: plan.agent.finalId, config: options.admittedAgent!.config }
+              : undefined,
+          ),
       );
       retained = true;
       rollbackAgentSession = undefined;
@@ -682,10 +692,14 @@ export async function applyTemplateAddPlanStateless(
       gateway: options.cronGateway,
     });
     const bootstrapNow = Date.now();
-    const bootstrap = await seedTemplatePackageBootstrap(plan, {
-      ...stageOptions("after-agent-commit"),
-      nowMs: bootstrapNow,
-    });
+    const bootstrap = await measureTemplateAddStage(
+      "workspace.bootstrap",
+      async () =>
+        await seedTemplatePackageBootstrap(plan, {
+          ...stageOptions("after-agent-commit"),
+          nowMs: bootstrapNow,
+        }),
+    );
     if (bootstrap === "seeded") {
       bootstrapSeededAt = new Date(bootstrapNow).toISOString();
     }

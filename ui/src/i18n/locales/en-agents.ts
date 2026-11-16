@@ -5,7 +5,7 @@ export const agentChip = {
   showAll: "Show all",
   createAgent: "Create new agent",
   newAgent: "New agent",
-  creatingAgent: "Creating new agent…",
+  creatingAgent: "Creating new agent",
   namedSettings: "{name} settings",
   newConversation: "New session",
   workspaceMenuLabel: "Workspace menu",

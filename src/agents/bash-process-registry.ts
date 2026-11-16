@@ -19,6 +19,7 @@ import { notifyListeners } from "../shared/listeners.js";
 import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -164,7 +165,10 @@ export interface ProcessSession {
     finalize: () => Promise<void>;
     drain: () => Promise<void>;
   };
-  /** Run whose exec call started this process; completion provenance only, never authority. */
+  /**
+   * Run that owns this process: the run whose exec call started it, or the run that continued
+   * that run's paused subagent task. Completion provenance only, never authority.
+   */
   originRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
@@ -205,6 +209,8 @@ export interface ProcessSession {
   /** Output prepared for a poll but not yet attached to the agent transcript. */
   pendingPollDelivery?: PendingPollDelivery;
   output: ProcessOutput;
+  /** Every output chunk in order, beyond the in-memory caps; kept only when the agent needs it. */
+  outputFile?: PrivateTempFileStream;
   readonly aggregated: string;
   readonly tail: string;
   exitCode?: number | null;
@@ -453,6 +459,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
+  session.outputFile?.write(chunk);
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;
@@ -761,6 +768,15 @@ export function tail(text: string, max = 2000) {
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */
 export function listRunningSessions() {
   return Array.from(runningSessions.values()).filter((s) => s.backgrounded);
+}
+
+/** A paused subagent task continues under a new run id; its running commands move with it. */
+export function moveRunningSessionsToRun(previousRunId: string, nextRunId: string): void {
+  for (const session of runningSessions.values()) {
+    if (session.originRunId === previousRunId) {
+      session.originRunId = nextRunId;
+    }
+  }
 }
 
 /** Lists retained finished background sessions. */

@@ -404,6 +404,39 @@ describe("configured file transcription through Talk RPCs", () => {
     );
   });
 
+  it("keeps an automatic streaming provider when the voice-note model has no credentials", async () => {
+    const createSession = vi.fn(() => ({
+      connect: async () => {},
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: () => true,
+    }));
+    await withFileProvider(
+      async (requests) => {
+        const config: OpenClawConfig = {
+          ...cfg,
+          models: { providers: { "local-stt": localProvider } },
+        };
+        const { call } = fileRpc(config, talkHandlers);
+        expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
+          transcription: { ready: true, activeProvider: "streaming-stt" },
+        });
+        expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
+          provider: "streaming-stt",
+        });
+        expect(createSession).toHaveBeenCalledTimes(1);
+        expect(requests).toHaveLength(0);
+      },
+      undefined,
+      {
+        id: "streaming-stt",
+        label: "Streaming STT",
+        isConfigured: () => true,
+        createSession,
+      },
+    );
+  });
+
   it.each(["unknown provider", "missing credentials", "missing CLI", "malformed CLI"])(
     "does not advertise or admit file transcription with %s",
     async (reason) => {

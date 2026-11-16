@@ -187,9 +187,12 @@ describe("proxy stream wrappers", () => {
       };
       let payload: Record<string, unknown> = {};
       const base: StreamFn = (resolvedModel, context, options) => {
-        payload = buildOpenAICompletionsParams(resolvedModel, context, {
-          cacheRetention: options?.cacheRetention,
-        });
+        // Request building must use this fixture's real endpoint policy, not a prior file's host.
+        payload = runWithAiTransportHost(transportHost, () =>
+          buildOpenAICompletionsParams(resolvedModel, context, {
+            cacheRetention: options?.cacheRetention,
+          }),
+        );
         options?.onPayload?.(payload, resolvedModel);
         return createAssistantMessageEventStream();
       };
@@ -219,7 +222,7 @@ describe("proxy stream wrappers", () => {
             expect(payload.messages).toEqual([
               { role: "system", content: `${stable}\nVOLATILE` },
               ...(hasUser ? [{ role: "user", content: "Question" }] : []),
-              { role: "developer", content: "OpenClaw runtime context:\nRuntime" },
+              { role: "user", content: "OpenClaw runtime context:\nRuntime" },
             ]);
           }
           expect(wire.includes('"ttl":"1h"')).toBe(

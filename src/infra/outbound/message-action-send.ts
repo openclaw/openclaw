@@ -34,6 +34,7 @@ import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachmen
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { readClawHubRecommendations } from "../../shared/clawhub-recommendations.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
@@ -228,7 +229,8 @@ export async function buildMessagePayload(params: {
       hasBuffer ||
       mergedMediaUrls.length > 0 ||
       hasPresentation ||
-      hasInteractive),
+      hasInteractive ||
+      readClawHubRecommendations(params.resolvedChannelData).length > 0),
   );
   const normalization =
     hasLocationConflict && input.actionOrigin === "message-tool"

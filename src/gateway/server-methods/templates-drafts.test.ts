@@ -379,7 +379,7 @@ Research public sources.
     );
     const choices = {
       name: "public-researcher",
-      description: "Researches public sources for a new user.",
+      description: "Researches public sources for a new user. ",
       excluded: [
         "file:workspace/checklist.md",
         "package:skill:clawhub:@maker/sources",

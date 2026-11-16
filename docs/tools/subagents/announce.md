@@ -85,6 +85,13 @@ After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
 
+Private results remain bound to the session that requested them. If a new session
+or reset replaces it before the batch can deliver, OpenClaw records the reason and
+shows a notice in the replacement session when it rejects the batch. The notice
+points to the previous session's completed tasks; it does not include child
+findings or resume the old request in the new session. A failed notice write keeps
+the batch pending for retry.
+
 Completion and settle run IDs stay within the 256-character execution-identity
 admission limit, including nested completions. IDs that fit remain unchanged;
 longer IDs retain their routing prefix and continuation markers with a SHA-256
@@ -203,6 +210,17 @@ have settled, the in-memory registry keeps a short task preview and lifecycle
 metadata. Full task and result text remain in SQLite and are loaded for selected
 reads or later mutations. Pending delivery, suspended delivery, cancellation, and
 yielded work keep their payloads until those obligations settle.
+
+Restart recovery includes finished results whose requester has already settled,
+even when that requester has no interrupted-run marker. Retired process authority
+alone does not mean the requester or its store was replaced. Retryable delivery
+is not eligible for completed-run retention cleanup.
+
+Registry removal records a `child_delivery_removed` session-state event in the
+same transaction. It identifies the run, its delivered, suspended, or discarded
+outcome, and the removal reason without copying result text. These receipts use
+the existing session-state history retention (30 days, at most 50,000 events);
+removing the short-lived registry row does not erase the delivery evidence.
 
 If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first

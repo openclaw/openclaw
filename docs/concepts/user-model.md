@@ -91,7 +91,9 @@ select a personal file. Internal turns continuing the same session use that
 session's selection, including subagent completions, `sessions_send`, goal
 continuation, and cron and restart wakes in that session. Isolated cron sessions
 keep shared defaults only. Subagent sessions still load only their allowed project
-instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+instructions, so delegated tasks never receive a personal `USER.md` file. A spawned session's prompt
+series keys on its session's selection on every turn, including its hidden task, so
+a later `sessions_send` turn does not rebuild the cached prompt. The shared
 local owner profile represents all connections using that identity, not separate
 people; use per-person sign-in on a team Gateway.
 

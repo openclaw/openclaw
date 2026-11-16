@@ -167,7 +167,10 @@ suite.define(() => {
         .toBe(0);
       expect
         .soft(
-          await page.getByRole("status").filter({ hasText: "Saved 1 entries" }).count(),
+          await page
+            .getByRole("status")
+            .filter({ hasText: "Entries saved: 1 (1 protected, 0 agent-readable)." })
+            .count(),
           "completed bulk receipt survives list failure",
         )
         .toBe(1);

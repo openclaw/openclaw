@@ -12,6 +12,8 @@ An **agent** is the full per-persona scope: workspace files, auth profiles, mode
 
 For a focused setup guide with account and conversation examples, see [Agent bindings](/concepts/agent-bindings).
 
+A second agent does not have to be a separate person, persona, or channel account. It can also be a separate job, such as reviewing pull requests or watching dependencies, with its own instructions, skills, and schedule. See [Agents and Templates](/concepts/agents-and-templates) for when to make one and how to package it for others.
+
 ## What is one agent
 
 Each agent has its own:
