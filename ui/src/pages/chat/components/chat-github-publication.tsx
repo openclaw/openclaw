@@ -6,6 +6,7 @@ import {
   createSignal,
   Errored,
   Loading,
+  latest,
   onSettled,
   refresh as refreshRead,
   Show,
@@ -290,11 +291,7 @@ export function GitHubPublicationAction(props: {
                 onClick={() => operation.run(props.publication.onNewAction)}
               >
                 <Loading on={operation.scope()} fallback={<Icon name="x" />}>
-                  {(() => {
-                    operation.read();
-                    operation.outcome();
-                    return <Icon name="x" />;
-                  })()}
+                  {(latest(operation.read), latest(operation.outcome), (<Icon name="x" />))}
                 </Loading>
               </button>
             </Show>
@@ -360,6 +357,7 @@ function PublicationButton(props: {
             : (props.publishLabel ?? t("chat.pullRequests.publishPr")),
     };
   });
+  // Observe completion without holding the live busy/disabled controls behind that read.
   // Accepted shared requests retain their status button even without a replay callback.
   return (
     <Errored fallback={operation.error}>
@@ -374,6 +372,7 @@ function PublicationButton(props: {
           ref={(element) => controlRef?.(element)}
           class="chat-pr__create"
           type="button"
+          aria-busy={operation.busy() ? "true" : undefined}
           disabled={action().disabled}
           onClick={() => operation.run(action().click)}
         >
@@ -382,11 +381,7 @@ function PublicationButton(props: {
           </Show>
           {action().label}
           <Loading on={operation.scope()} fallback={null}>
-            {(() => {
-              operation.read();
-              operation.outcome();
-              return null;
-            })()}
+            {(latest(operation.read), latest(operation.outcome), null)}
           </Loading>
         </button>
       </Show>
@@ -441,11 +436,7 @@ function PublicationRefresh(props: {
           onClick={() => operation.run(props.publication.onRefresh)}
         >
           <Loading on={operation.scope()} fallback={<Icon name="refresh" />}>
-            {(() => {
-              operation.read();
-              operation.outcome();
-              return <Icon name="refresh" />;
-            })()}
+            {(latest(operation.read), latest(operation.outcome), (<Icon name="refresh" />))}
           </Loading>
           <Show when={props.labelled}>{t("githubPublication.refresh")}</Show>
         </button>
