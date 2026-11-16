@@ -202,8 +202,13 @@ owner SAS commitment, transcript, six-digit code and all five mailbox steps unch
 N sends `start` to `"self"`; E is an admitted device of the same account. After the user
 confirms the code, E signs `add_member_device { account_id, peer_key, device_pub, label }`
 with its D and submits it over the tunnel **before** sending `sealed`. The sealed handoff
-carries the same pinning contents as owner SAS. There is no member recovery kit: losing
-every device requires a fresh invite from the owner, and no owner setting disables approval.
+carries the same pinning contents as owner SAS. If no admitted member device is available, the new browser may ask an owner instead.
+Its SAS start includes `member_account_id`, which is covered by the commitment and transcript.
+The account is a claim, not authentication: the owner must compare the six digits with that
+person over a trusted channel. The owner signs the existing `add_member_device` only after
+that comparison; the Gateway refuses an account that is no longer a member at commit time.
+The resulting device is an independent owner-approved root of the member device tree.
+Ordinary member self-approval has no `member_account_id` and stays unchanged.
 
 The device inherits its member's current role. R and owners with `manage_members` may also
 add one. Unknown accounts, full device lists, peer keys listed anywhere and signing keys

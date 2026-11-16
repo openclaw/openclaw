@@ -30,6 +30,8 @@ export type SasStart = {
   device_pub: string;
   peer_key: string;
   label: string;
+  /** Claimed existing member, bound by the compared code; never account authentication. */
+  member_account_id?: string;
   /**
    * A device that also runs as a node (an app) asks for its node in the same approval. The
    * commitment and transcript cover it, so the compared code binds the node key and the surface
