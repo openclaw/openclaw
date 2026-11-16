@@ -9,6 +9,14 @@ const selectableContextWindowMetadata = {
   contextWindowDefault: "1m",
 };
 
+it("offers setup-tokens for personal accounts without importing the host CLI login", () => {
+  const personalMethods = manifest.providerAuthChoices
+    .filter((choice) => "personalAccount" in choice && choice.personalAccount)
+    .map((choice) => choice.method);
+  expect(personalMethods).toContain("setup-token");
+  expect(personalMethods).not.toContain("cli");
+});
+
 it("keeps Haiku opt-in while preferring Code Mode for the other API models", () => {
   const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
   expect(models.length).toBeGreaterThan(0);

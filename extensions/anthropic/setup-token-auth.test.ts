@@ -4,11 +4,40 @@ import {
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAuthProfileOrder, type AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { runAnthropicSetupTokenAuth } from "./auth.runtime.js";
 
 const token = `sk-ant-oat01-${"synthetic".repeat(12)}`;
 const apiKey = { provider: "anthropic", mode: "api_key" } as const;
+
+it("collects a setup-token as a secret without changing shared configuration", async () => {
+  const text = vi.fn(async () => token);
+  const config = {};
+  const result = await runAnthropicSetupTokenAuth(
+    {
+      config,
+      runtime: createRuntimeEnv(),
+      prompter: createTestWizardPrompter({ text }),
+      isRemote: true,
+      openUrl: async () => {},
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("unexpected OAuth redirect");
+        },
+      },
+    },
+    "anthropic/claude-opus-5-5",
+  );
+  expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
+  expect(result.profiles).toEqual([
+    {
+      profileId: "anthropic:default",
+      credential: { type: "token", provider: "anthropic", token },
+    },
+  ]);
+  expect(result.configPatch).toBeUndefined();
+  expect(config).toEqual({});
+});
 
 it.each([
   { occupied: false, expected: "anthropic:setup-token" },

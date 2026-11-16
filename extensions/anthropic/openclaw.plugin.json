@@ -349,6 +349,7 @@
     {
       "provider": "anthropic",
       "method": "setup-token",
+      "personalAccount": true,
       "choiceId": "setup-token",
       "appGuidedSecret": true,
       "choiceLabel": "Anthropic setup-token",

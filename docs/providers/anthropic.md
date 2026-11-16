@@ -275,6 +275,13 @@ OpenClaw release:
     openclaw models auth login --provider anthropic --method setup-token
     ```
 
+    On a shared Gateway, add your own subscription through **Profile → Connected
+    accounts → Add account → Anthropic → Anthropic setup-token**. Generate the
+    token with your own Claude account and paste it into the secret field. The
+    account belongs to your profile; connecting it does not change the Gateway's
+    shared credentials or default model. Select that account and a Claude model
+    using the Claude CLI runtime for your chat.
+
     Direct Messages API requests using a setup token advertise a Claude Code
     client version, or the installed CLI version when newer. Anthropic uses that
     identity to gate newer models. When Anthropic rejects a request because the
