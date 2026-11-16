@@ -24,8 +24,8 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   preferredDir?: string;
   /** Captured state fallback for filesystem work dispatched to another isolate. */
   stateDir?: string;
-  /** Coordination addresses must stay shared across profiles and updater versions. */
-  purpose?: "workspace" | "coordination";
+  /** Coordination roots stay shared. Worker scratch must pass the child process's strict admission. */
+  purpose?: "workspace" | "coordination" | "worker";
   tmpdir?: () => string;
   warn?: (message: string) => void;
 };
@@ -78,6 +78,7 @@ function assertSafeTempAncestors(
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
     const trustedAncestor =
+      options.purpose !== "worker" &&
       getNodeTrustedWritableAncestors()?.includes(directory) &&
       stat.isDirectory() &&
       !stat.isSymbolicLink();

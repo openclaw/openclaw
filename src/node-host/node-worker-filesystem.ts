@@ -128,7 +128,7 @@ export async function prepareNodeWorkerFilesystem(params: {
   ].map(protectRuntimePath);
   // These roots allow writable children, but their lookup entries must stay trusted.
   protectRuntimePath(capturedHome);
-  const temporaryParent = protectRuntimePath(resolvePreferredOpenClawTmpDir());
+  const temporaryParent = protectRuntimePath(resolvePreferredOpenClawTmpDir({ purpose: "worker" }));
   const assertWritableRoot = (kind: "workspace" | "model HOME" | "scratch", directory: string) => {
     // Landlock grants are additive: a read-only rule cannot subtract a write grant.
     const assigned =
