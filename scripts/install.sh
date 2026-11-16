@@ -231,6 +231,19 @@ has_visible_prompt_output() {
     [[ -t 1 ]]
 }
 
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+    local name=""
+    name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+        echo "/dev/$name"
+    else
+        echo "/dev/tty"
+    fi
+}
+
 resolve_subprocess_stdin_path() {
     local prompt_output_visible="${1:-0}"
     if [[ "${NO_PROMPT:-0}" == "1" ]]; then
@@ -241,7 +254,7 @@ resolve_subprocess_stdin_path() {
         return 1
     fi
     if has_controlling_tty && [[ "$prompt_output_visible" == "1" ]]; then
-        echo "/dev/tty"
+        controlling_tty_path
     else
         echo "/dev/null"
     fi
@@ -3780,7 +3793,7 @@ install_with_bun() {
         run_quiet_step "Pinning existing Gateway to Bun" "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
     elif [[ "$NO_ONBOARD" != 1 ]] && ! has_openclaw_config; then
         if is_promptable; then
-            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun </dev/tty
+            "$OPENCLAW_BIN" onboard --install-daemon --daemon-runtime bun <"$(controlling_tty_path)"
             # Onboarding has no runtime-path option; record the exact fork now.
             "$OPENCLAW_BIN" gateway install --runtime bun --runtime-path "$BUN_PATH" --force
         else
@@ -3962,7 +3975,7 @@ main() {
             if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" <"$(controlling_tty_path)" || doctor_exit=$?
             fi
             if (( doctor_exit == 130 )); then
                 abort_install_int
@@ -4071,7 +4084,7 @@ main() {
                     warn_openclaw_not_found
                     return 0
                 fi
-                exec </dev/tty
+                exec <"$(controlling_tty_path)"
                 exec "$claw" onboard
             fi
             local user_claw
