@@ -228,15 +228,11 @@ export function recordRequesterDelivery(
   }
 }
 
-export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
-  return (
-    entry.delivery?.requesterDelivery?.state === "consumed" &&
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
-  );
+/** A result committed to the requester transcript is delivered; a later turn failure cannot unconsume it. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** A cancelled private continuation cannot unconsume its committed input. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
@@ -244,7 +240,7 @@ export function resolveRequesterDeliveryOutcome(
   return outcome &&
     !outcome.delivered &&
     entries.length > 0 &&
-    entries.every(hasConsumedPrivateRequesterInput)
+    entries.every(hasConsumedRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }
