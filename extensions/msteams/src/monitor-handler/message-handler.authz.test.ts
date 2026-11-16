@@ -1,12 +1,10 @@
-import path from "node:path";
-import { runPreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveAgentRoute as resolveProductionAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../../runtime-api.js";
 import { resolveMSTeamsAccountConfig, withAccountScopedMSTeamsConfig } from "../accounts.js";
@@ -28,7 +26,7 @@ import {
   createTurnContext,
 } from "./message-handler.test-support.js";
 
-const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const dispatch = getRuntimeApiMockState().dispatchReplyFromConfig;
 const graph = vi.hoisted(() => ({
   resolveTeamGroupId: vi.fn(
     async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
@@ -353,7 +351,7 @@ describe("msteams message authorization and supplemental context", () => {
   );
 
   it("does not widen an empty group sender allowlist through pairing or route entries", async () => {
-    const { handle, conversationStore, readAllowFromStore } = setup({
+    const { handle, conversationStore, readAllowFromStore, storePath } = setup({
       dmPolicy: "pairing",
       allowFrom: [],
       groupPolicy: "allowlist",
@@ -365,6 +363,13 @@ describe("msteams message authorization and supplemental context", () => {
     await handle({ channelData: { team: { id: "team123" } } });
     expect(readAllowFromStore).not.toHaveBeenCalled();
     expectBlocked(conversationStore);
+    expect(
+      await getSessionEntryAsync({
+        agentId: "main",
+        storePath: resolveStorePath(storePath, { agentId: "main" }),
+        sessionKey: `agent:main:msteams:channel:${channelId}`,
+      }),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -466,7 +471,7 @@ describe("msteams message authorization and supplemental context", () => {
   });
 
   it("persists the reply reference for DM pairing without dispatching", async () => {
-    const { handle, conversationStore, upsertPairingRequest, recordInboundSession } = setup({
+    const { handle, conversationStore, upsertPairingRequest, storePath } = setup({
       dmPolicy: "pairing",
       allowFrom: [],
     });
@@ -497,7 +502,13 @@ describe("msteams message authorization and supplemental context", () => {
       locale: "en-US",
       timezone: "America/New_York",
     });
-    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(
+      await getSessionEntryAsync({
+        agentId: "main",
+        storePath: resolveStorePath(storePath, { agentId: "main" }),
+        sessionKey: "agent:main:msteams:direct:new-aad",
+      }),
+    ).toBeUndefined();
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -767,17 +778,13 @@ describe("msteams message authorization and supplemental context", () => {
   });
 
   describe("pending history", () => {
-    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
     function historyHandler(conversationType = "channel") {
-      const tempDir = tempDirs.make("msteams-history-");
-      const { handle } = setup(
-        { groupPolicy: "open", requireMention: true, historyLimit: 10 },
-        {
-          runPrepared: runPreparedInboundReply,
-          resolveStorePath: () => path.join(tempDir, "sessions.json"),
-        },
-      );
-      return (text: string, root?: string, replyToId?: string, mentioned = false) =>
+      const { handle, storePath } = setup({
+        groupPolicy: "open",
+        requireMention: true,
+        historyLimit: 10,
+      });
+      const send = (text: string, root?: string, replyToId?: string, mentioned = false) =>
         handle(
           buildChannelActivity({
             id: text,
@@ -791,10 +798,11 @@ describe("msteams message authorization and supplemental context", () => {
             ...(mentioned ? {} : { entities: [] }),
           }),
         );
+      return { send, storePath: resolveStorePath(storePath, { agentId: "main" }) };
     }
 
     it("isolates pending history and cleanup per channel thread", async () => {
-      const send = historyHandler();
+      const { send, storePath } = historyHandler();
       await send("note in A", "root-a", "nested-a");
       await send("note in B", undefined, "root-b");
       expect(dispatch).not.toHaveBeenCalled();
@@ -811,11 +819,45 @@ describe("msteams message authorization and supplemental context", () => {
       ] as const) {
         expect(inB?.[field]).not.toContain("note in A");
       }
-      expect(inB?.SessionKey).toContain("root-b");
+      const sessionKeyB = `${channelSessionKey}:thread:root-b`;
+      expect(inB?.SessionKey).toBe(sessionKeyB);
+      expect(
+        await getSessionEntryAsync({ agentId: "main", storePath, sessionKey: sessionKeyB }),
+      ).toMatchObject({
+        sessionId: expect.any(String),
+        delivery: {
+          kind: "external",
+          origin: {
+            provider: "msteams",
+            surface: "msteams",
+            accountId: "default",
+            threadId: "root-b",
+          },
+        },
+      });
 
       // Consuming B must leave A pending, then consume A exactly once.
       await send("question in A", "root-a", "other-a", true);
       const inA = dispatch.mock.calls.at(-1)?.[0].ctx;
+      expect(inA?.SessionKey).toBe(`${channelSessionKey}:thread:root-a`);
+      expect(
+        await getSessionEntryAsync({
+          agentId: "main",
+          storePath,
+          sessionKey: `${channelSessionKey}:thread:root-a`,
+        }),
+      ).toMatchObject({
+        sessionId: expect.any(String),
+        delivery: {
+          kind: "external",
+          origin: {
+            provider: "msteams",
+            surface: "msteams",
+            accountId: "default",
+            threadId: "root-a",
+          },
+        },
+      });
       expect(inA?.Body).toContain("note in A");
       expect(inA?.Body).not.toContain("note in B");
       expect(inA?.InboundHistory).toEqual([expect.objectContaining({ body: "note in A" })]);
@@ -826,7 +868,7 @@ describe("msteams message authorization and supplemental context", () => {
     });
 
     it("keeps group-chat quotes in conversation-wide history", async () => {
-      const send = historyHandler("groupChat");
+      const { send } = historyHandler("groupChat");
       await send("earlier message", "quoted-a", "quoted-a");
       await send("question", undefined, undefined, true);
       const ctx = dispatch.mock.calls.at(-1)?.[0].ctx;
