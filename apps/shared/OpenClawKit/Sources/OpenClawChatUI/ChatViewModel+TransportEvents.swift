@@ -68,43 +68,76 @@ extension OpenClawChatViewModel {
         case .questionRequested, .questionResolved:
             return self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
-            self.resetSessionReactions()
-            self.invalidateSessionMetadataReadiness()
-            self.syncSessionReactions(refreshMetadata: true)
-            self.cancelHistoryInvalidationRefresh()
+            return self.beginTransportRecovery(evt, keepsCatalogs: false)
+        }
+        return nil
+    }
+
+    /// Drops run and history state the replaced socket owned, then reconciles in place: one history
+    /// read, then catalogs, composer capabilities and a health probe. `keepsCatalogs` is for an owner
+    /// that knows the new socket reaches the same Gateway: model, agent, source and composer catalogs
+    /// stay on screen until their reloads replace them. Transport events cannot know that.
+    @discardableResult
+    private func beginTransportRecovery(
+        _ evt: OpenClawChatTransportEvent,
+        keepsCatalogs: Bool) -> Task<Void, Never>
+    {
+        self.resetSessionReactions()
+        self.invalidateSessionMetadataReadiness()
+        self.syncSessionReactions(refreshMetadata: true)
+        self.cancelHistoryInvalidationRefresh()
+        if !keepsCatalogs {
             self.invalidateModelChoices()
             self.sourcePreviewState.invalidate()
             self.invalidateAgentCatalog(clear: true)
-            switch evt {
-            case .routeChanged, .reconnected:
-                self.questionAttentionOwnerID = UUID()
-                self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID
-                self.applyProgressCard(nil)
-            default: break
-            }
-            // Apple transports publish replacement sockets through either event.
-            // Old known-absent state must not authorize legacy plans on the new Gateway.
-            self.progressCardStoreAvailable = nil
-            self.invalidateProgressCardTarget()
             self.modelAvailabilityIsSessionScoped = false
             self.invalidateComposerCapabilities()
-            self.errorText = nil
-            self.swarmEnabled = false
-            self.resetSwarmProgress()
-            self.invalidateHistoryAfterTransportEvent(evt)
-            self.invalidateRunSnapshots()
-            self.clearPendingRuns()
-            self.invalidateIncompleteLiveRunUsage()
-            self.clearStreamingActivity()
-            let context = self.beginHistoryRequest()
-            let recoveryID = UUID()
-            self.pendingTransportRecoveryID = recoveryID
-            return Task {
-                let history = await self.refreshHistoryAfterRun(historyRequest: context)
-                await self.finishTransportRecovery(recoveryID, session: context.session, history: history)
-            }
         }
-        return nil
+        switch evt {
+        case .routeChanged, .reconnected:
+            self.questionAttentionOwnerID = UUID()
+            self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID
+            self.applyProgressCard(nil)
+        default: break
+        }
+        // Apple transports publish replacement sockets through either event.
+        // Old known-absent state must not authorize legacy plans on the new Gateway.
+        self.progressCardStoreAvailable = nil
+        self.invalidateProgressCardTarget()
+        self.errorText = nil
+        self.swarmEnabled = false
+        self.resetSwarmProgress()
+        self.invalidateHistoryAfterTransportEvent(evt)
+        self.invalidateRunSnapshots()
+        self.clearPendingRuns()
+        self.invalidateIncompleteLiveRunUsage()
+        self.clearStreamingActivity()
+        let context = self.beginHistoryRequest()
+        let recoveryID = UUID()
+        self.pendingTransportRecoveryID = recoveryID
+        return Task {
+            let history = await self.refreshHistoryAfterRun(historyRequest: context)
+            await self.finishTransportRecovery(
+                recoveryID,
+                session: context.session,
+                history: history,
+                keepsCatalogs: keepsCatalogs)
+        }
+    }
+
+    /// For owners whose transport reports no replacement socket (iOS): the connection to the same
+    /// Gateway came back. Reconciles in place, so the reader keeps what is on screen. A full
+    /// bootstrap here reset the loading state and re-read everything on every reconnect. Health
+    /// is unknown until the recovery probes it; that probe's healthy transition refreshes session
+    /// metadata and flushes the outbox.
+    public func recoverAfterReconnect() {
+        guard !self.isTransportDetached, !self.usesWebConversation else { return }
+        self.handleSidebarEvent(.reconnected)
+        self.applyTransportHealth(false)
+        // The active-session subscription belonged to the replaced socket.
+        let sessionKey = self.sessionKey
+        Task { [weak self] in await self?.syncActiveSessionSubscription(startingWith: sessionKey) }
+        self.beginTransportRecovery(.reconnected, keepsCatalogs: true)
     }
 
     /// Transcript recovery gets the first round trip. A newer reconnect replaces
@@ -112,7 +145,8 @@ extension OpenClawChatViewModel {
     private func finishTransportRecovery(
         _ recoveryID: UUID,
         session: SessionSnapshot,
-        history: RunHistoryRefreshResult) async
+        history: RunHistoryRefreshResult,
+        keepsCatalogs: Bool) async
     {
         // iOS may also own a bootstrap history read on the replacement route.
         await self.bootstrapTask?.value
@@ -125,7 +159,8 @@ extension OpenClawChatViewModel {
         // refetch it, since this pass also stands in for health recovery's fetch.
         if !history.applied { self.scheduleProgressCardFetch(for: session) }
         async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
-        async let composer: Void = self.loadComposerCapabilities(force: true)
+        // The new socket may carry changed capabilities; a kept catalog stays shown until replaced.
+        async let composer: Void = self.loadComposerCapabilities(force: true, keepingLoaded: keepsCatalogs)
         await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
         _ = await (catalogs, composer)
     }
@@ -139,7 +174,7 @@ extension OpenClawChatViewModel {
         Task { [weak self] in await self?.refreshCatalogsAfterRecovery(session: session) }
     }
 
-    /// Repopulates catalogs whose stale values the recovery already cleared.
+    /// Repopulates catalogs the recovery cleared, or refreshes the ones it kept.
     private func refreshCatalogsAfterRecovery(session: SessionSnapshot) async {
         self.refreshSourceContext()
         self.refreshAgentsIfRequested()

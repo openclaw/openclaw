@@ -482,7 +482,7 @@ extension OpenClawChatView {
                 .onScrollPhaseChange { _, phase in
                     self.handleTranscriptScrollPhase(phase)
                 }
-                .chatBehaviorProbeScroll()
+                .chatBehaviorProbeScroll(loading: self.viewModel.isLoading, healthy: self.viewModel.healthOK)
 
             if self.viewModel.isLoading, self.composerChrome == .full {
                 ProgressView()

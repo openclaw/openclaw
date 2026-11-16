@@ -4,8 +4,12 @@ import { buildAssistantEvents } from "./mock-openai-events.js";
 // Paced markdown reply for client UX harnesses (iOS `ios:behavior`). The prompt picks the
 // shape: `UXSTREAM chunks=400 interval=50` streams 400 deltas, 50 ms apart. The token is one
 // capitalized word because phone keyboards autocorrect lowercase phrases typed by UI drivers.
+// `IMAGE` ends the reply with a standalone `MEDIA:` line for `ux-image.png`, which the harness
+// places in the agent workspace.
 const QA_UX_STREAM_PROMPT_RE = /\bUXSTREAM\b/;
+const QA_UX_STREAM_IMAGE_RE = /\bIMAGE\b/;
 const QA_UX_STREAM_END_MARKER = "UX-STREAM-END";
+const QA_UX_STREAM_IMAGE_PATH = "ux-image.png";
 
 const DEFAULT_CHUNKS = 200;
 const MAX_CHUNKS = 2_000;
@@ -49,7 +53,10 @@ export function resolveQaUxStream(prompt: string): QaUxStream | undefined {
     0,
     MAX_INTERVAL_MS,
   );
-  const text = buildUxStreamText(chunkCount * CHARS_PER_CHUNK);
+  const body = buildUxStreamText(chunkCount * CHARS_PER_CHUNK);
+  const text = QA_UX_STREAM_IMAGE_RE.test(prompt)
+    ? `${body}\n\nMEDIA:${QA_UX_STREAM_IMAGE_PATH}`
+    : body;
   return {
     events: buildAssistantEvents([
       {

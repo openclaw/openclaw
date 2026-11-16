@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 // Measures chat UX on the iOS simulator against an isolated Gateway whose model is the scripted
-// QA mock: streaming follow, reading position while scrolled up, keyboard, and relaunch.
+// QA mock: streaming follow, reading position while scrolled up, keyboard, relaunch, and resume.
 // Usage: pnpm ios:behavior [--setup] [--profile ios-ux] [--cases a,b] [--samples 3] [--app <app>]
 // --setup writes the profile (Gateway stopped): loopback port, token auth, mock model.
 // Then run the mock and the Gateway (see .agents/skills/ios-e2e/BEHAVIOR.md) and this script.
 // IOS_SIM reuses a paired simulator; otherwise a fresh one is paired and deleted afterwards.
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -35,7 +43,10 @@ const { values } = parseArgs({
     profile: { type: "string", default: "ios-ux" },
     port: { type: "string", default: "19061" },
     "mock-url": { type: "string", default: "http://127.0.0.1:44180/v1" },
-    cases: { type: "string", default: "stream-turn,stream-follow,scrolled-up,keyboard,relaunch" },
+    cases: {
+      type: "string",
+      default: "stream-turn,stream-follow,scrolled-up,keyboard,relaunch,resume",
+    },
     samples: { type: "string", default: "3" },
     out: { type: "string" },
     app: {
@@ -589,6 +600,86 @@ const cases: Record<string, Case> = {
           "opens at the end (≤4 pt hidden)": launches.every(
             (entry) => (entry.hidden ?? Infinity) <= 4,
           ),
+        },
+      };
+    },
+  },
+  // Back to the app after the background grace expires, so the Gateway connection is dropped and
+  // rebuilt. What the reader left must still be there: the transcript is not reloaded (its loading
+  // flag stays off), rows are not rebuilt or moved, and the reply's image is not dropped and
+  // fetched again. Media resolver health drops once by design while the new socket is probed.
+  resume: {
+    kind: "guard",
+    async run(session, file) {
+      const agents = JSON.parse(openclaw(["agents", "list", "--json"])) as {
+        isDefault?: boolean;
+        workspace: string;
+      }[];
+      const workspace = agents.find((agent) => agent.isDefault)?.workspace;
+      if (!workspace) {
+        fail(`profile ${profile} has no default agent workspace.`);
+      }
+      // The mock's `IMAGE` reply ends with `MEDIA:ux-image.png`, relative to this workspace.
+      copyFileSync(
+        path.join(repoRoot, "docs/assets/openclaw-banner-light.png"),
+        path.join(workspace, "ux-image.png"),
+      );
+      launch(session);
+      await send("UXSTREAM chunks=150 interval=0 IMAGE");
+      await waitForText(END_MARKER, 60_000);
+      await hideKeyboard();
+      await delay(1500);
+      const backgroundedAt = Date.now();
+      run("xcrun", ["simctl", "launch", sim, "com.apple.Preferences"]);
+      // iOS ends the app's 25 s background grace task, and the app then drops its sockets.
+      await delay(40_000);
+      const resumedAt = Date.now();
+      run("xcrun", ["simctl", "launch", sim, bundleId]);
+      await delay(8000);
+      const end = Date.now();
+      const log = await readProbe(file);
+      const view = window(log, resumedAt, end);
+      const states = (key: string, value: string) =>
+        view.events.filter((e) => e.e === "state" && e.k === key && e.v === value).length;
+      const imageLoadedBefore = log.events.some(
+        (e) => e.e === "mark" && e.k === "image-loaded" && e.t < backgroundedAt,
+      );
+      const imageReloads = view.events.filter(
+        (e) => e.e === "mark" && (e.k === "image-loading" || e.k === "image-unavailable"),
+      ).length;
+      const dropped = run("xcrun", [
+        "simctl",
+        "spawn",
+        sim,
+        "log",
+        "show",
+        "--start",
+        // `log show` reads local wall-clock time; the Swedish locale formats it as YYYY-MM-DD HH:MM:SS.
+        new Date(backgroundedAt).toLocaleString("sv-SE"),
+        "--style",
+        "compact",
+        "--predicate",
+        'eventMessage CONTAINS "Background reconnect suppressed"',
+      ]).stdout.includes("Background reconnect suppressed");
+      const moved = motion(view.frames);
+      const rebuilt = remounts(log.events, resumedAt, end);
+      return {
+        metrics: {
+          reloads: states("loading", "1"),
+          healthDrops: states("health", "0"),
+          imageReloads,
+          remounts: rebuilt,
+          driftPt: moved.maxDriftPt,
+          teleports: moved.teleports,
+          hiddenAtEndPt: hiddenBelowComposer(view.frames.findLast((f) => "composer" in f.f)),
+        },
+        gates: {
+          "connection dropped while away (setup)": dropped,
+          "image loaded before leaving (setup)": imageLoadedBefore,
+          "no transcript reload on return": states("loading", "1") === 0,
+          "image stays loaded": imageReloads === 0,
+          "no remounts": rebuilt === 0,
+          "reading position holds (≤1 pt)": moved.maxDriftPt <= 1,
         },
       };
     },

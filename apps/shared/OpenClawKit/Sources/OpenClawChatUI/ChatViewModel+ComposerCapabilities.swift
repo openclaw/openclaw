@@ -247,7 +247,9 @@ extension OpenClawChatViewModel {
         return !catalogTool.sessionDenied
     }
 
-    func loadComposerCapabilities(force: Bool = false) async {
+    /// `keepingLoaded` refreshes a same-owner loaded catalog in the background: its controls stay
+    /// usable until the reply replaces them, instead of disappearing behind a loading state.
+    func loadComposerCapabilities(force: Bool = false, keepingLoaded: Bool = false) async {
         guard self.supportsComposerCapabilities else { return }
         let ownerID = self.composerCapabilityOwnerID
         if !force,
@@ -256,13 +258,17 @@ extension OpenClawChatViewModel {
         {
             return
         }
+        let keepsShownCatalog = keepingLoaded &&
+            self.composerCapabilityState.ownerID == ownerID && self.composerCapabilityState.phase == .loaded
         self.composerCapabilityState.loadGeneration &+= 1
         let loadGeneration = self.composerCapabilityState.loadGeneration
-        self.composerCapabilityState.ownerID = ownerID
-        self.composerCapabilityState.phase = .loading
-        self.composerCapabilityState.catalog = OpenClawChatComposerCapabilityCatalog()
-        self.composerCapabilityState.notice = nil
-        self.composerCapabilityState.errorMessage = nil
+        if !keepsShownCatalog {
+            self.composerCapabilityState.ownerID = ownerID
+            self.composerCapabilityState.phase = .loading
+            self.composerCapabilityState.catalog = OpenClawChatComposerCapabilityCatalog()
+            self.composerCapabilityState.notice = nil
+            self.composerCapabilityState.errorMessage = nil
+        }
         let target = self.currentModelPatchTarget()
         let catalog = await self.transport.loadComposerCapabilityCatalog(
             sessionKey: target.canonicalSessionKey,

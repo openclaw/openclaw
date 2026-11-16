@@ -61,13 +61,21 @@ extension View {
         #endif
     }
 
-    /// Records user scroll phases, so the host can tell the reader's own motion from layout motion.
+    /// Records user scroll phases, so the host can tell the reader's own motion from layout motion,
+    /// and the transcript's loading flag and media resolver health, so it can see a reload
+    /// (spinner, media dropping to "unavailable") that leaves no row motion.
     @ViewBuilder
-    func chatBehaviorProbeScroll() -> some View {
+    func chatBehaviorProbeScroll(loading: Bool, healthy: Bool) -> some View {
         #if DEBUG && os(iOS)
         if let recorder = ChatBehaviorRecorder.shared {
             onScrollPhaseChange { _, phase in
                 recorder.event(["e": "phase", "v": String(describing: phase)])
+            }
+            .onChange(of: loading, initial: true) { _, value in
+                recorder.event(["e": "state", "k": "loading", "v": value ? "1" : "0"])
+            }
+            .onChange(of: healthy, initial: true) { _, value in
+                recorder.event(["e": "state", "k": "health", "v": value ? "1" : "0"])
             }
         } else {
             self
