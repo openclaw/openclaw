@@ -10,6 +10,7 @@ import {
   isSessionFastMode,
   isSessionPermissionMode,
   isSessionRepository,
+  isSessionRepositorySource,
   isSessionTitleSource,
   isSessionToolOverrides,
   isSessionWorktreeSource,
@@ -91,6 +92,7 @@ const PLACEMENT_CREATE_STRING_FIELDS = [
   "cwd",
   "catalogId",
   "projectId",
+  "repositorySource",
 ] as const;
 const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "key",
@@ -159,6 +161,8 @@ export function parseSessionPlacementCreateParams(
     (record.toolOverrides !== undefined && !isSessionToolOverrides(record.toolOverrides)) ||
     (record.titleSource !== undefined && !isSessionTitleSource(record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
+    (record.repositorySource !== undefined &&
+      (!isSessionRepositorySource(record.repositorySource) || record.repository === undefined)) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )

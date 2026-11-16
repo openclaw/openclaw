@@ -233,7 +233,7 @@ export class DraftPlaceState {
   }
 
   get currentCheckoutUnavailableReason(): string | undefined {
-    return this.repositoryState.currentCheckoutUnavailableReason;
+    return this.repositoryState.checkoutUnavailableReason(this.browser.repositorySourceStatus);
   }
 
   get checkoutVisible(): boolean {
@@ -390,18 +390,18 @@ export class DraftPlaceState {
     if (this.deviceFolder) {
       return !this.deviceFolderAvailable || !isAbsolutePath(this.deviceFolder.path.trim());
     }
+    if (this.browser.repositorySourceStatus) {
+      return true;
+    }
     if (this.hostedEnvironment || this.freshWorkspace) {
       return false;
     }
-    if (this.browser.projectId || this.browser.remoteProject) {
-      return (
-        !this.browser.remoteProject &&
-        (!this.browser.selectedProject() || this.repositoryState.checkoutSubmissionBlocked)
-      );
-    }
     // Free-typed paths still reach sessions.create so the Gateway can return
     // the authoritative missing-scope error instead of the UI dead-ending.
-    return this.folderValidation.blocked;
+    return (
+      this.browser.projectSubmissionBlocked(this.repositoryState.checkoutSubmissionBlocked) ??
+      this.folderValidation.blocked
+    );
   }
 
   adoptAgentDefaults(
@@ -530,7 +530,11 @@ export class DraftPlaceState {
     if (params.repository) {
       this.browser.selectProject({
         kind: "remote",
-        project: { identity: params.repository.url, cloneUrl: params.repository.url },
+        project: {
+          identity: params.repository.url,
+          cloneUrl: params.repository.url,
+          sourceId: params.repositorySource,
+        },
       });
       this.repositoryState.setDetail("baseRef", params.repository.ref ?? "", false);
       this.repositoryState.load();
@@ -718,14 +722,6 @@ export class DraftPlaceState {
 
   setWorktreeName(worktreeName: string) {
     this.repositoryState.setDetail("worktreeName", worktreeName, this.read().submitting);
-  }
-
-  captureSubmittedWorktreeName(
-    params: Parameters<DraftRepositoryStateOwner["captureSubmittedName"]>[0],
-    agentId: string,
-    recovered = false,
-  ) {
-    return this.repositoryState.captureSubmittedName(params, { agentId, recovered });
   }
 
   restorePreferenceSelections() {

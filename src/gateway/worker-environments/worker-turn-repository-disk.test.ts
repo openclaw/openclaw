@@ -76,6 +76,10 @@ it.each(["worker-turn", "remote-exec"] as const)(
 it("inherits fresh disk history and dirty files without sharing or releasing the active parent's disk", async () => {
   const f = await fixture("worker-turn");
   const repository = await f.bindDisk();
+  // A plugin-sourced parent must keep its source owner for the child's worker dispatch.
+  await patchSessionEntryCore(sessionTarget, () => ({ repositorySourceId: "forge/repositories" }), {
+    skipMaintenance: true,
+  });
   const originalRefs = await refs(f.store.artifactPath(repository.workspaceId));
   const active = await f.beginTurn("parent-spawning");
   await f.write("private.txt", "committed on disk\n");
@@ -117,6 +121,7 @@ it("inherits fresh disk history and dirty files without sharing or releasing the
   if (!prepared.ok) {
     throw new Error(prepared.error.message);
   }
+  expect(prepared.value.repositorySourceId).toBe("forge/repositories");
   const child = (await f.store.get(prepared.value.repositoryWorkspaceId!))!;
   expect(child.workspaceId).not.toBe(repository.workspaceId);
   expect(child.diskAuthority).toBeUndefined();
@@ -222,6 +227,11 @@ it.each([
   async ({ boundary, change }) => {
     const f = await fixture("worker-turn");
     const repository = await f.bindDisk();
+    await patchSessionEntryCore(
+      sessionTarget,
+      () => ({ repositorySourceId: "forge/repositories" }),
+      { skipMaintenance: true },
+    );
     const artifact = f.store.artifactPath(repository.workspaceId);
     const originalRefs = await refs(artifact);
     await f.write("dirty.txt", "current parent bytes\n");
@@ -342,7 +352,10 @@ it.each([
       assert(created.ok);
       const child = await f.store.find(target);
       assert(child);
-      expect(loadSessionEntry(target)?.repositoryWorkspaceId).toBe(child.workspaceId);
+      expect(loadSessionEntry(target)).toMatchObject({
+        repositoryWorkspaceId: child.workspaceId,
+        repositorySourceId: "forge/repositories",
+      });
       expect(child.diskAuthority).toBeUndefined();
       await withSessionRepositoryCheckpoint(
         { workspaceId: child.workspaceId },

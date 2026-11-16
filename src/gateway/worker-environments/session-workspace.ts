@@ -13,7 +13,11 @@ import type {
 export type WorkerSessionWorkspace =
   | { kind: "local"; path: string }
   | { kind: "device-folder"; deviceId: string; path: string }
-  | { kind: "repository"; repository: SessionRepositoryWorkspaceRecord };
+  | {
+      kind: "repository";
+      repository: SessionRepositoryWorkspaceRecord;
+      repositorySourceId?: string;
+    };
 
 /** Repository roots contain result artifacts only; never use them as execution cwd. */
 export function sessionWorkspaceRoot(workspace: WorkerSessionWorkspace): string {

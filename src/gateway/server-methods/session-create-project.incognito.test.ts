@@ -20,6 +20,8 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
+import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -101,6 +103,42 @@ it("materializes and commits an unbound first-turn worktree without host session
   expect(session.entry.worktree).toEqual(saved.worktree);
   expect(await readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
   expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+});
+
+it("materializes an explicitly selected plugin source through the first-turn workspace owner", async () => {
+  const session = await createPendingSession("plugin-source");
+  const url = "https://git.example/team/project.git";
+  const project = await registerProjectRegistry({ path: workspace });
+  const fixture = createRepositorySourceFixture({
+    id: "remote",
+    resolve: (candidate) => (candidate === url ? { url, name: "project" } : undefined),
+    prepare: async ({ assertCurrent }) => {
+      assertCurrent();
+      return {
+        project,
+        assertCurrent,
+        resolveBase: async () => {
+          throw new Error("Existing explicit refs must resolve locally");
+        },
+      };
+    },
+  });
+  await patchSessionEntryCore(session.target, () => ({
+    pendingProjectGitUrl: url,
+    repositorySourceId: fixture.id,
+    pendingWorktree: { name: "plugin-source", baseRef: "main", titleSource: "plugin source" },
+  }));
+
+  await fixture.run(session.prepare);
+
+  const saved = session.read();
+  expect(saved).toMatchObject({
+    repositorySourceId: fixture.id,
+    projectId: project.id,
+    worktree: { repoRoot: workspace },
+  });
+  expect(saved?.pendingProjectGitUrl).toBeUndefined();
+  expect(await readFile(path.join(saved!.spawnedCwd!, "README.md"), "utf8")).toBe("base\n");
 });
 
 it.each(["lifecycle", "intent"] as const)(

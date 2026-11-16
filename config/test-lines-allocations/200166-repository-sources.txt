@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #200166: the public repository-source SDK contract (registration, URL admission, managed checkout, cloud worker admission, picker) and its bundled GitLab consumer.
+643

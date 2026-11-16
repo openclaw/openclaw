@@ -390,6 +390,9 @@ function buildMessageCutSessionEntry(
           ...(params.repositoryWorkspaceId
             ? { repositoryWorkspaceId: params.repositoryWorkspaceId }
             : {}),
+          ...(currentEntry.repositorySourceId
+            ? { repositorySourceId: currentEntry.repositorySourceId }
+            : {}),
         }
       : {}),
     ...(currentEntry.incognito === true || isIncognitoSessionKey(params.canonicalSourceKey)

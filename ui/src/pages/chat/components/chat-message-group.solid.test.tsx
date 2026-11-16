@@ -565,6 +565,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {
+    repositorySources: [],
     errors: [],
     hasPlugins: true,
     revision: 0,

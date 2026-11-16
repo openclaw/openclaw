@@ -24,6 +24,7 @@ import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
+import { normalizeManifestRepositorySources } from "./manifest-repository-sources.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
 import { normalizeManifestThemes } from "./manifest-themes.js";
 import type {
@@ -481,6 +482,10 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest dashboard: ${dashboardResult.error}`);
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
+  const repositorySources = normalizeManifestRepositorySources(raw.repositorySources);
+  if (!repositorySources.ok) {
+    return fail(`invalid plugin manifest repositorySources: ${repositorySources.error}`);
+  }
   const recommendedPrompts = validatePluginRecommendedPrompts(raw.recommendedPrompts);
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
@@ -524,8 +529,10 @@ export function loadPluginManifest(
       : {}),
     manifest: {
       ...manifestBeforeDashboard,
+      ...(raw.securityAuditConfig === true ? { securityAuditConfig: true } : {}),
       dashboard: dashboardResult.dashboard,
       controlUi: controlUiResult.value,
+      repositorySources: repositorySources.value,
       ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
         ? { uiCapabilities: uiCapabilities.capabilities }
         : {}),

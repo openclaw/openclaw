@@ -46,6 +46,8 @@ export type PreparedGatewaySessionLifecycle = {
   sessionRoot?: string;
   worktree?: NonNullable<InternalSessionEntry["worktree"]>;
   repositoryWorkspaceId?: string;
+  /** Inherited from a repository parent; selects the same plugin source at worker dispatch. */
+  repositorySourceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   /** Reacquire source custody only around the final persistence operation. */
   withCommit?: <T>(
@@ -134,6 +136,7 @@ export type CreateGatewaySessionParams = {
   /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;
   pendingProjectGitUrl?: string;
+  repositorySourceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;

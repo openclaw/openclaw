@@ -10,26 +10,38 @@ import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 const FETCH_TIMEOUT_MS = 10 * 60_000;
 
 /** The caller retains scratch-directory custody until this operation settles. */
-export async function prepareRepositoryWorkerGitPack(params: {
+export async function fetchRepositoryCheckoutPack(params: {
   url: string;
   baseCommit: string;
   retainedCommit?: string;
-  token: string;
+  httpAuthorization?: string;
   temporaryRoot: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<string> {
-  if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
-    throw new Error("Repository preparation requires a normalized GitHub HTTPS repository URL");
+  const url = URL.canParse(params.url) ? new URL(params.url) : undefined;
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.href !== params.url
+  ) {
+    throw new Error("Repository preparation requires a normalized HTTPS repository URL");
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {
-    throw new Error("Repository preparation requires an exact GitHub commit");
+    throw new Error("Repository preparation requires an exact commit");
   }
   if (params.retainedCommit !== undefined && !/^[a-f0-9]{40}$/u.test(params.retainedCommit)) {
-    throw new Error("Repository preparation requires an exact retained GitHub commit");
+    throw new Error("Repository preparation requires an exact retained commit");
   }
-  if (!params.token.trim()) {
-    throw new Error("Private repository preparation requires a current GitHub credential");
+  if (
+    params.httpAuthorization !== undefined &&
+    (!params.httpAuthorization.trim() || /[\r\n\0]/u.test(params.httpAuthorization))
+  ) {
+    throw new Error("Private repository preparation requires a current repository credential");
   }
   const assertCurrent = () => {
     params.signal.throwIfAborted();
@@ -56,14 +68,12 @@ export async function prepareRepositoryWorkerGitPack(params: {
       ["-c", "http.followRedirects=false", ...args],
       {
         baseEnv,
-        env: authenticated
-          ? appendGitConfig(baseEnv, [
-              [
-                `http.${params.url}.extraHeader`,
-                `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
-              ],
-            ])
-          : undefined,
+        env:
+          authenticated && params.httpAuthorization
+            ? appendGitConfig(baseEnv, [
+                [`http.${params.url}.extraHeader`, `Authorization: ${params.httpAuthorization}`],
+              ])
+            : undefined,
         input: "",
         timeoutMs: FETCH_TIMEOUT_MS,
         signal: params.signal,
@@ -81,7 +91,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
     if (result.termination !== "exit" || result.code !== 0 || result.stdoutTruncatedBytes) {
       throw new Error(
         authenticated
-          ? "GitHub could not supply the pinned repository commit; check access and retry preparation"
+          ? "Repository could not supply the pinned repository commit; check access and retry preparation"
           : "Git could not prepare the repository snapshot; retry preparation",
       );
     }
@@ -132,4 +142,27 @@ export async function prepareRepositoryWorkerGitPack(params: {
   });
   assertCurrent();
   return pack;
+}
+
+/** Native GitHub callers keep their existing source admission and token contract. */
+export async function prepareRepositoryWorkerGitPack(params: {
+  url: string;
+  baseCommit: string;
+  retainedCommit?: string;
+  token: string;
+  temporaryRoot: string;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}): Promise<string> {
+  if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
+    throw new Error("Repository preparation requires a normalized GitHub HTTPS repository URL");
+  }
+  if (!params.token.trim()) {
+    throw new Error("Private repository preparation requires a current GitHub credential");
+  }
+  const { token, ...input } = params;
+  return await fetchRepositoryCheckoutPack({
+    ...input,
+    httpAuthorization: `Basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+  });
 }

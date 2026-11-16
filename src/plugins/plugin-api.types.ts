@@ -315,6 +315,10 @@ export type OpenClawPluginApi = {
   registerReload: (registration: OpenClawPluginReloadRegistration) => void;
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
+  /** Offer repositories from a Git host in session creation, checkout and cloud workers. */
+  registerRepositorySource: (
+    source: import("./repository-source-types.js").RepositorySourceV1,
+  ) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: {
     (service: OpenClawPluginService): void;

@@ -5,6 +5,7 @@ import { format } from "oxfmt";
 import { ObjectOptions, Type, type TSchema } from "typebox";
 import { Intern } from "typebox/schema";
 import { AgentRuntimeRestrictionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { ControlUiRepositorySearchResultSchema } from "../packages/gateway-protocol/src/plugin-control-ui-repositories.js";
 import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
@@ -63,6 +64,12 @@ const additionalLintRules: Partial<Record<Group, string[]>> = {
   approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
+  [
+    "ControlUiRepositorySearchResult",
+    ControlUiRepositorySearchResultSchema,
+    'import("../../../../packages/gateway-protocol/src/plugin-control-ui-repositories.js").ControlUiRepositorySearchResult',
+    "session-input",
+  ],
   [
     "BoardSnapshot",
     BoardSnapshotSchema,
@@ -134,6 +141,7 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
       "worktreeSource",
       "deviceFolder",
       "repository",
+      "repositorySource",
       "fastMode",
       "cyberAccessProgram",
       "titleSource",

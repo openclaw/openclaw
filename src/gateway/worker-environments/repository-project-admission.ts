@@ -11,8 +11,10 @@ import type { GitHubCredentialReader } from "../../agents/github-credential-read
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
+  resolveConfiguredGitHubToolIdentity,
 } from "../../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePluginRepositorySource } from "../../plugins/repository-sources.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
@@ -45,7 +47,7 @@ const PINNED_REPOSITORY_QUERY = `query PinnedRepository($repositoryId: ID!, $com
     }
   }
 }`;
-type AdmissionRequest = {
+export type RepositoryProjectAdmissionRequest = {
   namespace: string;
   getConfig: () => OpenClawConfig;
   assertCurrent: () => void;
@@ -57,7 +59,13 @@ type AdmissionRequest = {
   ) => { setupRecipe?: string; recipe?: EnvironmentRecipe } | undefined;
 } & (
   | {
-      repository: { agentId: string; url: string; ref?: string; baseCommit?: string };
+      repository: {
+        agentId: string;
+        url: string;
+        ref?: string;
+        baseCommit?: string;
+        repositorySourceId?: string;
+      };
       expected?: never;
     }
   | { expected: RepositoryWorkerProjectSnapshot; repository?: never }
@@ -76,8 +84,51 @@ function sourceChanged(): never {
   );
 }
 
+/** Cheap retention policy only; source admission still owns current remote access. */
+export function isRepositoryWorkerProjectOwnerCurrent(
+  project: RepositoryWorkerProjectSnapshot,
+  config: OpenClawConfig,
+): boolean {
+  const { agent, identity } = project.source.owner;
+  if (project.source.repositorySourceId) {
+    try {
+      return resolvePluginRepositorySource(
+        project.source.repositorySourceId,
+        project.source.url,
+      ).isWorkerIdentityCurrent({ agentId: agent.agentId, identity });
+    } catch {
+      // A withdrawn/replaced source cannot retain its prepared workers.
+      return false;
+    }
+  }
+  const agentIdentity = resolveConfiguredGitHubToolIdentity({
+    config,
+    agentId: agent.agentId,
+    scope: "agent",
+  });
+  const systemIdentity = resolveConfiguredGitHubToolIdentity({
+    config,
+    agentId: agent.agentId,
+    scope: "system",
+  });
+  const selected = agentIdentity ?? systemIdentity;
+  const selectedSource = agentIdentity ? "agent-override" : "system-configured";
+  return selected
+    ? identity.source === selectedSource &&
+        "profileId" in identity &&
+        identity.profileId === selected.profileId
+    : identity.source === "anonymous" || identity.source === "system-detected";
+}
+
 /** Admit source before capacity selection; credentials remain with this Gateway owner. */
-export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequest) {
+export async function prepareRepositoryWorkerProjectSource(
+  params: RepositoryProjectAdmissionRequest,
+) {
+  if (params.repository?.repositorySourceId || params.expected?.source.repositorySourceId) {
+    return (
+      await import("./repository-source-project-admission.js")
+    ).preparePluginRepositoryWorkerProject(params);
+  }
   const expected = params.expected && readRepositoryWorkerProjectSnapshot(params.expected);
   const request = expected
     ? {

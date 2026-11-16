@@ -1,7 +1,10 @@
 import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
+import { createRepositoryCheckoutTransfer } from "../../plugins/repository-checkout-transfer.js";
+import { resolvePluginRepositorySource } from "../../plugins/repository-sources.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
+import { pluginSourceCredentialReader } from "./repository-source-project-admission.js";
 import {
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
@@ -15,6 +18,7 @@ import type {
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
   repository: SessionRepositoryWorkspaceRecord;
+  repositorySourceId?: string;
   tunnel: WorkerTunnelHandle;
   sessionId: string;
   sessionKey: string;
@@ -59,13 +63,17 @@ export async function syncSessionRepositoryWorkspace(params: {
     );
   }
   params.assertCurrent();
-  const github = prepared
-    ? undefined
-    : await prepareRepositoryGitHubIdentity(params.agentId, params.assertCurrent, {
-        repositoryUrl: repository.url,
-        readNativeCredential: params.readNativeCredential,
-        retainCredentialCleanup: params.retainCredentialCleanup,
-      });
+  const pluginSource = params.repositorySourceId
+    ? resolvePluginRepositorySource(params.repositorySourceId, repository.url)
+    : undefined;
+  const github =
+    prepared || pluginSource
+      ? undefined
+      : await prepareRepositoryGitHubIdentity(params.agentId, params.assertCurrent, {
+          repositoryUrl: repository.url,
+          readNativeCredential: params.readNativeCredential,
+          retainCredentialCleanup: params.retainCredentialCleanup,
+        });
   const assertCurrent = github?.assertSelected ?? params.assertCurrent;
   assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
@@ -85,6 +93,28 @@ export async function syncSessionRepositoryWorkspace(params: {
   };
   const sync = async (checkpoint?: typeof source.checkpoint) => {
     assertCurrent();
+    pluginSource?.assertCurrent();
+    if (pluginSource && !prepared) {
+      const bound = createRepositoryCheckoutTransfer(
+        params.tunnel,
+        {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          generation: params.generation,
+          gitAuthor: params.gitAuthor,
+          source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+        },
+        params.assertCurrent,
+      );
+      await pluginSource.checkoutWorker({
+        readCredential: pluginSourceCredentialReader(params.readNativeCredential),
+        retainCredentialCleanup: params.retainCredentialCleanup,
+        agentId: params.agentId,
+        transfer: bound.transfer,
+        assertCurrent: params.assertCurrent,
+      });
+      return bound.result();
+    }
     const start = () =>
       params.tunnel.syncWorkspace({
         sessionId: params.sessionId,

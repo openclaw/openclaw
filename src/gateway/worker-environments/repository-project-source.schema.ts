@@ -12,6 +12,7 @@ const AgentId = z
   });
 const AccountId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const Identity = z.discriminatedUnion("source", [
+  z.object({ source: z.literal("plugin"), key: z.string().min(1).max(256) }).strict(),
   z.object({ source: z.literal("anonymous") }).strict(),
   z.object({ source: z.literal("system-detected"), accountId: AccountId }).strict(),
   z
@@ -44,6 +45,10 @@ export const RepositoryWorkerProjectSchema = z.object({
     .object({
       kind: z.literal("repository"),
       url: z.string().max(2048),
+      repositorySourceId: z
+        .string()
+        .regex(/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/u)
+        .optional(),
       repositoryId: z
         .string()
         .min(1)

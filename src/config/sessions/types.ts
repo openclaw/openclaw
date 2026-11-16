@@ -385,6 +385,8 @@ type SessionEntryCore = SessionEntryProvenance &
     projectId?: string;
     /** Durable cloud repository owner; never identifies a Gateway filesystem path. */
     repositoryWorkspaceId?: string;
+    /** Exact manifest-declared plugin/source selection; absence retains native repository behavior. */
+    repositorySourceId?: string;
     /** Explicit parent session linkage for dashboard-created child sessions. */
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
@@ -898,6 +900,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.repositoryWorkspaceId !== undefined) {
     next.repositoryWorkspaceId = existing.repositoryWorkspaceId;
+  }
+  if (existing.repositorySourceId !== undefined) {
+    next.repositorySourceId = existing.repositorySourceId;
   }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;

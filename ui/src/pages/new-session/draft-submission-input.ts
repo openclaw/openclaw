@@ -109,11 +109,10 @@ export function prepareDraftSubmission(
     },
     consumeWorktreeName:
       submittedPlacement &&
-      place.captureSubmittedWorktreeName(
-        submittedPlacement,
-        submissionAgentId,
-        Boolean(startup || pendingPlacement),
-      ),
+      place.repositoryState.captureSubmittedName(submittedPlacement, {
+        agentId: submissionAgentId,
+        recovered: Boolean(startup || pendingPlacement),
+      }),
     pendingPlacement,
     message,
     mentions,

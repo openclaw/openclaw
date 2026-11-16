@@ -62,3 +62,17 @@ export {
   readDarwinProcessCommandLine,
   type DarwinProcess,
 } from "../process/darwin-process-inspection.js";
+
+// Repository-source transports run Git with the host's bounded runner, cancellation and
+// managed-checkout maintenance policy; the transport keeps authentication and remote policy.
+export {
+  executeGitCommand,
+  requireGitCommandOutput,
+  type GitCommandOptions,
+} from "../infra/git-exec.js";
+export type { GitOperationStarter } from "../infra/git-network-retry.js";
+export {
+  configureProjectCheckoutMaintenance,
+  projectCheckoutGitEnvironment,
+  runProjectGitCommand,
+} from "../projects/project-checkout-maintenance.js";

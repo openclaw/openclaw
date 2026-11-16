@@ -200,6 +200,8 @@ type SpawnParentRepositorySource = {
   kind: "repository";
   sessionId: string;
   repository: SessionRepositoryWorkspaceRecord;
+  /** The plugin source that admitted the parent's repository; children keep the same owner. */
+  repositorySourceId?: string;
   assertCurrent: SessionSourceAssertion;
 };
 
@@ -235,6 +237,7 @@ async function prepareSpawnParentWorktreeSource(
     "sessionRoot",
     "worktree",
     "repositoryWorkspaceId",
+    "repositorySourceId",
   ] as const;
   const sourceKind = parent.entry.repositoryWorkspaceId
     ? "repository"
@@ -281,7 +284,15 @@ async function prepareSpawnParentWorktreeSource(
       }
     });
     assertCurrent();
-    return { kind: "repository", sessionId: parent.entry.sessionId, repository, assertCurrent };
+    return {
+      kind: "repository",
+      sessionId: parent.entry.sessionId,
+      repository,
+      ...(parent.entry.repositorySourceId
+        ? { repositorySourceId: parent.entry.repositorySourceId }
+        : {}),
+      assertCurrent,
+    };
   }
   if (!parent.entry.worktree) {
     const projectId = normalizeOptionalString(parent.entry.projectId);

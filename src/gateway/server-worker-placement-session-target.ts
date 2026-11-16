@@ -277,7 +277,11 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   expectedTarget?: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>;
   expectedEntry?: Pick<
     InternalSessionEntry,
-    "lifecycleRevision" | "worktree" | "repositoryWorkspaceId" | "deviceFolder"
+    | "lifecycleRevision"
+    | "worktree"
+    | "repositoryWorkspaceId"
+    | "repositorySourceId"
+    | "deviceFolder"
   >;
   entryMatches?: (
     before: InternalSessionEntry | undefined,
@@ -326,6 +330,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         before?.archivedAt === after?.archivedAt &&
         before?.worktree?.id === after?.worktree?.id &&
         before?.repositoryWorkspaceId === after?.repositoryWorkspaceId &&
+        before?.repositorySourceId === after?.repositorySourceId &&
         before?.deviceFolder?.deviceId === after?.deviceFolder?.deviceId &&
         before?.deviceFolder?.path === after?.deviceFolder?.path &&
         (params.entryMatches?.(before, after) ?? true),
@@ -369,6 +374,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         (initialEntry.lifecycleRevision !== params.expectedEntry.lifecycleRevision ||
           initialEntry.worktree?.id !== params.expectedEntry.worktree?.id ||
           initialEntry.repositoryWorkspaceId !== params.expectedEntry.repositoryWorkspaceId ||
+          initialEntry.repositorySourceId !== params.expectedEntry.repositorySourceId ||
           initialEntry.deviceFolder?.deviceId !== params.expectedEntry.deviceFolder?.deviceId ||
           initialEntry.deviceFolder?.path !== params.expectedEntry.deviceFolder?.path))
     ) {
@@ -385,6 +391,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       archivedAt: initialEntry.archivedAt,
       worktreeId: initialEntry.worktree?.id,
       repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
+      repositorySourceId: initialEntry.repositorySourceId,
       deviceFolder: initialEntry.deviceFolder,
     };
     const acceptWorktree = captureWorktreeRegistryReadGuard(
@@ -435,6 +442,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         entry.archivedAt !== initialIdentity.archivedAt ||
         entry.worktree?.id !== initialIdentity.worktreeId ||
         entry.repositoryWorkspaceId !== initialIdentity.repositoryWorkspaceId ||
+        entry.repositorySourceId !== initialIdentity.repositorySourceId ||
         entry.deviceFolder?.deviceId !== initialIdentity.deviceFolder?.deviceId ||
         entry.deviceFolder?.path !== initialIdentity.deviceFolder?.path
       ) {
@@ -472,7 +480,11 @@ export async function resolveWorkerPlacementSessionTarget(params: {
           target,
           entry,
           worktree: undefined,
-          workspace: { kind: "repository", repository } satisfies WorkerSessionWorkspace,
+          workspace: {
+            kind: "repository",
+            repository,
+            ...(entry.repositorySourceId ? { repositorySourceId: entry.repositorySourceId } : {}),
+          } satisfies WorkerSessionWorkspace,
         };
       }
       assertWorktreeCurrent();

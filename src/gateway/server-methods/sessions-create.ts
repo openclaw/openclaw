@@ -58,11 +58,11 @@ import {
   isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
 import {
-  normalizeSessionProjectGitUrl,
+  pendingSessionRepositoryIntent,
   resolveRequestedSessionProject,
+  resolveSessionCreateProjectSelection,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
-  validateSessionWorktreeSelection,
 } from "./session-create-project.js";
 import {
   assertRequiredWorkerSessionCreateCurrent,
@@ -113,6 +113,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return respond(false, undefined, uploadError);
     }
     const p = structuredClone(params);
+    const repositorySelection = resolveSessionCreateProjectSelection(p);
+    if (!repositorySelection.ok) {
+      return respond(false, undefined, repositorySelection.error);
+    }
     const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
     if (requiredWorker.error) {
       return respond(false, undefined, requiredWorker.error);
@@ -125,10 +129,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ? { ...client.internal.operatorRoleActor }
       : undefined;
     const emptyWorkspace = p.worktreeSource === "empty";
-    const worktreeSelectionError = validateSessionWorktreeSelection(p);
-    if (worktreeSelectionError) {
-      return respond(false, undefined, worktreeSelectionError);
-    }
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
     const creation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
     if (p.surface && creation.via !== "operator") {
@@ -197,6 +197,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     // that committed session under its retained request and session authority.
     const deviceFolderAuthority: { assertCurrent?: () => void } = {};
     const commitGuard = () => {
+      repositorySelection.value?.assertCurrent();
       assertSessionCreateCurrent();
       // Agent-created sessions fence the requesting tool at commit only; once committed,
       // the session owns its opening input and run even if that tool stops.
@@ -311,13 +312,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     const requestedProjectId = normalizeOptionalString(p.projectId);
-    const requestedProjectGitUrl = p.projectGitUrl;
     const projectPreparationError = validateSessionProjectPreparation({
       cwd: requestedCwd,
       execNode: requestedExecNode,
-      gitUrl: requestedProjectGitUrl,
+      gitUrl: p.projectGitUrl,
       hasInitialTurn,
       projectId: requestedProjectId,
+      repositorySourceId: p.repositorySource,
     });
     if (projectPreparationError) {
       respond(false, undefined, projectPreparationError);
@@ -363,7 +364,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const projectRoot = requestedProject.value.root;
-    if (requestedProject.value.worktree || requestedProjectGitUrl) {
+    if (requestedProject.value.worktree || p.projectGitUrl) {
       p.worktree = true;
     }
     const deferWorktree =
@@ -444,7 +445,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !emptyWorkspace &&
         !projectRoot &&
         !requestedCwd &&
-        !requestedProjectGitUrl &&
+        !p.projectGitUrl &&
         spawnRequesterSessionKey &&
         spawnRequesterSessionKey === parentSessionKey &&
         sessionCreation.actor?.type === "agent" &&
@@ -457,7 +458,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           inheritParentKey: inheritParentWorktree ? spawnRequesterSessionKey : undefined,
           projectRequester: projectRequesterForClient(client),
           repositoryMutations: context.workerRepositoryWorkspaceMutationService,
-          projectGitUrl: requestedProjectGitUrl,
+          projectGitUrl: p.projectGitUrl,
           name: normalizeOptionalString(p.worktreeName),
           baseRef: worktreeBaseRef,
           deferWorktree,
@@ -514,7 +515,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       fastMode: p.fastMode,
       projectId: requestedProjectId,
       deviceFolder,
-      pendingProjectGitUrl: normalizeSessionProjectGitUrl(requestedProjectGitUrl),
+      ...pendingSessionRepositoryIntent(p, repositorySelection.value),
       incognito: p.incognito,
       ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
       ...(requestingOperatorProfileId ? { requestingOperatorProfileId } : {}),
@@ -599,7 +600,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         await prepareRequiredWorkerCreatedSession({
           requiredProfile,
           pendingWorktree: Boolean(preparedWorktree?.pendingWorktree),
-          requestedProjectGitUrl,
+          requestedProjectGitUrl: p.projectGitUrl,
           prepare: context.workerPlacementDispatchService?.withRequiredSession,
           session,
           assertCurrent: assertSessionCreateCurrent,

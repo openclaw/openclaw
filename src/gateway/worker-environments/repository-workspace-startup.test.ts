@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createGitHubReadIdentity } from "../../agents/github-read-identity.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
+import { performRepositoryCheckout } from "../../plugins/repository-checkout-transfer.js";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -219,6 +221,52 @@ async function fixture(runSetupScript = false, preparedNode = false) {
     },
   };
 }
+
+it("uses an exact plugin-owned checkout transfer and retains native checkpoint acceptance", async () => {
+  const f = await fixture();
+  const plugin = createRepositorySourceFixture({
+    id: "remote",
+    resolve: (url) => (url === f.repository.url ? { url, name: "project" } : undefined),
+    prepare: async () => {
+      throw new Error("Cloud checkout must not materialize on the Gateway");
+    },
+    worker: {
+      prepare: async () => {
+        throw new Error("Cold checkout does not prepare capacity");
+      },
+      async checkout({ transfer, assertCurrent }) {
+        const credential = {
+          token: "synthetic-plugin-git-token",
+          assertCurrent,
+          start: async <T>(run: () => Promise<T>) => await run(),
+        };
+        await performRepositoryCheckout(transfer, credential);
+        await expect(performRepositoryCheckout(transfer, credential)).rejects.toThrow(
+          "no longer available",
+        );
+      },
+    },
+  });
+
+  const synced = await plugin.run(() => f.start({ repositorySourceId: plugin.id }));
+
+  expect(synced.mode).toBe("repository");
+  const accepted = await f.store.get(f.repository.workspaceId);
+  expect(accepted?.checkpointRef).toBeTruthy();
+  expect(accepted?.baseCommit).toBe(f.baseCommit);
+  expect(JSON.stringify(accepted)).not.toContain("synthetic-plugin-git-token");
+  expect(prepareRepositoryGitHubIdentity).not.toHaveBeenCalled();
+  expect(f.syncWorkspace).toHaveBeenCalledTimes(1);
+  expect(f.syncWorkspace.mock.calls[0]?.[0].source).toMatchObject({
+    gitToken: "synthetic-plugin-git-token",
+  });
+  await plugin.instance.dispose();
+  f.syncWorkspace.mockClear();
+  await expect(plugin.run(() => f.start({ repositorySourceId: plugin.id }))).rejects.toThrow(
+    "reloaded or disabled",
+  );
+  expect(f.syncWorkspace).not.toHaveBeenCalled();
+});
 
 it("accepts the initial SQLite and bare Git checkpoint before sync can finish or resume the worker", async () => {
   const f = await fixture(true);
