@@ -108,6 +108,13 @@ describe("createTeamsReplyStreamController", () => {
     });
   });
 
+  it("holds an unfinished line that could become a table header", () => {
+    const stream = makeStream();
+    const ctrl = makeController(stream);
+    ctrl.onPartialReply({ text: "Totals:\nName | Ag" });
+    expect(stream.emit.mock.calls).toEqual([["Totals:"]]);
+  });
+
   it("holds a nested fence until the outer fence closes", () => {
     const stream = makeStream();
     const ctrl = makeController(stream);

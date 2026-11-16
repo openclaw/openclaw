@@ -41,7 +41,8 @@ function hasUnstreamedContent(payload: ReplyPayload): boolean {
 // become a block (list, heading, quote, table), and inline markup must be closed. Cut at
 // the last word boundary where code, emphasis, strikethrough, and link syntax balance.
 function streamablePartialLineLength(line: string): number {
-  if (!/^[\p{L}"'({$]/u.test(line)) {
+  // A line with a pipe can turn out to be a table header once the next line arrives.
+  if (!/^[\p{L}"'({$]/u.test(line) || line.includes("|")) {
     return 0;
   }
   let safe = 0;
