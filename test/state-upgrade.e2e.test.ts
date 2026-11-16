@@ -9,12 +9,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
 import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
+import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
 import { ChainStepError } from "../src/state/state-upgrade-validate.js";
-import {
-  createDoctorChain,
-  UPGRADE_REPORT_SCOPE,
-  upgradeStateDirectory,
-} from "../src/state/state-upgrade.js";
+import { upgradeStateDirectory } from "../src/state/state-upgrade.js";
 import { VERSION } from "../src/version.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
@@ -252,7 +249,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
             (
               state
                 .prepare("SELECT payload_json FROM diagnostic_events WHERE scope = ?")
-                .get(UPGRADE_REPORT_SCOPE) as { payload_json: string }
+                .get("upgrade.report") as { payload_json: string }
             ).payload_json,
           );
           expect(report).toMatchObject(

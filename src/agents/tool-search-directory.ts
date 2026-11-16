@@ -8,10 +8,10 @@ import {
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
   resolveCatalog,
-  toolSchemaDirectoryPromptCache,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { getToolSearchCatalogDescriptors } from "./tool-search-prepared-catalog.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -98,7 +98,7 @@ export function buildToolSchemaDirectoryPrompt(
     ? options.usageRanking
     : undefined;
   const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}:${usageRanking ? JSON.stringify(usageRanking) : ""}`;
-  let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
+  const { prompts: cachedPrompts } = getToolSearchCatalogDescriptors(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
   if (cachedPrompt !== undefined) {
@@ -113,10 +113,6 @@ export function buildToolSchemaDirectoryPrompt(
   );
   if (options?.allowedIds) {
     return prompt;
-  }
-  if (!cachedPrompts) {
-    cachedPrompts = new Map<string, string>();
-    toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
   }
   cachedPrompts.set(cacheKey, prompt);
   pruneMapToMaxSize(cachedPrompts, 12);
@@ -563,16 +559,12 @@ export function buildMcpToolSearchDirectory(
   const cacheKey = ranking
     ? `${MCP_TOOL_DIRECTORY_CACHE_KEY}:${JSON.stringify(ranking)}`
     : MCP_TOOL_DIRECTORY_CACHE_KEY;
-  let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
+  const { prompts: cachedPrompts } = getToolSearchCatalogDescriptors(catalog.entries);
   const cached = cachedPrompts?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   const directory = formatMcpToolDirectory(catalog.entries, ranking);
-  if (!cachedPrompts) {
-    cachedPrompts = new Map<string, string>();
-    toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
-  }
   cachedPrompts.set(cacheKey, directory);
   pruneMapToMaxSize(cachedPrompts, 12);
   return directory;

@@ -15,6 +15,7 @@ import {
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import type { ProviderConfigInput } from "../sessions/model-registry.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import {
   applyExtraParamsToAgentMock,
   buildConfiguredAgentSystemPromptMock,
@@ -785,6 +786,8 @@ describe("direct compactor through the context-engine delegate", () => {
         if (trigger === "manual") {
           const { prepareGatewaySessionCompaction } =
             await import("../../gateway/server-methods/sessions-compaction-runner.js");
+          const { isOwnedTranscriptPayload } =
+            await import("../../config/sessions/transcript-json.js");
           const entry = accessor.loadSessionEntry(fixture.target);
           if (!entry) {
             throw new Error("expected the compaction fixture session");
@@ -799,14 +802,16 @@ describe("direct compactor through the context-engine delegate", () => {
             storePath: fixture.target.storePath,
           });
           preparedSession = prepared.preparedSession;
-          expect(preparedSession?.sessionManager.getBranch()).toEqual(
+          const branch =
+            preparedSession?.sessionManager[sessionManagerReadTranscriptBranch]() ?? [];
+          expect(branch).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ type: "compaction", summary: previousSummary }),
             ]),
           );
-          expect(
-            preparedSession?.sessionManager.getBranch().filter((event) => event.type === "message"),
-          ).toHaveLength(7);
+          const messages = branch.filter((event) => event.type === "message");
+          expect(messages).toHaveLength(7);
+          expect(messages.every(({ message }) => isOwnedTranscriptPayload(message))).toBe(true);
         }
         const result = await compactQueued(
           { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
