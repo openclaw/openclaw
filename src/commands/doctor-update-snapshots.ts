@@ -2,14 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
 // Cleanup I/O failures retire snapshots under npm's dashed disposable-name form.
 const SNAPSHOT_NAME = /^\.openclaw[.-]package-backup-.*\.databases$/u;
+// Package installs keep PostgreSQL captures taken while the Gateway served under the capture root.
+const ONLINE_SNAPSHOT_NAME = /^online-.*\.databases$/u;
 const MAX_ROOT_ENTRIES = 1024;
 const MAX_SIZE_ENTRIES = 4096;
 const MAX_DEPTH = 32;
@@ -30,33 +34,33 @@ export async function collectUpdateSnapshotHealthFindings(
   const layout = packageRoot
     ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(path.dirname(packageRoot))
     : null;
-  if (!layout) {
-    return [];
-  }
+  const roots: [string, RegExp][] = [
+    ...(layout ? [[layout.globalRoot, SNAPSHOT_NAME] as [string, RegExp]] : []),
+    [resolveUpdateCaptureRoot(resolveStateDir(env)), ONLINE_SNAPSHOT_NAME],
+  ];
 
   const deadline = performance.now() + SCAN_BUDGET_MS;
   const directories: string[] = [];
   let partial = false;
   let rootEntries = 0;
-  try {
-    const root = await fs.opendir(layout.globalRoot);
-    for await (const entry of root) {
-      if (++rootEntries > MAX_ROOT_ENTRIES || performance.now() > deadline) {
-        partial = true;
-        break;
+  for (const [rootPath, name] of roots) {
+    try {
+      const root = await fs.opendir(rootPath);
+      for await (const entry of root) {
+        if (++rootEntries > MAX_ROOT_ENTRIES || performance.now() > deadline) {
+          partial = true;
+          break;
+        }
+        if (entry.isDirectory() && name.test(entry.name)) {
+          directories.push(path.join(rootPath, entry.name));
+        }
       }
-      if (entry.isDirectory() && SNAPSHOT_NAME.test(entry.name)) {
-        directories.push(path.join(layout.globalRoot, entry.name));
-      }
+    } catch (error) {
+      partial ||= !hasErrnoCode(error, "ENOENT");
     }
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return [];
-    }
-    partial = true;
   }
   if (directories.length === 0) {
-    return partial
+    return partial && layout
       ? [
           {
             checkId: "core/doctor/update-snapshots",
