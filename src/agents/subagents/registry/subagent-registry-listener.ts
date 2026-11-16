@@ -5,6 +5,7 @@ import {
 } from "../../../infra/agent-events.js";
 import {
   isGatewayRestartDraining,
+  runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
@@ -77,10 +78,19 @@ export function createSubagentRegistryListener(config: {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
-      // Own lifecycle writes before their first await.
-      void runWithGatewayIndependentRootWorkContinuation(async () => {
+      // Retain the event's owner before waiting for admission, not the emitter's lifetime.
+      const lifecycleGeneration = evt.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+      const context = captureOpenClawStateWorkerContext();
+      let entry = runs.get(evt.runId);
+      void runWithGatewayDetachedWorkContinuation(async () => {
+        if (
+          !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+          (entry && !isSameSubagentRunOwner(runs.get(evt.runId), entry))
+        ) {
+          return;
+        }
+        assertSubagentRegistryWriteSourceCurrent(context);
         const phase = evt.data?.phase;
-        let entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {
             const sessionKey = evt.sessionKey;
@@ -89,9 +99,7 @@ export function createSubagentRegistryListener(config: {
           }
           return;
         }
-        const lifecycleGeneration = getAgentEventLifecycleGeneration();
         const runId = entry.runId;
-        const context = captureOpenClawStateWorkerContext();
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         const assertCurrent = () => {
           assertSubagentRegistryWriteSourceCurrent(context);

@@ -4,6 +4,7 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../prepared-model-runtime-generation-scope.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { markRequesterSettleWakePending } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -104,19 +105,21 @@ export async function completeCleanupBookkeeping(
     }
     if (!cleanupParams.provisionalKill && (options.isDeleteCleanup || !entry.collect)) {
       runCleanupTail("context-engine cleanup", () =>
-        params.notifyContextEngineSubagentEnded(
-          {
-            childSessionKey: entry.childSessionKey,
-            reason: options.isDeleteCleanup ? "deleted" : "completed",
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspaceDir,
-          },
-          {
-            isCurrent: postBookkeepingEffectsAllowed,
-            prepareCurrent: async () =>
-              !(await context.shouldSuppressSessionEffects(entry)) &&
-              postBookkeepingEffectsAllowed(),
-          },
+        runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+          params.notifyContextEngineSubagentEnded(
+            {
+              childSessionKey: entry.childSessionKey,
+              reason: options.isDeleteCleanup ? "deleted" : "completed",
+              agentDir: entry.agentDir,
+              workspaceDir: entry.workspaceDir,
+            },
+            {
+              isCurrent: postBookkeepingEffectsAllowed,
+              prepareCurrent: async () =>
+                !(await context.shouldSuppressSessionEffects(entry)) &&
+                postBookkeepingEffectsAllowed(),
+            },
+          ),
         ),
       );
     }
