@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as notes from "../../packages/terminal-core/src/note.js";
-import { resolveNodeServiceIdentityEnvironment } from "../daemon/constants.js";
+import {
+  resolveNodeLaunchAgentLabel,
+  resolveNodeServiceIdentityEnvironment,
+} from "../daemon/constants.js";
 import * as futureConfig from "../daemon/future-config-guard.js";
 import * as launchdCurrent from "../daemon/launchd-current-service.js";
 import * as launchdExec from "../daemon/launchd-exec.js";
@@ -46,10 +49,13 @@ const isolatedEnvKeys = [
 const bootstrapped = () => native.exec.mock.calls.some(([args]) => args[0] === "bootstrap");
 
 async function writeDefinition(entry = "index.js", customPolicy = false) {
-  const env = { ...process.env, ...resolveNodeServiceIdentityEnvironment() };
+  const identity = resolveNodeServiceIdentityEnvironment(process.env);
+  const env = { ...process.env, ...identity };
+  const label = resolveNodeLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+  plist = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const { stdoutPath } = resolveGatewaySupervisorLogPaths(env);
   original = buildLaunchAgentPlist({
-    label: "ai.openclaw.node",
+    label,
     programArguments: [
       process.execPath,
       "--no-warnings",
@@ -60,7 +66,7 @@ async function writeDefinition(entry = "index.js", customPolicy = false) {
     environment: {
       HOME: home,
       OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-      ...resolveNodeServiceIdentityEnvironment(),
+      ...identity,
       CUSTOM_NODE_SETTING: "preserved",
     },
     stdoutPath,
@@ -182,6 +188,52 @@ it.each([
   expect(after?.environment).toEqual(before?.environment);
   expect(native.loaded).toBe(loaded);
   expect(bootstrapped()).toBe(loaded);
+});
+
+it.each(["deferred", "custom-policy"] as const)(
+  "keeps the named node profile in %s recovery commands",
+  async (condition) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw-work"));
+    if (condition === "deferred") {
+      vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
+    }
+    await writeDefinition("index.js", condition === "custom-policy");
+
+    await repair();
+
+    expect(notes.note).toHaveBeenCalledWith(
+      expect.stringContaining("Run openclaw --profile work doctor --fix to repair it."),
+      "Node service",
+    );
+    if (condition === "custom-policy") {
+      expect(notes.note).toHaveBeenCalledWith(
+        expect.stringContaining("Reinstall with openclaw --profile work node install --force"),
+        "Node service",
+      );
+    }
+    expect(await fs.readFile(plist, "utf8")).toBe(original);
+    expect(bootstrapped()).toBe(false);
+  },
+);
+
+it("keeps the named node profile in the repaired stopped-service start command", async () => {
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw-work"));
+  native.loaded = false;
+  await writeDefinition();
+
+  await repair();
+
+  expect(notes.note).toHaveBeenCalledWith(
+    expect.stringContaining("Run openclaw --profile work node start when ready."),
+    "Node service",
+  );
+  expect(native.loaded).toBe(false);
+  expect(bootstrapped()).toBe(false);
+  expect((await resolveNodeService().readCommand(process.env))?.programArguments).toContain(
+    path.join(packageRoot, "openclaw.mjs"),
+  );
 });
 
 it("preserves the previous definition when native activation fails", async () => {

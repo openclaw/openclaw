@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { isDefaultInstallIdentity, resolveIsNixMode } from "../config/paths.js";
 import { resolveNodeServiceIdentityEnvironment } from "../daemon/constants.js";
 import { resolveNodeService } from "../daemon/node-service.js";
@@ -54,7 +55,7 @@ export async function maybeRepairNodeServiceConfig(
       return;
     }
     note(
-      "Node service bypasses the node-host launcher, so automatic node updates cannot start. Run openclaw doctor --fix to repair it.",
+      `Node service bypasses the node-host launcher, so automatic node updates cannot start. Run ${formatCliCommand("openclaw doctor --fix", env)} to repair it.`,
       "Node service",
     );
     if (isServiceRepairDeferred(resolveServiceRepairPolicy(env))) {
@@ -113,7 +114,7 @@ export async function maybeRepairNodeServiceConfig(
     // Leave customized definitions with their owner instead of silently resetting those settings.
     if (driftError || drift.some((fact) => fact.kind !== "outdated")) {
       note(
-        "Node service has custom or unverified native settings. Reinstall with openclaw node install --force after preserving those settings; it was left unchanged.",
+        `Node service has custom or unverified native settings. Reinstall with ${formatCliCommand("openclaw node install --force", env)} after preserving those settings; it was left unchanged.`,
         "Node service",
       );
       return;
@@ -177,7 +178,7 @@ export async function maybeRepairNodeServiceConfig(
     } else {
       await service.stage(args);
       note(
-        "Node service launcher repaired; its stopped state was preserved. Run openclaw node start when ready.",
+        `Node service launcher repaired; its stopped state was preserved. Run ${formatCliCommand("openclaw node start", env)} when ready.`,
         "Node service",
       );
     }
