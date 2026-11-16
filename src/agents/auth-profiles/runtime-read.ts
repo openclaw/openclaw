@@ -47,10 +47,7 @@ import {
   readSharedAuthProfileRows,
   readUserModelAuthProfileAsync,
 } from "./sqlite-read.js";
-import {
-  resolveAuthProfileDatabasePath as resolveAgentAuthPath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "./sqlite.js";
+import { resolveAuthProfileDatabasePath as resolveAgentAuthPath } from "./sqlite.js";
 import type { AuthProfileReadSource } from "./store.worker-contract.js";
 import type { AuthProfileStore, AuthProfileRowRead } from "./types.js";
 
@@ -124,7 +121,7 @@ type AsyncAuthProfileStoreOptions = Omit<
 >;
 
 type AuthProfileRowsReader = Pick<
-  ReturnType<typeof prepareAgentAuthProfileRowsRead>,
+  Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>,
   "read" | "assertCurrent"
 >;
 
@@ -231,24 +228,28 @@ export function createAuthProfileStoreRuntimeReader({
     }
     const legacySharedPath = resolveAgentAuthPath(resolveSharedMainAuthAgentDir(env));
     const agentReads = new Map(
-      [
-        ...new Set([
-          ...(needsSharedStore ? [legacySharedPath] : []),
-          ...(effectiveAgentDir ? [resolveAgentAuthPath(effectiveAgentDir)] : []),
-          ...(effectiveAgentDir && inheritedAuthDir
-            ? [resolveAgentAuthPath(inheritedAuthDir)]
-            : []),
-        ]),
-      ].map((databasePath) => [
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-          env,
-        }),
-      ]),
+      await Promise.all(
+        [
+          ...new Set([
+            ...(needsSharedStore ? [legacySharedPath] : []),
+            ...(effectiveAgentDir ? [resolveAgentAuthPath(effectiveAgentDir)] : []),
+            ...(effectiveAgentDir && inheritedAuthDir
+              ? [resolveAgentAuthPath(inheritedAuthDir)]
+              : []),
+          ]),
+        ].map(
+          async (databasePath) =>
+            [
+              databasePath,
+              await prepareAgentAuthProfileRowsRead({
+                databasePath,
+                env,
+              }),
+            ] as const,
+        ),
+      ),
     );
-    // Capture every selected source before yielding, including an absent inherited database.
+    // Each source captures revocation before its cold filesystem admission yields.
     const credentialProfileId =
       profileId && !isUserModelAuthProfileId(profileId) ? profileId : undefined;
     const credentialAuthorities = new Map(
