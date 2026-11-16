@@ -1,11 +1,15 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { cancelRetainedCodexNativeThreadCommands } from "./native-process-authority.js";
 import type { NativeDescendantCancellationResult } from "./native-subagent-monitor-types.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import { isSameCodexAppServerThreadOwner } from "./thread-ownership.js";
 
-/** Stop owns admitted descendants, without retiring the session or its native history. */
+/**
+ * Stop owns admitted descendants and, for session-wide Stop, native commands its
+ * finished turns left running, without retiring the session or its native history.
+ */
 export async function withCodexSessionDescendantCancellation<T>(
   bindingStore: CodexAppServerBindingStore,
   params: Parameters<NonNullable<AgentHarness["withDescendantCancellation"]>>[0],
@@ -43,10 +47,38 @@ export async function withCodexSessionDescendantCancellation<T>(
     if (!lease) {
       return run(async () => ({ killed: 0, cancelledRequesters: [] }));
     }
+    const client = lease.client;
     return await codexNativeSubagentMonitorRuntime.withDescendantCancellation(
-      lease.client,
+      client,
       { ...params, parentThreadId: binding.threadId, assertBindingCurrent },
-      run,
+      (cancel) =>
+        run(async () => {
+          const descendants = await cancel();
+          // Run-scoped Stop leaves other turns' retained work with its own owners.
+          if (params.requesterTurnRunId !== undefined) {
+            return descendants;
+          }
+          try {
+            const commands = await cancelRetainedCodexNativeThreadCommands(
+              client,
+              binding.threadId,
+              params.acceptsRequest,
+              () => {
+                params.assertCurrent();
+                assertBindingCurrent();
+              },
+            );
+            return {
+              ...descendants,
+              killed: descendants.killed + commands.killed,
+              ...((descendants.errors?.length || commands.errors.length) && {
+                errors: [...(descendants.errors ?? []), ...commands.errors],
+              }),
+            };
+          } catch (error) {
+            return { ...descendants, errors: [...(descendants.errors ?? []), error] };
+          }
+        }),
     );
   } finally {
     await lease?.release();

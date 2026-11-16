@@ -32,6 +32,10 @@ import {
   getCodexInferenceThread,
   getCodexInferenceThreadQualification,
 } from "./inference-routing.js";
+import {
+  formatCodexNativeThreadHolders,
+  listCodexNativeThreadHolders,
+} from "./native-process-authority.js";
 import { attestCodexThreadToolSurface } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
@@ -44,7 +48,10 @@ import {
   fingerprintCodexThreadConfig,
   fingerprintRestrictedThreadConfig,
 } from "./thread-fingerprints.js";
-import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
+import {
+  codexThreadLifecycleAbortError,
+  CodexThreadBindingConflictError,
+} from "./thread-lifecycle-errors.js";
 import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
@@ -101,21 +108,6 @@ export function throwIfCodexThreadLifecycleAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw codexThreadLifecycleAbortError(signal);
   }
-}
-
-// Converts an aborted lifecycle signal into the error its caller observes.
-function codexThreadLifecycleAbortError(signal: AbortSignal): Error {
-  const reason = signal.reason;
-  if (reason instanceof Error) {
-    return reason;
-  }
-  const error = new Error(
-    typeof reason === "string" && reason.length > 0
-      ? reason
-      : "codex app-server thread lifecycle aborted",
-  );
-  error.name = "AbortError";
-  return error;
 }
 
 /** Releases consumed subscription ownership or retires an unsafe client. */
@@ -250,17 +242,20 @@ export async function releaseCodexBoundLiveThread(
     const claimed = isCodexAppServerLiveThreadClaimed(client, options.threadId);
     const protectedWork = isCodexAppServerLiveThreadProtected(client, options.threadId);
     if (claimed || protectedWork) {
+      const holders = listCodexNativeThreadHolders(client, options.threadId);
       embeddedAgentLog.debug("codex app-server retained thread release blocked", {
         threadId: options.threadId,
         changedClient: Boolean(changedClient),
         claimed,
         protected: protectedWork,
         backgroundOnly: isCodexAppServerLiveThreadBackgroundOnly(client, options.threadId),
+        nativeCommands: holders.length,
       });
       throw new AgentHarnessPreflightError(
-        options.waitForBackgroundCleanup && !claimed && protectedWork
+        (options.waitForBackgroundCleanup && !claimed && protectedWork
           ? `Codex thread ${options.threadId} still has background work after waiting for cleanup; stop its running work and retry.`
-          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
+          : `Codex thread ${options.threadId} is claimed by active work; stop it first.`) +
+          formatCodexNativeThreadHolders(holders),
       );
     }
     released = await releaseCodexRetainedLiveThread({
