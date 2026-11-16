@@ -338,7 +338,12 @@ export function createCronPromptExecutor(
             model: modelOverride,
           });
         // A fallback or runtime switch needs its own capability proof; retries reuse that selection.
-        const thinkingSelectionKey = `${providerOverride}/${modelOverride}\0${candidateRuntime}`;
+        const thinkingAuthProfileId =
+          runOptions.authProfileId ??
+          (providerOverride === params.liveSelection.provider
+            ? params.liveSelection.authProfileId
+            : undefined);
+        const thinkingSelectionKey = `${providerOverride}/${modelOverride}\0${candidateRuntime}\0${thinkingAuthProfileId ?? ""}`;
         if (
           (candidateConfiguredThinkLevel !== "off" || candidateRuntime !== "openclaw") &&
           hydratedThinkingSelection !== thinkingSelectionKey
@@ -348,6 +353,7 @@ export function createCronPromptExecutor(
             providerOverride,
             modelOverride,
             candidateRuntime,
+            thinkingAuthProfileId,
           );
           thinkingCatalog = runtimeCatalog.length > 0 ? runtimeCatalog : thinkingCatalog;
         }

@@ -130,6 +130,7 @@ async function resolveCronThinkingCatalog(params: {
   provider: string;
   model: string;
   agentRuntime: string;
+  authProfileId?: string;
 }): Promise<ModelCatalogEntry[]> {
   const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
   const selected = findModelInCatalog(catalog, params.provider, params.model);
@@ -146,6 +147,7 @@ async function resolveCronThinkingCatalog(params: {
     provider: params.provider,
     model: params.model,
     agentRuntime: params.agentRuntime,
+    authProfileId: params.authProfileId,
     agentId: params.owner.agentId,
     agentDir: params.owner.agentDir,
     workspaceDir: params.owner.workspaceDir,
@@ -169,6 +171,7 @@ export async function resolveCronThinkingSelection(params: {
   provider: string;
   model: string;
   agentRuntime: string;
+  authProfileId?: string;
   jobThinking?: string;
   hookThinking?: string;
   sessionThinking?: string;
@@ -192,8 +195,19 @@ export async function resolveCronThinkingSelection(params: {
   return {
     catalog,
     immutableThinkLevel,
-    loadThinkingCatalog: async (provider: string, model: string, agentRuntime: string) =>
-      await resolveCronThinkingCatalog({ owner: params.owner, provider, model, agentRuntime }),
+    loadThinkingCatalog: async (
+      provider: string,
+      model: string,
+      agentRuntime: string,
+      authProfileId?: string,
+    ) =>
+      await resolveCronThinkingCatalog({
+        owner: params.owner,
+        provider,
+        model,
+        agentRuntime,
+        authProfileId,
+      }),
     requestedThinkLevel,
   };
 }

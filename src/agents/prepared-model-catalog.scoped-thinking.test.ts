@@ -280,13 +280,22 @@ it.each(["ready", "retired", "failure"] as const)(
       isCurrent: () => current,
       loadNativeModelCatalog,
     };
-    const result = readAdmitted(admitted, { agentRuntime: "native-one" });
+    const result = readAdmitted(admitted, {
+      agentRuntime: "native-one",
+      authProfileId: "fixture:selected-account",
+    });
     if (outcome === "failure") {
       await expect(result).rejects.toBe(failure);
     } else {
       await expect(result).resolves.toEqual([native]);
     }
     expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+    expect(loadNativeModelCatalog).toHaveBeenCalledWith({
+      provider: entry.provider,
+      modelId: entry.id,
+      runtime: "native-one",
+      authProfileId: "fixture:selected-account",
+    });
     expect(preparedSnapshotMock).not.toHaveBeenCalled();
   },
 );

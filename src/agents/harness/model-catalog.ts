@@ -71,6 +71,7 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   /** Concrete runtime already selected for a turn; omitted for configured inventory reads. */
   agentRuntime?: string;
+  authProfileId?: string;
   nativeSelection?: PreparedNativeModelSelection;
   snapshot: ModelCatalogSnapshot;
   /** Current route and donor facts stay separate from retained raw inventory. */
@@ -209,6 +210,10 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
+        ...(runtime === defaultRuntime &&
+        (params.nativeSelection?.authProfileId ?? params.authProfileId)
+          ? { authProfileId: params.nativeSelection?.authProfileId ?? params.authProfileId }
+          : {}),
         configuredModelRefs,
       });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
@@ -357,6 +362,7 @@ export function isPreparedNativeModelCatalogReady(params: {
       !harness?.readModelCatalogReadiness ||
       harness.readModelCatalogReadiness({
         ...(scope ??= preparedHarnessCatalogScope(params.input)),
+        ...(selection?.authProfileId ? { authProfileId: selection.authProfileId } : {}),
         provider: entry.provider,
         modelId: entry.id,
       }) !== undefined

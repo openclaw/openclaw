@@ -59,6 +59,7 @@ function codexAppServerModelsToCatalogEntries(
 export function createCodexAppServerModelCatalog(runtime: string) {
   type Observation = {
     pluginConfig: unknown;
+    authProfileId?: string;
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
     authMode?: string;
@@ -80,6 +81,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       return !disposed &&
         params.provider === "openai" &&
         observation !== undefined &&
+        observation.authProfileId === params.authProfileId &&
         observation.pluginConfig === pluginConfig &&
         observation.models?.has(params.modelId) &&
         observation.accountType &&
@@ -103,7 +105,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         scopes.set(params.config, observations);
       }
       const key = scopeKey(params);
-      const observation: Observation = { pluginConfig };
+      // Core publishes one latest native catalog per scope. Keep its readiness tied
+      // to that same account, rather than retaining A's readiness after B replaces rows.
+      const observation: Observation = { pluginConfig, authProfileId: params.authProfileId };
       // Revoke before any await, including failed/disabled refreshes and superseded reads.
       observations.set(key, observation);
       const configured = readCodexPluginConfig(pluginConfig);
@@ -119,10 +123,15 @@ export function createCodexAppServerModelCatalog(runtime: string) {
           ? await resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
+              authProfileId: params.authProfileId,
             })
           : undefined;
       const authProfileId = authProfileStore
-        ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
+        ? resolveCodexAppServerAuthProfileId({
+            store: authProfileStore,
+            config: params.config,
+            authProfileId: params.authProfileId,
+          })
         : undefined;
       // SIWC's public provider owns the account model list. Native Codex sees only a
       // placeholder API key here, so its bundled catalog cannot describe that account.
