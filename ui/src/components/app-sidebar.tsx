@@ -96,8 +96,14 @@ function AppSidebarContent(
     (page, previous) => {
       const route = props.activeRouteId;
       const view = route ? sidebarViewForPage(route, props.activePluginTabId) : undefined;
+      // Only a dashboard opened from the list, or the next one after it, keeps the list; a page
+      // without a sidebar in between hands a later conversation back to Sessions.
+      const previousRoute = previous?.split("\n")[0];
       const keep =
-        view === "sessions" && owner.navigationView === "dashboards" && isSessionRouteId(route);
+        view === "sessions" &&
+        owner.navigationView === "dashboards" &&
+        isSessionRouteId(route) &&
+        (previousRoute === "dashboards" || isSessionRouteId(previousRoute));
       if (view && !keep && page !== previous && owner.navigationView !== view) {
         owner.navigationView = view;
         owner.invalidate();
