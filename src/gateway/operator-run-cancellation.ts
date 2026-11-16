@@ -45,8 +45,7 @@ export async function retainGatewayOperatorRun(
 ) {
   const captured = params.systemTurn
     ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : // An accepted turn owns its authority until it ends. The requester's turn ending,
-      // or its chat being edited, must not revoke it; current policy still can.
+    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
       await captureGatewayOperatorContinuation(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);

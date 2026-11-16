@@ -396,11 +396,6 @@ async function restoreGatewayOperatorSnapshot(params: {
     const originalModels = snapshot.modelPolicy
       ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
       : undefined;
-    const retainPolicy = () => {
-      assertPolicy();
-      references += 1;
-      return releaseHold();
-    };
     const authority = createAdmittedRunOperatorAuthority({
       ...live,
       recoverySnapshot: snapshot,
@@ -409,7 +404,9 @@ async function restoreGatewayOperatorSnapshot(params: {
       retain: () => {
         claim.signal.throwIfAborted();
         assertCurrent();
-        return retainPolicy();
+        assertPolicy();
+        references += 1;
+        return releaseHold();
       },
       get modelPolicy() {
         return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
@@ -581,37 +578,41 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   }
 }
 
-/** Accepted work holds its origin's saved facts and current policy, not its accepting request. */
+/** Accepted work runs on its origin's saved facts and current policy, not its accepting request. */
 export async function captureGatewayOperatorContinuation(
   input: Parameters<typeof captureGatewayOperatorRunAuthority>[0],
 ): ReturnType<typeof captureGatewayOperatorRunAuthority> {
   const inherited = input.client?.internal?.operatorRunAuthority;
   const context = input.context.resolveGatewayContext?.();
   const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
-  if (!input.client || !inherited || !context || !facts || facts.kind === "unavailable") {
+  if (!inherited || !context || !facts || facts.kind === "unavailable") {
     // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
+  // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
+  const releaseInherited = inherited.retain?.();
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: facts,
     context,
     assertCurrent: () => {},
+  }).catch((error: unknown) => {
+    releaseInherited?.();
+    throw error;
   });
-  try {
-    const { client } = input;
-    // Work from one origin keeps one comparable source identity, as completion batches require.
-    const authority = createAdmittedRunOperatorAuthority({
-      ...restored.authority,
-      source: inherited.source,
-      get modelPolicy() {
-        return restored.authority.modelPolicy;
-      },
-    });
-    return await captureGatewayOperatorRunAuthority({
-      ...input,
-      client: { ...client, internal: { ...client.internal, operatorRunAuthority: authority } },
-    });
-  } finally {
-    restored.release();
-  }
+  const authority = createAdmittedRunOperatorAuthority({
+    ...restored.authority,
+    // One origin keeps one comparable source identity, as completion batches require.
+    source: inherited.source,
+    scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
+    get modelPolicy() {
+      return restored.authority.modelPolicy;
+    },
+  });
+  return {
+    authority,
+    release: () => {
+      restored.release();
+      releaseInherited?.();
+    },
+  };
 }
