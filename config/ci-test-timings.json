@@ -2474,7 +2474,6 @@
         "includePatterns": [
           "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
           "src/agents/prepared-model-catalog-worker.integration.test.ts",
-          "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
           "src/agents/tool-surface-plan.provider-catalog.integration.test.ts"
         ],
         "pretestBuildMode": "runtime",

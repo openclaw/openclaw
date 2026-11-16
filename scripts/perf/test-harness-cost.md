@@ -35,7 +35,6 @@ whether any removable overhead remains.
 | `src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts`         |               14 |            513.427 |
 | `src/commands/agent.test.ts`                                                    |               21 |            477.414 |
 | `src/config/sessions/session-history-eviction.test.ts`                          |               21 |            198.758 |
-| `src/agents/prepared-model-catalog-worker.pool.integration.test.ts`             |               14 |            132.309 |
 | `src/agents/agent-command.live-model-switch.test.ts`                            |               27 |            122.571 |
 | `extensions/browser/chrome-extension/bootstrap.chromium.test.ts`                |                8 |            117.969 |
 | `src/gateway/server-restart-sentinel.test.ts`                                   |               21 |            111.755 |

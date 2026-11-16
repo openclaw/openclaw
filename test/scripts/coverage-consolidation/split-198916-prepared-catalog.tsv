@@ -1,0 +1,25 @@
+# frozen_main	964ab52230985b87545865a23cdf10f0699a181e
+# approved_source	4aef4e18c88852f75b3b750610fa5630c526a25b
+# source_base	4a0e45492b8987d67d8b56e8d6dcdb3765aa61ed
+# rank is the piece-local ordinal; suite mappings retained from PR 198916
+rank	removed_lines	file	keeper_files	reason
+1	322	src/agents/embedded-agent-runner/model.configured-catalog-index.test.ts	src/agents/embedded-agent-runner/model.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+2	128	src/agents/embedded-agent-runner/model.configured-overrides.test.ts	src/agents/embedded-agent-runner/model.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+3	372	src/agents/embedded-agent-runner/model.static-catalog.prepared.test.ts	src/agents/embedded-agent-runner/model.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+4	281	src/agents/embedded-agent-runner/model.static-catalog.snapshot-cache.test.ts	src/agents/embedded-agent-runner/model.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+5	302	src/agents/prepared-model-catalog-worker.authority.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+6	199	src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+7	350	src/agents/prepared-model-catalog-worker.config.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+8	202	src/agents/prepared-model-catalog-worker.directory.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+9	168	src/agents/prepared-model-catalog-worker.directory.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+10	218	src/agents/prepared-model-catalog-worker.metadata.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+11	334	src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+12	351	src/agents/prepared-model-catalog-worker.native.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+13	760	src/agents/prepared-model-catalog-worker.pool.integration.test.ts	src/agents/prepared-model-catalog-worker.test.ts;src/agents/prepared-model-catalog-worker.integration.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+14	440	src/agents/prepared-model-catalog-worker.reuse.integration.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+15	483	src/agents/prepared-model-catalog-worker.scope.integration.test.ts	src/agents/prepared-model-catalog-worker.test.ts;src/agents/prepared-model-catalog-worker.integration.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+16	454	src/agents/prepared-model-catalog-worker.secrets.test.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+17	456	src/agents/prepared-model-catalog.resources.test.ts	src/agents/prepared-model-catalog.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+18	365	src/agents/prepared-model-catalog.scoped-thinking.test.ts	src/agents/prepared-model-catalog.test.ts	Approved catalog coverage consolidation; existing same-owner suites retained.
+19	44	src/agents/test-helpers/catalog-capture-footprint.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Orphan helper: readCatalogCaptureFootprint is imported only by the deleted native-renewal and reuse suites.
+20	109	src/agents/test-helpers/prepared-model-catalog-legacy-fixture.ts	src/agents/prepared-model-catalog-worker.integration.test.ts;src/agents/prepared-model-catalog-worker.test.ts	Orphan helper: expectLegacyWorkerCatalogRetention is imported only by the deleted native suite.
