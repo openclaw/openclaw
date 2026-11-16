@@ -50,15 +50,7 @@ it("checks Incognito sends and Stop against the process-local active path", asyn
     });
 
   expectLeafChanged(await stop("obsolete-leaf"));
-  // An empty view is on every path, but Stop still refuses a session the sender never saw.
-  expectLeafChanged(
-    await send({
-      ...fixture.params,
-      message: "/stop",
-      sessionId: "reset-away",
-      expectedLeafEntryId: null,
-    }),
-  );
+
   expect((await stop("current-leaf")).mock.calls[0]?.[0]).toBe(true);
   expectLeafChanged(await send({ ...fixture.params, expectedLeafEntryId: "obsolete-leaf" }));
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

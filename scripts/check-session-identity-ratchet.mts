@@ -1,43 +1,60 @@
 import { execFileSync } from "node:child_process";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  listRatchetRenames,
-  parseRatchetArgs,
-  reportRatchetFailures,
-  resolveRatchetBase,
-} from "./lib/shrink-ratchet.mts";
+import { runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 
-// A chat's address is its session key. A transcript id or lifecycle revision names one
-// transcript, so only the session store and the transcript lease may compare or pin one.
-// Elsewhere no file may add a pin name or an id compare.
+// Nothing is stopped by inference. A chat is addressed by its key (ChatRef); a transcript id,
+// lifecycle revision, run id, generation or leaf id names one attempt and lives only in a
+// TranscriptLease or a view precondition inside the session store. Outside it, no file may
+// compare those values, name a pin, or refuse with a "something changed" message. Existing hits
+// are listed in the allowlist, which may only shrink.
+const BASELINE_PATH = "config/session-identity-allowlist.txt";
+const BASELINE_HEADER = [
+  "# Identity class A: per-file counts of id compares, pin names and inference refusals.",
+  "# Ratchet: counts may only shrink. Address chats by ChatRef; fence writers by TranscriptLease.",
+  "# Format: repo-relative path, tab, positive count. Zero-count files are omitted.",
+  "",
+].join("\n");
 const ROOTS = ["src", "extensions"];
 const OWNER = /^src\/config\/sessions\//u;
-const NAMES = /\bexpected(?:SessionId|LifecycleRevision)\b/gu;
-const COMPARES = [
-  /\.(?:sessionId|lifecycleRevision)\s*[!=]==/gu,
-  /[!=]==\s*[\w$.?()[\]]*\.(?:sessionId|lifecycleRevision)\b/gu,
+const ID = String.raw`(?:\w*[sS]essionId|lifecycleRevision|\w*[rR]unId|generation|\w*[lL]eafEntryId)`;
+const PATTERNS = [
+  /\bexpected(?:SessionId|LifecycleRevision)\b/gu,
+  new RegExp(String.raw`(?:^|[^\w$])${ID}\s*[!=]==`, "gu"),
+  new RegExp(String.raw`[!=]==\s*[\w$.?()[\]]*(?:^|[^\w$])${ID}\b`, "gu"),
+  /differs from the captured|no longer active|changed before|was replaced/giu,
 ];
-const PATHSPEC = [
-  ...ROOTS,
-  ":(exclude,glob)**/*.test.ts",
-  ":(exclude,glob)**/*.test-*.ts",
-  ":(exclude,glob)**/*test-support*",
-  ":(exclude,glob)**/*test-fixtures*",
-  ":(exclude,glob)**/*test-helpers*",
-  ":(exclude,glob)**/*test-utils*",
-  ":(exclude,glob)**/*test-harness*",
-  ":(exclude,glob)**/*.e2e.ts",
+const TOKENS = [
+  "essionId",
+  "ifecycleRevision",
+  "unId",
+  "generation",
+  "eafEntryId",
+  "differs from the captured",
+  "no longer active",
+  "changed before",
+  "was replaced",
 ];
+const EXCLUDE = [
+  "*.test.ts",
+  "*.test-*.ts",
+  "*test-support*",
+  "*test-fixtures*",
+  "*test-helpers*",
+  "*test-utils*",
+  "*test-harness*",
+  "*.e2e.ts",
+].map((glob) => `:(exclude,glob)**/${glob}`);
 
-/** Counts each line once per pin name and once per id compare. */
+/** Counts each pin name, id compare and inference refusal on one line. */
 export function countSessionIdentityPins(line: string) {
-  return (
-    (line.match(NAMES)?.length ?? 0) +
-    COMPARES.reduce((sum, pattern) => sum + (line.match(pattern)?.length ?? 0), 0)
-  );
+  return PATTERNS.reduce((sum, pattern) => sum + (line.match(pattern)?.length ?? 0), 0);
 }
 
-function countFiles(root: string, ref: string | undefined) {
+function countSource(source: string) {
+  return source.split("\n").reduce((sum, line) => sum + countSessionIdentityPins(line), 0);
+}
+
+function collectCurrent(root: string, staged: boolean) {
   let output = "";
   try {
     output = execFileSync(
@@ -45,15 +62,13 @@ function countFiles(root: string, ref: string | undefined) {
       [
         "grep",
         "-I",
-        ...(ref ? [] : ["--cached"]),
+        "-i",
+        ...(staged ? ["--cached"] : []),
         "-F",
-        ...["sessionId", "SessionId", "lifecycleRevision", "LifecycleRevision"].flatMap((token) => [
-          "-e",
-          token,
-        ]),
-        ...(ref ? [ref] : []),
+        ...TOKENS.flatMap((token) => ["-e", token]),
         "--",
-        ...PATHSPEC,
+        ...ROOTS.map((root) => `${root}/**/*.ts`),
+        ...EXCLUDE,
       ],
       { cwd: root, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
     );
@@ -65,13 +80,12 @@ function countFiles(root: string, ref: string | undefined) {
   }
   const counts = new Map<string, number>();
   for (const row of output.split("\n")) {
-    const withoutRef = ref ? row.slice(ref.length + 1) : row;
-    const separator = withoutRef.indexOf(":");
-    const file = withoutRef.slice(0, separator);
+    const separator = row.indexOf(":");
+    const file = row.slice(0, separator);
     if (separator <= 0 || OWNER.test(file)) {
       continue;
     }
-    const found = countSessionIdentityPins(withoutRef.slice(separator + 1));
+    const found = countSessionIdentityPins(row.slice(separator + 1));
     if (found > 0) {
       counts.set(file, (counts.get(file) ?? 0) + found);
     }
@@ -80,42 +94,31 @@ function countFiles(root: string, ref: string | undefined) {
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
-  try {
-    const args = parseRatchetArgs(argv);
-    if (args.prune) {
-      throw new Error("Session identity ratchet has no baseline to prune.");
-    }
-    const base = resolveRatchetBase(root, args);
-    if (!base) {
-      throw new Error("Session identity ratchet requires a Git base commit.");
-    }
-    const before = countFiles(root, base);
-    for (const { from, to } of listRatchetRenames(root, base, args.staged, ROOTS)) {
-      before.set(to, (before.get(to) ?? 0) + (before.get(from) ?? 0));
-    }
-    const after = countFiles(root, args.staged ? undefined : "HEAD");
-    const sum = (counts: Map<string, number>) => [...counts.values()].reduce((a, b) => a + b, 0);
-    console.log(
-      `Session identity pins outside the session store: ${sum(before)} -> ${sum(after)}.`,
-    );
-    const entries = [...after]
-      .filter(([file, count]) => count > (before.get(file) ?? 0))
-      .map(([file, count]) => `${file}: ${before.get(file) ?? 0} -> ${count}`)
-      .toSorted();
-    if (
-      reportRatchetFailures(
-        [{ title: `Session identity pins grew against ${base}`, entries }],
-        "Address a chat by its key (ChatRef). Only a live writer holds a transcript, through TranscriptLease; do not compare sessionId or lifecycleRevision, and do not add expectedSessionId or expectedLifecycleRevision.",
-      )
-    ) {
-      return 1;
-    }
-    console.log(`Session identity ratchet OK against ${base}.`);
-    return 0;
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
+  return runPerFileCountRatchet(root, argv, {
+    baselinePath: BASELINE_PATH,
+    baselineHeader: BASELINE_HEADER,
+    renameSourceRoots: ROOTS,
+    collectCurrent: ({ staged }) => collectCurrent(root, staged),
+    countAtRef: (ref, filePath) =>
+      OWNER.test(filePath)
+        ? 0
+        : countSource(
+            execFileSync("git", ["show", `${ref}:${filePath}`], {
+              cwd: root,
+              encoding: "utf8",
+              maxBuffer: 256 * 1024 * 1024,
+              stdio: ["ignore", "pipe", "ignore"],
+            }),
+          ),
+    messages: {
+      increaseTitle: "Session identity pins exceed the per-file allowlist:",
+      expansionTitle: "The session identity allowlist may only shrink:",
+      guidance:
+        "Address a chat by its key (ChatRef). Only a live writer holds a transcript, through TranscriptLease, and a view precondition uses the prefix rule. Do not compare session ids, lifecycle revisions, run ids, generations or leaf ids, and do not refuse with a 'changed'/'replaced'/'no longer active' message.",
+      countNoun: "pins",
+      successTitle: "Session identity ratchet OK",
+    },
+  });
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

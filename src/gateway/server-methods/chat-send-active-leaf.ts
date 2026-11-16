@@ -7,30 +7,35 @@ import type { GatewaySessionEntryRead } from "../session-utils.js";
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 /**
- * A send continues the branch its sender saw. It is admitted while the sender's leaf is
- * still on the active path: the exact leaf, or an ancestor that later appends extended. A
- * rewind, branch switch or reset away from that leaf refuses it, as does a reset away from
- * `requestedSessionId`. An empty view is a prefix of any path for a message (`acceptEmptyView`);
- * Stop needs the transcript to still be empty, so it never cancels work it did not see.
+ * What a sender saw must be a prefix of the active path: its leaf, or an ancestor that later
+ * appends extended. An empty view is a prefix of every path. A rewind, branch switch or reset
+ * away from the leaf leaves it off the path and refuses the send.
+ *
+ * Typed Stop still fences on the incarnation it saw (`stop`): an empty view must still be empty
+ * and the session id must match, so a Stop never cancels work started after it.
+ * TODO(identity 3b): Stop moves to `stopChatWork`, which records the stop instead; delete `stop`.
  */
 export function assertExpectedLeafActive(
   session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath"> & {
     transcript?: SessionTranscriptAnchorFacts;
   },
   expectedLeafEntryId: string | null,
-  requestedSessionId?: string,
-  options?: { acceptEmptyView?: true },
+  stop?: { requestedSessionId: string | undefined },
 ) {
+  if (
+    stop &&
+    stop.requestedSessionId !== undefined &&
+    stop.requestedSessionId !== session.entry?.sessionId
+  ) {
+    throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
+  }
   const onActivePath =
-    session.transcript?.onActivePath ??
-    (session.entry?.sessionId ? undefined : expectedLeafEntryId === null);
+    (!stop && expectedLeafEntryId === null) ||
+    (session.entry?.sessionId ? session.transcript?.onActivePath : expectedLeafEntryId === null);
   if (onActivePath === undefined) {
     throw new Error("Chat admission omitted its worker-prepared active path");
   }
-  if (
-    (!onActivePath && !(options?.acceptEmptyView && expectedLeafEntryId === null)) ||
-    (requestedSessionId !== undefined && requestedSessionId !== session.entry?.sessionId)
-  ) {
+  if (!onActivePath) {
     throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
   }
 }
@@ -64,7 +69,9 @@ export async function assertExpectedLeafActiveAsync(
 ): Promise<void> {
   if (isIncognitoSessionKey(session.canonicalKey)) {
     const transcript = await readIncognitoActivePath(session, agentId, expectedLeafEntryId);
-    assertExpectedLeafActive({ ...session, transcript }, expectedLeafEntryId, requestedSessionId);
+    assertExpectedLeafActive({ ...session, transcript }, expectedLeafEntryId, {
+      requestedSessionId,
+    });
     return;
   }
   await withSessionEntriesFromStoresInWorker(
@@ -91,7 +98,7 @@ export async function assertExpectedLeafActiveAsync(
           transcript: owner!.result.transcript,
         },
         expectedLeafEntryId,
-        requestedSessionId,
+        { requestedSessionId },
       );
     },
     { ordered: true },
