@@ -766,6 +766,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
 
 .chat-handoff-sessions li {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
   padding: 2px 0;
 }
@@ -776,6 +777,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   border: 1px solid var(--border);
   border-radius: 999px;
   font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
 }
 
 [data-status="attention"] > .chat-handoff-sessions__status,
