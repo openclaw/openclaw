@@ -194,7 +194,9 @@ describe("operator role policy", () => {
       let enumerations = 0;
       roles.assignments.byGithubLogin = new Proxy(
         {
-          ...Object.fromEntries(Array.from({ length: 2_000 }, (_, i) => [`person-${i}`, "guest"])),
+          ...Object.fromEntries(
+            Array.from({ length: 2_000 }, (_value, i) => [`person-${i}`, "guest"]),
+          ),
           "release-operator": "maintainer",
         },
         {
