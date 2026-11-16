@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import Module, { syncBuiltinESMExports } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -48,7 +48,6 @@ const workspaceFiles = integer("workspace-files", 0, 100_000);
 const workspaceFileBytes = integer("workspace-file-bytes", 0, 32_768);
 const sleeper = new Int32Array(new SharedArrayBuffer(4));
 let active;
-let nativeLoaded = false;
 const originals = Object.getOwnPropertyDescriptors(fs);
 for (const [name, original] of Object.entries(fs)) {
   if (name.endsWith("Sync") && typeof original === "function") {
@@ -70,46 +69,6 @@ fs.realpathSync.native = (...args) => {
   }
   return originalRealpathNative(...args);
 };
-// This local synthetic probe intercepts the actual addon before fs-safe captures it.
-// eslint-disable-next-line no-underscore-dangle
-const load = Module._load;
-const wrapped = new WeakSet();
-// eslint-disable-next-line no-underscore-dangle
-Module._load = function (specifier, ...args) {
-  const nativeAddon = Reflect.apply(load, this, [specifier, ...args]);
-  if (
-    /^@openclaw\/fs-safe-(?:darwin|linux|win32|freebsd)/u.test(specifier) &&
-    nativeAddon &&
-    !wrapped.has(nativeAddon)
-  ) {
-    wrapped.add(nativeAddon);
-    nativeLoaded = true;
-    const open = nativeAddon.openBeneath;
-    if (typeof open === "function") {
-      nativeAddon.openBeneath = function (...input) {
-        const sample = active;
-        if (
-          sample &&
-          typeof input[1] === "string" &&
-          input[1].endsWith(".plugin-model-catalog.lock") &&
-          input[2] & fs.constants.O_CREAT
-        ) {
-          sample.lockCreates++;
-          if (delayMs && !sample.injected) {
-            sample.injected = true;
-            const blockedAt = performance.now();
-            setTimeout(() => {
-              sample.injectedTimerDelayMs = performance.now() - blockedAt;
-            }, 0);
-            Atomics.wait(sleeper, 0, 0, delayMs);
-          }
-        }
-        return Reflect.apply(open, this, input);
-      };
-    }
-  }
-  return nativeAddon;
-};
 syncBuiltinESMExports();
 
 const { createGatewayBenchEnv } = await import("../lib/gateway-bench-runtime.ts");
@@ -121,8 +80,34 @@ process.env = {
   OPENCLAW_FS_SAFE_NATIVE_MODE: "required",
 };
 const { getFsSafeNativeStatus } = await import("@openclaw/fs-safe/config");
-assert.equal((await getFsSafeNativeStatus({ probe: true })).loaded, true);
-assert(nativeLoaded, "Native fs-safe addon was not intercepted");
+const nativeStatus = await getFsSafeNativeStatus({ probe: true });
+assert.equal(nativeStatus.loaded, true);
+assert.equal(typeof nativeStatus.packageName, "string");
+// Use the owner's selected addon, sharing its existing require-cache identity.
+const requireNative = createRequire(import.meta.resolve("@openclaw/fs-safe/config"));
+const nativeAddon = requireNative(nativeStatus.packageName);
+const open = nativeAddon.openBeneath;
+assert.equal(typeof open, "function");
+nativeAddon.openBeneath = function (...input) {
+  const sample = active;
+  if (
+    sample &&
+    typeof input[1] === "string" &&
+    input[1].endsWith(".plugin-model-catalog.lock") &&
+    input[2] & fs.constants.O_CREAT
+  ) {
+    sample.lockCreates++;
+    if (delayMs && !sample.injected) {
+      sample.injected = true;
+      const blockedAt = performance.now();
+      setTimeout(() => {
+        sample.injectedTimerDelayMs = performance.now() - blockedAt;
+      }, 0);
+      Atomics.wait(sleeper, 0, 0, delayMs);
+    }
+  }
+  return Reflect.apply(open, this, input);
+};
 if (values.create) {
   const { generateTeamShapeFixture, parseTeamShapeOptions } =
     await import("./team-shape-fixture.ts");
@@ -325,6 +310,5 @@ try {
   Object.defineProperties(fs, originals);
   fs.realpathSync.native = originalRealpathNative;
   syncBuiltinESMExports();
-  // eslint-disable-next-line no-underscore-dangle
-  Module._load = load;
+  nativeAddon.openBeneath = open;
 }
