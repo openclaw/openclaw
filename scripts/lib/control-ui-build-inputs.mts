@@ -4,6 +4,31 @@ import path from "node:path";
 import { hashInputFiles, listCacheFiles, type BuildCacheEntry } from "./build-artifact-cache.mts";
 import { isRecord, trimString } from "./record-shared.mjs";
 
+/** Packaged plugin directories whose UI declarations a Control UI build consumes. */
+export function listPackagedControlUiPlugins(repoRoot: string): string[] {
+  const root = path.join(repoRoot, "dist/extensions");
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
+      if (!fs.existsSync(manifestPath)) {
+        return [];
+      }
+      const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      if (!isRecord(manifest) || !trimString(manifest.id)) {
+        throw new Error(`Invalid packaged plugin manifest for ${entry.name}: missing plugin id`);
+      }
+      // The distribution plugin consumes only declared native UI assets.
+      // Keep malformed declarations so Vite still rejects them.
+      return manifest.controlUi === undefined ? [] : [entry.name];
+    })
+    .toSorted();
+}
+
 export async function createControlUiBuildInputs(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
@@ -49,38 +74,14 @@ export async function createControlUiBuildInputs(
     "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
     // Package metadata discovers new generations; all copied files (including
     // deferred chunks absent from Vite's module graph) invalidate reuse.
-    ...(() => {
-      const root = path.join(repoRoot, "dist/extensions");
-      if (!fs.existsSync(root)) {
-        return [];
-      }
-      return fs
-        .readdirSync(root, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .flatMap((entry) => {
-          const relative = `dist/extensions/${entry.name}`;
-          const manifestPath = path.join(repoRoot, relative, "openclaw.plugin.json");
-          if (!fs.existsSync(manifestPath)) {
-            return [];
-          }
-          const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-          if (!isRecord(manifest) || !trimString(manifest.id)) {
-            throw new Error(
-              `Invalid packaged plugin manifest for ${entry.name}: missing plugin id`,
-            );
-          }
-          // The distribution plugin consumes only declared native UI assets.
-          // Keep malformed declarations in the key so Vite still rejects them.
-          if (manifest.controlUi === undefined) {
-            return [];
-          }
-          return [
-            `${relative}/package.json`,
-            `${relative}/openclaw.plugin.json`,
-            `${relative}/dist/control-ui`,
-          ];
-        });
-    })(),
+    ...listPackagedControlUiPlugins(repoRoot).flatMap((name) => {
+      const relative = `dist/extensions/${name}`;
+      return [
+        `${relative}/package.json`,
+        `${relative}/openclaw.plugin.json`,
+        `${relative}/dist/control-ui`,
+      ];
+    }),
   ];
   const staticInputs = listCacheFiles(repoRoot, paths, fs);
   const testInputs = new Set(

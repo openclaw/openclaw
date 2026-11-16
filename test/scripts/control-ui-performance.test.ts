@@ -938,6 +938,9 @@ export default {
       return git("rev-parse", "HEAD");
     };
     fs.mkdirSync(scratch, { recursive: true });
+    // macOS temporary roots are symlinks (/var -> /private/var).
+    const linkedScratch = path.join(temporaryRoot, "linked-scratch");
+    fs.symlinkSync(scratch, linkedScratch, "junction");
     fs.mkdirSync(at("extensions"), { recursive: true });
     installDistArtifactScripts(root, [], { compiler: false });
     for (const [file, source] of performanceSources) {
@@ -989,11 +992,17 @@ export default {
       "scripts/build-plugin-control-ui.mts": `
 import fs from "node:fs";
 import path from "node:path";
-const output = path.join(process.argv[3], "dist/extensions/fixture");
-fs.mkdirSync(path.join(output, "dist/control-ui"), { recursive: true });
-fs.writeFileSync(path.join(output, "package.json"), '{"name":"fixture"}');
-fs.writeFileSync(path.join(output, "openclaw.plugin.json"), '{"id":"fixture","controlUi":{"entry":"dist/control-ui/index.js"}}');
-fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presenter");
+import { pathToFileURL } from "node:url";
+// Keep the real builder's direct-run guard, which a symlinked archive path defeats.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  for (const id of new Set(["fixture", ...process.argv.slice(4)])) {
+    const output = path.join(process.argv[3], "dist/extensions", id);
+    fs.mkdirSync(path.join(output, "dist/control-ui"), { recursive: true });
+    fs.writeFileSync(path.join(output, "package.json"), JSON.stringify({ name: id }));
+    fs.writeFileSync(path.join(output, "openclaw.plugin.json"), JSON.stringify({ id, controlUi: { entry: "dist/control-ui/index.js" } }));
+    fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presenter");
+  }
+}
 `,
     })) {
       write(file, source);
@@ -1075,9 +1084,9 @@ fs.writeFileSync(path.join(output, "dist/control-ui/index.js"), "native presente
           GITHUB_ACTIONS: "",
           GITHUB_STEP_SUMMARY: "",
           OPENCLAW_TEST_BUILD_IDENTITY_CAPTURE: identityCapture,
-          TMPDIR: scratch,
-          TMP: scratch,
-          TEMP: scratch,
+          TMPDIR: linkedScratch,
+          TMP: linkedScratch,
+          TEMP: linkedScratch,
         },
       );
       const output = `${result.stdout}${result.stderr}`;
@@ -1297,6 +1306,18 @@ export default { plugins: [{ name: "signal", buildStart() { process.kill(process
       ).toBe("updated native presenter");
     },
   );
+
+  test("packages the candidate's plugin UI inventory into the base", {}, async (repo) => {
+    const base = await repo.commit("matching production inputs");
+    // A full build packages plugin UIs beyond the Settings presenters.
+    await prepareControlUiSettings(repo.root, path.join(repo.root, "scripts"), ["panel"]);
+    const { output } = await repo.runComparison(base, 0);
+    expect(output).toContain(
+      "Control UI plugin distributions: candidate fixture, panel; base fixture, panel.",
+    );
+    expect(output).toContain("identical build inputs; reusing candidate as base");
+    expect(output).toMatch(/startup JS gzip vs base: \d+ B -> \d+ B \(\+0 B\)/u);
+  });
 
   test("refuses symlinked output roots without mutating targets", {}, async (repo) => {
     const protectedRoot = path.join(repo.temporaryRoot, "protected");
