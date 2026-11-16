@@ -400,13 +400,13 @@ keeping the device list and healthy readings available.
 
 System details use reported facts. A connected device is not necessarily the
 device running a session, and unavailable measurements are not shown as zero.
-The telemetry and backup overview reserves its space while those readings load,
-so the desktop and Backups stay in place. It summarizes the three volumes with
-the highest used percentage and reserves unused rows for devices with fewer
-volumes. **+N more volumes in Details** opens every volume and its history.
-**Backup details** opens the complete backup outcomes, schedules, and storage
-locations, even when no device is selected. The overview does not scroll;
-turning off statistics keeps a compact backup area.
+The telemetry overview reserves its space while those readings load, so the
+desktop stays in place. It summarizes the three volumes with the highest used
+percentage and reserves unused rows for devices with fewer volumes. **+N more
+volumes in Details** opens every volume and its history. The overview does not
+scroll; turning off statistics hides it unless a notice needs to stay visible.
+Backup health lives in **Settings → Agent Defaults → Session**; see
+[backups](/install/backups).
 See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for worker desktop
 enablement and sizing.
 

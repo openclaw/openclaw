@@ -27,11 +27,13 @@ it("leaves Storage while a submitted run is held and ignores its late completion
       return Promise.resolve(
         method === "sessions.storage.status"
           ? inventory()
-          : {
-              ...configSnapshot(config, "raw-one"),
-              configRevisionHash: "revision-one",
-              appliedConfigHash: "revision-one",
-            },
+          : method === "backup.status"
+            ? { targets: [], schedules: [], locations: [] }
+            : {
+                ...configSnapshot(config, "raw-one"),
+                configRevisionHash: "revision-one",
+                appliedConfigHash: "revision-one",
+              },
       );
     },
   );

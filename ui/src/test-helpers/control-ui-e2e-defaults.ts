@@ -1,4 +1,5 @@
 import type {
+  BackupStatusResult,
   ChannelsStatusResult,
   EnvironmentsListResult,
   UserProfile,
@@ -147,6 +148,7 @@ export function createControlUiDefaultResponses(scenario: {
       current: true,
       worktree: true,
     } satisfies ProjectsCheckoutOptionsResult,
+    "backup.status": { targets: [], schedules: [], locations: [] } satisfies BackupStatusResult,
     "doctor.memory.status": {
       agentId: "main",
       provider: "none",

@@ -304,6 +304,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/backups-settings.tsx",
+      "text": "openclaw backup enable --to &lt;location&gt;"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "placeholder",
       "path": "ui/src/pages/config/talk-transcription.tsx",
@@ -434,13 +441,6 @@
       "name": "label",
       "path": "ui/src/pages/skills/library-dialog-content.tsx",
       "text": "SKILL.md"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/systems/systems-backups.tsx",
-      "text": "openclaw backup enable --to &lt;location&gt;"
     }
   ]
 }

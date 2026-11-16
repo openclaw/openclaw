@@ -83,7 +83,6 @@ function installSystemsGateway(
       },
       "node.list": { nodes: [] },
       "system.info": systemInfo,
-      "backup.status": { targets: [], schedules: [], locations: [] },
       ...methodResponses,
     },
   });
@@ -115,10 +114,6 @@ suite.define(() => {
           await desktop
             .getByRole("heading", { name: "No desktop available", exact: true })
             .waitFor();
-          await workspace
-            .locator(".systems-backups__summary")
-            .getByText("No backups yet.", { exact: true })
-            .waitFor({ state: "attached" });
           await gateway.setOnline(false);
           const recovery = "Reconnect to refresh devices or open a desktop.";
           await desktop.getByRole("heading", { name: recovery, exact: true }).waitFor();
@@ -152,10 +147,6 @@ suite.define(() => {
           await desktop
             .getByRole("heading", { name: "No desktop available", exact: true })
             .waitFor();
-          await workspace
-            .locator(".systems-overview .systems-backups__summary")
-            .getByText("No backups yet.", { exact: true })
-            .waitFor({ state: "attached" });
           await details.getByRole("button", { name: "Close details", exact: true }).click();
           await details.waitFor({ state: "hidden" });
           expect(repeatedMessages, "One connection problem needs one recovery explanation").toBe(1);
@@ -228,15 +219,9 @@ suite.define(() => {
       },
     );
   });
-  it.each(
-    [400, 820, 1280].flatMap((width) =>
-      [1, 12].flatMap((diskCount) =>
-        [false, true].map((backups) => ({ width, diskCount, backups })),
-      ),
-    ),
-  )(
-    "keeps the overview steady at $width px with $diskCount disks (backups: $backups)",
-    async ({ width, diskCount, backups }) => {
+  it.each([400, 820, 1280].flatMap((width) => [1, 12].map((diskCount) => ({ width, diskCount }))))(
+    "keeps the overview steady at $width px with $diskCount disks",
+    async ({ width, diskCount }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
         async ({ page }) => {
@@ -249,50 +234,25 @@ suite.define(() => {
                 availableBytes: (diskCount - index) * 1024 ** 3,
               })),
             },
-            "backup.status": {
-              targets: backups
-                ? [
-                    {
-                      kind: "archive",
-                      target: "Synthetic archive",
-                      latest: {
-                        id: "backup",
-                        kind: "archive",
-                        createdAt: 1,
-                        archivePath: "/backup",
-                        status: "failed",
-                        error: "Archive disk disconnected",
-                      },
-                    },
-                  ]
-                : [],
-              schedules: [],
-              locations: [],
-            },
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
           const inventoryReads = await gateway.deferNext("environments.list");
-          const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
             window.openclawControlUi!.navigate("systems");
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
-          await gateway.waitForRequest("backup.status", { after: backupReads });
           await waitForControlUiRoute(page, { routeId: "systems" });
           await page.locator(".systems-body").waitFor();
           const shifts = await observeLayoutShifts(page);
           if (width <= 640) {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
-          await page.getByText("Loading backups…", { exact: true }).waitFor();
+          await page.locator(".systems-overview .systems-vital.skeleton").first().waitFor();
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
           const initialY = await position();
-          const backupY = await page
-            .locator(".systems-backups")
-            .evaluate((element) => element.getBoundingClientRect().y);
           await expect
             .poll(() =>
               page.evaluate(() =>
@@ -310,21 +270,6 @@ suite.define(() => {
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
           expect(await body.locator(".systems-state").isVisible()).toBe(true);
-          expect(await page.locator(".systems-backups").textContent()).toContain(
-            "Loading backups…",
-          );
-          await gateway.resolveDeferred("backup.status");
-          await page
-            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups yet.", {
-              exact: false,
-            })
-            .waitFor();
-          expect(await position()).toBe(initialY);
-          expect(
-            await page
-              .locator(".systems-backups")
-              .evaluate((element) => element.getBoundingClientRect().y),
-          ).toBe(backupY);
           expect(await page.locator(".systems-volume-summary li:not([aria-hidden])").count()).toBe(
             Math.min(3, diskCount),
           );
@@ -355,15 +300,12 @@ suite.define(() => {
               .locator(".systems-details")
               .evaluate((element) => element === document.activeElement),
           ).toBe(true);
-          if (backups) {
-            await page.getByText("Archive disk disconnected", { exact: true }).waitFor();
-          }
           await page.getByRole("button", { name: "Close details" }).click();
           await expect
             .poll(() => more.evaluate((element) => element === document.activeElement))
             .toBe(true);
 
-          // Selecting a worker removes Gateway backups and may have no telemetry.
+          // Selecting a worker may have no telemetry; the overview keeps its space.
           const picker = page.locator(".systems-mobile-picker");
           if (await picker.isVisible()) {
             await picker.selectOption("worker-one");
@@ -376,7 +318,10 @@ suite.define(() => {
             }
             await worker.click();
           }
-          await expect.poll(() => page.locator(".systems-backups").count()).toBe(0);
+          await page
+            .locator(".systems-heading h2")
+            .getByText("Cloud worker", { exact: true })
+            .waitFor({ state: "attached" });
           expect(await position()).toBe(initialY);
         },
       );
@@ -386,26 +331,13 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
       async ({ page }) => {
-        await installSystemsGateway(page, 0, {
-          "backup.status": {
-            targets: [
-              {
-                kind: "archive",
-                target: "Synthetic archive",
-                latest: { id: "backup", kind: "archive", createdAt: 1, archivePath: "/backup" },
-              },
-            ],
-            schedules: [],
-            locations: [],
-          },
-        });
+        await installSystemsGateway(page, 0);
         await page.goto(suite.server.baseUrl + "systems");
         await page.locator(".systems-mobile-picker option[value='worker-one']").waitFor({
           state: "attached",
         });
         const overview = page.locator(".systems-overview");
         const stats = page.locator(".systems-overview__telemetry");
-        const backups = page.locator(".systems-backups");
         const toolbarBottom = () =>
           page
             .locator(".systems-toolbar")
@@ -415,13 +347,11 @@ suite.define(() => {
 
         expect(await overview.isVisible()).toBe(false);
         expect(await stats.count()).toBe(0);
-        expect(await backups.isVisible()).toBe(false);
         expect(await bodyTop()).toBe(await toolbarBottom());
 
         const show = page.getByRole("button", { name: "Show statistics" });
         await show.click();
         await stats.waitFor();
-        await backups.waitFor();
         expect(await bodyTop()).toBeGreaterThan(await toolbarBottom());
 
         // The choice survives leaving the page and overrides the width default.
@@ -438,7 +368,7 @@ suite.define(() => {
         await expect.poll(() => stats.count()).toBe(0);
         await page.setViewportSize({ width: 1280, height: 900 });
         expect(await page.getByRole("button", { name: "Show statistics" }).isVisible()).toBe(true);
-        await backups.waitFor();
+        expect(await overview.isVisible()).toBe(false);
       },
     );
   });

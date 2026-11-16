@@ -8,7 +8,7 @@ suite.define(() => {
     (width) =>
       suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          featureMethods: ["environments.list", "node.list", "system.info", "backup.status"],
+          featureMethods: ["environments.list", "node.list", "system.info"],
           deferredMethods: ["environments.list"],
           methodResponses: {
             "environments.list": { environments: [] },
@@ -23,7 +23,6 @@ suite.define(() => {
               pid: 1,
               uptimeMs: 1000,
             },
-            "backup.status": { targets: [], schedules: [], locations: [] },
           },
         });
         await page.goto(suite.server.baseUrl + "systems");
