@@ -881,7 +881,8 @@ describe("existing PR preparation through the registered agent action", () => {
       expect(await f.git("rev-parse", "ORIG_HEAD")).toBe(originalHead);
       expect(await f.git("show", "ORIG_HEAD:newer-base.txt")).toBe("base advanced after PR");
       if (boundRuntime) {
-        expect(runtime?.isPaused()).toBe(true);
+        // Canonical acceptance precedes the guest freeze for projection application.
+        expect(runtime?.isPaused()).toBe(false);
       }
       await f.advanceHead({ "newer-pr.txt": "remote advanced during first import\n" });
       if (!boundRuntime) {
