@@ -37,40 +37,47 @@ const REJECTIONS = [
   },
   {
     name: "Google generateContent 404 not supported for generateContent",
+    provider: "google",
     status: 404,
     body: `{"error":{"code":404,"message":"models/${MODEL} is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.","status":"NOT_FOUND"}}`,
   },
   {
     name: "Google generateContent 400 response modalities",
+    provider: "google",
     status: 400,
     body: `{"error":{"code":400,"message":"The requested combination of response modalities (TEXT) is not supported by the model. models/${MODEL} accepts the following combination of response modalities:\\n* AUDIO\\n","status":"INVALID_ARGUMENT"}}`,
   },
   {
     name: "Google generateContent 400 bidiGenerateContent only",
+    provider: "google",
     status: 400,
     body: `{"error":{"code":400,"message":"models/${MODEL} only supports real-time bidirectional streaming via WebSocket (bidiGenerateContent). Please use the Gemini Live API (bidiGenerateContent via WebSocket) instead of generateContent.","status":"INVALID_ARGUMENT"}}`,
   },
 ];
 
-function listing(modelIds: string[]): ProviderCatalogOutcome[] {
+// The shapes each catalog owner publishes: OpenAI `modelIdCatalog`, Google `listedModelIds`.
+function listing(provider: string, modelIds: string[]): ProviderCatalogOutcome[] {
   return [
-    {
-      provider: "openai",
-      status: "ready",
-      modelIdCatalog: { baseUrl: "https://api.openai.com/v1", modelIds },
-    },
+    provider === "google"
+      ? { provider, status: "ready", listedModelIds: modelIds }
+      : {
+          provider,
+          status: "ready",
+          modelIdCatalog: { baseUrl: "https://api.openai.com/v1", modelIds },
+        },
   ];
 }
 
 function makeInput(
-  response: { status: number; body: string },
+  response: { status: number; body: string; provider?: string },
   options: { fallbackConfigured: boolean; listed?: string[] },
 ) {
+  const provider = response.provider ?? "openai";
   const input = makeAssistantFailureInput(
-    { provider: "openai", model: MODEL, content: [], ...projectProviderError(response) },
+    { provider, model: MODEL, content: [], ...projectProviderError(response) },
     { fallbackConfigured: options.fallbackConfigured },
   );
-  input.providerOutcomes = listing(options.listed ?? [MODEL, "fixture-chat-model"]);
+  input.providerOutcomes = listing(provider, options.listed ?? [MODEL, "fixture-chat-model"]);
   return input;
 }
 
