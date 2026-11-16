@@ -1,11 +1,9 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { Message } from "../../llm/types.js";
+import type { Message, ToolResultMessage } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
@@ -27,9 +25,12 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
-import { describeSessionToolDefinition } from "./session-tool-definition.js";
-
-type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+import {
+  readToolSurfaceCheckpoint,
+  type ToolDefinition,
+  type ToolSurface,
+} from "./session-tool-checkpoint.js";
+import { describeSessionToolDefinition, sameToolParameters } from "./session-tool-definition.js";
 
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
@@ -122,19 +123,6 @@ function changedPromptRoutePart(previous: unknown, current: string): SystemPromp
       : undefined;
   return part ? `route:${part}` : "new";
 }
-
-type ToolDefinition = ReturnType<typeof describeSessionToolDefinition>;
-type PublicationListing = ToolDefinition &
-  Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
-
-type ToolSurface = {
-  routeKey: string;
-  historyId: string | null;
-  /** Digest of the tool policy config; a policy change starts a new pin. */
-  toolPolicy: string;
-  tools: ToolDefinition[];
-  publicationListing?: PublicationListing;
-};
 
 type ToolSurfaceInput = {
   state: EmbeddedSessionPromptState;
@@ -246,19 +234,6 @@ export function getSessionToolUsageRanking(
   sessionId: string,
 ): ToolUsageRankingSnapshot | undefined {
   return sessionPromptStates.get(sessionId)?.usageRanking?.snapshot;
-}
-
-function sameToolParameters(left: unknown, right: unknown): boolean {
-  if (left === right) {
-    return true;
-  }
-  const a = getPublishedRuntimeToolInputSchema(left);
-  const b = getPublishedRuntimeToolInputSchema(right);
-  // Restored transcript pins have no publication fact; derive only their side.
-  return a || b
-    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
-        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
-    : stableStringify(left) === stableStringify(right);
 }
 
 function resolveSessionToolSurface(params: ToolSurfaceInput) {
@@ -394,28 +369,6 @@ function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
     { ...tool, label: tool.name, execute: async () => ({ content: [], details: {} }) },
     `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
   );
-}
-
-/** The latest checkpointed pin, unless a later model change retired it. */
-function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
-  const markerIndex = entries.findLastIndex(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
-  const entry = entries[markerIndex];
-  const data = entry?.type === "custom" ? entry.data : undefined;
-  return isRecord(data) &&
-    Array.isArray(data.tools) &&
-    !entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
-    ? {
-        routeKey: data.routeKey,
-        historyId: data.historyId,
-        toolPolicy: data.toolPolicy,
-        // SAFETY: this module alone writes the tool definitions and publication listing checkpoint.
-        tools: data.tools as ToolDefinition[],
-        // SAFETY: this module alone checkpoints PublicationListing values; older pins omit the field.
-        publicationListing: data.publicationListing as PublicationListing | undefined,
-      }
-    : undefined;
 }
 
 /**

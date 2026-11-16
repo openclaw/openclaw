@@ -6,7 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
-import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "./prepared-tool-definition.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
