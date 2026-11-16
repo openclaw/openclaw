@@ -69,9 +69,13 @@ describe("plugin install mutation-free preflight", () => {
     expect(fixture.runtimeErrors.at(-1)).toContain("path install disabled in test");
   });
 
-  it.skipIf(process.platform === "win32").each([{ flags: [] }, { flags: ["--link"] }])(
+  it.skipIf(process.platform === "win32").each([
+    { flags: [], mode: {} },
+    // A linked install validates in place and records this same path in plugins.load.paths.
+    { flags: ["--link"], mode: { dryRun: true } },
+  ])(
     "installs the plugin a symlinked parent's `..` leads to, keeping its final link $flags",
-    async ({ flags }: { flags: string[] }) => {
+    async ({ flags, mode }: { flags: string[]; mode: { dryRun?: boolean } }) => {
       const root = fs.realpathSync(tempDirs.make("plugin-symlink-parent-"));
       fs.mkdirSync(path.join(root, "physical", "nested"), { recursive: true });
       fs.mkdirSync(path.join(root, "physical", "plugin-real"));
@@ -81,7 +85,7 @@ describe("plugin install mutation-free preflight", () => {
 
       await expect(install(`${root}/selected/../plugin-b`, ...flags)).rejects.toThrow("__exit__:1");
       expect(fixture.installPluginFromPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({ path: path.join(root, "physical", "plugin-b") }),
+        expect.objectContaining({ path: path.join(root, "physical", "plugin-b"), ...mode }),
       );
     },
   );

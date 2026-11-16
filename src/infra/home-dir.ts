@@ -104,11 +104,23 @@ function resolvePathWithHome(
   return resolveExpanded(expanded);
 }
 
+function notADirectory(target: string): Error {
+  return Object.assign(new Error(`ENOTDIR: not a directory, '${target}'`), {
+    code: "ENOTDIR",
+    path: target,
+  });
+}
+
 /**
  * Resolves a path about to be opened or written, like `path.resolve`, except that a symlink
  * followed by `..` is replaced by its target first, as the OS does: with `link -> a/b`,
  * `link/../x` names `a/x`, not the lexical `./x`. Every other segment keeps its spelling, so a
  * final symlink (for example a `plugins install --link` source) is recorded as typed.
+ *
+ * For a path with `..`, throws the error the OS would give (`ENOENT`, `ENOTDIR`, `EACCES`)
+ * when a segment before `..` cannot be traversed, or when a trailing `/` or `/.` names an
+ * existing non-directory. Returning such a path would let later normalization reopen a
+ * lexical neighbor.
  */
 export function resolveFilesystemPath(input: string): string {
   // Windows folds `..` lexically before the filesystem sees the path.
@@ -119,25 +131,25 @@ export function resolveFilesystemPath(input: string): string {
     ? input
     : `${getUserPathBaseDirectory().getStore() ?? process.cwd()}/${input}`;
   const fs = process.getBuiltinModule("fs");
+  const segments = unfolded.split("/");
   let current = "/";
-  try {
-    for (const segment of unfolded.split("/")) {
-      if (segment === "..") {
-        const directory = fs.lstatSync(current).isSymbolicLink()
-          ? fs.realpathSync(current)
-          : current;
-        if (!fs.statSync(directory).isDirectory()) {
-          return unfolded;
-        }
-        current = path.dirname(directory);
-      } else if (segment !== "" && segment !== ".") {
-        current = path.join(current, segment);
+  for (const segment of segments) {
+    if (segment === "..") {
+      const directory = fs.lstatSync(current).isSymbolicLink() ? fs.realpathSync(current) : current;
+      if (!fs.statSync(directory).isDirectory()) {
+        throw notADirectory(directory);
       }
+      current = path.dirname(directory);
+    } else if (segment !== "" && segment !== ".") {
+      current = path.join(current, segment);
     }
-  } catch {
-    // A missing, unreadable or non-directory segment before `..`: leave the path unfolded so
-    // the I/O fails with the OS error instead of opening a lexical neighbor.
-    return unfolded;
+  }
+  const last = segments.at(-1);
+  if (last === "" || last === ".") {
+    const stat = fs.statSync(current, { throwIfNoEntry: false });
+    if (stat && !stat.isDirectory()) {
+      throw notADirectory(current);
+    }
   }
   return current;
 }

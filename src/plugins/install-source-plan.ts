@@ -100,8 +100,13 @@ export function resolvePluginInstallSourcePlan(params: {
     return fileSpec;
   }
   const normalized = fileSpec?.path ?? params.raw;
-  const resolved = resolveUserFilesystemPath(normalized);
-  if (fs.existsSync(resolved)) {
+  let resolved: string | undefined;
+  try {
+    resolved = resolveUserFilesystemPath(normalized);
+  } catch {
+    // A spec the filesystem cannot traverse is not a local source; keep classifying it.
+  }
+  if (resolved && fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
     const bundled =
       recordSource === "path"

@@ -228,7 +228,8 @@ export async function createTemplateProject(
 export async function validateTemplateProject(
   projectPath: string,
 ): Promise<TemplateProjectValidationResult> {
-  let root = resolveFilesystemPath(projectPath);
+  // Discovery resolves the path for I/O; this spelling only labels its failures.
+  let root = resolve(projectPath);
   const failure = (
     code: string,
     path: string,

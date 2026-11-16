@@ -308,10 +308,7 @@ describe.skipIf(process.platform === "win32")("resolveFilesystemPath", () => {
     // The OS cannot apply `..` to a missing directory or a file, so no neighbor is offered.
     fs.writeFileSync(path.join(root, "physical", "nested", "file"), "");
     fs.symlinkSync(path.join(root, "physical", "nested", "file"), path.join(root, "file-link"));
-    for (const parent of ["missing", "file-link"]) {
-      expect(resolveFilesystemPath(`${root}/${parent}/../plugin-link`)).toBe(
-        `${root}/${parent}/../plugin-link`,
-      );
-    }
+    expect(() => resolveFilesystemPath(`${root}/missing/../plugin-link`)).toThrow("ENOENT");
+    expect(() => resolveFilesystemPath(`${root}/file-link/../plugin-link`)).toThrow("ENOTDIR");
   });
 });

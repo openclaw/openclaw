@@ -238,7 +238,12 @@ async function resolveSource(
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
-  const inputPath = resolveFilesystemPath(path);
+  let inputPath: string;
+  try {
+    inputPath = resolveFilesystemPath(path);
+  } catch {
+    return fileFailure("read_failed", `Could not resolve Template source ${path}.`);
+  }
   const inputStat = await stat(inputPath).catch(() => undefined);
   if (!inputStat) {
     return fileFailure("read_failed", `Could not resolve Template source ${inputPath}.`);

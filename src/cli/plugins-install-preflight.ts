@@ -112,8 +112,16 @@ export async function resolvePluginInstallPreflight(params: RunPluginInstallComm
     }
   }
 
-  if (marketplace && fs.existsSync(resolveUserFilesystemPath(marketplace))) {
-    marketplace = resolveUserFilesystemPath(marketplace);
+  if (marketplace) {
+    let localMarketplace: string | undefined;
+    try {
+      localMarketplace = resolveUserFilesystemPath(marketplace);
+    } catch {
+      // A source the filesystem cannot traverse is a marketplace name or URL.
+    }
+    if (localMarketplace && fs.existsSync(localMarketplace)) {
+      marketplace = localMarketplace;
+    }
   }
   const opts = { ...params.opts, marketplace };
   const optionError = marketplace
