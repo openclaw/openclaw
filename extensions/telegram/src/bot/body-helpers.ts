@@ -179,17 +179,6 @@ export function resolveTelegramRichMessagePlaceholder(
   return msg.rich_message ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
-export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
-  if (!msg.rich_message) {
-    return undefined;
-  }
-  return renderRichBlocks(msg.rich_message.blocks) || undefined;
-}
-
-export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
-  return resolveTelegramRichMessageText(msg) ?? resolveTelegramRichMessagePlaceholder(msg);
-}
-
 export function isBinaryContent(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
@@ -250,7 +239,13 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
       entities: [],
     };
   }
-  return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
+  if (msg.poll) {
+    return { text: formatTelegramPollText(msg.poll), entities: [] };
+  }
+  // A rich message has no text/caption; its rendered blocks are its text for the
+  // prompt, debounce, history and reply context alike. A rich message without
+  // text blocks stays empty, and callers fall back to the rich placeholder.
+  return { text: msg.rich_message ? renderRichBlocks(msg.rich_message.blocks) : "", entities: [] };
 }
 
 export function joinTelegramTextParts(
@@ -356,13 +351,6 @@ export function hasLeadingBotCommandAddressedToOtherBot(
   const command = text.slice(0, leadingCommand.length);
   const target = command.match(/^\/[^@\s]+@([a-z0-9_]+)$/iu)?.[1];
   return Boolean(target && target.toLowerCase() !== normalizedBotUsername);
-}
-
-export function hasBotMentionInText(text: string, botUsername: string): boolean {
-  return hasStandaloneTelegramMention(
-    normalizeLowercaseStringOrEmpty(text),
-    normalizeLowercaseStringOrEmpty(`@${botUsername}`),
-  );
 }
 
 export type TelegramForwardedContext = {

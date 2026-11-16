@@ -8,7 +8,7 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   resolveConfiguredAgentDatabaseCandidatePaths,
-  resolveConfiguredAgentDatabaseTargets,
+  type SessionStoreTarget,
 } from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -37,7 +37,8 @@ export async function assertAcpSessionKeysMigratedForStartup(
   env: NodeJS.ProcessEnv,
   admittedAgentIds: readonly string[],
   admittedDatabase: OpenClawAgentDatabaseOptions | undefined,
-  assertCurrent?: () => void,
+  assertCurrent: (() => void) | undefined,
+  excludeTarget: (target: SessionStoreTarget) => boolean,
 ): Promise<void> {
   assertCurrent?.();
   const result = await executeExistingOpenClawStateRead({ env }, { type: "acpSessions.list" });
@@ -51,10 +52,7 @@ export async function assertAcpSessionKeysMigratedForStartup(
     : undefined;
   // Historical ACP rows do not admit retired stores. Keep physical shared stores
   // in scope, and let the admission owner's refusals defer configured stores.
-  const configuredPaths = [
-    ...resolveConfiguredAgentDatabaseTargets(cfg, { env }).map((target) => target.path),
-    ...resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }),
-  ];
+  const configuredPaths = resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env });
   const refusedPaths = admittedDatabase
     ? []
     : listAgentDatabaseAdmissionRefusals({ env }).flatMap(
@@ -82,6 +80,18 @@ export async function assertAcpSessionKeysMigratedForStartup(
       local: boolean;
     }> = [];
     for (const identity of identities) {
+      // Historical explicit ACP owners can outlive their roster entry and schema.
+      if (
+        excludeTarget({
+          agentId: identity.agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: identity.agentId,
+            env,
+          }),
+        })
+      ) {
+        continue;
+      }
       let owner: ReturnType<typeof resolveSessionStorePathForAcp>;
       try {
         owner = resolveSessionStorePathForAcp({

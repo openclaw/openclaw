@@ -15,7 +15,6 @@ import { CronCliError } from "./cron-cli-error.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
-  callCronReadFromCli,
   enrichCronJsonWithStatus,
   formatCronLookupMiss,
   handleCronCliError,
@@ -78,12 +77,11 @@ async function waitForCronRunCompletion(params: {
     // History reads share the wait deadline, but enqueue keeps its own RPC
     // timeout and a zero-duration wait still gets one immediate ledger poll.
     const pollOpts = { ...params.opts, timeout: String(pollTimeoutMs) };
-    const page = (await callGatewayFromCli(
-      "cron.runs",
-      pollOpts,
-      { id: params.jobId, runId: params.runId, limit: 1 },
-      { signal: params.signal },
-    )) as { entries?: CronRunLogEntry[] };
+    const page = (await callGatewayFromCli("cron.runs", pollOpts, {
+      id: params.jobId,
+      runId: params.runId,
+      limit: 1,
+    })) as { entries?: CronRunLogEntry[] };
     params.signal?.throwIfAborted();
     const entry = page.entries?.[0];
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
@@ -119,8 +117,7 @@ export function registerCronSimpleCommands(cron: Command) {
         .argument("<id>", "Job id")
         .action(async (id, opts) => {
           try {
-            const call = method === "cron.get" ? callCronReadFromCli : callGatewayFromCli;
-            const res = await call(method, opts, {
+            const res = await callGatewayFromCli(method, opts, {
               id: requireCronJobId(id),
               ...(method === "cron.update" ? { patch: { enabled: name === "enable" } } : {}),
             });
@@ -213,7 +210,7 @@ export function registerCronSimpleCommands(cron: Command) {
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }
-          const res = await callCronReadFromCli("cron.runs", opts, {
+          const res = await callGatewayFromCli("cron.runs", opts, {
             ...(opts.all ? { scope: "all" } : { id }),
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
             ...(typeof opts.status === "string" ? { status: opts.status } : {}),

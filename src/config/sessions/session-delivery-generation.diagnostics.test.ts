@@ -266,7 +266,7 @@ it("keeps separate latches for two leases", async () => {
   const other = await prepareSessionGenerationFacts({ ...scope, ...original });
   onTestFinished(() => other.release());
   const seen = records();
-  sessionChanges.emit({ all: true, scope: "runtime" });
+  sessionChanges.emit({ all: true, scope: { storePath: scope.storePath } });
   refusal(lease.assertCurrent);
   refusal(other.assertCurrent);
   expect(seen).toHaveLength(2);

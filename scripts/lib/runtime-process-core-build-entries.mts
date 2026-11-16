@@ -38,6 +38,7 @@ export const runtimeProcessCoreEntrypoints = [
 ];
 
 const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.cronReadOnly,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
   runtimeProcessEntrypoints.sessionDiskBudget,
   runtimeProcessEntrypoints.pluginModelCatalogRead,
@@ -51,6 +52,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.execRealpath,
   runtimeProcessEntrypoints.secretFileRead,
   runtimeProcessEntrypoints.fileLog,
+  runtimeProcessEntrypoints.serviceChildGroupAnchor,
   runtimeProcessEntrypoints.controlUiFile,
   runtimeProcessEntrypoints.publicSessionCard,
   runtimeProcessEntrypoints.sessionTranscriptReconcile,
@@ -83,7 +85,6 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat,
   runtimeProcessEntrypoints.serviceChildRelay,
-  runtimeProcessEntrypoints.serviceChildGroupAnchor,
 ]);
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {

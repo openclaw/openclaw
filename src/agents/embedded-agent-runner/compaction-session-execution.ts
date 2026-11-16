@@ -41,12 +41,14 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { AgentSession } from "../sessions/agent-session.js";
+import { estimateTokens } from "../sessions/compaction/compaction.js";
 import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
-import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
@@ -259,7 +261,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         params.compactionTimeoutReset?.();
       };
       try {
-        const createdSession = await createAgentSession({
+        ({ session } = await createAgentSession({
           cleanupProviderSessionResourcesOnDispose: false,
           systemPrompt: systemPromptText,
           cwd: effectiveCwd,
@@ -271,8 +273,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           sessionManager,
           settingsManager,
           resourceLoader,
-        });
-        session = createdSession.session;
+        }));
         session[agentSessionSetContextReplacementHook](
           (tokensAfter, tokensBefore, details) =>
             recordCompaction({
@@ -363,10 +364,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           ...replayContext(),
           messages: prior,
         });
-        const dedupedValidated = dedupeDuplicateUserMessagesForCompaction(validated);
         // Apply validated transcript to the live session even when no history limit is configured,
         // so compaction and hook metrics are based on the same message set.
-        session.agent.state.messages = dedupedValidated;
+        session.agent.state.messages = dedupeDuplicateUserMessagesForCompaction(validated);
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
         const originalMessages = session.messages;

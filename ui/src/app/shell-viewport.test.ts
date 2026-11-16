@@ -106,9 +106,11 @@ describe("shell visual viewport", () => {
       expect(keyboard()).toBe(true);
       resize({ height: 440, offsetTop: 70 }, "scroll");
       expect(height()).toBe("510px");
+      expect(root.style.getPropertyValue("--shell-visible-height")).toBe("440px");
       expect(keyboard()).toBe(true);
       resize({ height: 844, offsetTop: 0 });
       expect(height()).toBe("844px");
+      expect(root.style.getPropertyValue("--shell-visible-height")).toBe("844px");
       expect(inset()).toBe("");
       expect(keyboard()).toBe(false);
       expect(input.matches(":focus")).toBe(true);
@@ -196,6 +198,7 @@ describe("shell visual viewport", () => {
     resize({ height: 480 });
     resize({ height: 422, scale: 2, offsetTop: 50 });
     expect(height()).toBe("");
+    expect(root.style.getPropertyValue("--shell-visible-height")).toBe("");
     expect(inset()).toBe("");
     resize({ height: 480, scale: 1, offsetTop: 0 });
     expect(height()).toBe("480px");
@@ -214,6 +217,7 @@ describe("shell visual viewport", () => {
     disconnect();
     expect(frames.size).toBe(0);
     expect(height()).toBe("");
+    expect(root.style.getPropertyValue("--shell-visible-height")).toBe("");
     expect(inset()).toBe("");
     expect(keyboard()).toBe(false);
     resize({ height: 300 });
@@ -231,6 +235,7 @@ describe("shell visual viewport", () => {
     editor();
     window.dispatchEvent(new Event("resize"));
     expect(height()).toBe("");
+    expect(root.style.getPropertyValue("--shell-visible-height")).toBe("");
     expect(inset()).toBe("");
     expect(frames.size).toBe(0);
   });

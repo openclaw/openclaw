@@ -95,10 +95,12 @@ export async function configuredSourceIntegrity(plan: TemplateAddPlan): Promise<
     const digest =
       action.sourceKind === "templateMarkdownBody" && source.templateMarkdownBody
         ? digestTemplateBytes(source.templateMarkdownBody)
-        : [
-            ...source.snapshot.workspaceSources,
-            ...(source.packageBootstrap ? [source.packageBootstrap] : []),
-          ].find((file) => file.realPath === action.source)?.digest;
+        : action.sourceKind === "templateManifest"
+          ? source.snapshot.manifest.digest
+          : [
+              ...source.snapshot.workspaceSources,
+              ...(source.packageBootstrap ? [source.packageBootstrap] : []),
+            ].find((file) => file.realPath === action.source)?.digest;
     if (!digest || digest !== action.digest) {
       throw new Error("Template source changed after consent.");
     }
@@ -116,6 +118,27 @@ export async function configuredSourceIntegrity(plan: TemplateAddPlan): Promise<
       ? { packageBootstrap: withoutRealPath(source.snapshot.packageBootstrap) }
       : {}),
   });
+}
+
+/** An unfinished Add of this exact release: a repeated request resumes it instead of adding a copy. */
+export async function isRetainedTemplateInitialization(
+  config: OpenClawConfig,
+  agentId: string,
+  source: ClawHubCoordinate,
+  assertCurrent: () => void,
+): Promise<boolean> {
+  const pending = await readSessionEntryReadOnlyInWorker(
+    {
+      agentId,
+      sessionKey: resolveAgentMainSessionKey({ cfg: config, agentId }),
+      storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
+    },
+    assertCurrent,
+  );
+  return (
+    pending?.initializationPending === true &&
+    isDeepStrictEqual(pending.templateInitialization?.source, source)
+  );
 }
 
 export async function readRetainedTemplateInitialization(

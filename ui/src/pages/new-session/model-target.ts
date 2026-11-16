@@ -255,11 +255,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
     params.initialModelPending ||
     (!metadata.hasSnapshot && Boolean(model || agentRuntime))
   ) {
-    return t(
-      metadata.status === "error"
-        ? "chat.modelControls.modelsUnavailable"
-        : "chat.modelControls.loadingModels",
-    );
+    return t("chat.modelControls.modelsUnavailable");
   }
   if (
     metadata.modelSelectionPolicy?.restricted &&
@@ -298,7 +294,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
       return t("chat.modelControls.modelsUnavailable");
     }
     if (params.metadataPending || !metadata.hasSnapshot) {
-      return t("chat.modelControls.loadingModels");
+      return t("chat.modelControls.modelsUnavailable");
     }
     if (!params.accountReady) {
       return unavailable ?? t("chat.modelControls.modelsUnavailable");

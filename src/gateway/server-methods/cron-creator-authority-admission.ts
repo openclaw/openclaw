@@ -46,7 +46,6 @@ export function isDirectGatewayUserClient(client: GatewayClient | null | undefin
     internal?.syntheticClient !== true &&
     internal?.senderAttribution === undefined &&
     internal?.approvalRuntime !== true &&
-    internal?.cronRunContinuation !== true &&
     internal?.agentRuntimeIdentity === undefined &&
     internal?.pluginRuntimeOwnerId === undefined &&
     internal?.agentRunTracking === undefined &&
@@ -112,15 +111,10 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isCurrent?: () => boolean;
   request: AgentRunRequest;
   inputProvenance?: InputProvenance;
-  hasRestoredCronContinuation: boolean;
   isOneShotModelRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
-  if (
-    params.client?.internal?.syntheticClient === true &&
-    !params.hasRestoredCronContinuation &&
-    !params.isOneShotModelRun
-  ) {
+  if (params.client?.internal?.syntheticClient === true && !params.isOneShotModelRun) {
     const continuation = consumeRequesterCronAuthorityAdmission({
       runId: params.runId,
       sessionKey: params.resolvedSessionKey,
@@ -134,7 +128,6 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   return resolveDirectOperatorAuthority({
     ...params,
     disallowed:
-      params.hasRestoredCronContinuation ||
       params.isOneShotModelRun ||
       request.modelRun === true ||
       request.acpTurnSource !== undefined ||
@@ -237,5 +230,32 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(
     ...params,
     disallowed:
       params.isIncognito || params.isReconnectResume || !isDirectGatewayChatUserTurn(params),
+  });
+}
+
+/** Template Add is an administrator action; its hidden continuation is not fresh user ingress. */
+export function resolveGatewayTemplateSetupCronAuthorityAdmission(
+  params: Omit<GatewayChatUserTurn, "isIncognito" | "isDirectExternalUser"> & {
+    isIncognitoEntry: boolean;
+  },
+): GatewayCronCreatorAuthorityAdmission | undefined {
+  if (
+    params.inputProvenance?.kind !== "internal_system" ||
+    params.inputProvenance.sourceTool !== "template_add_setup" ||
+    params.client?.internal?.controlUiAdmin !== true ||
+    !hasGatewayAdminScope(params.client)
+  ) {
+    return undefined;
+  }
+  return resolveDirectOperatorAuthority({
+    ...params,
+    // Explicit owner-only internal route above, not authority inferred from provenance.
+    inputProvenance: undefined,
+    disallowed:
+      params.isIncognitoEntry ||
+      params.isReconnectResume ||
+      params.hasExplicitOrigin ||
+      params.hasRestoredCronContinuation ||
+      params.turnKind !== "main",
   });
 }

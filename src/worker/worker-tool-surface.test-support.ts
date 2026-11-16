@@ -399,6 +399,46 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
     expect(gateway.inferenceRequests).toHaveLength(0);
   });
 
+  it.each([
+    ["follows tools.loopDetection when enabled", undefined, true],
+    ["stays off when tools.loopDetection.enabled is false", false, false],
+  ] as const)(
+    "runs the repeat guard on worker turns: %s",
+    async (_name, toolRepeatGuard, noted) => {
+      const args = { markdown: "Still working" };
+      const calls = [1, 2, 3].map((n) => toolCall("progress_card", `progress-${n}`, args));
+      const { gateway, launch } = await setup({ inferencePlans: [...calls, "text"] });
+      const surface = gateway.toolSurface();
+      launch.assignment.toolAuthority.allowedToolNames = [];
+      gateway.toolSurface = () => ({
+        ...surface,
+        policy: { ...surface.policy, ...(toolRepeatGuard === false ? { toolRepeatGuard } : {}) },
+        tools: [
+          {
+            id: "progress_card",
+            execution: "gateway",
+            definition: {
+              name: "progress_card",
+              label: "Progress card",
+              description: "Show progress to the user.",
+              parameters: { type: "object", properties: { markdown: { type: "string" } } },
+            },
+          },
+        ],
+      });
+
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+      expect(gateway.gatewayToolRequests).toHaveLength(3);
+      const notes = (gateway.inferenceRequests[3]?.context.messages ?? [])
+        .filter((message) => message.role === "toolResult")
+        .map((message) =>
+          JSON.stringify(message.content).includes("same arguments 3 times in a row"),
+        );
+      expect(notes).toEqual([false, false, noted]);
+    },
+  );
+
   it("runs with no tools when the Gateway authority is empty", async () => {
     const { gateway, launch } = await setup();
     launch.assignment.toolAuthority.allowedToolNames = [];

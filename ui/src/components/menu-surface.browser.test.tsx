@@ -667,6 +667,7 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
             status: { state: "on" },
             link: { linked: false },
             channel: "local_operator",
+            remoteAccessSetup: "local",
             accountSignIn: "popup",
             owner: true,
             connection: { kind: "local" },

@@ -88,7 +88,12 @@ export function prepareActivityGroup(
         return root ? [root] : [];
       })
     : groupToolCalls(cards);
-  const headline = selectActivityHeadline(currentActivity, cardGroups, preparedByCard);
+  const headline = selectActivityHeadline(
+    currentActivity,
+    cardGroups,
+    preparedByCard,
+    opts.subagents?.subagentSessions,
+  );
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;

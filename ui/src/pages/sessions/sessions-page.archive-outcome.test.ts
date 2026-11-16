@@ -505,13 +505,13 @@ describe("sessions command outcomes", () => {
         hidden: false,
       }),
     );
-    await waitForFast(() => expect(page.textContent).toContain("Working…"));
+    await waitForFast(() => expect(page.textContent).toContain("Working"));
     pending.reject(failure);
     await waitForFast(() => {
       const alerts = page.querySelectorAll('[role="alert"]');
       expect(alerts).toHaveLength(1);
       expect(alerts[0]?.textContent).toContain(failure.message);
-      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).not.toContain("Working");
     });
 
     const refreshCalls = managed.refreshList.mock.calls.length;

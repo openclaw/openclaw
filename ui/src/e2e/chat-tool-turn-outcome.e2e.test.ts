@@ -520,10 +520,10 @@ suite.define(() => {
     await page.locator(".chat-activity-group__label--running").waitFor();
     await expect
       .poll(() => page.locator(".chat-activity-group__label--running").textContent())
-      .toBe("Read the matching notes…");
-    await expect.poll(shimmering).toEqual(["Read the matching notes…"]);
+      .toBe("Read the matching notes");
+    await expect.poll(shimmering).toEqual(["Read the matching notes"]);
     await page.locator(".chat-activity-group__summary").click();
-    await expect.poll(shimmering).toEqual(["Read the matching notes…", "Read the matching notes"]);
+    await expect.poll(shimmering).toEqual(["Read the matching notes", "Read the matching notes"]);
 
     await progress("second", "Read the matching notes", "completed");
     await expect.poll(shimmering).toEqual([]);

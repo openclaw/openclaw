@@ -110,7 +110,7 @@ type CapabilityProviderSource =
   | (() => readonly CapabilityProvider[]);
 
 /** @deprecated Only synchronous tool-constructor compatibility uses this path. */
-export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
+function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: readonly T[];
   provider?: T;
   providerId?: string;
@@ -398,18 +398,20 @@ export function buildMediaReferenceDetails(
   kind: "image" | "video" | "pdf",
   options?: { includeEmpty?: boolean; singleRewriteKey?: string },
 ): Record<string, unknown> {
+  // Inline payloads are provider inputs, not printable receipt metadata.
+  const describeInput = (input: string) => (/^data:/i.test(input) ? "[inline image]" : input);
   const single = entries.length === 1 ? entries[0] : undefined;
   if (single) {
     const rewriteKey = options?.singleRewriteKey ?? "rewrittenFrom";
     return {
-      [kind]: single.resolvedInput,
+      [kind]: describeInput(single.resolvedInput),
       ...(single.rewrittenFrom ? { [rewriteKey]: single.rewrittenFrom } : {}),
     };
   }
   if (entries.length > 1 || options?.includeEmpty) {
     return {
       [`${kind}s`]: entries.map((entry) => ({
-        [kind]: entry.resolvedInput,
+        [kind]: describeInput(entry.resolvedInput),
         ...(entry.rewrittenFrom ? { rewrittenFrom: entry.rewrittenFrom } : {}),
       })),
     };

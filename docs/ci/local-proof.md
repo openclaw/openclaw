@@ -147,6 +147,20 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Independent full-check stages
+
+`pnpm check --stage <name>` selects from the existing `preflight`, `typecheck`,
+`lint`, and `policy` stages. Repeat the option to select several stages; execution
+keeps canonical order and runs each selected stage once. Omitting the option
+retains the complete check. `--base`, `--include-test-types`, and
+`--include-architecture` keep their usual meaning.
+
+The npm source preflight runs `preflight`, `typecheck`, and `policy` in one
+worker and `lint` (including formatting) in another. The aggregate source receipt
+requires both workers to succeed. Frozen sources whose successful help output
+does not advertise `--stage` run the original complete check once instead; they
+do not gain stage parallelism. Capability-probe failures remain failures.
+
 ### Delegating changed compilers in CI
 
 `check:changed --delegate-compilers` retains the selected formatting, lint, guards,
@@ -469,10 +483,11 @@ environment allowlist still applies. Explicit Blacksmith Testbox workflows
 hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.2 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
-before provider discovery or lease work. The original binary stays untouched.
+Testboxes alive, and verified Boat cleanup when stopping a VM deletes it. Missing
+or older binaries use a verified managed 0.83.2 release before provider discovery
+or lease work. The original binary stays untouched.
 
 For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
 binary's runtime pack before allocating a lease. Use a complete matching Crabbox
@@ -489,15 +504,12 @@ Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
-`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+Standard dispatched check leases request `blacksmith-4vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a default 60-minute total GitHub job deadline including
 hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
-`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+`blacksmith-8vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
 gates. Select it only for a justified memory need, not merely for more time; see
 [Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
-A native capacity check measured eight CPUs and 30.95 GiB of memory on the
-32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
-isolated runtime validation without increasing the number of jobs or workers.
 Workloads still admit work from observed resources; the runner label is not a
 capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
 
@@ -770,7 +782,7 @@ Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-cl
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.83.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 

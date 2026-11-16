@@ -210,7 +210,7 @@ async function proveUnchangedSandboxCommandCheckpoints(
     );
     vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementation(async (source, destination) => {
       expect(atomicCapture, "Fast small workspaces must avoid snapshot creation").not.toBe("small");
-      expect(paused).toBe(true);
+      expect(paused, "Atomic exports must not freeze the guest").toBe(false);
       if (deferredCleanup) {
         expect(await retiredCaptures(), "A previous retired capture still owns disk space").toEqual(
           [],
@@ -221,6 +221,9 @@ async function proveUnchangedSandboxCommandCheckpoints(
       }
       captures++;
       await fs.cp(source, destination, { recursive: true });
+      if (takesSnapshot && captures === 1) {
+        await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
+      }
     });
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(
       async (destination, options) => {
@@ -291,9 +294,6 @@ async function proveUnchangedSandboxCommandCheckpoints(
       pauses++;
     } else if (args[0] === "unpause") {
       paused = false;
-      if (takesSnapshot && pauses === 1) {
-        await writeText(projection.workspaceDir, "source.txt", "later background edit\n");
-      }
     }
     return { code: 0, stdout, stderr: "" };
   });
@@ -465,7 +465,7 @@ async function proveUnchangedSandboxCommandCheckpoints(
           /preCopyMs=(?:[0-9]+\.[0-9]|-) copyMs=(?:[0-9]+\.[0-9]|-) postCopyBeforeResumeMs=(?:[0-9]+\.[0-9]|-) resumeMs=[0-9]+\.[0-9] accepted=true$/u,
         );
         if (takesSnapshot || atomicCapture === "clone-unavailable") {
-          expect(messages[0]).toMatch(/preCopyMs=[0-9]+\.[0-9] copyMs=[0-9]+\.[0-9]/u);
+          expect(messages[0]).toMatch(/preCopyMs=- copyMs=[0-9]+\.[0-9]/u);
         } else {
           expect(messages[0]).toContain("preCopyMs=- copyMs=- postCopyBeforeResumeMs=-");
         }
@@ -493,7 +493,17 @@ async function proveUnchangedSandboxCommandCheckpoints(
         await expectMissing(owner.worktree.path, "source.txt");
       }
     }
-    expect(pauses).toBe(atomicCapture === "nested" ? 4 : resumeAfterCapture ? 3 : 2);
+    expect(pauses).toBe(
+      atomicCapture === true
+        ? failAcceptance
+          ? 1
+          : 0
+        : atomicCapture === "nested"
+          ? 2
+          : resumeAfterCapture
+            ? 3
+            : 2,
+    );
     if (atomicCapture) {
       await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
     }
@@ -521,7 +531,7 @@ export function registerSandboxCheckpointTests(
   );
 
   it.each([false, true])(
-    "captures before scanning while preserving post-resume writes (interrupted acceptance: %s)",
+    "captures without freezing while preserving later writes (interrupted acceptance: %s)",
     (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner(), true, interrupted, true),
   );
 

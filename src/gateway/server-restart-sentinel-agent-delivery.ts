@@ -6,6 +6,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveDeliveryQueueMediaDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -111,7 +112,10 @@ async function persistQueuedGeneratedMedia(params: {
           },
         ],
         stateDir,
-        localRoots: [getMediaDir()],
+        localRoots: [
+          getMediaDir(),
+          ...(entry.reviewedTaskId ? [resolveDeliveryQueueMediaDir(stateDir)] : []),
+        ],
       });
       if (
         !blocks.some(
@@ -310,6 +314,8 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
           "queued generated-media transcript write is waiting for the running turn",
         );
       }
+      // The queue arbitrates exact-task correction before preparing the visible write.
+      await markSessionDeliveryAttemptStarted(entry, params.queueContext);
       await persistQueuedGeneratedMedia({
         ...params,
         entry,

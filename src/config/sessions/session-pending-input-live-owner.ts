@@ -32,6 +32,7 @@ export function hydratePendingInputWorkerOwner(
     workerDatabasePath: current.databasePath,
     sources: current.sources?.map(hydrate),
     assertCurrent,
+    assertReadCurrent: assertCurrent,
     finish: () => {
       throw new Error("Worker custody cannot finish its host owner");
     },
@@ -91,29 +92,42 @@ export function publishSessionPendingInputWorkerReceipt(
 }
 
 /** A promoted input stays protected while any of its admitted sources is still live. */
-export function collectForeignLiveSessionPendingInputEntries(params: {
-  scope: { databasePath: string; sessionId: string; sessionKey: string };
-  liveOwners: Iterable<SessionPendingInputOwner>;
-  currentOwner: SessionPendingInputOwner | undefined;
-  assertLifetimeCurrent: (owner: SessionPendingInputOwner) => void;
-}): ReadonlyMap<string, string> {
+export async function collectForeignLiveSessionPendingInputEntries(
+  params: {
+    readLiveOwners: () => Iterable<SessionPendingInputOwner>;
+    currentOwner: SessionPendingInputOwner | undefined;
+    assertActive: (owner: SessionPendingInputOwner) => void;
+  },
+  scope: { databasePath: string; sessionId: string; sessionKey: string },
+): Promise<ReadonlyMap<string, string>> {
   const entries = new Map<string, string>();
-  const current = params.currentOwner?.promotedOwner ?? params.currentOwner;
-  for (const source of params.liveOwners) {
-    const owner = source.promotedOwner ?? source;
-    if (
-      owner === current ||
-      entries.has(owner.transcriptInputId) ||
-      owner.workerDatabasePath !== params.scope.databasePath ||
-      owner.sessionId !== params.scope.sessionId ||
-      owner.sessionKey !== params.scope.sessionKey
-    ) {
+  const eligible = (owner: SessionPendingInputOwner) =>
+    owner !== (params.currentOwner?.promotedOwner ?? params.currentOwner) &&
+    !entries.has(owner.transcriptInputId) &&
+    owner.workerDatabasePath === scope.databasePath &&
+    owner.sessionId === scope.sessionId &&
+    owner.sessionKey === scope.sessionKey;
+  const sources = [...params.readLiveOwners()];
+  for (const source of sources) {
+    if (!eligible(source.promotedOwner ?? source)) {
       continue;
     }
     try {
       // Check the registered source, not all siblings: one may already have settled.
-      params.assertLifetimeCurrent(source);
-      entries.set(owner.transcriptInputId, owner.idempotencyKey);
+      params.assertActive(source);
+      if (source.authority) {
+        source.authority.assertLifetimeCurrent();
+      } else {
+        const checking = source.assertReadCurrent();
+        if (checking !== undefined) {
+          await checking;
+        }
+      }
+      params.assertActive(source);
+      const owner = source.promotedOwner ?? source;
+      if (eligible(owner)) {
+        entries.set(owner.transcriptInputId, owner.idempotencyKey);
+      }
     } catch {
       // Finished, cancelled, or superseded sources no longer protect an orphan.
     }
