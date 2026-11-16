@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
@@ -58,9 +59,9 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
         });
         finalizers.unshift(() => server.stop());
         signal.throwIfAborted();
-        process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
-        process.stdout.write(`CA cert: ${ca.certPath}\n`);
-        process.stdout.write(`Capture DB: ${store.dbPath}\n`);
+        process.stdout.write(terminalText`Debug proxy: ${server.proxyUrl}\n`);
+        process.stdout.write(terminalText`CA cert: ${ca.certPath}\n`);
+        process.stdout.write(terminalText`Capture DB: ${store.dbPath}\n`);
         process.stdout.write("Press Ctrl+C to stop.\n");
         await new Promise<void>((resolve) => {
           const onSignal = () => resolve();
@@ -233,28 +234,28 @@ export async function runProxyValidateCommand(opts: {
       result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
       "",
       theme.heading("Proxy"),
-      `  Source: ${theme.muted(outputResult.config.source)}`,
-      `  URL:    ${outputResult.config.proxyUrl ?? theme.muted("not configured")}`,
+      `  Source: ${theme.muted(sanitizeTerminalText(outputResult.config.source))}`,
+      `  URL:    ${outputResult.config.proxyUrl === undefined ? theme.muted("not configured") : sanitizeTerminalText(outputResult.config.proxyUrl)}`,
     ];
     if (result.config.errors.length > 0) {
       lines.push("", theme.heading("Problems"));
       for (const error of result.config.errors) {
-        lines.push(`  - ${theme.error(error)}`);
+        lines.push(`  - ${theme.error(sanitizeTerminalText(error))}`);
       }
     }
     if (result.checks.length > 0) {
       lines.push("", theme.heading("Checks"));
       for (const check of result.checks) {
         const icon = check.ok ? theme.success("✓") : theme.error("✗");
-        const paddedKind = theme.muted(check.kind.padEnd(7, " "));
+        const paddedKind = theme.muted(sanitizeTerminalText(check.kind).padEnd(7, " "));
         const status =
           check.status === undefined
             ? ""
-            : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
+            : ` ${check.ok ? theme.success(terminalText`HTTP ${check.status}`) : theme.error(terminalText`HTTP ${check.status}`)}`;
         const detail = check.error
-          ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
+          ? ` — ${check.ok ? theme.muted(sanitizeTerminalText(check.error)) : theme.error(sanitizeTerminalText(check.error))}`
           : "";
-        lines.push(`  ${icon} ${paddedKind} ${check.url}${status}${detail}`);
+        lines.push(`  ${icon} ${paddedKind} ${sanitizeTerminalText(check.url)}${status}${detail}`);
       }
     }
     if (!result.ok) {

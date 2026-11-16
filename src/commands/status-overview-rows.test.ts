@@ -210,14 +210,17 @@ it("shows managed host desktop coordinates", () => {
 it("shows utility model capability warnings in normal and full status", () => {
   expect(value("Utility model")).toBeUndefined();
   params.summary.utilityModelWarnings = [
-    { path: "agents.defaults.utilityModel", message: "fixture-cli/small cannot disable tools." },
+    {
+      path: "agents.defaults.utilityModel\u202e",
+      message: "fixture-cli/small\u001b[2J cannot\ndisable\ttools.",
+    },
   ];
   expect(value("Utility model")).toBe(
-    "warn(agents.defaults.utilityModel: fixture-cli/small cannot disable tools.)",
+    "warn(agents.defaults.utilityModel: fixture-cli/small cannot\\ndisable\\ttools.)",
   );
   const rows = allRows();
   expect(findRowValue(rows, "Utility model")).toBe(
-    "agents.defaults.utilityModel: fixture-cli/small cannot disable tools.",
+    "agents.defaults.utilityModel: fixture-cli/small cannot\\ndisable\\ttools.",
   );
 });
 
@@ -230,7 +233,7 @@ it("builds status-all overview rows from the shared surface", () => {
         state: "degraded",
         caExpiresAt: "2036-09-01T00:00:00.000Z",
         failedCertificates: 1,
-        message: "Check OpenSSL, then retry the request.",
+        message: "Check\u001b]2;title\u0007 OpenSSL,\rthen retry the request.",
       },
       degradedSecretOwners: [
         {
@@ -243,7 +246,7 @@ it("builds status-all overview rows from the shared surface", () => {
       ],
       degradedPlugins: [
         {
-          pluginId: "discord",
+          pluginId: "dis\u001b[2Jcord\u0085\u202e",
           state: "configured-unavailable",
           diagnostic: {
             kind: "plugin-verification",
@@ -266,7 +269,7 @@ it("builds status-all overview rows from the shared surface", () => {
     Update: expect.stringContaining("behind 2"),
     "Update restart": "restart pending health verification",
     Security: "Run: openclaw security audit --deep",
-    "Secret egress proxy": "Check OpenSSL, then retry the request.",
+    "Secret egress proxy": "Check OpenSSL,\\rthen retry the request.",
     "Degraded secrets":
       "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
     "Degraded plugins": "1 configured-unavailable · discord",
@@ -283,4 +286,23 @@ it("uses unknown only when Gateway self metadata is absent", () => {
   expect(
     findRowValue(buildStatusCommandOverviewRows({ ...params, surface }), "Gateway self"),
   ).toBeUndefined();
+});
+
+it("shows pending plugin reloads in the status-all overview", () => {
+  params.summary.pluginReload = {
+    phase: "reloading",
+    pluginIds: ["com\u001b[2Jposio", "lobster\u202e"],
+    reason:
+      "Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster;\nnew agent runs wait up to the 600s drain budget. Press Ctrl+C to cancel the waiting reload.",
+  };
+  expect(findRowValue(allRows(), "Plugin reload")).toBe(
+    "reloading composio, lobster · Plugin replacement queued behind 2 retained work item(s) for plugin composio, lobster;\\nnew agent runs wait up to the 600s drain budget. Press Ctrl+C to cancel the waiting reload.",
+  );
+});
+
+it("shows plugins that failed to load in the status overview", () => {
+  params.summary.failedPlugins = ["acme\u001b[2J-heartbeat"];
+  expect(findRowValue(allRows(), "Plugins not loaded")).toBe(
+    "acme-heartbeat · data kept; retried on next start · run openclaw doctor",
+  );
 });

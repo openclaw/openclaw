@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
+import type { CapabilityEnvelope } from "./metadata.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { parseOptionalTimeoutMs, requireProviderModelOverride } from "./shared.js";
 
 describe("capability CLI model overrides", () => {
@@ -43,4 +45,27 @@ describe("capability CLI numeric option parsing", () => {
       "Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000.",
     );
   });
+});
+
+it("sanitizes envelope values and summaries without flattening multiline bodies", () => {
+  const envelope: CapabilityEnvelope = {
+    ok: true,
+    capability: "\u001b[31mmodel.run",
+    transport: "local",
+    provider: "provider\u202e",
+    model: "model\u0085",
+    attempts: [],
+    ignoredOverrides: [{ field: "\u202e" }],
+    outputs: [
+      { path: "file\npath", text: "first\u001b]2;title\u0007\nsecond\tcolumn" },
+      { value: "\u202e" },
+    ],
+  };
+  expect(formatEnvelopeForText(envelope)).toBe(
+    'model.run via local\nprovider: provider\nmodel: model\nignoredOverrides: [{"field":""}]\noutputs: 2\nfile\\npath\nfirst\nsecond\\tcolumn\n{"value":""}',
+  );
+  expect(formatEnvelopeForText({ ...envelope, ok: false, error: "fail\u0007\nnext" })).toBe(
+    "model.run failed: fail\\nnext",
+  );
+  expect(providerSummaryText([undefined, { name: "\u202e" }])).toBe('\n{"name":""}');
 });

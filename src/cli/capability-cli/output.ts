@@ -1,3 +1,7 @@
+import {
+  sanitizeTerminalText,
+  terminalText,
+} from "../../../packages/terminal-core/src/safe-text.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../../runtime.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 
@@ -16,14 +20,14 @@ export function emitJsonOrText<T>(
 
 export function formatEnvelopeForText(envelope: CapabilityEnvelope): string {
   if (!envelope.ok) {
-    return `${envelope.capability} failed: ${envelope.error ?? "unknown error"}`;
+    return terminalText`${envelope.capability} failed: ${envelope.error ?? "unknown error"}`;
   }
   const lines = [
-    `${envelope.capability} via ${envelope.transport}`,
-    ...(envelope.provider ? [`provider: ${envelope.provider}`] : []),
-    ...(envelope.model ? [`model: ${envelope.model}`] : []),
+    terminalText`${envelope.capability} via ${envelope.transport}`,
+    ...(envelope.provider ? [terminalText`provider: ${envelope.provider}`] : []),
+    ...(envelope.model ? [terminalText`model: ${envelope.model}`] : []),
     ...(envelope.ignoredOverrides && envelope.ignoredOverrides.length > 0
-      ? [`ignoredOverrides: ${JSON.stringify(envelope.ignoredOverrides)}`]
+      ? [terminalText`ignoredOverrides: ${JSON.stringify(envelope.ignoredOverrides)}`]
       : []),
     `outputs: ${String(envelope.outputs.length)}`,
   ];
@@ -33,21 +37,29 @@ export function formatEnvelopeForText(envelope: CapabilityEnvelope): string {
     if (envelope.capability === "embedding.create" && Array.isArray(output.embedding)) {
       const preview = output.embedding.slice(0, 8).join(", ");
       lines.push(
-        textValue ?? "",
-        `dimensions: ${String(output.dimensions)}`,
-        `embedding: [${preview}${output.embedding.length > 8 ? ", ..." : ""}]`,
+        (textValue ?? "").split("\n").map(sanitizeTerminalText).join("\n"),
+        terminalText`dimensions: ${String(output.dimensions)}`,
+        terminalText`embedding: [${preview}${output.embedding.length > 8 ? ", ..." : ""}]`,
       );
       continue;
     }
     if (pathValue || textValue) {
-      lines.push(...[pathValue, textValue].filter((entry): entry is string => Boolean(entry)));
+      if (pathValue) {
+        lines.push(sanitizeTerminalText(pathValue));
+      }
+      if (textValue) {
+        lines.push(textValue.split("\n").map(sanitizeTerminalText).join("\n"));
+      }
     } else {
-      lines.push(JSON.stringify(output));
+      lines.push(sanitizeTerminalText(JSON.stringify(output)));
     }
   }
   return lines.join("\n");
 }
 
 export function providerSummaryText(providers: readonly unknown[]): string {
-  return providers.map((entry) => JSON.stringify(entry)).join("\n") || "No results found.";
+  return (
+    providers.map((entry) => sanitizeTerminalText(JSON.stringify(entry) ?? "")).join("\n") ||
+    "No results found."
+  );
 }

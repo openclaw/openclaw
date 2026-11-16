@@ -53,7 +53,7 @@ const cases: {
       eventLoop: {
         degraded: true,
         degradedSinceMs: 180_000,
-        reasons: ["event_loop_delay", "cpu"],
+        reasons: ["event_loop_delay\u001b[2J", "cpu\u0007"],
         delayP99Ms: 61_000,
         delayMaxMs: 62_000,
         utilization: 1,
@@ -72,9 +72,9 @@ const cases: {
     name: "partial status warnings",
     payload: {
       partial: true,
-      warnings: ["whatsapp:default status failed: snapshot failed"],
+      warnings: ["whatsapp:default status failed:\u001b]2;title\u0007 snapshot\nfailed"],
     },
-    contains: [/Channel status is partial/, "whatsapp:default status failed: snapshot failed"],
+    contains: [/Channel status is partial/, "whatsapp:default status failed: snapshot\\nfailed"],
   },
   {
     name: "policy diagnostics without partial status",
@@ -82,15 +82,18 @@ const cases: {
       channelAccounts: { signal: [{ accountId: "default", configured: true, running: true }] },
       statusIssues: [
         {
-          channel: "signal",
-          accountId: "default",
+          channel: "signal\u001b[31m",
+          accountId: "default\u202e",
           kind: "config",
-          message: "Channel configuration reload is deferred while active work finishes.",
-          fix: "Wait for active work to finish, then refresh channel status.",
+          message: "Channel configuration\nreload is deferred\u001b]2;title\u0007",
+          fix: "Wait\rfor\tactive\u0085 work",
         },
       ],
     },
-    contains: ["running", "configuration reload is deferred", "Wait for active work to finish"],
+    contains: [
+      "running",
+      "- signal default: Channel configuration\\nreload is deferred (Wait\\rfor\\tactive work)",
+    ],
     verify: (_lines, output) => expect(output).not.toContain("status is partial"),
   },
   {
