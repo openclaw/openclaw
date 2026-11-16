@@ -437,6 +437,81 @@ function DashboardGrid(props: {
   );
 }
 
+/** A sample dashboard drawn with the app's own surfaces and accent; decorative only. */
+function DashboardSample() {
+  const tile = (value: string, change?: string) => (
+    <div class="dashboards-sample__tile">
+      <i />
+      <b>{value}</b>
+      <Show when={change}>
+        <small>{change}</small>
+      </Show>
+    </div>
+  );
+  return (
+    <div class="dashboards-sample" aria-hidden="true">
+      {tile("98.2%", "+1.4")}
+      {tile("41m", "−6m")}
+      {tile("12", "+3")}
+      <div class="dashboards-sample__tile dashboards-sample__tile--wide">
+        <i />
+        <svg viewBox="0 0 200 84" preserveAspectRatio="none">
+          <path
+            class="dashboards-sample__line"
+            d="M0 62 C22 58 30 40 50 44 S82 66 104 48 S140 14 160 22 S188 30 200 12"
+          />
+          <path
+            class="dashboards-sample__line dashboards-sample__line--muted"
+            d="M0 70 C30 68 44 60 70 62 S120 72 150 58 S184 52 200 46"
+          />
+        </svg>
+      </div>
+      <div class="dashboards-sample__tile">
+        <i />
+        <div class="dashboards-sample__bars">
+          <For each={[38, 62, 48, 84, 56, 70]}>
+            {(height, index) => (
+              <span
+                class={{ "dashboards-sample__bar--accent": index() === 3 }}
+                style={{ height: `${height}%` }}
+              />
+            )}
+          </For>
+        </div>
+      </div>
+      <div class="dashboards-sample__tile dashboards-sample__tile--wide">
+        <i />
+        <div class="dashboards-sample__lines">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+      {tile("7")}
+    </div>
+  );
+}
+
+function DashboardsEmpty(props: { handlers: DashboardGalleryHandlers }) {
+  return (
+    <section class="dashboards-empty" data-dashboards-empty>
+      <DashboardSample />
+      <div class="dashboards-empty__copy" role="status">
+        <h2>{t("dashboardsPage.emptyTitle")}</h2>
+        <p>{t("dashboardsPage.emptyDescription")}</p>
+      </div>
+      <button
+        type="button"
+        class="btn primary dashboards-empty__action"
+        onClick={() => props.handlers.onNavigate?.("new-session")}
+      >
+        <Icon name="plus" />
+        {t("dashboardsPage.newSession")}
+      </button>
+    </section>
+  );
+}
+
 function DashboardList(props: {
   data: DashboardsRouteData;
   filters: DashboardGalleryFilters;
@@ -448,15 +523,7 @@ function DashboardList(props: {
   const visibleRows = createMemo(() => visibleDashboardRows(props.data, props.filters));
   return (
     <Show when={!(props.data.error && !props.data.result)}>
-      <Show
-        when={rows().length > 0}
-        fallback={
-          <section class="card stack" data-dashboards-empty role="status">
-            <div class="list-title">{t("dashboardsPage.emptyTitle")}</div>
-            <div class="card-sub">{t("dashboardsPage.emptyDescription")}</div>
-          </section>
-        }
-      >
+      <Show when={rows().length > 0} fallback={<DashboardsEmpty handlers={props.handlers} />}>
         <section class="dashboards-gallery" aria-label={t("tabs.dashboards")}>
           <DashboardAuthorChip
             authors={authors()}

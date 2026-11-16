@@ -5,6 +5,7 @@ const enDashboards = {
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
     emptyDescription: "Ask your agent to make a dashboard in any conversation.",
+    newSession: "New session",
     loadError: "Couldn’t load dashboards. Try again. {error}",
     openFocusMode: "Open dashboard in focus mode",
     running: "Updating now",
