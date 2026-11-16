@@ -28,6 +28,26 @@ const STABLE_114_D843_CI_FAILURES = new Map([
 const RELEASE_VALIDATION_WAIVERS = [
   {
     targetVersion: "2026.11.5",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly authorized this Telegram package-job waiver on " +
+      "2026-11-16 at 18:20 UTC. FRV 43898101600/1, child 43902860005/1, job " +
+      "133430641645 passed the first 15 scenarios, then failed the quiet-progress " +
+      "assertion in scenario 16. Provider success and exactly-once final delivery " +
+      "passed before that assertion; all 18 Telegram plugin shards and the separate " +
+      "live Telegram lane passed. The candidate permits bounded Exec status text " +
+      "that differs from the frozen qualification assertion, supporting a test-contract " +
+      "mismatch rather than demonstrated P0/P1 delivery loss. Actual offending message " +
+      "text was not retained, so a display or detail-exposure defect is not ruled out. " +
+      "Later package scenarios were not proved by that failed run. Retain raw failures " +
+      "and required execution; no not-run exemption. This accepts only the named " +
+      "terminal failed job for this release, not other Gateway/native failures, " +
+      "cancelled or missing evidence, credentials, integrity, install/update, " +
+      "or publication gates.",
+  },
+  {
+    targetVersion: "2026.11.5",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",
     reason:
