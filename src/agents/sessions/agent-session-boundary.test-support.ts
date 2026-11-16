@@ -34,7 +34,7 @@ export async function extensionFixture(
   return { resourceLoader, eventBus };
 }
 
-export function compactionSettings(
+function compactionSettings(
   compaction: {
     enabled?: boolean;
     reserveTokens?: number;

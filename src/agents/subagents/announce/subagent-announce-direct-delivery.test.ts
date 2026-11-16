@@ -412,8 +412,6 @@ it.each([
   const visible = ending !== "private" && ending !== "child" && ending !== "session-only";
   if (ending === "private") {
     fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
   }
   if (ending === "child") {
     fixture.params.requesterIsSubagent = true;
@@ -464,7 +462,45 @@ it.each([
 });
 it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
-  ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
+  [
+    "cancelled requester turn",
+    { status: "timeout", stopReason: "rpc", replaySafe: true },
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "cancelled requester with unknown effects",
+    { status: "timeout", stopReason: "rpc" },
+    { disposition: undefined, reason: "requester_aborted" },
+  ],
+  [
+    "effectful tool before cancellation",
+    {
+      status: "timeout",
+      result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
+    },
+    { disposition: undefined, reason: "requester_aborted" },
+  ],
+  [
+    "committed progress before cancellation",
+    {
+      status: "timeout",
+      result: {
+        payloads: [],
+        meta: { aborted: true },
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "Progress already sent",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+    },
+    { disposition: undefined, reason: "requester_aborted" },
+  ],
   [
     "saved-state conflict with intentional suppression",
     {

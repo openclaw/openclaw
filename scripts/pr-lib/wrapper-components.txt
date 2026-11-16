@@ -365,6 +365,7 @@ src/agents/session-slug.ts
 src/agents/core-tool-facts.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
+src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
@@ -2053,6 +2054,7 @@ src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
+src/shared/subagent-completion.ts
 src/shared/tool-block-contract.ts
 src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
@@ -2548,6 +2550,7 @@ src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
 src/config/sessions/session-transcript-hydration-caller.ts
+src/config/sessions/session-transcript-hydration-decoder.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2702,6 +2705,7 @@ src/boards/board-website.ts
 src/boards/github-actions-capability.ts
 src/boards/session-actor-board-memory.ts
 src/chat/sender-identity.ts
+src/chat/transcript-display-position.ts
 src/chat/work-context.ts
 src/config/sessions/ambient-transcript-watermark-projection.ts
 src/config/sessions/cleanup-service-read.policy.ts

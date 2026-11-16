@@ -1,4 +1,8 @@
 /** Interprets direct announcement responses and the existing text-fallback receipt. */
+import {
+  classifyAgentRunTerminalOutcome,
+  resolveAgentRunWaitTerminalFacts,
+} from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -125,18 +129,34 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       !directAnnounceResult?.meta?.error &&
       !directAnnounceResult?.meta?.aborted;
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});
+    const hasCompletionSideEffect = Boolean(
+      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
+    );
     const missingVisibleReplyResult = (): SubagentAnnounceDeliveryResult => {
+      const terminal = resolveAgentRunWaitTerminalFacts(directAnnounceRecord ?? {});
+      const aborted =
+        directAnnounceResult?.meta?.aborted === true ||
+        (terminal && classifyAgentRunTerminalOutcome(terminal) === "cancellation");
+      const retryAborted =
+        aborted && directAnnounceRecord?.replaySafe === true && !automaticEvidence.mayHaveSent;
       const stateConflict =
+        !aborted &&
         !automaticEvidence.mayHaveSent &&
         isAnnounceSavedStateConflict(directAnnounceResult?.meta?.error);
       return {
         delivered: false,
         path: "direct",
-        reason: stateConflict ? "requester_state_conflict" : "visible_reply_missing",
-        error: stateConflict
-          ? summarizeDeliveryError(directAnnounceResult?.meta?.error)
-          : "completion agent did not produce a visible reply",
-        ...(requesterCompletedSuccessfully || stateConflict
+        reason: aborted
+          ? "requester_aborted"
+          : stateConflict
+            ? "requester_state_conflict"
+            : "visible_reply_missing",
+        error: aborted
+          ? "completion agent was aborted before delivering a reply"
+          : stateConflict
+            ? summarizeDeliveryError(directAnnounceResult?.meta?.error)
+            : "completion agent did not produce a visible reply",
+        ...(requesterCompletedSuccessfully || stateConflict || retryAborted
           ? { disposition: "retryable" as const }
           : {}),
       };
@@ -245,9 +265,6 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         };
       }
     }
-    const hasCompletionSideEffect = Boolean(
-      directAnnounceResult && hasCommittedOutboundDeliveryEvidence(directAnnounceResult),
-    );
     const hasVisibleRequiredCompletionReply =
       hasMessagingToolDelivery ||
       (!requiresMessageToolDelivery && hasVisibleNonSilentGatewayPayload);
