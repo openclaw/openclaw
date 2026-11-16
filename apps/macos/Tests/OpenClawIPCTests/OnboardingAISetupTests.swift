@@ -853,7 +853,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
         let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element)]
             .compactMap(\.self)
-        if element.accessibilityRole?() == .button,
+        if [.button, .disclosureTriangle].contains(element.accessibilityRole?()),
            element.isAccessibilityEnabled?() == true,
            text.contains(where: { $0 == title || (title == "API Keys" && $0.contains(title)) })
         {
@@ -931,7 +931,11 @@ private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
     colorScheme: ColorScheme = .light
 ) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
-    let snapshot = await inspectAISetupSurface(OnboardingAISetupSheet(model: model), colorScheme: colorScheme)
+    let state = model.authError != nil ? "error" : String(describing: model.providerAuthCancellation)
+    let captureName = "wizard-\(model.providerWizardKind.map { String(describing: $0) } ?? "none")-" +
+        "\(model.authStep?.id ?? "starting")-\(state)-\(colorScheme == .dark ? "dark" : "light")"
+    let snapshot = await inspectAISetupSurface(
+        OnboardingAISetupSheet(model: model), colorScheme: colorScheme, captureName: captureName)
     #expect(snapshot.actions["Cancel"] != nil)
     return snapshot
 }
@@ -939,7 +943,8 @@ private func inspectAISetupSheet(
 @MainActor
 private func inspectAISetupSurface(
     _ content: some View,
-    colorScheme: ColorScheme = .light
+    colorScheme: ColorScheme = .light,
+    captureName: String? = nil
 ) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
     // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
     await TestIsolation.withIsolatedState {
@@ -947,10 +952,12 @@ private func inspectAISetupSurface(
         var appeared = false
         let hosting = NSHostingView(rootView: content
             .environment(\.colorScheme, colorScheme)
+            .background(Color(nsColor: .windowBackgroundColor))
             .onAppear { appeared = true })
         hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 500)
         // Keep the sheet mounted through the AX request and detach it before closing.
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         defer {
@@ -971,6 +978,23 @@ private func inspectAISetupSurface(
             Issue.record(error)
             snapshot = ([], [:])
         }
+        if let captureName,
+           let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"]
+        {
+            do {
+                hosting.layoutSubtreeIfNeeded()
+                hosting.displayIfNeeded()
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                let name = captureName.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "-", options: .regularExpression)
+                let root = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+                try png.write(to: root.appendingPathComponent("\(name).png"))
+            } catch {
+                Issue.record(error)
+            }
+        }
         return (snapshot.labels, snapshot.actions, hosting.fittingSize)
     }
 }
@@ -978,8 +1002,11 @@ private func inspectAISetupSurface(
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct OnboardingAISetupTests {
-    @Test(arguments: [false, true])
-    func `two path onboarding keeps discovery passive and local setup reachable`(hasLocalModel: Bool) async throws {
+    @Test(arguments: [false, true], [ColorScheme.light, .dark])
+    func `two path onboarding keeps discovery passive and local setup reachable`(
+        hasLocalModel: Bool,
+        colorScheme: ColorScheme) async throws
+    {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "ThinkingOnboarding"))
         let harness = try AISetupHarness(
             url: #require(URL(string: "ws://example.invalid")),
@@ -1026,9 +1053,12 @@ struct OnboardingAISetupTests {
 
             _ = AppKitTestSupport.application
             let hosting = NSHostingView(rootView: view.aiSetupPage(contentHeight: 600)
+                .environment(\.colorScheme, colorScheme)
+                .transaction { $0.disablesAnimations = true }
                 .background(Color(nsColor: .windowBackgroundColor)))
             hosting.frame = NSRect(x: 0, y: 0, width: 630, height: 600)
             let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
             window.isReleasedWhenClosed = false
             window.contentView = hosting
             defer {
@@ -1043,21 +1073,23 @@ struct OnboardingAISetupTests {
             func capture(_ name: String) throws {
                 guard let directory = ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_CAPTURE_DIR"] else { return }
                 hosting.layoutSubtreeIfNeeded()
+                hosting.displayIfNeeded()
                 let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
                 let png = try #require(bitmap.representation(using: .png, properties: [:]))
                 let root = URL(fileURLWithPath: directory, isDirectory: true)
                 try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-                try png.write(to: root.appendingPathComponent("\(name)-\(hasLocalModel ? "found" : "fresh").png"))
+                try png.write(to: root.appendingPathComponent("\(name)-\(hasLocalModel ? "found" : "fresh")-\(colorScheme == .dark ? "dark" : "light").png"))
             }
 
-            try capture("choices")
             var snapshot = try await inspectAISetupAccessibility(hosting)
             #expect(snapshot.labels.contains("Get OpenClaw thinking."))
             #expect(snapshot.actions["Connect an AI account"] == true)
             #expect(snapshot.actions["Use a local model"] == true)
             #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
             #expect(!snapshot.labels.contains { $0.contains("Sign in with ChatGPT (Beta)") })
+
+            try capture("choices")
 
             try await pressOnboardingEntryButton("Use a local model", in: hosting)
             try await TestWait.state("local setup page") {
@@ -1070,6 +1102,19 @@ struct OnboardingAISetupTests {
             }
             #expect(!snapshot.actions.keys.contains { $0.contains("API Keys") })
             try capture("local")
+
+            if hasLocalModel {
+                try await pressOnboardingEntryButton("Set up a different model", in: hosting)
+                try await TestWait.state("explicit managed setup after discovery") {
+                    try await inspectAISetupAccessibility(hosting).actions["Find a model"] == true
+                }
+                try capture("local-different-model")
+            }
+            try await pressOnboardingEntryButton("Other model services and advanced settings", in: hosting)
+            try await TestWait.state("advanced model services") {
+                try await inspectAISetupAccessibility(hosting).labels.contains { $0.contains("Ollama") }
+            }
+            try capture("local-advanced")
             try await pressOnboardingEntryButton("Back", in: hosting)
             try await TestWait.state("connection choices restored") {
                 try await inspectAISetupAccessibility(hosting).actions["Connect an AI account"] == true
@@ -1086,6 +1131,7 @@ struct OnboardingAISetupTests {
             try await TestWait.state("explicit key entry") {
                 try await inspectAISetupAccessibility(hosting).labels.contains("Connect with an API key or token")
             }
+            try capture("account-api-key-entry")
             #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect"])
         } catch {
             await harness.gateway.shutdown()
