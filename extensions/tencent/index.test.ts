@@ -73,7 +73,12 @@ function capturePayload(
 
 describe("tencent provider plugin", () => {
   it.each([
-    ["tokenhub", "TokenHub", buildTokenHubProvider, ["hy4-preview", "hy4", "hy4-flash", "hy3", "hy3-preview"]],
+    [
+      "tokenhub",
+      "TokenHub",
+      buildTokenHubProvider,
+      ["hy4-preview", "hy4", "hy4-flash", "hy3", "hy3-preview"],
+    ],
     ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy4", "hy4-flash", "hy3"]],
   ] as const)(
     "%s auth preserves merge rows and configures its provider in replace mode",

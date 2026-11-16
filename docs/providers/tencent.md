@@ -101,17 +101,17 @@ on the server.
 
 ## Built-in catalog
 
-| Model ref                       | Name                    | Input       | Context   | Max output | Notes                          |
-| ------------------------------- | ----------------------- | ----------- | --------- | ---------- | ------------------------------ |
-| `tencent-tokenhub/hy4-preview`  | hy4 preview (TokenHub)  | text        | 1,024,000 | 64,000     | reasoning-enabled; **default** |
-| `tencent-tokenhub/hy4`          | hy4 (TokenHub)          | text, image | 1,024,000 | 64,000     | reasoning-enabled; vision      |
+| Model ref                       | Name                    | Input       | Context   | Max output | Notes                                |
+| ------------------------------- | ----------------------- | ----------- | --------- | ---------- | ------------------------------------ |
+| `tencent-tokenhub/hy4-preview`  | hy4 preview (TokenHub)  | text        | 1,024,000 | 64,000     | reasoning-enabled; **default**       |
+| `tencent-tokenhub/hy4`          | hy4 (TokenHub)          | text, image | 1,024,000 | 64,000     | reasoning-enabled; vision            |
 | `tencent-tokenhub/hy4-flash`    | hy4 flash (TokenHub)    | text, image | 1,048,576 | 65,536     | reasoning-enabled; vision; fast tier |
-| `tencent-tokenhub/hy3`          | hy3 (TokenHub)          | text        | 256,000   | 128,000    | reasoning-enabled; previous GA |
-| `tencent-tokenhub/hy3-preview`  | hy3 preview (TokenHub)  | text        | 256,000   | 128,000    | deprecated; use `hy4-preview`  |
-| `tencent-tokenplan/hy4-preview` | hy4 preview (TokenPlan) | text        | 1,024,000 | 64,000     | reasoning-enabled; **default** |
-| `tencent-tokenplan/hy4`         | hy4 (TokenPlan)         | text, image | 1,024,000 | 64,000     | reasoning-enabled; vision      |
+| `tencent-tokenhub/hy3`          | hy3 (TokenHub)          | text        | 256,000   | 128,000    | reasoning-enabled; previous GA       |
+| `tencent-tokenhub/hy3-preview`  | hy3 preview (TokenHub)  | text        | 256,000   | 128,000    | deprecated; use `hy4-preview`        |
+| `tencent-tokenplan/hy4-preview` | hy4 preview (TokenPlan) | text        | 1,024,000 | 64,000     | reasoning-enabled; **default**       |
+| `tencent-tokenplan/hy4`         | hy4 (TokenPlan)         | text, image | 1,024,000 | 64,000     | reasoning-enabled; vision            |
 | `tencent-tokenplan/hy4-flash`   | hy4 flash (TokenPlan)   | text, image | 1,048,576 | 65,536     | reasoning-enabled; vision; fast tier |
-| `tencent-tokenplan/hy3`         | hy3 (TokenPlan)         | text        | 256,000   | 128,000    | reasoning-enabled; previous GA |
+| `tencent-tokenplan/hy3`         | hy3 (TokenPlan)         | text        | 256,000   | 128,000    | reasoning-enabled; previous GA       |
 
 `hy4-preview` is Tencent Hunyuan's large MoE language model for reasoning, long-context instruction following, code, and agent workflows. Tencent's OpenAI-compatible examples use `hy4-preview` as the model id and support standard chat-completions tool calling plus `reasoning_effort`.
 
