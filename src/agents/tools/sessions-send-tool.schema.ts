@@ -75,6 +75,16 @@ export const SessionsSendOutputSchema = Type.Union([
       runId: Type.String(),
       status: Type.Union([Type.Literal("error"), Type.Literal("forbidden")]),
       error: Type.String(),
+      followupAccess: Type.Optional(
+        Type.Object(
+          {
+            phase: Type.Union([Type.Literal("admission"), Type.Literal("revocation")]),
+            endpoint: Type.Union([Type.Literal("parent"), Type.Literal("child")]),
+            code: Type.String(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
       selfHold: Type.Optional(
         Type.Object(
           {

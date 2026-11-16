@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admission-refusal.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { SessionFollowupAccessError } from "../../gateway/session-mutation-authorization-error.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEventEntry } from "../../infra/system-events.js";
@@ -48,6 +49,7 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import type { SessionSendReplyAdmission } from "./sessions-send-communication.js";
+import { sendFollowupAccessFailure } from "./sessions-send-helpers.js";
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
 import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
@@ -522,12 +524,16 @@ function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
   return {
     selfHeld: readAgentSelfHeldRefusal(error),
     ok: false as const,
-    result: jsonResult({
-      runId: params.runId,
-      status: "error",
-      error: error instanceof Error ? error.message : typeof error === "string" ? error : "error",
-      sessionKey: params.sessionKey,
-    }),
+    result:
+      error instanceof SessionFollowupAccessError
+        ? sendFollowupAccessFailure(error, params.runId)
+        : jsonResult({
+            runId: params.runId,
+            status: "error",
+            error:
+              error instanceof Error ? error.message : typeof error === "string" ? error : "error",
+            sessionKey: params.sessionKey,
+          }),
   };
 }
 

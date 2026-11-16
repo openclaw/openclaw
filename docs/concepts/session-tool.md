@@ -361,6 +361,21 @@ and input preparation. If admission rejects the turn, the send returns an error
 and the turn does not start. A requested state watch is installed only after
 successful admission.
 
+Retained followup result custody additionally checks generic session-mutation
+authority for both the requester (parent) and target (child), in that order.
+Session-tool visibility, a scoped child grant, or parent lineage can admit a send
+without satisfying those additional checks. Child creation or ownership does not
+override the parent's mutation policy, the allowed-agent ceiling, or sandbox
+requirements. These checks remain current for the lifetime of retained custody.
+
+An endpoint policy denial returns `followupAccess` with `phase` (`admission` for
+the initial check, `revocation` after admission), `endpoint` (`parent` or `child`),
+and the policy's `code` (for example `INVALID_REQUEST` or `FORBIDDEN`). The diagnostic
+does not include session keys, identities, policy messages, or policy details. A
+hidden-session denial retains its generic category rather than revealing whether
+the conversation exists. A denial alone is not evidence that permissions changed
+or that ownership overrides another policy.
+
 For native-child followups with in-process one-way result delivery, yielding to
 accepted children keeps the same logical result obligation. Its exact admitted continuation returns
 one final result; an empty yielded predecessor is not a completed `no_reply`.

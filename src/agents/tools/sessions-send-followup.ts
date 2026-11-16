@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { SessionFollowupAccessError } from "../../gateway/session-mutation-authorization-error.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -37,7 +38,16 @@ export async function startSessionsSendFollowup(
   >,
 ) {
   const dispatch = () => startSessionsSendAgentRun(params);
-  const start = request ? await withFollowupRequest(request, dispatch) : await dispatch();
+  let start = request ? await withFollowupRequest(request, dispatch) : await dispatch();
+  const denied = request?.custody.signal.reason;
+  if (!start.ok && !start.selfHeld && denied instanceof SessionFollowupAccessError) {
+    // RPC can normalize the thrown type; the retained owner still holds its safe verdict.
+    const { sessionKey: _sessionKey, ...details } = start.result.details;
+    start = {
+      ...start,
+      result: jsonResult({ ...details, error: denied.message, followupAccess: denied.denial }),
+    };
+  }
   const completion = request?.completion;
   if (!start.ok) {
     if (completion?.accepted && request) {
@@ -294,7 +304,9 @@ export async function dispatchSessionsSendFollowup(
           status: "error",
           error: formatErrorMessage(failure),
           sentBeforeError: true,
-          sessionKey: replyContext.displayKey,
+          ...(error instanceof SessionFollowupAccessError
+            ? { followupAccess: error.denial }
+            : { sessionKey: replyContext.displayKey }),
         }),
       },
       completion,

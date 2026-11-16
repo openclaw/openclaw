@@ -5,6 +5,7 @@ import {
 } from "../../channels/plugins/index.js";
 import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { SessionFollowupAccessError } from "../../gateway/session-mutation-authorization-error.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { readLatestAssistantReply, type AgentWaitResult } from "../run-wait.js";
@@ -31,6 +32,20 @@ export function sendFailure(
     status,
     error,
     ...(sessionKey !== undefined ? { sessionKey } : {}),
+  });
+}
+
+export function sendFollowupAccessFailure(
+  error: SessionFollowupAccessError,
+  runId: string,
+  sentBeforeError = false,
+) {
+  return jsonResult({
+    runId,
+    status: error.denial.phase === "admission" ? "forbidden" : "error",
+    error: error.message,
+    followupAccess: error.denial,
+    ...(sentBeforeError ? { sentBeforeError: true } : {}),
   });
 }
 
