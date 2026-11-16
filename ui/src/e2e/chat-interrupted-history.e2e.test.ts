@@ -27,7 +27,8 @@ suite.define(() => {
       await thread.getByText("Interrupted", { exact: true }).waitFor();
       await thread.locator(".chat-activity-group__summary").first().waitFor();
       await thread.locator(".chat-activity-group__summary").first().click();
-      await thread.getByText("Inspect fixture 1", { exact: true }).waitFor();
+      await thread.getByText("fixture-0-0.txt", { exact: true }).waitFor();
+      await thread.getByText("fixture-0-1.txt", { exact: true }).waitFor();
       await page.reload();
       await thread.getByText(interruptedChatCommentary[1]!, { exact: true }).waitFor();
       await thread.getByText("Interrupted", { exact: true }).waitFor();

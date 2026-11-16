@@ -22,7 +22,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
 import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {

@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PostgresSyncConnection } from "./postgres-sync/connection.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { resolveUpdateSqlitePath } from "./update-database-path.js";
 
 // Generic database paths only need to know whether an update capture is active. The capture

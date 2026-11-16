@@ -92,12 +92,12 @@ it("serves HTTP liveness while runtime IO is held and publishes current draining
 
         const stat = fsp.stat;
         using _ = vi.spyOn(fsp, "stat").mockImplementation(async (...args) => {
-          const result = await stat(...args);
+          const identity = await stat(...args);
           if (args[0] === process.execPath) {
             entered.resolve();
             await resume.promise;
           }
-          return result;
+          return identity;
         });
         const ready = probe("/readyz").then((response) => {
           readyResponded = true;

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import {
   admitModelTurn,
   completionConfig,
@@ -18,7 +19,11 @@ import { readTranscriptEventMessage } from "../../config/sessions/session-access
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import type { DeferredCronNotifications } from "../../cron/service/state.js";
+import { applyJobResult } from "../../cron/service/timer-outcomes.js";
+import { createChatAbortSignalReason } from "../../gateway/chat-abort.js";
 import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -350,7 +355,16 @@ it.for([
   },
 );
 
-it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalled"] as const)(
+it.for([
+  "user",
+  "caller",
+  "auth-revoked",
+  "restart",
+  "superseded",
+  "frozen-superseded",
+  "timeout",
+  "stalled",
+] as const)(
   "preserves controller-owned %s through the scheduled event receipt",
   async (reason, { signal }) => {
     await withOpenClawTestState(
@@ -378,29 +392,37 @@ it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalle
             }
             owner.supersede();
             expect(owner.abortSignal.aborted).toBe(reason !== "frozen-superseded");
+          } else if (reason === "user") {
+            owner.abortByUser();
+          } else if (reason === "auth-revoked") {
+            owner.abort(createChatAbortSignalReason("auth-revoked"));
           } else {
             owner.abort(
               reason === "timeout"
                 ? new DOMException("deadline", "TimeoutError")
                 : reason === "restart"
                   ? createAgentRunRestartAbortError()
-                  : undefined,
+                  : new DOMException("caller stopped", "AbortError"),
             );
             expect(owner.result).toMatchObject({ kind: "aborted" });
           }
           return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
         });
+        const startedAt = Date.now();
+        const job = makeCronJob({
+          id: "owned-stop-job",
+          agentId: "main",
+          sessionTarget: `session:${scope.sessionKey}`,
+          schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+          state: { nextRunAtMs: startedAt },
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "Wait for cancellation." },
+        });
         try {
           const outcome = await runGatewayCronSessionEvent(
             {
               occurrence: TEST_SCHEDULED_OCCURRENCE,
-              job: makeCronJob({
-                id: "owned-stop-job",
-                agentId: "main",
-                sessionTarget: `session:${scope.sessionKey}`,
-                delivery: { mode: "none" },
-                payload: { kind: "agentTurn", message: "Wait for cancellation." },
-              }),
+              job,
               text: "Wait for cancellation.",
               admissionSource: "operator-schedule",
               deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
@@ -410,15 +432,46 @@ it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalle
             createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
           );
           expect(outcome).toMatchObject({ status: "error", executionStarted: true });
-          if (reason === "timeout") {
+          if (reason === "timeout" || reason === "stalled" || reason === "caller") {
             expect(outcome.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
-          } else if (reason === "stalled") {
-            expect(outcome.errorClassification?.kind).not.toBe("aborted");
+          } else if (reason === "auth-revoked") {
+            expect(outcome.errorClassification).toEqual({
+              kind: "reason",
+              reason: "auth_permanent",
+            });
           } else {
             expect(outcome.errorClassification).toEqual({ kind: "aborted" });
             expect(outcome.interruptedByRestart).toBe(reason === "restart");
           }
           expect(model).toHaveBeenCalledOnce();
+          const cron = createCronRegressionState({
+            storePath: state.statePath("cron", "jobs.json"),
+            runIsolatedAgentJob: async () => ({ status: "ok" }),
+          });
+          const deferredNotifications: DeferredCronNotifications = [];
+          const endedAt = Date.now();
+          applyJobResult(
+            cron,
+            job,
+            {
+              ...outcome,
+              startedAt,
+              endedAt,
+              errorReason: resolveCronRunErrorReason(
+                outcome.error,
+                outcome.provider,
+                outcome.errorClassification,
+              ),
+            },
+            { deferredNotifications },
+          );
+          const retry = ["timeout", "stalled", "caller", "restart"].includes(reason);
+          expect(job.enabled).toBe(retry);
+          if (retry) {
+            expect(job.state.nextRunAtMs).toBe(endedAt + (reason === "restart" ? 2_000 : 30_000));
+            expect(job.state.autoDisabled).toBeUndefined();
+          }
+          expect(deferredNotifications).toHaveLength(reason === "auth-revoked" ? 1 : 0);
         } finally {
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();

@@ -211,7 +211,7 @@ for (const end of ["disable", "stop"] as const) {
     const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
     const directory = path.join(claw.stateDir, "openclaw-id");
     const endpointFile = path.join(directory, "endpoint.key");
-    const { key: endpoint } = loadOrCreateEndpointKey(endpointFile);
+    const { key: endpoint } = await loadOrCreateEndpointKey(endpointFile);
     const record = (await readStoredClaw())!;
     // Bootstrap a signed fixture whose two active key files match its binding.
     await writeStoredClaw({
@@ -235,14 +235,17 @@ for (const end of ["disable", "stop"] as const) {
       ["gateway.key", "endpoint.key"].map((file) => fs.readFileSync(path.join(directory, file)));
     const beforeKeys = activeKeys();
     const nextEndpoint = formatIrohEndpointKey(
-      Buffer.from(ed25519PublicKeyHex(loadOrCreateEndpointKey(`${endpointFile}.next`).key), "hex"),
+      Buffer.from(
+        ed25519PublicKeyHex((await loadOrCreateEndpointKey(`${endpointFile}.next`)).key),
+        "hex",
+      ),
     );
     vi.spyOn(tunnelRuntime, "stageEndpointKey").mockResolvedValue(nextEndpoint);
     const binding = await signStatement(
       "ServerBinding",
       {
         ...before!.binding!.body,
-        k_gw: stageGatewayKey(claw.stateDir),
+        k_gw: await stageGatewayKey(claw.stateDir),
         k_srv: nextEndpoint,
         binding_seq: 2,
       },

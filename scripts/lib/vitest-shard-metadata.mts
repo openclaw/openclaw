@@ -142,7 +142,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // seconds balance files; complete shard spans still own elapsed admission.
   ["src/gateway/server-methods/agent.test.ts", 82],
   ["src/gateway/server-methods/chat.directive-tags.test.ts", 38],
-  ["src/gateway/server-methods/sessions-rewind.storage.test.ts", 33],
   ["src/gateway/server-methods/sessions-rewind.test.ts", 32],
   ["src/gateway/server-methods/session-catalog-privacy.test.ts", 24],
   ["src/gateway/server-methods/chat.reset-visible-yield.test.ts", 24],
@@ -189,9 +188,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/commands/doctor-config-flow.test.ts", 21.1],
   ["src/commands/doctor-config-flow.workspace-persistence.test.ts", 22.5],
   ["src/commands/doctor-config-preflight.admission.process.test.ts", 23.7],
-  ["src/commands/doctor-config-preflight.plugin-deferral.test.ts", 79.4],
   ["src/commands/doctor-config-preflight.pristine.process.test.ts", 32.1],
-  ["src/commands/doctor-config-preflight.process.test.ts", 37.4],
   // Testbox run 35529032951: the expanded rollback corpus takes 194.3s serial.
   ["src/commands/doctor-config-preflight.refusal.process.test.ts", 194.3],
   ["src/commands/doctor-config-preflight.state-migration-input.test.ts", 27.5],
@@ -328,7 +325,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
-  ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   // Preserved case maxima from PR runs 36394634707, 36394423189 and

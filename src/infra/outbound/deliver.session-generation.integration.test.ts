@@ -148,7 +148,7 @@ it("retains a completed result through temporary lifecycle unavailability", asyn
   });
 });
 
-it("replays every same-generation result and terminalizes only revoked unsent results", async () => {
+it("replays queued results to the conversation key across a reset", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { generation, update, send } = fixture();
     const enqueue = (id: string) =>
@@ -177,10 +177,10 @@ it("replays every same-generation result and terminalizes only revoked unsent re
     await replay();
     expect(send.mock.calls.map((call) => call[1])).toEqual(ids);
     expect(await Promise.all(ids.map((id) => loadPendingDelivery(id)))).toEqual([null, null]);
-    await enqueue("sessions-send:revoked");
+    await enqueue("sessions-send:after-reset");
     update("reset");
     await replay();
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(queueStatus("sessions-send:revoked")).toBe("failed");
+    expect(send.mock.calls.map((call) => call[1])).toEqual([...ids, "sessions-send:after-reset"]);
+    expect(await loadPendingDelivery("sessions-send:after-reset")).toBeNull();
   });
 });
