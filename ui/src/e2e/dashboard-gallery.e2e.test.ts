@@ -525,7 +525,10 @@ suite.define(() => {
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
         );
-        await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
+        // The pages menu closed on the choice; its Dashboards item no longer reads as current.
+        await page
+          .locator('a.nav-item[href="/dashboards"]:not([aria-current])')
+          .waitFor({ state: "attached" });
         await noteInput.waitFor();
         expect(await noteInput.inputValue()).toBe(notes);
         expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);
