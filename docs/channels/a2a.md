@@ -101,7 +101,7 @@ and terminal state remain attached to the original task ID, so the peer can keep
 `GetTask`. Queued replies do not require an outbound peer URL or start a reverse-direction message.
 In `steer` queue mode, a message steered into the active turn settles its own task when that
 turn ends, with the replies the turn delivered after the message joined it, or
-`TASK_STATE_FAILED` if the turn fails.
+`TASK_STATE_FAILED` if the turn fails or is stopped.
 
 Older clients can use `message/send` as an alias for `SendMessage`.
 

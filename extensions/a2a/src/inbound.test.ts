@@ -252,19 +252,20 @@ describe("A2A channel inbound dispatch", () => {
   );
 
   it.each([
-    ["completes", false, "TASK_STATE_COMPLETED"],
-    ["fails", true, "TASK_STATE_FAILED"],
-  ])(
+    ["completes", "completed", "TASK_STATE_COMPLETED", undefined],
+    ["fails", "failed", "TASK_STATE_FAILED", "Agent run failed"],
+    ["is cancelled", undefined, "TASK_STATE_FAILED", "Agent run aborted"],
+  ] as const)(
     "settles a message steered into the active run when that run %s",
-    async (_l, failed, state) => {
+    async (_l, outcome, state, status) => {
       const run = Promise.withResolvers<void>();
       const steered = fixture.store.create(fixture.task.contextId, "hermes", "steered");
       fixture.store.start(steered.id);
       fixture.dispatch
         .mockImplementationOnce(async (turn) => {
           await run.promise;
-          if (failed) {
-            turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+          if (outcome) {
+            turn.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
           }
           return dispatched(turn);
         })
@@ -280,9 +281,14 @@ describe("A2A channel inbound dispatch", () => {
       run.resolve();
       await host;
       expect(steered.status.state).toBe(state);
-      expect(steered.artifacts).toEqual(
-        failed ? [] : [{ artifactId: expect.any(String), parts: [{ text: "TWO" }] }],
-      );
+      if (outcome === "completed") {
+        expect(steered.artifacts).toEqual([
+          { artifactId: expect.any(String), parts: [{ text: "TWO" }] },
+        ]);
+      } else {
+        expect(steered.artifacts).toEqual([]);
+        expect(steered.status.message?.parts).toEqual([{ text: status }]);
+      }
     },
   );
 

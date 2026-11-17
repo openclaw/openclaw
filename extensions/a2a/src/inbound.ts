@@ -146,6 +146,8 @@ export async function dispatchA2aInbound(params: {
     activeRuns.set(route.sessionKey, ownRun);
   }
   let runFailed = false;
+  // Core reports completed or failed runs; a cancelled run reports neither.
+  let runCompleted = false;
   try {
     const dispatch = await params.channelRuntime.inbound.dispatch({
       cfg: params.config,
@@ -171,7 +173,9 @@ export async function dispatchA2aInbound(params: {
         sourceReplyDeliveryMode: "automatic",
         onQueuedFollowupReplyBatch: deliverQueuedReply,
         onAgentRunTerminalOutcome: (outcome) => {
-          if (outcome === "failed") {
+          if (outcome === "completed") {
+            runCompleted = true;
+          } else {
             runFailed = true;
             void params.store.fail(params.taskId, "Agent run failed").catch(reportPersistenceError);
           }
@@ -209,7 +213,9 @@ export async function dispatchA2aInbound(params: {
       activeRuns.delete(route.sessionKey);
       const completion: RunCompletion = runFailed
         ? { kind: "failed", error: "Agent run failed" }
-        : { kind: "completed" };
+        : runCompleted
+          ? { kind: "completed" }
+          : { kind: "aborted" };
       ownRun.completion = completion;
       await Promise.all(ownRun.steered.map((settleSteered) => settleSteered(completion)));
     }
