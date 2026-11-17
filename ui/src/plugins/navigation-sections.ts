@@ -77,11 +77,13 @@ export function navigationItemCurrent(
   location: OpenLocation,
   section: boolean,
 ): boolean {
-  return (
-    pageOpen(entry, location) ||
-    (section &&
-      registrations.some((child) => sameParent(child, entry) && pageOpen(child, location)))
-  );
+  const childOpen = () =>
+    registrations.some((child) => sameParent(child, entry) && pageOpen(child, location));
+  // A child can share its parent's path and select its page through query parameters.
+  // Only an item representing the whole section also marks its children's pages.
+  return section
+    ? pageOpen(entry, location) || childOpen()
+    : pageOpen(entry, location) && !childOpen();
 }
 
 /** A child shown in its parent's section; one whose parent is not registered stands alone. */

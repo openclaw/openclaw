@@ -13,24 +13,42 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 
 it.each([
-  [[], []],
-  [["plugin:workboard/board-b1"], ["plugin:workboard/board-b1"]],
-  [["plugin:workboard/workboard"], ["plugin:workboard/workboard"]],
-  [["plugin:workboard/workboard", "plugin:workboard/board-b1"], ["plugin:workboard/board-b1"]],
-  [["plugin:workboard/board-b2"], []],
-])("marks one rail item for an open board with pins %j", async (pins, marked) => {
+  ["path", [], []],
+  ["path", ["plugin:workboard/board-b1"], ["plugin:workboard/board-b1"]],
+  ["path", ["plugin:workboard/workboard"], ["plugin:workboard/workboard"]],
+  [
+    "path",
+    ["plugin:workboard/workboard", "plugin:workboard/board-b1"],
+    ["plugin:workboard/board-b1"],
+  ],
+  ["path", ["plugin:workboard/board-b2"], []],
+  ["query", ["plugin:workboard/workboard"], ["plugin:workboard/workboard"]],
+  [
+    "query",
+    ["plugin:workboard/workboard", "plugin:workboard/board-b1"],
+    ["plugin:workboard/board-b1"],
+  ],
+] as const)("marks one rail item (%s, pins %j)", async (address, pins, marked) => {
   const moreMarked = marked.length === 0;
   // A board's own page is open; only the rail item that shows it is marked.
   const original = window.location.href;
   onTestFinished(() => window.history.replaceState(null, "", original));
-  window.history.replaceState(null, "", "/workboard/b1");
+  window.history.replaceState(
+    null,
+    "",
+    address === "query" ? "/workboard?board=b1&filter=mine" : "/workboard/b1",
+  );
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
   gateway.publish({ selfUser: { id: "self", name: "Self" } });
   const context = createContext(gateway.gateway, createSessionsHarness("main", []).sessions);
   const host = {
     navigation: {
       pageHref: ({ params }: { params?: Record<string, string> }) =>
-        params?.board ? `/workboard/${params.board}` : "/workboard",
+        params?.board
+          ? address === "query"
+            ? `/workboard?board=${params.board}`
+            : `/workboard/${params.board}`
+          : "/workboard",
     },
   };
   const item = (id: string, board?: string) => ({
