@@ -3,6 +3,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { filterStringEntries } from "@openclaw/normalization-core";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { seedDeferredWorkspaceDefaults } from "../agents/workspace-preparation.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -227,7 +228,7 @@ export async function runTemplatesAddCommand(
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
-      emitTemplateFailure(opts.json, message, {
+      emitTemplateFailure(opts.json, sanitizeTerminalText(message), {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
         ok: false,
@@ -293,13 +294,18 @@ async function runTemplatesAddFromSource(
     diagnostics: result.diagnostics,
     context: {
       config,
+      resolvePreferredModel: async (requested) => {
+        const { resolveLocalTemplatePreferredModel } =
+          await import("../templates/preferred-model-runtime.js");
+        return resolveLocalTemplatePreferredModel(requested, config);
+      },
       agentId: opts.agentId,
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
       existingAgentIds,
       existingWorkspacePaths: existingAgentIds.map((agentId) =>
         resolveAgentWorkspaceDir(config, agentId),
       ),
-      existingMcpServers: listedMcpServers.mcpServers,
+      existingMcpServers: listedMcpServers.authoredConfig?.mcp?.servers ?? {},
       packagePreflight: (pkg, workspace, sourceContext) =>
         preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },
@@ -464,7 +470,7 @@ async function runTemplatesAddFromSource(
         });
         const { withLocalCronService } = await import("../cron/local-service.js");
         const { createTemplateCronGateway } = await import("../templates/cron-gateway.js");
-        return await withLocalCronService(getRuntimeConfig, async (cron) =>
+        const applied = await withLocalCronService(getRuntimeConfig, async (cron) =>
           applyTemplateAddPlanStateless(plan, {
             ...conversation,
             config,
@@ -482,6 +488,14 @@ async function runTemplatesAddFromSource(
             cronGateway: createTemplateCronGateway(cron, getRuntimeConfig, assertCurrent),
           }),
         );
+        if (applied.agentRetained && applied.status !== "complete") {
+          // Offline Add has no resume, so the package BOOTSTRAP.md stays held.
+          await seedDeferredWorkspaceDefaults(
+            plan.agent.workspace,
+            getRuntimeConfig().agents?.defaults,
+          );
+        }
+        return applied;
       },
     );
   } catch (error) {

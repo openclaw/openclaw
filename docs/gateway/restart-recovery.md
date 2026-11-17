@@ -76,7 +76,9 @@ without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
-and output pipes. On macOS and Linux, any remaining referenced handles get a
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
@@ -196,6 +198,12 @@ database unavailable` with its agent ID; it does not suppress another agent's
 recovery. Recovery runs after database preparation ends, under the session's
 current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
+
+Runtime status and automation-list notifications do not invalidate a resumed
+turn's stored session generation. Compaction and subsequent tool calls retain the
+same admitted owner; session replacement, revocation, and uncertain storage changes
+still refuse stale authority. Model fallback does not retry a refused session
+generation, because selecting another model cannot restore that authority.
 
 The boot owner retains each agent's pending crash intervals in the existing shared
 SQLite machine-state store until its recovery pass completes, including an empty
@@ -583,9 +591,9 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running ordinary (non-durable) background exec processes, that same input also says:
-
-> Background exec processes were stopped; rerun them if still needed.
+Background commands that were waiting to wake the conversation are reported
+separately, with a notice for each command, after any restart, including a crash. See
+[lost background commands](/gateway/background-process#lost-background-commands).
 
 This is a new input, not a replay of the original user prompt or unfinished tool
 call. Later model requests can contain the text as conversation history. The
@@ -615,7 +623,9 @@ stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
 conversation. The resume input inherits no old browser connection, approval, or
 requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device.
+revalidated authority of the person's recorded device. A resumed Control UI task
+can update pinned dashboard widgets under that admitted authority without a
+connected browser. Inline widgets still require a connected capable client.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash
@@ -674,6 +684,12 @@ keeps one requester authority, including when a paused child continues in a new
 turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
+
+If shutdown interrupts the requester while it is processing a captured child
+result, that settle input keeps its completion obligation. Startup resumes the
+same input under fresh authority instead of also sending a generic restart
+input. Its original transcript entry and completion receipt prevent duplicate
+handoffs across later restarts. An intentional Stop still ends the obligation.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

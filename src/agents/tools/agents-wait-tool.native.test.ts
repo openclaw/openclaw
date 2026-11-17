@@ -47,7 +47,7 @@ function record(id: string) {
 }
 
 describe("native collector requester ownership", () => {
-  it("reads persisted pending and completed results, refusing other parents and reset incarnations", async () => {
+  it("reads persisted pending and completed results of its chat across a reset, refusing other parents", async () => {
     await withRegistry(async () => {
       const done = {
         ...record("done"),
@@ -66,9 +66,9 @@ describe("native collector requester ownership", () => {
       expect(result.completed).toMatchObject([
         { runId: "done", result: "reviewed", status: "done" },
       ]);
-      expect(result.pending).toEqual(["pending"]);
+      // The chat owns its collectors: a reset does not hide a run that an earlier session started.
+      expect(result.pending).toEqual(["pending", "reset"]);
       expect(result.errors).toEqual([
-        { runId: "reset", error: "not_owner" },
         { runId: "foreign", error: "not_owner" },
         { runId: "missing", error: "not_found" },
       ]);

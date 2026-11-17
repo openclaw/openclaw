@@ -910,18 +910,17 @@ describe("prepareEmbeddedAttemptStream", () => {
     }
   });
 
-  it.each(["ordinary", "deferred cancellation", "pending task"] as const)(
+  it.each(["ordinary", "deferred cancellation"] as const)(
     "publishes terminal activity under %s ownership",
     async (scenario) => {
       const result = await observeTerminalRunActivity(scenario, (subscribe) =>
         mocks.subscribe.mockImplementation(subscribe),
       );
       const deferred = scenario === "deferred cancellation";
-      const active = deferred || scenario === "pending task";
       expect(result).toEqual({
         activeBefore: true,
-        terminalEvents: [{ phase: deferred ? "finishing" : "end", active }],
-        activeAfter: active,
+        terminalEvents: [{ phase: deferred ? "finishing" : "end", active: deferred }],
+        activeAfter: deferred,
       });
     },
   );

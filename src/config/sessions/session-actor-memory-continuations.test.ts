@@ -76,6 +76,7 @@ const makePendingOwner = (
   databasePath: scope.storePath,
   workerDatabasePath: scope.storePath,
   assertCurrent() {},
+  assertReadCurrent() {},
   finish() {},
 });
 

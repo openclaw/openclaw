@@ -103,8 +103,7 @@ const enUpdateActions = {
       blockedWaiting: "Blocked · waiting for active work · {target}",
     },
     dialog: {
-      disconnected:
-        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
+      reconnecting: "Reconnecting…",
       restarting:
         "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",
@@ -113,7 +112,7 @@ const enUpdateActions = {
       statusNotRefreshed: "Couldn’t refresh update status. Check your connection and try again.",
       checkStatusDisconnected: "Reconnect to the Gateway to check status or retry the update.",
       retryUpdate: "Retry update",
-      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      starting: "Starting update…",
       notStarted:
         "The update request went unanswered. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     },

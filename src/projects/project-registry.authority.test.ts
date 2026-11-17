@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectNestedErrorCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requestLeaseAdmission } from "../state/openclaw-state-lease-admission.test-support.js";
+import { expiryAdmission } from "../state/openclaw-state-lease-async.test-support.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
@@ -15,6 +21,10 @@ import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 // Capture before fake timers: settlement needs a real event-loop turn.
 const nextMessageTurn = setImmediate;
+type LeaseStorage = ReturnType<
+  typeof import("../state/openclaw-state-lease-worker-storage.js").createOpenClawStateLeaseWorkerStorage
+>;
+type LeaseOwner = Parameters<LeaseStorage["acquire"]>[0];
 
 const fixture = vi.hoisted(() => {
   const forbiddenNative = vi.fn(() => {
@@ -22,6 +32,7 @@ const fixture = vi.hoisted(() => {
   });
   return {
     expiresAt: 40_000,
+    configureStorage: vi.fn<(storage: LeaseStorage) => LeaseStorage>(),
     resolveProject: vi.fn<() => Promise<ProjectRegistryRecord>>(),
     removeReference: vi.fn<() => Promise<"missing" | "changed" | "remaining" | "final">>(),
     removeCheckout: vi.fn<() => Promise<void>>(),
@@ -84,39 +95,45 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
   ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-lease-worker-storage.js")>()),
-  acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
-  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
-}));
+vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../state/openclaw-state-lease-worker-storage.js")>();
+  return {
+    ...actual,
+    acquireLease: fixture.forbiddenNative,
+    createOpenClawStateLeaseWorkerStorage: (context: OpenClawStateWorkerContext) =>
+      fixture.configureStorage(actual.createOpenClawStateLeaseWorkerStorage(context)),
+  };
+});
 vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-lease-storage.js")>()),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => path.resolve("/synthetic-state/lease.sqlite"),
-  verifyOpenClawStateLeaseOwnership: () => {
-    if (Date.now() >= fixture.expiresAt) {
-      throw new OpenClawStateLeaseError("Synthetic lease ownership expired", {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-      });
-    }
-    return fixture.expiresAt;
-  },
+  verifyOpenClawStateLeaseOwnership: fixture.forbiddenNative,
   renewOpenClawStateLease: fixture.forbiddenNative,
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute ? execute() : fixture.release(),
   releaseOpenClawStateLease: fixture.release,
 }));
 // mock-isolation: project checkout leases must not start native heartbeat workers.
-vi.mock("../state/openclaw-state-lease-heartbeat.js", () =>
-  fixture.forbid("startOpenClawStateLeaseHeartbeat"),
-);
+vi.mock("../state/openclaw-state-lease-heartbeat.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-lease-heartbeat.js")>()),
+  startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
+}));
 
 type WorkerOptions = {
   assertCurrent?: () => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };
 type ProjectReadScope = {
-  execute: (command: { type: string }) => Promise<unknown>;
+  execute: (
+    command:
+      | { type: "projects.resolve" }
+      | {
+          type: "projects.removeCheckoutReference";
+          input: { leases: readonly OpenClawStateLeaseIdentity[] };
+        },
+  ) => Promise<unknown>;
 };
 
 // mock-isolation: Use synthetic storage with real admission retention and lease drainage.
@@ -137,15 +154,31 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
     const retained = options.createAdmission({ settled: settled.promise });
     try {
       return await operation({
-        execute: (command) => {
+        execute: async (command) => {
           settled.resolve(fixture.settlement());
-          return command.type === "projects.removeCheckoutReference"
-            ? fixture.removeReference()
-            : fixture.resolveProject();
+          if (command.type === "projects.resolve") {
+            return await fixture.resolveProject();
+          }
+          const facts = {
+            kind: "state-leases",
+            leases: command.input.leases.map((identity) => ({
+              identity,
+              expiresAt: fixture.expiresAt,
+            })),
+          };
+          const admit = (stage: "transaction" | "commit") => {
+            if (requestLeaseAdmission(retained.admission, stage, facts) !== 1) {
+              throw toErrorObject(retained.admission.failure, "Project worker admission refused");
+            }
+          };
+          admit("transaction");
+          const result = await fixture.removeReference();
+          admit("commit");
+          return result;
         },
       });
     } finally {
-      retained.admission.finish();
+      await retained.admission.finish();
       fixture.afterCallback();
     }
   },
@@ -172,6 +205,32 @@ async function select(signal?: AbortSignal): Promise<Selection> {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  const observeExpiry = (owner: LeaseOwner, purpose: "acquire" | "verify" | "renew") =>
+    owner.runLifecycle(purpose, async (scope) => {
+      scope.assertCurrent();
+      using observation = expiryAdmission(scope);
+      if (Date.now() >= fixture.expiresAt) {
+        throw new OpenClawStateLeaseError("Synthetic lease ownership expired", {
+          code: "OPENCLAW_STATE_LEASE_LOST",
+        });
+      }
+      return observation.publish(fixture.expiresAt);
+    });
+  fixture.configureStorage.mockImplementation((storage) => {
+    storage.acquire = async (owner) => ({
+      kind: "acquired",
+      expiresAt: await observeExpiry(owner, "acquire"),
+    });
+    storage.verify = (owner) => observeExpiry(owner, "verify");
+    storage.renew = (owner) => observeExpiry(owner, "renew");
+    storage.release = (owner) =>
+      owner.runLifecycle("release", async (scope) => {
+        scope.assertCurrent();
+        fixture.release();
+      });
+    storage.withRetainedStartup = fixture.forbiddenNative;
+    return storage;
+  });
   fixture.resolveProject.mockResolvedValue(project);
   fixture.removeReference.mockResolvedValue("final");
   fixture.removeCheckout.mockResolvedValue();

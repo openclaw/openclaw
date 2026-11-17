@@ -1,8 +1,6 @@
-import type {
-  LocalWorkspacePausePhase,
-  LocalWorkspacePauseReason,
-} from "../../agents/sandbox/local-workspace-quiescence.js";
-import type { SandboxConfig } from "../../agents/sandbox/types.js";
+import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { SandboxStateOwnerPath } from "../../agents/sandbox/state-owner-path.js";
+import type { LocalWorkspacePausePhase, SandboxConfig } from "../../agents/sandbox/types.js";
 import {
   startWorktreePreparationPhase,
   timeWorktreePreparationPhase,
@@ -231,12 +229,13 @@ async function settleLocalWorkspace<T>(
           worktree: params.worktree,
           env,
           assertCurrent: params.assertCurrent ?? (() => {}),
+          workerAuthority: params.workerAuthority,
         };
-        assertLocalWorkspaceProjectionOwner(
-          reply.row,
-          expectedOwner,
-          localWorkspaceProjectionPath(expectedOwner),
-        );
+        const projectionPath = await localWorkspaceProjectionPath(expectedOwner);
+        context.admission.assertCurrent();
+        params.assertCurrent?.();
+        params.workerAuthority?.assertCurrent?.();
+        assertLocalWorkspaceProjectionOwner(reply.row, expectedOwner, projectionPath);
       }
       const { readRegistry } = await import("../../agents/sandbox/registry.js");
       const { prepareSandboxPersistentExecRetirement } =
@@ -445,7 +444,7 @@ async function probeUnchangedLocalWorkspace(
     return undefined;
   }
   // Bind the row before observation; acceptance retains the same lease and live authority.
-  projectionOperations(owner, store, row).current();
+  projectionOperations(owner, store, row, await localWorkspaceProjectionPath(owner)).current();
   for (const target of targets) {
     markProbe?.(target);
     const selected = row;
@@ -556,6 +555,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   storePath?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
@@ -672,6 +672,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       worktree,
       assertCurrent,
       workerAuthority: {
+        stateOwnerPath: params.stateOwnerPath,
         assertCurrent: assertSessionCurrent,
         predicates: [{ kind: "live-binding", record: worktree }],
       },

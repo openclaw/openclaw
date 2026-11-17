@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess, type SendHandle } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
@@ -34,6 +34,7 @@ import {
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
+import type { SpawnBrokerHost } from "./host-contract.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import {
   childCapacityError,
@@ -59,12 +60,12 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease } from "./resource-host.js";
+export type { BrokerNativeResourceLease, SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
-export class SpawnBrokerHost {
+class BrokerHost implements SpawnBrokerHost {
   private readonly unregisterExitCleanup: () => void;
   readonly entryPath: string;
   private readonly workerUrl: URL;
@@ -141,19 +142,18 @@ export class SpawnBrokerHost {
       });
     }
     void this.readiness.promise.catch(() => {});
-    try {
-      this.start();
-    } catch (error) {
-      if (this.resourceDirectory) {
-        rmSync(this.resourceDirectory, { recursive: true, force: true });
-      }
-      throw error;
-    }
+    this.start();
     this.unregisterExitCleanup = registerProcessExitCleanup(this.onParentExit);
   }
 
   get pid(): number | undefined {
     return this.process?.pid;
+  }
+  get hasOpenNativeResourceClaims(): boolean {
+    return this.resourceClaims?.hasOpenClaims ?? false;
+  }
+  get nativeResourceAdmissionClosed(): boolean {
+    return this.resourceClaims?.admissionClosed ?? false;
   }
   ready(): Promise<void> {
     return this.closing
@@ -725,8 +725,8 @@ export class SpawnBrokerHost {
       try {
         await this.waitForCleanup();
       } finally {
-        if (this.resourceDirectory) {
-          rmSync(this.resourceDirectory, { recursive: true, force: true });
+        if (this.resourceDirectory && this.hasBeenReady) {
+          await rm(this.resourceDirectory, { recursive: true, force: true });
         }
       }
     } finally {
@@ -737,7 +737,7 @@ export class SpawnBrokerHost {
 }
 
 export function createSpawnBrokerHost(
-  options?: ConstructorParameters<typeof SpawnBrokerHost>[0],
+  options?: ConstructorParameters<typeof BrokerHost>[0],
 ): SpawnBrokerHost {
-  return new SpawnBrokerHost(options);
+  return new BrokerHost(options);
 }

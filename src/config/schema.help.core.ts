@@ -81,7 +81,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleStyle":
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
-    "Custom regex strings replace the default string list for logs and diagnostics. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Tool arguments, results, and session transcripts are not redacted. Use this to mask deployment-specific tokens and identifiers in diagnostic output.",
+    "Custom regex strings replace the default string list for logs and diagnostics. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Tool arguments, results, and chat history are not redacted. Use this to mask deployment-specific tokens and identifiers in diagnostic output.",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
@@ -206,7 +206,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
-    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access.',
+    'Access to other people\'s sessions: "none" hides them even with explicit session membership, "invited" requires explicit membership, "view" allows reading, "suggest" permits the suggestion flow, and "write" permits participation without membership. Explicit session membership can raise "view" or "suggest" access for a specific session. Session creators and connections holding operator.admin retain their session access. A creator or admin can invite an explicitly configured "invited" profile with a selected human @mention; connection scopes and draft/incognito restrictions still apply.',
   "gateway.roles.definitions.*.sandbox":
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and blocks execution if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":

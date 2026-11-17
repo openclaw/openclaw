@@ -27,7 +27,7 @@ const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guard
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
-const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
+const gatewaySubscriptions = "src/gateway/server-runtime-config.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
@@ -35,8 +35,17 @@ const windowsGitBash = "src/agents/sessions/windows-git-bash-path.test.ts";
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
+const runtimeBuildGraph = "test/scripts/runtime-process-build-graph.test.ts";
+const toolingConfig = "test/vitest/vitest.tooling.config.ts";
 
 it.for([
+  ["runtime build graph shard", toolingConfig, [], true, [runtimeBuildGraph]],
+  [
+    "runtime build graph excluded",
+    toolingConfig,
+    [runtimeBuildGraph, "--exclude", runtimeBuildGraph],
+    false,
+  ],
   ["ordinary infra", infraConfig, ["src/infra/node-sqlite.test.ts"], false],
   ["root config", "vitest.config.ts", [coreWorker], true],
   ["custom config", "custom.config.ts", [coreWorker], false],
@@ -72,7 +81,7 @@ it.for([
     agentsCoreConfig,
     [codeModeWorker],
     false,
-    ["src/agents/code-mode.test.ts"],
+    ["src/agents/code-mode.integrated.test.ts"],
   ],
   ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
   ["Git Bash basename filter", unitFastConfig, [path.basename(windowsGitBash, ".test.ts")], true],
@@ -97,6 +106,7 @@ subprocess.for([
           "capture",
           "gateway-runtime-config",
           "windows-git-bash",
+          "runtime-build-graph",
           "failure",
           "cancel",
           "excluded",
@@ -129,7 +139,9 @@ subprocess.for([
                 ? ["src/gateway/server-runtime-config.test.ts", gatewayServerConfig]
                 : mode === "windows-git-bash"
                   ? [windowsGitBash, unitFastConfig]
-                  : [coreWorker, infraConfig];
+                  : mode === "runtime-build-graph"
+                    ? [runtimeBuildGraph, toolingConfig]
+                    : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
         const loans = path.join(directory, "loans.jsonl");
@@ -315,6 +327,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "capture",
           "gateway-runtime-config",
           "windows-git-bash",
+          "runtime-build-graph",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);

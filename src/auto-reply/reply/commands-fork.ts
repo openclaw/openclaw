@@ -16,6 +16,7 @@ import {
   getSessionBindingService,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
@@ -90,15 +91,20 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
     let binding: SessionBindingRecord | undefined;
     let audience = "";
     let assertNativeCurrent: (() => void) | undefined;
-    let source:
-      | Awaited<
-          ReturnType<
-            typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFacts
-          >
-        >
-      | undefined;
+    let source: import("../../config/sessions/transcript-lease.js").TranscriptLease | undefined;
     let sourceSessionKey: string | undefined;
     let recordOutcome: ((text: string, replyId: string) => Promise<void>) | undefined;
+    const assertHostAuthority = captureExternalSessionCommitGuard(() => {
+      if (!open || getLoadedChannelPluginForRead(conversation.channel) !== plugin) {
+        throw new Error("The fork command or channel owner changed; send a new request.");
+      }
+      assertCommandAuthorized?.();
+      params.commandInvocationSignal?.throwIfAborted();
+      params.opts?.abortSignal?.throwIfAborted();
+      if (params.command.senderIsOwner) {
+        params.command.assertOwnerCurrent?.();
+      }
+    });
     const assertHostCurrent = composeSessionSourceAssertion([
       createDynamicSessionSourceAssertion(
         () => source?.assertCurrent,
@@ -106,17 +112,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           throw new Error("The fork source changed; send a new request.");
         },
       ),
-      captureExternalSessionCommitGuard(() => {
-        if (!open || getLoadedChannelPluginForRead(conversation.channel) !== plugin) {
-          throw new Error("The fork command or channel owner changed; send a new request.");
-        }
-        assertCommandAuthorized?.();
-        params.commandInvocationSignal?.throwIfAborted();
-        params.opts?.abortSignal?.throwIfAborted();
-        if (params.command.senderIsOwner) {
-          params.command.assertOwnerCurrent?.();
-        }
-      }),
+      assertHostAuthority,
     ]);
     const assertCurrent = composeSessionSourceAssertion([
       assertHostCurrent,
@@ -193,14 +189,14 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
         { createGatewaySession },
         { readSessionEntryReadOnlyInWorker },
         { isSessionControllerWorkActive },
-        { prepareSessionGenerationFacts },
+        { acquireTranscriptLease },
         { recordCommittedCommandExchange, scopeCommandTranscriptId },
         { runAgentHarnessBeforeMessageWriteHook },
       ] = await Promise.all([
         import("../../gateway/session-create-service.js"),
         import("../../config/sessions/session-entry-read-runtime.js"),
         import("../../sessions/session-controller.lifecycle.js"),
-        import("../../config/sessions/session-delivery-generation.js"),
+        import("../../config/sessions/transcript-lease.js"),
         import("../../config/sessions/command-transcript.js"),
         import("../../agents/harness/hook-helpers.js"),
       ]);
@@ -217,13 +213,10 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           "There is no conversation context to fork yet. Send a message in this thread first.",
         );
       }
-      source = await prepareSessionGenerationFacts({
-        agentId,
-        storePath,
-        sessionKey: parentKey,
-        sessionId: parent.sessionId,
-        lifecycleRevision: parent.lifecycleRevision ?? null,
-      });
+      source = await acquireTranscriptLease(
+        chatRef({ agentId, storePath, sessionKey: parentKey }),
+        { sessionId: parent.sessionId, lifecycleRevision: parent.lifecycleRevision },
+      );
       assertCurrent();
       const commandId = scopeCommandTranscriptId(
         params.ctx.MessageSidFull ?? params.ctx.MessageSid ?? params.opts?.runId ?? randomUUID(),
@@ -233,6 +226,10 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           conversationId: conversation.conversationId,
         },
       );
+      const assertRecordingCurrent = composeSessionSourceAssertion([
+        source.assertNativeTransactionCurrent,
+        assertHostAuthority,
+      ]);
       recordOutcome = async (replyText, replyId) => {
         const inputAdmission = params.opts?.userTurnTranscriptRecorder?.getAdmissionReceipt();
         const result = await recordCommittedCommandExchange({
@@ -243,7 +240,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
           expectedSessionId: parent.sessionId,
           expectedLifecycleRevision: parent.lifecycleRevision ?? null,
           // Local recovery recording needs the source owner, not permission to send a recap.
-          assertCurrent: assertHostCurrent,
+          assertCurrent: assertRecordingCurrent,
           beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
           commandText: params.command.commandBodyNormalized,
           commandId,

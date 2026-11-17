@@ -97,7 +97,7 @@ const enCron = {
     },
 
     attention: {
-      title: "Run failed",
+      title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
@@ -106,6 +106,7 @@ const enCron = {
       running: "A new run is in progress. Review its outcome before starting another run.",
       effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
+      errorDetails: "Error details",
     },
 
     jobs: {
@@ -355,15 +356,11 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
-      transcript: "Conversation",
-      viewTranscript: "View transcript",
-      transcriptScope:
-        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
-      transcriptEmpty: "No messages in this conversation yet.",
-      transcriptMissingMetadata:
-        "Couldn’t open this conversation. Its session information is missing.",
-      transcriptUnavailable:
-        "Couldn’t identify this conversation. Refresh the activity history and try again.",
+      conditionCheckFailed: "Condition check failed",
+      deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       next: "Next {rel}",
     },
     events: {

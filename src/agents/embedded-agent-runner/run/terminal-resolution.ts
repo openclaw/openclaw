@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   retainSilentFinalPayloads,
   setReplyPayloadMetadata,
@@ -169,7 +170,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     | "activateCompactionContinuation"
     | "clearCompactionContinuation"
   >;
-  armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
@@ -352,7 +352,6 @@ export async function resolveEmbeddedRunTerminal(input: {
       `compaction interrupted visible final answer: ${runLogContext} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
-    input.armPostCompactionGuard();
     return { action: "retry" };
   }
   // Invisible retries return above; visible and terminal paths release this retained constraint.
@@ -465,6 +464,9 @@ async function completeEmbeddedRun(
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
+          code:
+            extractErrorCode(terminalFailure) ??
+            resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }

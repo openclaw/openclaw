@@ -2,6 +2,8 @@
 import "./owner-devices-dialog.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
+import { resolveControlUiPaths } from "../../app/browser.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
@@ -25,8 +27,10 @@ function ApprovalRow(props: {
   claw: string;
   owner: OwnerApproval;
   onDevices: () => void;
+  onClose: () => void;
 }) {
   const [days, setDays] = createSignal("");
+  const [comparedCode, setComparedCode] = createSignal("");
   const expiry = () => (days().trim() ? Number(days()) : null);
   const valid = () =>
     expiry() === null || (Number.isSafeInteger(expiry()) && expiry()! > 0 && expiry()! <= 3650);
@@ -39,9 +43,28 @@ function ApprovalRow(props: {
       <strong class="openclaw-id-approval__browser openclaw-id-owner-enter">
         {props.request.label}
       </strong>
+      <Show when={props.request.member}>
+        {(member) => (
+          <p class="openclaw-id-devices__description">
+            {t("openclawId.approvalMemberClaim", { member: member().name })}
+            <br />
+            {t("openclawId.approvalMemberRequest")}
+            <Show when={member().email && member().email !== member().name}>
+              <br />
+              {member().email}
+            </Show>
+            <Show when={member().location}>
+              <br />
+              {t("openclawId.approvalReportedLocation", { location: member().location! })}
+            </Show>
+          </p>
+        )}
+      </Show>
       <Show when={!props.request.error && !props.request.expired}>
         <p class="openclaw-id-devices__description openclaw-id-owner-enter">
-          {t("openclawId.approvalCompare")}
+          {props.request.member
+            ? t("openclawId.approvalMemberCompare", { member: props.request.member.name })
+            : t("openclawId.approvalCompare")}
         </p>
       </Show>
       <Show when={!props.request.error && !props.request.expired && props.request.tools}>
@@ -60,11 +83,13 @@ function ApprovalRow(props: {
       <Show when={error()}>
         {(message) => (
           <div class="openclaw-id-devices__error openclaw-id-owner-enter" role="alert">
-            {message().message}
+            {props.request.uncertain && props.request.member
+              ? t("openclawId.approvalMemberUncertain", { member: props.request.member.name })
+              : message().message}
           </div>
         )}
       </Show>
-      <Show when={props.request.code || !inactive()}>
+      <Show when={!props.request.member && (props.request.code || !inactive())}>
         <div
           class={[
             "openclaw-id-approval__number",
@@ -98,21 +123,37 @@ function ApprovalRow(props: {
         )}
       </Show>
       <Show when={!inactive()}>
-        <label class="openclaw-id-approval__expiry openclaw-id-owner-enter">
-          <span>
-            {t("openclawId.regenExpiry")}
-            <small>{t("openclawId.regenExpiryHint")}</small>
-          </span>
-          <input
-            type="number"
-            min="1"
-            max="3650"
-            inputmode="numeric"
-            value={days()}
-            onInput={(event) => setDays(event.currentTarget.value)}
-            disabled={props.request.busy}
-          />
-        </label>
+        <Show when={props.request.member}>
+          <label class="field">
+            <span>{t("openclawId.approvalMemberCode")}</span>
+            <input
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              autocomplete="off"
+              value={comparedCode()}
+              onInput={(event) => setComparedCode(event.currentTarget.value)}
+              disabled={props.request.busy}
+            />
+          </label>
+        </Show>
+        <Show when={!props.request.member}>
+          <label class="openclaw-id-approval__expiry openclaw-id-owner-enter">
+            <span>
+              {t("openclawId.regenExpiry")}
+              <small>{t("openclawId.regenExpiryHint")}</small>
+            </span>
+            <input
+              type="number"
+              min="1"
+              max="3650"
+              inputmode="numeric"
+              value={days()}
+              onInput={(event) => setDays(event.currentTarget.value)}
+              disabled={props.request.busy}
+            />
+          </label>
+        </Show>
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
           <button
             type="button"
@@ -120,37 +161,60 @@ function ApprovalRow(props: {
             disabled={props.request.busy}
             onClick={() => void props.owner.decide(props.request.id, false)}
           >
-            {t("openclawId.approvalDeny")}
+            {t(props.request.member ? "openclawId.approvalMemberDeny" : "openclawId.approvalDeny")}
           </button>
           <button
             type="button"
             class="btn primary"
-            disabled={props.request.busy || !props.request.code || !valid()}
+            disabled={
+              props.request.busy ||
+              !props.request.code ||
+              !valid() ||
+              (Boolean(props.request.member) && comparedCode() !== props.request.code)
+            }
             onClick={() => {
               const duration = expiry();
               void props.owner.decide(
                 props.request.id,
                 true,
                 duration === null ? null : Math.floor(Date.now() / 1000) + duration * 86400,
+                comparedCode(),
               );
             }}
           >
-            {t("openclawId.approvalApprove")}
+            {t(
+              props.request.member
+                ? "openclawId.approvalMemberApprove"
+                : "openclawId.approvalApprove",
+            )}
           </button>
         </openclaw-modal-actions>
       </Show>
       <Show when={props.request.uncertain}>
         <openclaw-modal-actions class="exec-approval-actions openclaw-id-owner-enter">
-          <button type="button" class="btn primary" onClick={() => props.onDevices()}>
-            {t("openclawId.yourDevices")}
-          </button>
+          <Show
+            when={props.request.member}
+            fallback={
+              <button type="button" class="btn primary" onClick={() => props.onDevices()}>
+                {t("openclawId.yourDevices")}
+              </button>
+            }
+          >
+            <a
+              class="btn primary"
+              href={`${pathForRoute("plugin", resolveControlUiPaths(window.location.pathname)[0])}?plugin=openclaw-id-access&id=access`}
+              onClick={() => props.onClose()}
+            >
+              {t("openclawId.approvalMemberDevices")}
+            </a>
+          </Show>
         </openclaw-modal-actions>
       </Show>
     </section>
   );
 }
 
-/** Shows pending requests with their six-digit matching numbers; never offers an unsigned approval. */
+/** Shows owner-device codes or a member-read code input; never offers an unsigned approval. */
 export function showOwnerApprovalDialog(params: {
   client: GatewayBrowserClient;
   onDevices: () => void;
@@ -218,6 +282,7 @@ export function showOwnerApprovalDialog(params: {
                     t("openclawId.yourClaw")
                   }
                   owner={owner!}
+                  onClose={() => modal.finish(undefined)}
                   onDevices={() => {
                     modal.finish(undefined);
                     params.onDevices();

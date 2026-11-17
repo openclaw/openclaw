@@ -3611,8 +3611,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
-   checkout off main. Sits on its own row above the icon bar so the full branch
-   name stays readable without crowding the footer controls. */
+   checkout off main. Keep it on one line; the tooltip exposes the full name. */
 .sidebar-footer-branch {
   display: flex;
   align-items: center;
@@ -3630,6 +3629,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-footer-branch__icon {
   display: inline-flex;
   flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-footer-branch__icon svg {

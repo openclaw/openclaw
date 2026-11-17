@@ -18,6 +18,8 @@ import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.j
 import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
+  CronCreatorAuthorityRunScope,
+  CronManagementEntitlement,
 } from "./cron-creator-authority-grant.types.js";
 
 /** Resolve the deployment's automation scope when binding model tools or admitting RPCs. */
@@ -47,33 +49,6 @@ const activeManagement = new AsyncLocalStorage<{
   channelRequester?: CronAuthenticatedChannelRequester;
   execPolicy?: CronStreamExecPolicy;
 }>();
-
-/** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
-export type CronManagementEntitlement =
-  | Readonly<{ source: "control-ui-admin" }>
-  | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
-
-export type CronCreatorAuthorityRunScope = {
-  readonly runId: string;
-  readonly callerOrigin: CronScheduledToolCallerOrigin;
-  readonly signal: AbortSignal;
-  readonly grantTokens: Set<string>;
-  readonly managementEntitlement?: CronManagementEntitlement;
-  /** Separately admitted channel-owner identity, not implied by automation management rights. */
-  readonly requesterOwner?: Readonly<{
-    isCurrent: () => boolean;
-    senderId?: string;
-    channel?: string;
-    accountId?: string;
-  }>;
-  /** Fresh admission only; never transferred with a management continuation. */
-  readonly callerScopedCreation?: true;
-  /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
-  readonly controlUiAdmin?: true;
-  readonly isCurrent?: () => boolean;
-  active: boolean;
-  abort: () => void;
-};
 
 type CronCreatorAuthorityGrantEntry = {
   scope: CronCreatorAuthorityRunScope;
