@@ -284,6 +284,9 @@ An input already committed to the transcript is not executed again by queued-inp
 recovery or a same-key resend. Inputs without a recoverable original source end
 with a recorded `restart-unrecoverable` cause rather than silently disappearing.
 Temporary authority or dispatch outages leave recoverable inputs queued for retry.
+A fresh input for that session first retries the older queued inputs once. If the
+outage persists, the fresh input receives a retryable refusal instead of overtaking
+them. Other sessions remain available; no timer or background retry loop is added.
 This preserves input, not execution permissions: Stop, reset, deletion, revocation,
 and queue-policy refusals retain their recorded terminal causes and do not replay.
 Host sleep that preserves the process can continue the existing queue normally.

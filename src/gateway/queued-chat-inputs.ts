@@ -8,6 +8,8 @@ import type {
   SessionPendingInputEndCause,
   SessionPendingInputRow,
 } from "../config/sessions/session-pending-input.types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -50,6 +52,9 @@ async function failQueuedInput(
   }
 }
 
+type QueuedInputReplayFailure = { error: unknown };
+type DeferredQueuedInputReplay = QueuedInputReplayFailure & { resume: () => Promise<void> };
+
 /** Re-admit durable FIFO rows; only a committed transcript append consumes them. */
 export async function continueSessionQueuedInputs(
   context: GatewayRequestContext,
@@ -58,7 +63,7 @@ export async function continueSessionQueuedInputs(
     signal: AbortSignal;
     assertCurrent: () => void;
   },
-): Promise<void> {
+): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
     options.signal.throwIfAborted();
     options.assertCurrent();
@@ -180,7 +185,7 @@ export async function continueSessionQueuedInputs(
         context.logGateway.warn(
           `Queued input ${row.run_id} is waiting for restart authority: ${String(error)}`,
         );
-        return false;
+        return { error };
       }
       context.logGateway.warn(
         `Queued input ${row.run_id} was not sent after restart: ${String(error)}`,
@@ -189,23 +194,50 @@ export async function continueSessionQueuedInputs(
     } finally {
       admitted?.release();
     }
-    return true;
+    return undefined;
   };
   // History pages are bounded newest-first; admit the older page before this one.
-  const continuePage = async (before?: number): Promise<boolean> => {
+  const continuePage = async (before?: number): Promise<QueuedInputReplayFailure | undefined> => {
     assertCurrent();
     const page = await readSessionQueuedInputPage(target, {
       before,
     });
-    if (page.nextBefore !== undefined && !(await continuePage(page.nextBefore))) {
-      return false;
-    }
-    for (const row of page.rows.toReversed()) {
-      if (!(await admit(row))) {
-        return false;
+    if (page.nextBefore !== undefined) {
+      const deferred = await continuePage(page.nextBefore);
+      if (deferred) {
+        return deferred;
       }
     }
-    return true;
+    for (const row of page.rows.toReversed()) {
+      const deferred = await admit(row);
+      if (deferred) {
+        return deferred;
+      }
+    }
+    return undefined;
   };
-  await continuePage();
+  const deferred = await continuePage();
+  if (!deferred) {
+    return undefined;
+  }
+  let flight: Promise<void> | undefined;
+  return {
+    error: deferred.error,
+    resume: () => {
+      flight ??= runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+            const remaining = await continuePage();
+            if (remaining) {
+              throw remaining.error;
+            }
+          }),
+        "startup:queued-input-resume",
+        options.signal,
+      ).finally(() => {
+        flight = undefined;
+      });
+      return flight;
+    },
+  };
 }

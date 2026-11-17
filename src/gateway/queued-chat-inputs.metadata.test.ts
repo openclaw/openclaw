@@ -7,6 +7,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -17,6 +18,7 @@ import {
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
+import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -38,7 +40,10 @@ import {
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
-import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
+import {
+  persistRunningSessionsForRestart,
+  resumeMarkedSessions,
+} from "./session-restart-resume.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -179,6 +184,76 @@ it.each([
     }
   },
 );
+
+it.each([
+  new GatewayOperatorAccessUnavailableError(),
+  new GatewayDispatchUnavailableError("chat.send", true),
+])("keeps deferred restart input ahead of a fresh send: %s", async (error) => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  fixture.params.message = "OLDER_RESTART_INPUT";
+  expectStarted(await fixture.send());
+  const retained = await retireOriginalInputs(fixture);
+  await patchSessionEntryCore(retained.target, () => ({
+    resumeAfterRestart: undefined,
+    lifecycleRunId: undefined,
+    status: "done",
+  }));
+  setRuntimeConfigSnapshot({
+    ...getRuntimeConfig(),
+    session: { store: fixture.scope.storePath },
+  });
+  const lifetime = new AbortController();
+  fixture.context.agentDatabaseStartup = createAgentDatabaseStartupObservation(
+    new Map(),
+    lifetime.signal,
+  );
+  let unavailable = true;
+  const restoreSource = operatorRecovery.restoreGatewayQueuedOperatorRecovery;
+  using restore = vi
+    .spyOn(operatorRecovery, "restoreGatewayQueuedOperatorRecovery")
+    .mockImplementation((params) => {
+      if (unavailable) {
+        return Promise.reject(error);
+      }
+      return restoreSource(params);
+    });
+  const dispatched: string[] = [];
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    const body = input.ctx.RawBody ?? input.ctx.Body ?? "";
+    dispatched.push(body.includes("OLDER_RESTART_INPUT") ? "older" : "fresh");
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+  try {
+    await resumeMarkedSessions({
+      context: fixture.context,
+      signal: lifetime.signal,
+      log: fixture.context.logGateway,
+    });
+    expect(dispatched).toEqual([]);
+    const fresh = {
+      ...fixture.params,
+      message: "FRESH_INPUT",
+      idempotencyKey: "fresh-after-restart",
+    };
+    await expect(fixture.send(undefined, {}, fresh)).rejects.toBe(error);
+    expect(dispatched).toEqual([]);
+    expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+      { state: "queued" },
+    ]);
+    unavailable = false;
+    expectStarted(await fixture.send(undefined, {}, fresh));
+    await fixture.finishDispatch();
+    expect(dispatched).toEqual(["older", "fresh"]);
+    expect(restore).toHaveBeenCalledTimes(3);
+    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+    expect(fixture.context.agentDatabaseStartup.hasPendingAgents).toBe(false);
+  } finally {
+    lifetime.abort();
+    fixture.context.agentDatabaseStartup = undefined;
+  }
+});
 
 it.each(["missing source", "different sender", "revoked device"] as const)(
   "cancels queued input with %s despite the sender's local administrator role",

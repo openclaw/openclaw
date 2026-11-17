@@ -297,6 +297,7 @@ function resumePreparedRestartStores(
   params: RestartResumeParams,
   agentId: string,
   prepared: PreparedRestartStore[],
+  deferred: Map<string, () => Promise<void>>,
 ): Promise<void> {
   const recovery = getRestartRecovery(params.context);
   let work = recovery.agents.get(agentId);
@@ -305,7 +306,7 @@ function resumePreparedRestartStores(
       withAgentInputRecovery(params.context.agentDatabaseStartup, agentId, async () => {
         let completed = true;
         for (const store of prepared) {
-          completed = (await resumeRestartStore(params, store)) && completed;
+          completed = (await resumeRestartStore(params, store, deferred)) && completed;
         }
         const through = prepared[0]?.windows?.at(-1)?.endedAt;
         if (completed && through !== undefined) {
@@ -350,6 +351,7 @@ function createPreparedRestartRecovery(
   prepared: PreparedRestartStore[],
 ) {
   const sessions = new Map<string, Promise<void>>();
+  const deferred = new Map<string, () => Promise<void>>();
   for (const store of prepared) {
     for (const [key, ready] of store.sessions) {
       const earlier = sessions.get(key);
@@ -362,13 +364,19 @@ function createPreparedRestartRecovery(
   const ready = getRestartRecovery(context).ready.promise;
   return {
     sessions,
+    deferred,
     run: async () => {
       await racePromiseWithAbortSignal(ready, signal);
       await runWithGatewayIndependentRootWorkAdmission(
         () =>
           withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
             signal.throwIfAborted();
-            await resumePreparedRestartStores({ context, signal, log }, agentId, prepared);
+            await resumePreparedRestartStores(
+              { context, signal, log },
+              agentId,
+              prepared,
+              deferred,
+            );
           }),
         "startup:agent-session-resume",
         signal,
@@ -415,6 +423,7 @@ export async function resumeMarkedSessions(
     const completion = createDeferredCore();
     owner?.registerInputRecovery(agentId, {
       sessions: work.sessions,
+      deferred: work.deferred,
       completion: completion.promise,
     });
     return () => work.run().finally(completion.resolve);
@@ -441,6 +450,7 @@ export async function resumeMarkedSessions(
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
   { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
+  deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
   const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
@@ -686,14 +696,22 @@ async function resumeRestartStore(
     }
     for (const session of orphaned) {
       try {
-        await continueSessionQueuedInputs(
+        const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session },
-          {
-            signal,
-            assertCurrent: () => signal.throwIfAborted(),
-          },
+          { signal, assertCurrent: () => signal.throwIfAborted() },
         );
+        if (remaining) {
+          completed = false;
+          deferred.set(session.sessionKey, async () => {
+            await withAgentInputRecovery(
+              context.agentDatabaseStartup,
+              target.physicalAgentId,
+              remaining.resume,
+            );
+            deferred.delete(session.sessionKey);
+          });
+        }
       } catch (error) {
         signal.throwIfAborted();
         completed = false;
