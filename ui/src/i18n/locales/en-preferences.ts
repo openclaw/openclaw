@@ -96,7 +96,7 @@ const enPreferences = {
         reportedFunnel: "Through Tailscale Funnel.",
       },
       devicesDescription: "Manage paired devices and connection requests.",
-      execPolicy: "Command permissions",
+      execPolicy: "Gateway command defaults",
       execPolicyValue: {
         deny: "Deny",
         allowlist: "Allowlist",
@@ -106,11 +106,11 @@ const enPreferences = {
         unknown: "Unknown",
       },
       execPolicyDescription: {
-        deny: "Agents can’t run commands.",
+        deny: "Commands are blocked by default.",
         allowlist: "Agents run allowlisted commands only.",
         ask: "Agents ask before commands the allowlist doesn’t cover.",
-        auto: "A reviewer checks commands the allowlist doesn't cover, then asks.",
-        full: "Agents run commands without asking.",
+        auto: "A reviewer may allow or deny commands outside the allowlist, or ask for your approval.",
+        full: "No routine approval prompts. Additional security checks can still require approval.",
       },
       browserEnabled: "Browser tools",
       toolProfile: "Available tools",

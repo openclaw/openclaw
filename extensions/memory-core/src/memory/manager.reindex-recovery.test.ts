@@ -518,8 +518,10 @@ describe("memory manager reindex recovery", () => {
     const publishedDb = harness.db;
     const queued = createDeferred<void>();
     let reservation: Awaited<ReturnType<typeof reservePublishedWriter>> | undefined;
-    observePublishedReservations(publishedDb, () => {
+    const terminalSignals = new Set<AbortSignal>();
+    observePublishedReservations(publishedDb, (terminalSignal) => {
       if (reservation) {
+        terminalSignals.add(terminalSignal);
         queued.resolve();
       }
     });
@@ -544,11 +546,24 @@ describe("memory manager reindex recovery", () => {
       await expect(reservation?.done).rejects.toThrow(
         /^Agent database execution admission is closed$/,
       );
-      await expect(sync).rejects.toThrow(/^Agent database execution admission is closed$/);
+      const failure: unknown = await sync.catch((error: unknown) => error);
       // Readmission waits until the revoked write and its native owner settle.
       await closeOpenClawAgentDatabasesAsync();
       const reopenedDb = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db;
       expect(reopenedDb.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
+      expect(terminalSignals.size).toBe(1);
+      const [terminalSignal] = terminalSignals;
+      expect(terminalSignal?.aborted).toBe(true);
+      expect(terminalSignal?.reason).toBeInstanceOf(Error);
+      expect(failure).toBeInstanceOf(Error);
+      if (!(failure instanceof Error)) {
+        throw new Error("Expected the embedding publication failure");
+      }
+      expect(failure).toMatchObject({
+        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+        operation: "batch",
+      });
+      expect(failure.cause).toBe(terminalSignal?.reason);
     } finally {
       reservation?.release();
       await Promise.allSettled([reservation?.done, sync]);

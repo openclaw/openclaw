@@ -4,6 +4,7 @@ import type { ResolveContextEngineOptions } from "../../../context-engine/regist
 import type { callGateway } from "../../../gateway/call.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { runOutsidePluginInvocationScope } from "../../../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
 import { importRuntimeModule } from "../../../shared/runtime-import.js";
@@ -52,13 +53,24 @@ export function createSubagentRegistryGatewayCaller(
   };
 }
 
-export async function loadSubagentRegistryPluginRuntimeHandle(params: {
+/**
+ * Subagent end handling runs after the requester's turn, whose invocation scope it may still
+ * carry as the ambient store. That closed scope grants nothing, so post-turn plugin loading
+ * acquires fresh admission, like the `subagent_ended` dispatch it feeds.
+ */
+export function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   allowGatewaySubagentBinding?: boolean;
 }): Promise<PluginRegistry | undefined> {
+  return runOutsidePluginInvocationScope(() => loadPluginRuntimeHandle(params));
+}
+
+async function loadPluginRuntimeHandle(
+  params: Parameters<typeof loadSubagentRegistryPluginRuntimeHandle>[0],
+): Promise<PluginRegistry | undefined> {
   if (params.allowGatewaySubagentBinding && params.agentDir) {
     const prepared = await preparedRuntimeLoader.load();
     const registry = prepared.getPreparedInboundPluginRegistry({
@@ -74,13 +86,15 @@ export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   ).loadAgentRuntimePluginRegistryHandleAsync(params);
 }
 
-export async function resolveSubagentRegistryContextEngine(
+export function resolveSubagentRegistryContextEngine(
   cfg: OpenClawConfig,
   options?: ResolveContextEngineOptions,
 ) {
-  const runtime = await subagentRegistryRuntimeLoader.load();
-  return await runtime.resolveContextEngine(cfg, {
-    ...options,
-    initialize: runtime.ensureContextEnginesInitialized,
+  return runOutsidePluginInvocationScope(async () => {
+    const runtime = await subagentRegistryRuntimeLoader.load();
+    return await runtime.resolveContextEngine(cfg, {
+      ...options,
+      initialize: runtime.ensureContextEnginesInitialized,
+    });
   });
 }

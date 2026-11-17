@@ -131,9 +131,11 @@ export function attachProgressNarratorToReplyOptions(params: {
       return;
     }
     lastText = "";
-    void Promise.resolve(onUpdate({ text: "" })).catch((err: unknown) => {
-      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
-    });
+    void Promise.resolve()
+      .then(() => onUpdate({ text: "" }))
+      .catch((err: unknown) => {
+        logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
+      });
   }
 
   const generate = async (input: ProgressNarrationInput, turnSignal: AbortSignal) => {
@@ -225,7 +227,16 @@ export function attachProgressNarratorToReplyOptions(params: {
       clearRetryTimer();
       return;
     }
-    if (isProgressDraftVisible?.() === false) {
+    let visible: boolean | undefined;
+    try {
+      visible = isProgressDraftVisible?.();
+    } catch (err) {
+      // Deferred wakeups may outlive the plugin scope that owns this callback.
+      stopTurn();
+      narratorLog.warn(`narration stopped after visibility check failed: ${String(err)}`);
+      return;
+    }
+    if (visible === false) {
       if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
         visibilityRetryCount += 1;
         scheduleRetry(VISIBILITY_RETRY_MS, immediate);

@@ -17,7 +17,6 @@ const PAGES = [
   { path: "usage", trigger: ".usage-phone-actions__trigger", item: "Refresh" },
   { path: "meetings", trigger: ".transcripts-page-menu__trigger", item: "Refresh" },
   { path: "logs", trigger: "button.logs-toolbar__button[title='More actions']", item: "Refresh" },
-  { path: "activity?view=live", trigger: ".activity-live-actions__trigger", item: "Expand all" },
   { path: "settings/agents/main/overview", trigger: ".agents-page-menu__trigger", item: "Refresh" },
   { path: "settings/skills", trigger: ".skill-library-search__icon", item: "Search skills" },
 ] as const;

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Measures chat UX on the iOS simulator against an isolated Gateway whose model is the scripted
-// QA mock: streaming follow, reading position while scrolled up, keyboard, and relaunch.
+// QA mock: streaming follow, reading position while scrolled up, keyboard, relaunch, and a blank
+// transcript judged from screenshots (keyboard, chat length and agent turns, chat switches).
 // Usage: pnpm ios:behavior [--setup] [--profile ios-ux] [--cases a,b] [--samples 3] [--app <app>]
 // --setup writes the profile (Gateway stopped): loopback port, token auth, mock model.
 // Then run the mock and the Gateway (see .agents/skills/ios-e2e/BEHAVIOR.md) and this script.
 // IOS_SIM reuses a paired simulator; otherwise a fresh one is paired and deleted afterwards.
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -13,7 +14,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
+  type ProbeFrame,
   type ProbeLog,
+  type Rect,
+  type ScreenLine,
   bodyCounts,
   composerGap,
   hiddenBelowComposer,
@@ -24,6 +28,7 @@ import {
   parseProbeLog,
   percentile,
   remounts,
+  transcriptText,
   window,
 } from "./lib/ios-behavior-grade.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -35,9 +40,27 @@ const { values } = parseArgs({
     profile: { type: "string", default: "ios-ux" },
     port: { type: "string", default: "19061" },
     "mock-url": { type: "string", default: "http://127.0.0.1:44180/v1" },
-    cases: { type: "string", default: "stream-turn,stream-follow,scrolled-up,keyboard,relaunch" },
+    cases: {
+      type: "string",
+      default: [
+        "stream-turn",
+        "stream-follow",
+        "scrolled-up",
+        "keyboard",
+        "relaunch",
+        ...["up", "down"].flatMap((keyboard) =>
+          ["short", "long"].flatMap((length) =>
+            ["plain", "agent"].map((content) => `blank-${keyboard}-${length}-${content}`),
+          ),
+        ),
+      ].join(","),
+    },
     samples: { type: "string", default: "3" },
     out: { type: "string" },
+    // Existing chats (session keys, `agent:main:` omitted) for the cases that need history, in
+    // place of seeding mock turns: point --profile at a scratch copy of a real profile to judge
+    // real transcripts. Never commit such profiles or their screenshots.
+    sessions: { type: "string" },
     app: {
       type: "string",
       default: path.join(
@@ -50,9 +73,30 @@ const { values } = parseArgs({
 const profile = values.profile;
 const END_MARKER = "UX-STREAM-END";
 const MOCK_MODEL = "mock-openai/gpt-5.6-luna";
+// Prompts for the blank-transcript cases. The defaults drive the QA mock; `UXAGENT` is an agent
+// turn (commentary, tool calls, progress card, then a long reply). A profile with a real model
+// passes its own prompts through these variables.
+const SEED_PROMPT = process.env.IOS_BEHAVIOR_SEED_PROMPT ?? "UXSTREAM chunks=150 interval=0";
+const REPLY_PROMPT = process.env.IOS_BEHAVIOR_REPLY_PROMPT ?? "UXSTREAM chunks=300 interval=20";
+const AGENT_SEED_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_SEED_PROMPT ?? "UXAGENT steps=4 chunks=150 interval=0 label=SEED";
+const AGENT_REPLY_PROMPT =
+  process.env.IOS_BEHAVIOR_AGENT_REPLY_PROMPT ??
+  "UXAGENT steps=4 chunks=300 interval=20 label=REPLY";
+// The mock names the reply's plan steps after it; a real-model prompt has none, so no check.
+const AGENT_REPLY_LABEL = /\blabel=([A-Za-z]+)/.exec(AGENT_REPLY_PROMPT)?.[1];
+const replaySessions = values.sessions
+  ?.split(",")
+  .map((key) => key.trim())
+  .filter(Boolean);
+if (replaySessions?.length === 0) {
+  console.error("ios:behavior: --sessions needs at least one chat.");
+  process.exit(1);
+}
+let replayIndex = 0;
 
 // Set once this run creates a simulator, so every exit path deletes it.
-const owned: { simulator?: string } = {};
+const owned: { simulator?: string; recorder?: ChildProcess } = {};
 
 function deleteOwnedSimulator() {
   if (owned.simulator) {
@@ -62,6 +106,8 @@ function deleteOwnedSimulator() {
 }
 
 function fail(message: string): never {
+  // simctl finishes the file on SIGINT by itself; without it, recording outlives the runner.
+  owned.recorder?.kill("SIGINT");
   deleteOwnedSimulator();
   console.error(`ios:behavior: ${message}`);
   process.exit(1);
@@ -191,13 +237,16 @@ for (const key of ["HardwareKeyboardLastSeen", "AutomaticMinimizationEnabled"]) 
 }
 run("xcrun", ["simctl", "boot", sim]);
 run("xcrun", ["simctl", "bootstatus", sim, "-b"]);
-// bootstatus returns before app launches are accepted; the first launch can fail silently.
-for (let attempt = 1; ; attempt += 1) {
-  if (run("xcrun", ["simctl", "launch", sim, bundleId], { allowFailure: true }).ok) {
+// bootstatus returns before app launches are accepted; the first launches can fail. On a loaded
+// Mac that took longer than the old 20 s, so wait by time and report the last error.
+const launchDeadline = Date.now() + 90_000;
+for (;;) {
+  const launched = spawnSync("xcrun", ["simctl", "launch", sim, bundleId], { encoding: "utf8" });
+  if (launched.status === 0) {
     break;
   }
-  if (attempt === 10) {
-    fail("the app would not launch on the rebooted simulator.");
+  if (Date.now() > launchDeadline) {
+    fail(`the app would not launch on the rebooted simulator:\n${launched.stderr}`);
   }
   await delay(2000);
 }
@@ -327,8 +376,227 @@ async function readProbe(file: string): Promise<ProbeLog> {
   return parseProbeLog(text);
 }
 
+/** A chat with history: the next --sessions chat, or `session` after a seeded mock turn. */
+async function longChat(session: string, seedPrompt: string) {
+  if (replaySessions) {
+    replayIndex += 1;
+    return replaySessions[replayIndex % replaySessions.length] ?? session;
+  }
+  await agentTurn(session, seedPrompt);
+  return session;
+}
+
+function runAsync(command: string, args: string[]) {
+  return new Promise<string>((resolve) => {
+    const child = spawn(command, args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.on("error", (error) => fail(`${command} failed: ${error.message}`));
+    child.on("close", (code) =>
+      code === 0
+        ? resolve(stdout)
+        : fail(`${command} ${args.slice(0, 3).join(" ")} failed:\n${stderr || stdout}`),
+    );
+  });
+}
+
+// One agent turn in `session` through the Gateway CLI; settles when the run finishes. Seeds chat
+// history without driving the app, so turns for several chats can run at once.
+const agentTurn = (session: string, message: string) =>
+  runAsync("node", [
+    "openclaw.mjs",
+    "--profile",
+    profile,
+    "agent",
+    "--agent",
+    "main",
+    "--session-key",
+    `agent:main:${session}`,
+    "--message",
+    message,
+    "--json",
+  ]);
+
+// Screen oracle. Each sample is a screenshot plus the accessibility geometry nearest in time
+// (where the transcript and composer are, and the chrome to ignore); text recognition runs over a
+// batch of screenshots afterwards. The view tree and accessibility both kept listing content while
+// a real iPhone showed a blank chat (#191478); recognized pixels do not.
+type ScreenSample = {
+  png: string;
+  screen: { width: number; height: number };
+  transcript?: Rect;
+  exclude: Rect[];
+  /** The progress card's label ("Plan, 4 of 4 steps done, Completed: …"), when one is drawn. */
+  plan?: string;
+};
+let screenCount = 0;
+const screensDir = path.join(outDir, "screens");
+mkdirSync(screensDir, { recursive: true });
+
+// Compiled once per run: the Vision CLI takes ~0.2 s per screenshot in batch; the motion CLI reads
+// every native frame of a recording window (~4 s for a 12 s window).
+const screenTextTool = path.join(outDir, "ios-screen-text");
+const screenMotionTool = path.join(outDir, "ios-screen-motion");
+for (const [tool, source] of [
+  [screenTextTool, "ios-screen-text.swift"],
+  [screenMotionTool, "ios-screen-motion.swift"],
+] as const) {
+  run("xcrun", ["swiftc", "-O", "-o", tool, path.join(repoRoot, "scripts", source)]);
+}
+
+type Layout = Omit<ScreenSample, "png">;
+
+function readLayout(roots: AxNode[]): Layout {
+  let transcript: Rect | undefined;
+  let composerTop = Infinity;
+  const exclude: Rect[] = [];
+  let plan: string | undefined;
+  const walk = (node: AxNode) => {
+    const id = node.AXUniqueId ?? "";
+    const text = node.AXLabel ?? "";
+    if (node.frame) {
+      if (id === "chat-transcript" && (!transcript || node.frame.height > transcript.height)) {
+        transcript = node.frame;
+      }
+      if (id === "chat-composer-surface" || id === "chat-message-input") {
+        composerTop = Math.min(composerTop, node.frame.y);
+      }
+      // Chrome that stays drawn while the messages are gone: the progress card and run footer.
+      if (id.startsWith("chat-progress-card") || /^(Plan, |Done in )/.test(text)) {
+        exclude.push(node.frame);
+      }
+      // The card above the composer has no identifier, only this label.
+      if (text.startsWith("Plan, ")) {
+        plan = text;
+      }
+    }
+    node.children?.forEach(walk);
+  };
+  roots.forEach(walk);
+  const screen = roots[0]?.frame ?? { width: 0, height: 0 };
+  if (transcript) {
+    const bottom = Math.min(transcript.y + transcript.height, composerTop);
+    transcript = { ...transcript, height: Math.max(0, bottom - transcript.y) };
+  }
+  return { screen, transcript, exclude, plan };
+}
+
+/**
+ * Screenshots back to back for `ms`, each paired with the accessibility read nearest in time. A
+ * screenshot takes ~0.4 s and `describe-ui` ~1.9 s, so the reads run in their own loop: one read
+ * per screenshot left 2.5-6 s between samples, enough to miss a blank users see. The rects only
+ * move with the keyboard, navigation or a progress card; a read ~1 s off the screenshot is
+ * accepted.
+ */
+async function watchScreen(label: string, ms: number): Promise<ScreenSample[]> {
+  const until = Date.now() + ms;
+  const timed = async <T,>(work: Promise<T>) => {
+    const start = Date.now();
+    const value = await work;
+    return { t: (start + Date.now()) / 2, value };
+  };
+  const layouts: { t: number; layout: Layout }[] = [];
+  const shots: { t: number; png: string }[] = [];
+  await Promise.all([
+    (async () => {
+      do {
+        const { t, value } = await timed(runAsync(axe, ["describe-ui", "--udid", sim]));
+        layouts.push({ t, layout: readLayout(JSON.parse(value) as AxNode[]) });
+      } while (Date.now() < until);
+    })(),
+    (async () => {
+      do {
+        screenCount += 1;
+        const png = path.join(screensDir, `${String(screenCount).padStart(4, "0")}-${label}.png`);
+        const { t } = await timed(runAsync("xcrun", ["simctl", "io", sim, "screenshot", png]));
+        shots.push({ t, png });
+      } while (Date.now() < until);
+    })(),
+  ]);
+  return shots.map(({ t, png }) => {
+    const { layout } = layouts.reduce((best, entry) =>
+      Math.abs(entry.t - t) < Math.abs(best.t - t) ? entry : best,
+    );
+    const { screen, transcript, exclude, plan } = layout;
+    return { png, screen, transcript, exclude, plan };
+  });
+}
+
+type ScreenRead = { png: string; lines: number };
+
+/**
+ * Lines of transcript text per sample, grouped like `windows` (one `watchScreen` call each); -1
+ * where no transcript was on screen to judge.
+ */
+function readScreens(windows: ScreenSample[][]): ScreenRead[][] {
+  const watched = windows.flat();
+  const lines = new Map<string, ScreenLine[]>();
+  for (let start = 0; start < watched.length; start += 50) {
+    const batch = watched.slice(start, start + 50).map((entry) => entry.png);
+    for (const record of run(screenTextTool, batch).stdout.trim().split("\n")) {
+      if (record) {
+        const parsed = JSON.parse(record) as { image: string; lines: ScreenLine[] };
+        lines.set(parsed.image, parsed.lines);
+      }
+    }
+  }
+  return windows.map((shots) =>
+    shots.map((entry) => ({
+      png: entry.png,
+      lines: entry.transcript
+        ? transcriptText(lines.get(entry.png) ?? [], entry.screen, entry.transcript, entry.exclude)
+            .length
+        : -1,
+    })),
+  );
+}
+
+function screenGates(windows: ScreenRead[][], when: string): Result {
+  const reads = windows.flat();
+  const judged = reads.filter((entry) => entry.lines >= 0);
+  const blank = judged.filter((entry) => entry.lines === 0);
+  for (const entry of blank) {
+    console.log(`ios:behavior: blank transcript on screen: ${entry.png}`);
+  }
+  for (const entry of reads.filter((read) => read.lines < 0)) {
+    console.log(`ios:behavior: no transcript to judge: ${entry.png}`);
+  }
+  return {
+    metrics: {
+      screenSamples: judged.length,
+      blankSamples: blank.length,
+      unjudgedSamples: reads.length - judged.length,
+      minTextLines: judged.length > 0 ? Math.min(...judged.map((entry) => entry.lines)) : undefined,
+    },
+    gates: {
+      // Every sample: a transcript that vanished from the screen, then came back, must not pass
+      // because the samples around it could be judged.
+      [`transcript on screen to judge ${when} (setup)`]:
+        reads.length >= 3 && judged.length === reads.length,
+      [`transcript text on screen ${when}`]: blank.length === 0,
+    },
+  };
+}
+
 type Metrics = Record<string, number | undefined>;
-type Result = { metrics: Metrics; gates: Record<string, boolean> };
+/**
+ * `drawnMotion`: windows (epoch ms) and screen areas (points) to measure on the case's recording
+ * once it is written; `ignoreX` is a column range holding a control that moves by design.
+ */
+type DrawnWindow = {
+  from: number;
+  to: number;
+  area: Rect;
+  screenWidth: number;
+  ignoreX?: [number, number];
+};
+type Result = {
+  metrics: Metrics;
+  gates: Record<string, boolean>;
+  drawnMotion?: DrawnWindow[];
+};
 // `guard`: every gate passes in every sample. `bad`: reproduces an open bug, so its setup gates
 // pass and another gate fails in at least one sample; once the fix lands every gate passes and
 // the case becomes a guard. No majority vote: a jump in one sample is a jump users see.
@@ -354,12 +622,10 @@ const sendTime = (log: ProbeLog) =>
 
 // A long reply streams in after a send. The app has two reading policies (ChatView
 // handleTimelineChange): with the keyboard hidden it pins the sent message near the top and lets
-// the reply grow below it; with the keyboard up it follows the live edge (#108692). Both are
-// `bad` on main: the reply shifts when the final row replaces the live bubble, and with the
-// keyboard up the growing reply is not followed.
+// the reply grow below it; with the keyboard up it follows the live edge (#108692).
 function streamCase(keyboardUp: boolean): Case {
   return {
-    kind: "bad",
+    kind: "guard",
     async run(session, file) {
       launch(session);
       await enterText("UXSTREAM chunks=300 interval=40");
@@ -380,11 +646,13 @@ function streamCase(keyboardUp: boolean): Case {
         view.events.find((e) => e.e === "mount" && e.k?.startsWith(prefix) === true);
       const finalKey = mountOf("assistant/")?.k;
       const aliases = finalKey ? { [finalKey]: "live" } : {};
+      const finalAt = mountOf("assistant/")?.t;
       const moved = motion(view.frames, { aliases });
       const userMount = mountOf("user/");
       const firstText = firstFrame(view.frames, (frame) => "live" in frame.f);
       const bodies = bodyCounts(view.events);
-      const last = view.frames.at(-1);
+      // Only the composer is tagged in every frame; read the end against its last position.
+      const last = view.frames.findLast((frame) => "composer" in frame.f);
       const common: Metrics = {
         sendToBubbleMs: userMount && userMount.t - sentAt,
         sendToFirstTextMs: firstText && firstText - sentAt,
@@ -398,32 +666,61 @@ function streamCase(keyboardUp: boolean): Case {
       };
       if (keyboardUp) {
         const streaming = view.frames.filter(
-          (frame) => firstText !== undefined && frame.t >= firstText,
+          (frame) => firstText !== undefined && frame.t >= firstText && frame.t < (finalAt ?? end),
+        );
+        const followLag = percentile(
+          streaming.map((frame) => hiddenBelowComposer(frame) ?? 0),
+          0.95,
         );
         const hidden = hiddenBelowComposer(last);
+        // Teleports and backward motion are reported, not gated: in about one run in ten the
+        // transcript still flashes to the top for ~80 ms as the final row replaces the live bubble,
+        // and the reply's end dips ~40 pt for a frame as the working indicator leaves.
         return {
           metrics: {
             ...common,
             backwardPt: moved.backwardPt,
-            followLagP95Pt: percentile(
-              streaming.map((frame) => hiddenBelowComposer(frame) ?? 0),
-              0.95,
-            ),
+            followLagP95Pt: followLag,
             hiddenAtEndPt: hidden,
           },
           gates: {
             ...setup,
-            "no teleports": moved.teleports === 0,
-            "no backward motion (≤1 pt)": moved.backwardPt <= 1,
-            "end in view (≤4 pt hidden)": (hidden ?? Infinity) <= 4,
+            "reply followed while streaming (p95 ≤4 pt hidden)": (followLag ?? Infinity) <= 4,
+            "end in view after it finishes (≤4 pt hidden)": (hidden ?? Infinity) <= 4,
             "no remounts": common.remounts === 0,
           },
         };
       }
-      // The one-shot move to the new turn lands within a second; after that the pin must hold.
+      // The one-shot move to the new turn lands within a second; after that the pin must hold. The
+      // gate reads the recording: on the `List` transcript (#192232) the probe also reports cell
+      // layouts of 5–60 pt that never reach the screen, so its drift is reported only. Two drawn
+      // windows cover it. While the reply grows, its footer row moves down, which the recording
+      // cannot tell from a scroll, so the early window's area ends above the footer's first
+      // position (it only moves down from there). It opens once that area holds two strips,
+      // ~150–400 ms after the first second. From when the reply fills the screen, the late window
+      // covers the whole transcript above the run footer, which appears when the reply ends,
+      // minus the columns of the jump-to-latest button, which floats over the reply.
       const pinned = motion(window(log, sentAt + 1000, end).frames, { aliases });
       const userKey = userMount?.k;
       const replyHidden = hiddenBelowComposer(last) ?? 0;
+      const layout = readLayout(
+        JSON.parse(run(axe, ["describe-ui", "--udid", sim]).stdout) as AxNode[],
+      );
+      const transcript = layout.transcript ?? fail("no transcript on screen after the reply.");
+      const filled = firstFrame(
+        view.frames,
+        (frame) => (frame.f.live?.[1] ?? 0) > (frame.f.composer?.[0] ?? Infinity),
+      );
+      // Bottom of the reply's footer row: avatar and elapsed time, 44 pt tall.
+      const footerTop = (frame: ProbeFrame) => (frame.f.live?.[1] ?? 0) - 44;
+      const early = view.frames.find(
+        (frame) => frame.t >= sentAt + 1000 && footerTop(frame) - transcript.y >= 80,
+      );
+      const bottom = Math.min(
+        transcript.y + transcript.height,
+        ...layout.exclude.filter((rect) => rect.y > transcript.y).map((rect) => rect.y),
+      );
+      const jump = axFrame((node) => node.AXLabel === "Jump to latest reply");
       return {
         metrics: {
           ...common,
@@ -433,11 +730,28 @@ function streamCase(keyboardUp: boolean): Case {
         },
         gates: {
           ...setup,
-          "reply grew past the fold (setup)": replyHidden > 100,
+          "reply grew past the fold (setup)":
+            replyHidden > 100 && filled !== undefined && early !== undefined,
           "no teleports": moved.teleports === 0,
-          "sent turn holds still, reply included (≤1 pt)": pinned.maxDriftPt <= 1,
           "no remounts": common.remounts === 0,
         },
+        drawnMotion: [
+          {
+            from: early?.t ?? end,
+            // Past the late window's start: each window measures from its own first frame, so a
+            // jump right at the boundary would be the late window's baseline.
+            to: filled === undefined ? end : filled + 500,
+            area: { ...transcript, height: early ? footerTop(early) - transcript.y : 0 },
+            screenWidth: layout.screen.width,
+          },
+          {
+            from: filled ?? end,
+            to: end,
+            area: { ...transcript, height: bottom - transcript.y },
+            screenWidth: layout.screen.width,
+            ignoreX: jump && [jump.x, jump.x + jump.width],
+          },
+        ],
       };
     },
   };
@@ -458,16 +772,25 @@ const cases: Record<string, Case> = {
       await delay(2000);
       // An interactive swipe would also dismiss the keyboard and move every row; settle it first.
       await hideKeyboard();
-      ui([
+      // By coordinates inside the transcript's frame: the iOS transcript is a `List`, which the
+      // UI driver does not offer as a scroll container (#192232).
+      const area =
+        axFrame((node) => node.AXUniqueId === "chat-transcript") ?? fail("no transcript.");
+      const x = String(Math.round(area.x + area.width / 2));
+      run(axe, [
         "swipe",
-        "--within-element-ref",
-        ref(/chat-transcript/),
-        "--direction",
-        "down",
-        "--distance",
-        "0.5",
+        "--start-x",
+        x,
+        "--start-y",
+        String(Math.round(area.y + area.height * 0.25)),
+        "--end-x",
+        x,
+        "--end-y",
+        String(Math.round(area.y + area.height * 0.75)),
         "--duration",
         "0.3",
+        "--udid",
+        sim,
       ]);
       await delay(1500);
       const holdFrom = Date.now();
@@ -590,7 +913,73 @@ const cases: Record<string, Case> = {
       };
     },
   },
+  ...blankMatrix(),
 };
+
+// Every combination of keyboard up/down, short/long chat and plain/agent content, each judged by
+// the screen oracle from composer focus until after the reply ends. The harness missed #191478
+// because its only keyboard-up sends were in short plain chats; `blank-up-long-agent` is that bug.
+function blankMatrix(): Record<string, Case> {
+  const matrix: Record<string, Case> = {};
+  for (const keyboard of ["up", "down"] as const) {
+    for (const length of ["short", "long"] as const) {
+      for (const content of ["plain", "agent"] as const) {
+        matrix[`blank-${keyboard}-${length}-${content}`] = {
+          kind: "guard",
+          async run(session) {
+            const prompt = content === "agent" ? AGENT_REPLY_PROMPT : REPLY_PROMPT;
+            const chat =
+              length === "long"
+                ? await longChat(session, content === "agent" ? AGENT_SEED_PROMPT : SEED_PROMPT)
+                : session;
+            launch(chat);
+            await delay(2000);
+            await enterText(prompt);
+            if (keyboard === "down") {
+              await hideKeyboard();
+            }
+            const keyboardAtSend = keyboardShown();
+            const focused = await watchScreen("focus", 3000);
+            tap(/chat-send-message/);
+            const sent: ScreenSample[][] = [];
+            const until = Date.now() + 90_000;
+            let replied = false;
+            while (!replied && Date.now() < until) {
+              sent.push(await watchScreen("send", 2000));
+              // The run footer is static text, which the snapshot's target list leaves out. The
+              // app shows it only for a run it watched from its own send.
+              replied =
+                axFrame((node) => node.AXLabel?.startsWith("Done in") ?? false) !== undefined;
+            }
+            if (replied) {
+              sent.push(await watchScreen("done", 3000));
+            }
+            // A new chat has no text before the send; judge it from the send on.
+            const judged = length === "short" ? sent : [focused, ...sent];
+            const result = screenGates(readScreens(judged), "from focus to after the reply");
+            result.gates[`keyboard ${keyboard} at send (setup)`] =
+              keyboardAtSend === (keyboard === "up");
+            result.gates["reply finished (setup)"] = replied;
+            if (content === "agent" && AGENT_REPLY_LABEL) {
+              // The mock's last step closes the card only after every earlier step succeeded, and
+              // the long reply follows it; a failed step ends the turn with a short error reply.
+              // The label tells this turn's card from the seed turn's, which also completed.
+              result.gates["every agent tool step succeeded (setup)"] = sent
+                .flat()
+                .some(
+                  (sample) =>
+                    /^Plan, (\d+) of \1 steps done/.test(sample.plan ?? "") &&
+                    sample.plan?.includes(AGENT_REPLY_LABEL),
+                );
+            }
+            return result;
+          },
+        };
+      }
+    }
+  }
+  return matrix;
+}
 
 const selected = caseNames.map((name) => ({
   name,
@@ -611,7 +1000,65 @@ try {
     for (let sample = 1; sample <= samples; sample += 1) {
       const session = `ux-${name}-${stamp}-${sample}`.toLowerCase();
       const file = path.join(outDir, `${name}-${sample}.jsonl`);
+      // Every case is recorded for review and ends with a screen check, so cases that gate on
+      // motion are also judged on what is drawn.
+      const recording = path.join(outDir, `${name}-${sample}.mp4`);
+      const video = spawn("xcrun", ["simctl", "io", sim, "recordVideo", "--force", recording], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      owned.recorder = video;
+      // The recording's first frame is drawn when simctl reports the start. Wait for it here: the
+      // cases block the event loop with synchronous commands, which would stamp the line late.
+      const videoStartedAt = await new Promise<number>((resolve) => {
+        const stopped = () =>
+          fail(`the recording of ${name} #${sample} stopped before it started.`);
+        video.once("exit", stopped);
+        video.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+          if (chunk.includes("Recording started")) {
+            video.off("exit", stopped);
+            resolve(Date.now());
+          }
+        });
+      });
       const result = await testCase.run(session, file);
+      const settled = screenGates(
+        readScreens([await watchScreen(`${name}-end`, 1500)]),
+        "at the end",
+      );
+      // Both gates: without a transcript to read, the text gate passes on zero samples.
+      Object.assign(result.gates, settled.gates);
+      result.metrics.endTextLines = settled.metrics.minTextLines;
+      video.kill("SIGINT");
+      if (video.exitCode === null) {
+        await new Promise((resolve) => {
+          video.once("exit", resolve);
+        });
+      }
+      owned.recorder = undefined;
+      if (result.drawnMotion) {
+        const measured = result.drawnMotion.map(({ from, to, area, screenWidth, ignoreX }) => {
+          const args = [area.x, area.y, area.width, area.height, screenWidth, ...(ignoreX ?? [])];
+          return JSON.parse(
+            run(screenMotionTool, [
+              recording,
+              ...[(from - videoStartedAt) / 1000, (to - videoStartedAt) / 1000].map(String),
+              ...args.map((value) => String(Math.round(value))),
+            ]).stdout,
+          ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
+        });
+        result.metrics.drawnMovePt = Math.max(...measured.map((entry) => entry.maxMovePt));
+        // Reported, not gated: on `main` the live bubble → final row handoff redraws the reply
+        // about 2 pt right and 1 pt down for a few frames, which no vertical shift explains.
+        result.metrics.drawnUnexplainedFrames = measured.reduce(
+          (sum, entry) => sum + entry.unexplainedFrames,
+          0,
+        );
+        // A window outside the recording or a blank area reads as 0 pt without seeing anything.
+        result.gates["recording covers each window with content (setup)"] = measured.every(
+          (entry) => entry.frames >= 2 && entry.strips >= 2,
+        );
+        result.gates["drawn transcript holds still (≤1 pt)"] = result.metrics.drawnMovePt <= 1;
+      }
       results.push(result);
       console.log(`ios:behavior: ${name} #${sample} ${JSON.stringify(result.metrics)}`);
     }

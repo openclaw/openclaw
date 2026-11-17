@@ -71,6 +71,35 @@ describe("VisitorAccessService", () => {
     expect(result.details).not.toHaveProperty("email");
   });
 
+  it("invites and renews visitors with invitation-only session access", async () => {
+    const fixture = visitorFixture({
+      gatewayConfig: {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: { guest: { ...guestRole, sessions: { others: "invited" } } },
+          },
+        },
+      },
+    });
+
+    await fixture.service.invite({ email: "visitor@example.com", days: 2 }, fixture.authority);
+    expect(fixture.emails()).toEqual(["visitor@example.com"]);
+    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW + 2 * DAY_MS);
+
+    vi.setSystemTime(NOW + DAY_MS);
+    const renewed = await fixture.service.invite(
+      { email: "visitor@example.com", days: 4 },
+      fixture.authority,
+    );
+    expect(renewed.text).toContain("Renewed");
+    expect(fixture.grants.get("visitor@example.com")).toMatchObject({
+      createdAt: NOW,
+      expiresAt: NOW + 5 * DAY_MS,
+    });
+    expect(fixture.emails()).toEqual(["visitor@example.com"]);
+  });
+
   it.each([
     [404, true, /visitor was not found.*retry/],
     [400, true, /visitor is not a valid GitHub login.*retry/],
@@ -122,6 +151,19 @@ describe("VisitorAccessService", () => {
 
     expect(fixture.grants.size).toBe(0);
     expect(fixture.mutations()).toEqual([]);
+  });
+
+  it("describes definitions alone as unrestricted rather than retaining an assigned role", async () => {
+    const fixture = visitorFixture({
+      profiles: [{ id: "stored-staff", emails: [EMAIL], role: "staff" }],
+      grants: [visitorGrant(EMAIL)],
+      gatewayConfig: {
+        gateway: { roles: { definitions: { guest: guestRole, staff: staffRole } } },
+      },
+    });
+    expect((await fixture.list()).text).toContain(
+      "Gateway access is unrestricted: roles are disabled",
+    );
   });
 
   it.each<[string, Partial<ProfileFixture>, string, typeof staffRole?]>([

@@ -38,10 +38,12 @@ export async function readLocalWorkspacePath(params: {
     row &&
     (worktree.ownerKind !== "session" ||
       row.session_key !== worktree.ownerId ||
-      row.projection_path !== localWorkspaceProjectionPath({ worktree, env: context.environment }))
+      row.projection_path !==
+        (await localWorkspaceProjectionPath({ worktree, env: context.environment })))
   ) {
     throw new Error("Local sandbox workspace owner changed");
   }
+  assertCurrent();
   return {
     root: row?.baseline_ref ? row.projection_path : params.cwd,
     worktreeId: worktree.id,

@@ -39,6 +39,7 @@ import {
 } from "./runtime-snapshot-owner.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
   updateRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -63,6 +64,10 @@ type EnsureAuthProfileStoreOptions = Pick<
   | "syncExternalCli"
 >;
 type StoreReadHost = Pick<RuntimeReadHost, "loadAuthProfileStoreForAgent"> & {
+  findPersistedAuthProfileCredentialAsync: (params: {
+    agentDir?: string;
+    profileId: string;
+  }) => Promise<AuthProfileStore["profiles"][string] | undefined>;
   resolvePersistedLoadOptions: (
     options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "database"> | undefined,
   ) => { allowKeychainPrompt?: boolean; database?: AuthProfileDatabase };
@@ -660,6 +665,20 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     );
   }
 
+  /** Prepare a recorded provider without putting persisted SQLite reads on the caller's thread. */
+  async function prepareAuthProfileProvider(params: {
+    agentDir: string;
+    profileId: string;
+  }): Promise<{ provider: string | undefined }> {
+    const provider = getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)?.profiles[
+      params.profileId
+    ]?.provider;
+    if (provider || isEnvOnlyAuthProfileRuntime()) {
+      return { provider };
+    }
+    return { provider: (await host.findPersistedAuthProfileCredentialAsync(params))?.provider };
+  }
+
   async function prepareAuthProfileStoreForModelRuntime(
     agentDir: string,
     options: { config: OpenClawConfig; inheritedAuthDir?: string; skipCredentials?: boolean },
@@ -704,5 +723,6 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     ensureAuthProfileStoreForLocalUpdate,
     ensureAuthProfileStoreForLocalUpdateAsync,
     prepareAuthProfileStoreForModelRuntime,
+    prepareAuthProfileProvider,
   };
 }

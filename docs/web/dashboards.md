@@ -137,6 +137,10 @@ never needs the agent.
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
+  On a phone, reports and progress cards also grow to show all their content,
+  so scrolling the board never gets stuck inside a card; their saved size is
+  the smallest they get. Elsewhere, including the narrow side panel on desktop,
+  every widget keeps the size you gave it and its content scrolls inside.
 - **Automatic height.** HTML widgets adjust their height to fit their content.
   Resizing by handle or choosing a size preset fixes the height. Choose
   **Auto height** from the widget menu to fit the content again.

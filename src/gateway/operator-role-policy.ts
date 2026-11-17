@@ -2,7 +2,10 @@ import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/sche
 import type { ErrorShape, HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { SessionsDispatchParams } from "../../packages/gateway-protocol/src/schema/session-placement.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,8 +16,10 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
@@ -38,9 +43,15 @@ type GatewaySessionAgentAuthorization = {
   cfg: OpenClawConfig;
   agentId: string;
 } & (
-  | { actor: GatewayOperatorRoleActor; profileId?: never; client?: never }
-  | { actor?: never; profileId: string | undefined; client?: never }
-  | { actor?: never; profileId?: never; client: GatewayClient | null | undefined }
+  | { authority: AdmittedRunOperatorAuthority; actor?: never; profileId?: never; client?: never }
+  | { authority?: never; actor: GatewayOperatorRoleActor; profileId?: never; client?: never }
+  | { authority?: never; actor?: never; profileId: string | undefined; client?: never }
+  | {
+      authority?: never;
+      actor?: never;
+      profileId?: never;
+      client: GatewayClient | null | undefined;
+    }
 );
 
 /**
@@ -96,21 +107,27 @@ export function resolveOperatorRoleSelection(
   githubLogin: string | null,
 ): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
   const roles = cfg.gateway?.roles;
-  if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    !profileId ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return { roleSource: "default" };
   }
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return { effectiveRole: assignedRole, roleSource: "assigned" };
   }
   const login = githubLogin?.toLowerCase();
-  if (login) {
-    for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
-      if (
-        configuredLogin.trim().toLowerCase() === login &&
-        Object.hasOwn(roles.definitions, role)
-      ) {
-        return { effectiveRole: role, roleSource: "githubLogin" };
-      }
+  const assignments = roles.assignments?.byGithubLogin;
+  if (login && assignments) {
+    // Config validation rejects duplicate normalized logins; exact keys need no roster scan.
+    const key = Object.hasOwn(assignments, login)
+      ? login
+      : Object.keys(assignments).find((candidate) => candidate.trim().toLowerCase() === login);
+    const role = key === undefined ? undefined : assignments[key];
+    if (role && Object.hasOwn(roles.definitions, role)) {
+      return { effectiveRole: role, roleSource: "githubLogin" };
     }
   }
   return { effectiveRole: roles.default, roleSource: "default" };
@@ -122,7 +139,7 @@ export function resolveOperatorRolePolicyForProfile(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
-  if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   const profile = profileId
@@ -144,7 +161,11 @@ export function resolveOperatorRolePolicyForAssignment(
   githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return undefined;
   }
   if (!profileId) {
@@ -173,11 +194,23 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
+  creation:
+    | {
+        actor?: SessionCreatedActor;
+        openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+      }
+    | undefined,
 ): "required" | undefined {
+  const principal = creation?.openclawIdPrincipal;
+  if (principal?.kind === "member") {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new OpenClawIdPrincipalChangedError();
+    }
+    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
   const actor = creation?.actor;
   return actor?.type === "human" &&
     actor.id &&
@@ -239,7 +272,10 @@ export function resolveOperatorRolePolicy(
     if (roleFacts?.policy) {
       return roleFacts.policy;
     }
-    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+    if (
+      !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      authority.profileId === GATEWAY_OWNER_PROFILE_ID
+    ) {
       return undefined;
     }
     if (!roleFacts) {
@@ -262,6 +298,21 @@ export function resolveOperatorRolePolicy(
     );
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+}
+
+/** Administrator members use membership, while other callers keep their profile policy. */
+export function resolveAdministratorMemberRolePolicy(
+  client: GatewayClient | null | undefined,
+  cfg: OpenClawConfig,
+): GatewayOperatorRoleDefinition | undefined {
+  const principal =
+    client?.internal?.openclawIdPrincipal ??
+    client?.internal?.operatorRunAuthority?.openclawIdPrincipal;
+  if (!client || principal?.kind !== "member" || !client.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return undefined;
+  }
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  return policy?.scopes.includes(ADMIN_SCOPE) ? policy : deniedOperatorRole;
 }
 
 /** A retained caller cannot keep grants removed by the current named role. */
@@ -324,19 +375,25 @@ export function authorizeGatewaySessionCreation(
   params: GatewaySessionAgentAuthorization,
   prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
 ): ErrorShape | undefined {
+  if (params.authority) {
+    assertAdmittedRunOperatorAuthority(params.authority);
+    params.authority.assertCurrent();
+  }
   const actor =
     params.actor ??
     ("client" in params ? resolveGatewayOperatorRoleActor(params.client) : undefined);
-  if (actor?.kind === "system") {
+  if (!params.authority && actor?.kind === "system") {
     return undefined;
   }
-  const profileId = actor?.profileId ?? params.profileId;
-  // Keep the client's prepared identity and live run authority at this boundary.
-  const role = prepared
-    ? prepared.policy
-    : "client" in params
-      ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
-      : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
+  const profileId = actor?.kind === "operator" ? actor.profileId : params.profileId;
+  // Retain membership restrictions independently of the linked profile's named role.
+  const role = params.authority
+    ? params.authority.rolePolicy
+    : prepared
+      ? prepared.policy
+      : "client" in params
+        ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
+        : resolveOperatorRolePolicyForProfile(profileId, params.cfg);
   if (!role || role.agents === "*" || role.agents.includes(params.agentId)) {
     return undefined;
   }
@@ -365,7 +422,7 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
 }): void {
   const role = resolveOperatorRolePolicy(params.client ?? null, params.config);
   const administrator =
-    (!params.config.gateway?.roles && !params.client) ||
+    (!isNamedOperatorRoleEnforcementEnabled(params.config) && !params.client) ||
     (params.client?.connect?.scopes?.includes(ADMIN_SCOPE) === true &&
       (!role || role.scopes.includes(ADMIN_SCOPE)));
   if (administrator) {

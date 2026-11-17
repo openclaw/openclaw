@@ -10,11 +10,7 @@ import {
   makeTool,
   startToolCalls,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
-import {
-  attachInternalToolBatchLifecycle,
-  attachInternalToolExecutionPreparer,
-  setInternalBeforeToolBatch,
-} from "../../packages/agent-core/src/internal-hooks.js";
+import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
@@ -294,42 +290,6 @@ it("retains returned and rejected failures from separate streamed tool batches",
   expect(siblingSettled && publicationFailed).toBe(true);
 });
 
-it("releases an admitted sequential async batch when its predecessor fails locally", async () => {
-  const uncertain = new SqliteWorkerError("Synthetic predecessor failure", "outcome-unknown");
-  const waitingAdmitted = Promise.withResolvers<void>();
-  const executeWaiting = vi.fn(emptyResult);
-  const releaseWaiting = vi.fn();
-  const beforeCalls: string[] = [];
-  const { agent, streamFn } = scenario(
-    [
-      tool("first", async () => {
-        await waitingAdmitted.promise;
-        await nextTurn();
-        throw uncertain;
-      }),
-      { ...tool("waiting", executeWaiting), executionMode: "sequential" },
-    ],
-    {
-      beforeToolCall: async ({ toolCall }) => {
-        beforeCalls.push(toolCall.name);
-      },
-    },
-    true,
-  );
-  setInternalBeforeToolBatch(agent, async ({ calls: admittedCalls }) => {
-    if (admittedCalls.some(({ toolCall }) => toolCall.name === "waiting")) {
-      waitingAdmitted.resolve();
-      return attachInternalToolBatchLifecycle({}, { releaseSkippedCalls: releaseWaiting });
-    }
-    return undefined;
-  });
-  const outcome = await failedPrompt(agent, streamFn);
-  expectFailureGraph(outcome, uncertain);
-  expect(releaseWaiting).toHaveBeenCalledExactlyOnceWith(["waiting"]);
-  expect(beforeCalls).toEqual(["first"]);
-  expect(executeWaiting).not.toHaveBeenCalled();
-});
-
 it.each(["reject", "complete"] as const)(
   "settles an invoked pending guard that later %ss",
   async (settlement) => {
@@ -385,31 +345,7 @@ it.each(["reject", "complete"] as const)(
   },
 );
 
-it("keeps pre-start publication failure primary when admission release also fails", async () => {
-  const uncertain = new SqliteWorkerError("Synthetic publication failure", "outcome-unknown");
-  const cleanup = new Error("Synthetic admission release failure");
-  const { agent } = scenario([preparedTool("prestart")]);
-  setInternalBeforeToolBatch(agent, async () =>
-    attachInternalToolBatchLifecycle(
-      {},
-      {
-        releaseSkippedCalls() {
-          throw cleanup;
-        },
-      },
-    ),
-  );
-  agent.subscribe((event) => {
-    if (event.type === "tool_execution_end") {
-      throw uncertain;
-    }
-  });
-  const outcome = await failedPrompt(agent);
-  expectFailureGraph(outcome, uncertain, cleanup);
-  expect(outcome).toMatchObject({ cause: uncertain });
-});
-
-it.each(["execution", "admission", "ordinary"] as const)(
+it.each(["execution", "ordinary"] as const)(
   "retains %s and cleanup failures while draining every accepted progress update",
   async (phase) => {
     const primary =
@@ -441,18 +377,6 @@ it.each(["execution", "admission", "ordinary"] as const)(
       }),
     );
     const { agent } = scenario([progressTool]);
-    if (phase === "admission") {
-      setInternalBeforeToolBatch(agent, async () =>
-        attachInternalToolBatchLifecycle(
-          {},
-          {
-            commitReadyCalls() {
-              throw primary;
-            },
-          },
-        ),
-      );
-    }
     agent.subscribe(async (event) => {
       if (event.type !== "tool_execution_update") {
         return;

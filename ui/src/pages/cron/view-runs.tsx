@@ -1,4 +1,4 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
@@ -31,7 +31,6 @@ type CronRunsSectionProps = Pick<
   | "onLoadMoreRuns"
   | "onRefresh"
   | "onRunsFiltersChange"
-  | "onViewRunTranscript"
   | "onRunMount"
 > & {
   conditionActivity?: {
@@ -356,9 +355,6 @@ export function RunsSection(props: CronRunsSectionProps) {
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
                 onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
-                onViewRunTranscript={(targetEntry, trigger) =>
-                  props.onViewRunTranscript?.(targetEntry, trigger)
-                }
               />
             )}
           </For>
@@ -391,25 +387,51 @@ export function runStatusLabel(
       "cron.runs.runStatusUnknown",
   );
 }
-function RunError(props: { error: CronRunLogEntry["error"] }) {
-  return <div class="muted">{formatUiExternalText(props.error)}</div>;
+/** Long errors stay two lines tall until the reader asks for the rest. */
+const RUN_ERROR_PREVIEW_CHARS = 160;
+function RunError(props: { error: string }) {
+  const [expanded, setExpanded] = createSignal(false);
+  const long = () => props.error.length > RUN_ERROR_PREVIEW_CHARS || props.error.includes("\n");
+  return (
+    <div class="cron-run-entry__error">
+      <div class={["muted", { "cron-error--clamped": long() && !expanded() }]} title={props.error}>
+        {props.error}
+      </div>
+      <Show when={long()}>
+        <button
+          type="button"
+          class="settings-row__desc-action"
+          aria-expanded={expanded() ? "true" : "false"}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded() ? t("cron.runEntry.hideDetails") : t("cron.runEntry.showDetails")}
+        </button>
+      </Show>
+    </div>
+  );
 }
 function Run(props: {
   entry: CronRunLogEntry;
   formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
   highlightedRunId?: string | null;
-  onViewRunTranscript?: CronProps["onViewRunTranscript"];
   onRunMount?: (
     ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
   ) => (() => void) | undefined;
 }) {
+  // A failed run whose condition never fired is a condition-script failure: no task ran.
+  const conditionFailed = () =>
+    props.entry.status === "error" && props.entry.triggerFired === false;
   const status = () =>
-    runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
-  const delivery = () =>
-    t(
-      RUN_DELIVERY_LABELS.get(props.entry.deliveryStatus ?? "not-requested") ??
-        "cron.runs.deliveryUnknown",
-    );
+    conditionFailed()
+      ? t("cron.runEntry.conditionCheckFailed")
+      : runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);
+  // An unknown outcome is not a fact worth showing.
+  const delivery = () => {
+    const deliveryStatus = props.entry.deliveryStatus ?? "not-requested";
+    const label = RUN_DELIVERY_LABELS.get(deliveryStatus);
+    // An unknown outcome is only worth a label when it carries its own explanation.
+    return !label || (deliveryStatus === "unknown" && !deliveryError()) ? null : t(label);
+  };
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
     return usage?.total_tokens !== undefined
@@ -421,9 +443,12 @@ function Run(props: {
           })
         : null;
   });
-  const bodySource = () =>
-    props.entry.summary || formatUiExternalText(props.entry.error) || t("cron.runEntry.noSummary");
-  const showErrorInMeta = () => Boolean(props.entry.error) && Boolean(props.entry.summary);
+  const error = () => formatUiExternalText(props.entry.error);
+  // Older history copied the run error into the delivery error; show each error once.
+  const deliveryError = () => {
+    const text = formatUiExternalText(props.entry.deliveryError);
+    return text === error() ? "" : text;
+  };
   const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
   const facts = createMemo(() =>
     [
@@ -476,25 +501,35 @@ function Run(props: {
               {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
             </div>
           ) : undefined}
-          {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
-            <div>
-              <button
-                class="btn btn--sm"
-                onClick={(event) => props.onViewRunTranscript?.(props.entry, event.currentTarget)}
-              >
-                {t("cron.runEntry.viewTranscript")}
-              </button>
-            </div>
-          ) : undefined}
-          {showErrorInMeta() ? <RunError error={props.entry.error} /> : undefined}
-          {props.entry.deliveryError ? <RunError error={props.entry.deliveryError} /> : undefined}
         </div>
       </div>
-      <SanitizedHtml
-        tag="div"
-        class="cron-run-entry__body chat-text"
-        html={toSanitizedMarkdownHtml(bodySource())}
-      />
+      <Show
+        when={props.entry.summary || !error()}
+        fallback={
+          <div class="cron-run-entry__body">
+            <RunError error={error()} />
+          </div>
+        }
+      >
+        <SanitizedHtml
+          tag="div"
+          class="cron-run-entry__body chat-text"
+          html={toSanitizedMarkdownHtml(props.entry.summary || t("cron.runEntry.noSummary"))}
+        />
+        <Show when={error()}>
+          <RunError error={error()} />
+        </Show>
+      </Show>
+      <Show when={deliveryError()}>
+        <div class="muted cron-run-entry__delivery-error">
+          {t(
+            props.entry.deliveryStatus === "not-delivered"
+              ? "cron.runEntry.deliveryFailed"
+              : "cron.runEntry.deliveryNote",
+            { error: deliveryError() },
+          )}
+        </div>
+      </Show>
     </div>
   );
 }

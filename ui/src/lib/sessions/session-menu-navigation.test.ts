@@ -87,6 +87,22 @@ it.each([false, true])("copies credential-free session links (preview=%s)", asyn
     `https://gateway.example.test/remote${preview ? "/share" : ""}${sessionPath}`,
   );
 });
+it.each([false, true])(
+  "copies claw-address links for claw members (preview=%s)",
+  async (preview) => {
+    Object.assign(params.context.gateway.snapshot.hello!, {
+      controlUiUrl: "https://gateway.example.test/remote",
+      controlUiClawUrl: "https://studio-k7x2q.claws.example.test/remote",
+    });
+
+    await run(preview ? "copy-session-preview-link" : "copy-session-link");
+
+    const href = vi.mocked(copyToClipboard).mock.calls.at(-1)?.[0];
+    expect(new URL(href ?? "").origin).toBe(
+      preview ? "https://gateway.example.test" : "https://studio-k7x2q.claws.example.test",
+    );
+  },
+);
 it("keeps catalog preview targets without connection credentials", async () => {
   params.session = {
     key: "agent:research:catalog:codex:dev%3Amac:thread%2F123",

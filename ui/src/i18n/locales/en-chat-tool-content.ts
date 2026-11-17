@@ -21,6 +21,7 @@ const enChatToolContent = {
       diff: "Diff",
       raw: "Raw",
       openDetails: "Open tool details in side panel",
+      openDetailsTooltip: "Open details",
       noOutputFailed: "The tool failed without output.",
     },
   },

@@ -1,4 +1,3 @@
-/** One controller-owned steer of a reserved input into its captured execution owner. */
 import { bindWorkerToolPreparation } from "../agents/harness/host-private-capabilities.js";
 import {
   admitFollowupRunLifecycle,
@@ -75,15 +74,9 @@ export async function beginSessionControllerSteer(
   let attempt: ReplyMessageInjectionAttempt;
   try {
     const assertInputCurrent = () => {
-      try {
-        params.input.abortSignal.throwIfAborted();
-        params.input.sourceAdapter?.authority?.assertCurrent();
-        params.options.abortSignal?.throwIfAborted();
-      } catch (error) {
-        // A revoked source cannot become a runnable followup when preparation unwinds.
-        retireSessionControllerInput(params.input);
-        throw error;
-      }
+      params.input.abortSignal.throwIfAborted();
+      params.input.sourceAdapter?.authority?.assertCurrent();
+      params.options.abortSignal?.throwIfAborted();
     };
     const preparation = params.options.toolAuthorityPreparation;
     const prepared = bindWorkerToolPreparation(

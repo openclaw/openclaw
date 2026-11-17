@@ -605,6 +605,13 @@ environments, which some macOS releases report without a bounded end; a process
 whose arguments cannot be read still leaves the census incomplete. Processes
 started by the repair itself are never handoff work, so they do not block it.
 
+When a package journal pins an existing historical lease store, repair checks
+that store before settling publication, even if the current per-user store is
+empty. Publication settlement and finalization reuse the admitted repair claim.
+If recovery refuses, repair preserves the evidence and reports the specific
+ownership, descendant, history, grace, or restoration reason. The repairing CLI
+must contain this fix; an older blocked CLI cannot obtain it from a candidate.
+
 Repair also checks legacy update child-lineage leases left after a manual
 installation hop, even when the installation-root lease is absent. Dead PIDs
 and PIDs reused with different start identities can be reclaimed. An unbound
@@ -1274,6 +1281,11 @@ Releases it swaps without `update migrate` are not recorded. Changed backups rem
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.
+`openclaw backup create` includes them by default; `--exclude-migration-backups`
+omits them from that archive without removing them. The same flag also omits
+Doctor's PostgreSQL backup directories (`.pre-startup-migration-<id>.postgres.bak`)
+and restart-recovery originals (`.pre-startup-migration-restart-recovery-<id>.bak`);
+see [`openclaw backup`](/cli/backup).
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.
