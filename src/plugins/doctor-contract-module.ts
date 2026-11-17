@@ -16,6 +16,7 @@ import type {
 } from "../plugin-state/plugin-state-store.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
+import type { OpenClawPluginCliContext } from "./plugin-registration.types.js";
 
 export type PluginDoctorStateMigrationDetection = {
   preview: string[];
@@ -151,6 +152,19 @@ type PluginDoctorStateMigrationInput = {
   context: PluginDoctorStateMigrationContext;
 };
 
+/** Registers only within a manifest-declared recovery subtree; never receives runtime activation. */
+export type PluginDoctorRecoveryCliContext = Pick<
+  OpenClawPluginCliContext,
+  "program" | "parentPath" | "config"
+> &
+  Pick<PluginDoctorStateMigrationInput, "env" | "stateDir"> & {
+    context: Pick<PluginDoctorStateMigrationContext, "openPluginStateKeyedStore">;
+  };
+
+export type PluginDoctorRecoveryCliRegistrar = (
+  params: PluginDoctorRecoveryCliContext,
+) => void | Promise<void>;
+
 type PluginDoctorStateMigrationResult = {
   changes: string[];
   warnings: string[];
@@ -224,6 +238,7 @@ export type PluginDoctorProviderRename = {
 };
 
 export type PluginDoctorContractModule = {
+  registerRecoveryCli?: unknown;
   historicalWebhookListener?: unknown;
   /** Retained host artifacts can migrate listener settings while plugin repairs stay deferred. */
   normalizeHistoricalWebhookConfig?: unknown;
@@ -365,10 +380,16 @@ export function coercePluginDoctorContractModule(
   const stateMigrations = coercePluginDoctorStateMigrations(
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
+  const recoveryCli = mod.registerRecoveryCli ?? defaultExport?.registerRecoveryCli;
+  if (recoveryCli !== undefined && typeof recoveryCli !== "function") {
+    throw new Error("Doctor registerRecoveryCli must be a function");
+  }
+  const registerRecoveryCli = recoveryCli as PluginDoctorRecoveryCliRegistrar | undefined;
   const providerRenames = coerceProviderRenames(
     mod.providerRenames ?? defaultExport?.providerRenames,
   );
   const summary: Record<keyof PluginManifestDoctorContract, boolean> = {
+    recoveryCli: Boolean(registerRecoveryCli),
     configRepair:
       rules.length > 0 || Boolean(normalizeCompatibilityConfig) || providerRenames.length > 0,
     resolveSessionStoreAgentIds: Boolean(resolveSessionStoreAgentIds),
@@ -384,6 +405,7 @@ export function coercePluginDoctorContractModule(
     resolveSessionStoreAgentIds,
     sessionRouteStateOwners,
     stateMigrations,
+    registerRecoveryCli,
     summary,
   };
 }
