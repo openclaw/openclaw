@@ -1,5 +1,4 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
-import { readMeetMeetingCode } from "../meet-url.js";
 
 // Meet automation scripts match English UI labels. Pin the page language while
 // preserving authuser and every other caller-supplied query parameter.
@@ -17,14 +16,11 @@ export function normalizeMeetUrlForReuse(url: string | undefined): string | unde
   if (parsed?.protocol !== "https:" || parsed.hostname.toLowerCase() !== "meet.google.com") {
     return undefined;
   }
-  // A joined tab lands on Meet's own `/meet/<code>` form; it is the same call as `/<code>`.
-  const segments = parsed.pathname.split("/").filter(Boolean);
-  const codeOnly = segments.length === (segments[0]?.toLowerCase() === "meet" ? 2 : 1);
-  const code = codeOnly ? readMeetMeetingCode(parsed.pathname) : undefined;
-  if (!code) {
+  const match = parsed.pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/)?$/i);
+  if (!match?.[1]) {
     return undefined;
   }
-  return `https://meet.google.com/${code}`;
+  return `https://meet.google.com/${match[1].toLowerCase()}`;
 }
 
 export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefined): boolean {
