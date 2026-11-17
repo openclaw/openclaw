@@ -71,6 +71,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        cacheShort: "Cache",
+        cacheHitRate: "Prompt tokens read from cache",
         sessionTotal: "Session total",
         unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",

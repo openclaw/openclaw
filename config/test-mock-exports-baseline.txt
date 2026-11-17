@@ -2929,7 +2929,6 @@
 ["src/cli/run-main.test-support.ts","../plugins/memory-runtime.js","6132a717776777639833c311ff082c853cecfd736aa468fb7bc1564d8155e0bf",1]
 ["src/cli/run-main.test-support.ts","../plugins/memory-state.js","c3d926b60873081ce39894c69a8701a8189f67b9fa19dd54f3bd2ac60df11e18",1]
 ["src/cli/run-main.test-support.ts","../tui/tui.js","db01cbdbd7f64ae2e631d0462f169c83514eb349e34e977377798f033cf8c7c0",1]
-["src/cli/run-main.test-support.ts","../version.js","69696fc001fdb7c099ea297ef9288c357bb8803ea3f3079ff9225e4e096a62ce",1]
 ["src/cli/run-main.test-support.ts","./banner.js","9cc1dc74fea74adf1bfbd14d0da1f130def0acbcc7c31e4178d0c2268e0fd721",1]
 ["src/cli/run-main.test-support.ts","./command-execution-startup.js","c2031295b14d5c8a8895efe2ffd42038b978baf0bcc972fb1769470cc94de987",1]
 ["src/cli/run-main.test-support.ts","./container-target.js","2a89c669e44be426612f1ac643c91695c83bd88b309920c774c0bf60b2750a78",1]
