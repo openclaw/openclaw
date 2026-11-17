@@ -30,8 +30,10 @@ describe("final text replay after a crash mid-send", () => {
     ["reconciled as sent", { status: "sent", messageId: "platform-1" }, 1, 0],
     ["a second crash, during the resend", undefined, 2, 0],
     ["the resend refused before connecting, then recovered again", undefined, 1, 1],
+    // A proven-unsent replay keeps its normal retry budget.
+    ["reconciled as not sent, refused before connecting", { status: "not_sent" }, 1, 2],
   ] as const)("%s", async (label, reconciliation, startedAttempts, expectedSends) => {
-    const refused = label.startsWith("the resend refused");
+    const refused = label.includes("refused before connecting");
     if (reconciliation) {
       resolveAdapter.mockReturnValue({
         durableFinal: {
@@ -79,12 +81,15 @@ describe("final text replay after a crash mid-send", () => {
     const log = createRecoveryLog();
     await recoverPendingDeliveries({ deliver, log, cfg: {}, stateDir: tmpDir() });
     if (refused) {
-      // A proven-unsent failure clears the unconfirmed state; the ceiling must still hold.
-      setQueuedEntryState(tmpDir(), id, { retryCount: 1, lastAttemptAt: 0 });
+      // A proven-unsent failure clears the unconfirmed state; only a blind replay keeps the ceiling.
+      const [entry] = await loadPendingDeliveries(tmpDir());
+      expect(entry?.recoveryState).toBeUndefined();
+      expect(entry?.maxRetries).toBe(expectedSends === 2 ? undefined : 2);
+      setQueuedEntryState(tmpDir(), id, { retryCount: 1, lastAttemptAt: Date.now() - 3_600_000 });
       await recoverPendingDeliveries({ deliver, log, cfg: {}, stateDir: tmpDir() });
     }
     expect(deliver).toHaveBeenCalledTimes(expectedSends);
-    expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(expectedSends === 2 ? 1 : 0);
     if (startedAttempts === 2) {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("refusing blind replay"));
     }

@@ -54,6 +54,19 @@ export function canReplayAmbiguousFinalText(
   );
 }
 
+/** "proven": the adapter proved a started send never left; "blind": the final-text rule above. */
+export type UnknownSendReplay = "blind" | "proven";
+
+export function resolveUnknownSendReplay(
+  entry: QueuedDelivery,
+  reconciliation?: { status: string } | null,
+): UnknownSendReplay | undefined {
+  if (reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started") {
+    return "proven";
+  }
+  return canReplayAmbiguousFinalText(entry, reconciliation) ? "blind" : undefined;
+}
+
 export function shouldInspectQueuedDelivery(entry: QueuedDelivery, now: number): boolean {
   // The live producer may still be awaiting its committed enqueue reply. Taking
   // an inspection claim would preempt it before we reload and skip its lease.
