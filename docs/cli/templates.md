@@ -458,10 +458,7 @@ and responds in this order:
    cards offer **Install**; community cards offer **View details** for normal
    plugin review. Unknown packages produce a not-found result, not a card.
 5. Creation failures, by name and reason. Successful skills are not listed.
-6. The author's opening from `BOOTSTRAP.md`. If you selected a recommended prompt,
-   the agent is instructed to finish bootstrap first, asking and waiting for any
-   needed answers across replies, then address that task in the same conversation.
-   Without a selection, the existing opening is unchanged.
+6. The author's opening from `BOOTSTRAP.md`, last in the same turn.
 
 Neither creation nor this turn installs or enables a plugin referenced on
 ClawHub, or enables an automation. A missing or disabled referenced plugin never
@@ -476,7 +473,7 @@ the composer.
 If that first turn fails or is interrupted, **Retry setup** runs only that turn
 with a fresh run ID in the existing chat. It does not re-create the agent,
 rewrite its files, fetch the Template again, or reinstall dependencies. The
-ordinary session retains the creation report and selected prompt until the turn completes; a retry
+ordinary session retains the creation report until the turn completes; a retry
 cannot start a second setup while the first still owns the agent's setup lease.
 Retry explicitly targets the admitted agent. If setup completed while the client
 was disconnected, Retry reconciles that existing chat without adding another copy.
