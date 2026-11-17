@@ -1,0 +1,4 @@
+# Gateway control-ui regression for #193102.
+# Core server-http.a2a-namespace.test.ts plus the A2A Accept table.
+# Credit matches added test lines versus the PR base.
+211
