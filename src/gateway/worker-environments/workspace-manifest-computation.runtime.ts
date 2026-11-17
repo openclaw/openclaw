@@ -149,6 +149,7 @@ export async function executeWorkspaceManifestComputation(
         (action.kind === "scan" ||
           action.kind === "probe" ||
           action.kind === "materialize" ||
+          action.kind === "paths" ||
           action.kind === "archive")
       ) {
         // A scan consumes this map. Its actual root may still await acceptance;
@@ -415,19 +416,6 @@ export async function executeWorkspaceManifestComputation(
       const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, () => preflightWorkspaceApplyImpl(input));
-    }
-    case "workspace.manifest.paths": {
-      const input = command.input;
-      const manifest = parseWorkerWorkspaceManifest(
-        decodeUtf8(input.raw),
-        input.expectedRef,
-        input.buildCacheInputs,
-      );
-      // Parsing already projects eligible entries; keep the directory-first path order.
-      return new Set([
-        ...(manifest.directories ?? []),
-        ...manifest.entries.map((entry) => entry.path),
-      ]);
     }
     case "workspace.manifest.parse": {
       const raw = decodeUtf8(command.input.raw);

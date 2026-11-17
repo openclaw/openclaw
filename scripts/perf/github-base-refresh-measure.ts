@@ -2,11 +2,10 @@
  * Measure base-refresh capture and overlay preparation on 24,000 synthetic files.
  * Usage: node --import ./scripts/tsx.mjs scripts/perf/github-base-refresh-measure.ts
  *   --fixture .local/github-base-refresh --mode prepare|base|candidate|compare
- *   [--files 24000 --samples 5 --operation refresh|paths]
+ *   [--files 24000 --samples 5]
  * Prepare once, then measure base before editing and compare after the worker move.
  * `base` reproduces the original capture/parse/overlay/conflict/serialize sequence;
- * `candidate` calls the production workspace worker operation. `--operation paths`
- * isolates canonical baseline parsing and eligible-path projection. Compare alternates
+ * `candidate` calls the production workspace worker operation. Compare alternates
  * AB/BA with one unmeasured warmup per arm; no forced GC or allocation profiler.
  * Timers sample longest main-loop scheduling gap, including OS scheduling noise;
  * mainThreadCpuMs is thread CPU, totalCpuMs includes worker threads. This owner
@@ -40,12 +39,10 @@ const { values } = parseArgs({
     mode: { type: "string", default: "compare" },
     files: { type: "string", default: "24000" },
     samples: { type: "string", default: "5" },
-    operation: { type: "string", default: "refresh" },
   },
 });
 assert.ok(values.fixture, "--fixture is required");
 assert.ok(["prepare", "base", "candidate", "compare"].includes(values.mode));
-assert.ok(["refresh", "paths"].includes(values.operation));
 const fixture = path.resolve(values.fixture);
 const count = Number(values.files);
 const samples = Number(values.samples);
@@ -120,33 +117,20 @@ if (values.mode === "prepare") {
   const expectedRaw = await fs.readFile(path.join(fixture, "expected.json"), "utf8");
   const baseRef = digest(baseRaw);
   const buildCacheInputs: string[] = [];
-  // The fixture's explicit wire paths are independent of the production projection.
-  const expectedPathDocument: { entries: { path: string }[] } = JSON.parse(baseRaw);
-  const expectedPaths = new Set(expectedPathDocument.entries.map((entry) => entry.path));
   type Arm = "base" | "candidate";
   const run = async (arm: Arm) => {
     if (arm === "candidate") {
-      const { prepareWorkspaceBaseRefresh, workspaceManifestPaths } =
+      const { prepareWorkspaceBaseRefresh } =
         await import("../../src/gateway/worker-environments/workspace-manifest-worker.js");
-      return values.operation === "paths"
-        ? await workspaceManifestPaths(
-            { rawManifest: baseRaw, manifestRef: baseRef },
-            buildCacheInputs,
-          )
-        : await prepareWorkspaceBaseRefresh({
-            beforeRoot,
-            afterRoot,
-            baseCommit,
-            baseRaw,
-            baseRef,
-            buildCacheInputs,
-            action: "refresh_base",
-          });
-    }
-    if (values.operation === "paths") {
-      return new Set(
-        manifestNodes(parseWorkerWorkspaceManifest(baseRaw, baseRef, buildCacheInputs)).keys(),
-      );
+      return await prepareWorkspaceBaseRefresh({
+        beforeRoot,
+        afterRoot,
+        baseCommit,
+        baseRaw,
+        baseRef,
+        buildCacheInputs,
+        action: "refresh_base",
+      });
     }
     const before = await captureWorkspaceSnapshot({ root: beforeRoot, baseCommit });
     const after = await captureWorkspaceSnapshot({ root: afterRoot, baseCommit });
@@ -172,12 +156,8 @@ if (values.mode === "prepare") {
     };
   };
   const verify = (result: Awaited<ReturnType<typeof run>>, arm: Arm) => {
-    if (result instanceof Set) {
-      assert.deepEqual(result, expectedPaths, `${arm} golden paths`);
-    } else {
-      assert.equal(result.rawManifest, expectedRaw, `${arm} golden manifest`);
-      assert.equal(result.manifestRef, digest(expectedRaw));
-    }
+    assert.equal(result.rawManifest, expectedRaw, `${arm} golden manifest`);
+    assert.equal(result.manifestRef, digest(expectedRaw));
   };
   const arms: Arm[] =
     values.mode === "compare"
@@ -222,7 +202,7 @@ if (values.mode === "prepare") {
         console.log(
           JSON.stringify({
             arm,
-            operation: values.operation,
+            operation: "refresh",
             pair: pair + 1,
             elapsedMs,
             mainThreadCpuMs: (main.user + main.system) / 1000,
@@ -233,8 +213,7 @@ if (values.mode === "prepare") {
             loadAfter: os.loadavg(),
             rssMiB: process.memoryUsage().rss / 1024 ** 2,
             heapMiB: process.memoryUsage().heapUsed / 1024 ** 2,
-            manifestRef: result instanceof Set ? baseRef : result.manifestRef,
-            paths: result instanceof Set ? result.size : undefined,
+            manifestRef: result.manifestRef,
           }),
         );
       }

@@ -382,6 +382,8 @@ The target is checked again under pause before application; concurrent guest
 writes are preserved as conflicts. Successful two-sided transfers resume before
 temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations
 still keeps the guest paused until both workspaces accept the transfer.
+Canonical path selection stays in the workspace worker, so selecting paths does
+not copy a complete accepted manifest through the Gateway.
 
 GitHub PR preparation and base refresh download commit history and missing objects
 with the guest running. After those downloads finish, OpenClaw checks the guest's

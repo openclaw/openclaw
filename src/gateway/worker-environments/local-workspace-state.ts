@@ -44,7 +44,6 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
-  workspaceManifestPaths,
 } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -148,13 +147,12 @@ export function projectionOperations(
     raw: string,
     ref: string,
     patch: Parameters<typeof store.update>[1] = {},
-  ) => {
-    await update(patch, {
+  ) =>
+    update(patch, {
       rawManifest: raw,
       manifestRef: ref,
       buildCacheInputs: await buildCacheInputs(),
     });
-  };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;
   const targetPath = (target: Direction) =>
@@ -175,7 +173,11 @@ export function projectionOperations(
   const canonicalPaths = async () => {
     const retained = await buildCacheInputs();
     const selected = current();
-    const document = selected.baseline_ref ? await baselineDocument() : undefined;
+    const baseline =
+      selected.baseline_ref && (await readManifest({ kind: "paths", buildCacheInputs: retained }));
+    if (baseline && baseline.kind !== "paths") {
+      throw new Error("Local workspace baseline paths are missing");
+    }
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
       admittedPaths: preparedInputPaths
@@ -184,9 +186,7 @@ export function projectionOperations(
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
-      baselinePaths: document
-        ? await workspaceManifestPaths(document, retained, signal)
-        : undefined,
+      baselinePaths: baseline ? baseline.paths : undefined,
     });
   };
   const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {

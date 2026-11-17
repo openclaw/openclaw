@@ -242,10 +242,6 @@ export type WorkspaceManifestComputationOperations = {
       input: { raw: Uint8Array<ArrayBuffer>; expectedRef?: string };
       output: { manifest: WorkerWorkspaceManifest; manifestRef: string };
     };
-    "workspace.manifest.paths": {
-      input: { raw: Uint8Array<ArrayBuffer>; expectedRef: string; buildCacheInputs: string[] };
-      output: Set<string>;
-    };
     "workspace.manifest.pair": {
       input: {
         buildCacheInputs?: string[];

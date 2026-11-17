@@ -112,7 +112,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   if (
     row.tree_root_digest &&
     input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
-    ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
+    ["scan", "probe", "materialize", "paths", "archive"].includes(input.action.kind)
   ) {
     return { row, records: undefined, knownPacks: undefined };
   }
@@ -145,6 +145,24 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         })
       : undefined;
   return { row, records, ...(knownPacks ? { knownPacks } : {}) };
+}
+
+function manifestPaths(
+  document: { rawManifest: string; manifestRef: string },
+  buildCacheInputs: string[],
+): Extract<LocalWorkspaceManifestValue, { kind: "paths" }> {
+  const manifest = parseWorkerWorkspaceManifest(
+    document.rawManifest,
+    document.manifestRef,
+    buildCacheInputs,
+  );
+  return {
+    kind: "paths",
+    paths: new Set([
+      ...(manifest.directories ?? []),
+      ...manifest.entries.map((entry) => entry.path),
+    ]),
+  };
 }
 
 export async function executeLocalWorkspaceManifestRead(
@@ -378,9 +396,16 @@ export async function executeLocalWorkspaceManifestRead(
       ),
     };
   }
-  if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
+  if (
+    (action.kind === "materialize" || action.kind === "paths") &&
+    row.baseline_json &&
+    row.baseline_ref
+  ) {
     // Pending legacy receipts name these exact bytes until acceptance migrates them.
-    return { kind: "materialize", rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
+    const document = { rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
+    return action.kind === "paths"
+      ? manifestPaths(document, action.buildCacheInputs)
+      : { kind: "materialize", ...document };
   }
   let records = baselineRecords;
   const replacing = action.kind === "prepare" && action.manifest.replace;
@@ -470,16 +495,16 @@ export async function executeLocalWorkspaceManifestRead(
       ),
     };
   }
-  if (action.kind === "materialize") {
-    return {
-      kind: "materialize",
-      ...manifestDocument(
-        Array.from(records.values(), ({ node }) => node).filter((node) => node.path !== ""),
-        row.base_commit,
-        undefined,
-        "stored",
-      ),
-    };
+  if (action.kind === "materialize" || action.kind === "paths") {
+    const document = manifestDocument(
+      Array.from(records.values(), ({ node }) => node).filter((node) => node.path !== ""),
+      row.base_commit,
+      undefined,
+      "stored",
+    );
+    return action.kind === "paths"
+      ? manifestPaths(document, action.buildCacheInputs)
+      : { kind: "materialize", ...document };
   }
 
   // The host index is authoritative for every operation. Guest Git metadata is never read.

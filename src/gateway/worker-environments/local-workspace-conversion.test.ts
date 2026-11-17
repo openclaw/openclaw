@@ -49,12 +49,15 @@ it("converts an accepted empty runtime directory without changing its manifest o
       baseline_json: raw,
       baseline_ref: baselineRef,
     });
+    const paths = { kind: "paths" as const, buildCacheInputs: [] };
+    expect(await store.manifest(row, paths)).toEqual({ kind: "paths", paths: new Set() });
     const prepared = await store.manifest(row, { kind: "convert" });
     assert(prepared.kind === "replace");
     const converted = await store.accept(prepared.update);
     expect(converted.baseline_ref).toBe(baselineRef);
     expect(converted.tree_root_digest).not.toBeNull();
     expect(converted.baseline_json).toBeNull();
+    expect(await store.manifest(converted, paths)).toEqual({ kind: "paths", paths: new Set() });
     expect(await store.manifest(converted, { kind: "materialize" })).toEqual({
       kind: "materialize",
       rawManifest: raw,

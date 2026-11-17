@@ -24,6 +24,7 @@ export type LocalWorkspaceManifestAction =
     }
   | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
   | { kind: "materialize" }
+  | { kind: "paths"; buildCacheInputs: string[] }
   | { kind: "convert" }
   | { kind: "repair"; canonicalRoot: string }
   | {
@@ -119,6 +120,7 @@ export type LocalWorkspaceManifestValue =
   | LocalWorkspaceManifestScan
   | { kind: "rescan"; entryCount?: number }
   | { kind: "materialize"; rawManifest: string; manifestRef: string }
+  | { kind: "paths"; paths: Set<string> }
   | {
       kind: "archive";
       overlay?: {

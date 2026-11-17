@@ -79,7 +79,6 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
             case "workspace.manifest.template":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
-            case "workspace.manifest.paths":
             case "workspace.manifest.serialize":
             case "workspace.manifest.overlay":
             case "workspace.manifest.pair":
