@@ -219,6 +219,8 @@ The patch includes the canonical `dist/src/servers/feishu-wire.proto` plus `dist
 
 Remove this patch and its registration when an upstream release passes `extensions/qa-lab/src/crabline-feishu-wire.test.ts`, including the real installed dependency round trip under Node's string-code-generation ban. The synthetic fixtures cover uint64 values beyond JavaScript's safe-integer range, negative int32, UTF-8 headers, arbitrary payload bytes, optional fields, unknown fields, malformed/truncated frames, and invalid IDs. They make no live Feishu or Gateway request.
 
+The same patch adds Telegram replies to QA ingress. The Telegram server keeps accepted bot sends, `editMessageText` results, and admin inbound messages by chat and `message_id`, and each accepted send's recorder event carries the `messageId` it was assigned. An admin inbound `replyToMessageId` becomes the Bot API `reply_to_message` (without a nested reply); an unknown target gets Telegram's `message to be replied not found`. The OpenClaw bridge forwards `OpenClawCrablineInboundInput.replyToId` as that field. Remove these hunks when an upstream release passes the Telegram reply case in `extensions/qa-lab/src/crabline-transport-message-id.test.ts` without them.
+
 The owning plugin manifests bundle these patched runtime dependencies. Selected-plugin distributions carry those bundle declarations and their installed dependency closures into Docker and node artifacts; the default core package does not gain optional media or QA dependencies.
 `playwright-core@1.64.1` has an approved syntax-only normalizer patch. Acorn
 parses serialized callbacks in the same function-body grammar instead of

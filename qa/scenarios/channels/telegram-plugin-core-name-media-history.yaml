@@ -16,7 +16,8 @@ scenario:
     - music_generate runs from the run-owned fixture plugin, since no music provider gives the run a core tool of that name.
     - The first reply, delivered through the real Telegram plugin, names the plugin's image under the managed media store.
     - The second turn's final provider request carries no input_image or input_file part.
-    - That request's channel history, replayed in the current turn's runtime context, carries the first reply with the plugin path byte for byte.
+    - The second message replies to the first reply, so the Telegram plugin keeps the chat window that existing plain DMs leave to the transcript.
+    - That window, replayed in the current turn's runtime context, carries the first reply as an OpenClaw line with the plugin path byte for byte.
     - The earlier assistant message in that request carries the first reply unchanged too.
   docsRefs:
     - docs/channels/telegram.md
@@ -174,12 +175,15 @@ flow:
         - set: secondMarker
           value:
             expr: "`${marker}-SECOND`"
+        # Existing plain DMs carry history through the transcript, not the chat window
+        # (openclaw/openclaw#183190). A reply keeps the window, which this turn checks.
         - sendInbound:
             conversation:
               id: { ref: config.conversationId }
               kind: direct
             senderId: { ref: config.senderId }
             senderName: QA Media Trust Operator
+            replyToId: { ref: firstReply.id }
             text:
               expr: "`Reply exactly: ${secondMarker}`"
         - waitForOutbound:
@@ -216,10 +220,13 @@ flow:
         - set: history
           value:
             expr: "mockInput.extractCurrentRuntimeContextTexts(secondInput).join('\\n')"
+        - set: windowLine
+          value:
+            expr: "`OpenClaw: ${firstReplyText}`"
         - assert:
-            expr: history.includes(firstReplyText)
+            expr: history.includes(windowLine)
             message:
-              expr: "`the current turn's channel history did not replay the first reply unchanged (${firstReplyText}): ${history.slice(-600)}`"
+              expr: "`the current turn's chat window did not replay the first reply unchanged (${windowLine}): ${history.slice(-600)}`"
         - set: assistantJson
           value:
             expr: "JSON.stringify(secondInput.filter((item) => item.role === 'assistant'))"
@@ -228,4 +235,4 @@ flow:
             expr: assistantJson.includes(JSON.stringify(firstReplyText).slice(1, -1))
             message:
               expr: "`the earlier assistant message did not carry the first reply unchanged (${firstReplyText}): ${assistantJson.slice(0, 600)}`"
-      detailsExpr: "JSON.stringify({ pluginPath, mediaParts: mediaParts.length, imageInputCount: secondRequest.imageInputCount, history: history.slice(Math.max(0, history.indexOf(firstReplyText) - 80), history.indexOf(firstReplyText) + firstReplyText.length) })"
+      detailsExpr: "JSON.stringify({ pluginPath, mediaParts: mediaParts.length, imageInputCount: secondRequest.imageInputCount, history: history.slice(Math.max(0, history.indexOf(windowLine) - 80), history.indexOf(windowLine) + windowLine.length) })"

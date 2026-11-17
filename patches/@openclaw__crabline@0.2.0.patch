@@ -1,3 +1,28 @@
+diff --git a/dist/src/openclaw/bridges/telegram.js b/dist/src/openclaw/bridges/telegram.js
+index 792ab120dfa1ca626f43e5d962239072653f1f1f..88371d17e23cf99083d3da1939a66dda46e08fef 100644
+--- a/dist/src/openclaw/bridges/telegram.js
++++ b/dist/src/openclaw/bridges/telegram.js
+@@ -227,6 +227,7 @@ export const TELEGRAM_OPENCLAW_CRABLINE_PROVIDER_BRIDGE = createOpenClawCrabline
+                                 entities: [telegramBotCommandEntity(input.text, input.nativeCommand.name)],
+                             }
+                             : {}),
++                        ...(input.replyToId !== undefined ? { replyToMessageId: input.replyToId } : {}),
+                         text: input.text,
+                     },
+                     providerTargetKey: telegramTargetKey(chatId, threadId),
+diff --git a/dist/src/openclaw/shared.d.ts b/dist/src/openclaw/shared.d.ts
+index ff09a941f8ed39f582e8b2c968c0a54ba2ca4fd1..c4288c836390c5deb840dae7fea5045737ed2387 100644
+--- a/dist/src/openclaw/shared.d.ts
++++ b/dist/src/openclaw/shared.d.ts
+@@ -57,6 +57,8 @@ export type OpenClawCrablineInboundInput = {
+         id: string;
+         kind: "direct" | "group";
+     };
++    /** Provider-native ID of the message this one replies to; Telegram delivers it as `reply_to_message`. */
++    replyToId?: string | undefined;
+     senderId: string;
+     senderName?: string | undefined;
+     text: string;
 diff --git a/dist/src/servers/feishu-wire-codec.js b/dist/src/servers/feishu-wire-codec.js
 new file mode 100644
 index 0000000000000000000000000000000000000000..408a2adda53f1f53dd4bc845c0958e8ea72f6aa2
@@ -582,3 +607,103 @@ index 0000000000000000000000000000000000000000..a545a259d03b6849b4b2193aaeccf456
 +if (!source.includes(sharedRoot)) throw new Error("Generated protobuf root changed");
 +writeFileSync(target, "// Generated from feishu-wire.proto by protobufjs-cli 2.7.0; see generate-feishu-wire.mjs.\n" +
 +  source.replace(sharedRoot, "// Keep this schema private; other protobuf clients may use the shared default root.\nconst $root = {};"));
+diff --git a/dist/src/servers/telegram.js b/dist/src/servers/telegram.js
+index c7bafd11890fc2ec3c4497b60ae187b238c7cf8c..e3d5d7a79cdd9b69d24c53426f7f043170fd860b 100644
+--- a/dist/src/servers/telegram.js
++++ b/dist/src/servers/telegram.js
+@@ -774,6 +774,28 @@ function takeNextTelegramMessageId(state, chatId) {
+     state.nextMessageIds.set(telegramChatKey(chatId), messageId + 1);
+     return messageId;
+ }
++function telegramMessageKey(chatId, messageId) {
++    return `${telegramChatKey(chatId)}:${messageId}`;
++}
++function rememberTelegramMessage(state, message) {
++    if (!isJsonObject(message) || !isJsonObject(message.chat) || typeof message.message_id !== "number") {
++        return;
++    }
++    // A Bot API reply_to_message never carries its own reply_to_message.
++    const { reply_to_message: _replyToMessage, ...stored } = message;
++    state.messages.set(telegramMessageKey(message.chat.id, message.message_id), stored);
++}
++function resolveTelegramReplyToMessage(state, body) {
++    const value = body.replyToMessageId ?? body.reply_to_message_id;
++    if (value === undefined) {
++        return undefined;
++    }
++    const chat = resolveTelegramChat(state, body.chatId ?? body.chat_id);
++    const messageId = toIntegerValue(value);
++    return chat && messageId !== undefined && messageId > 0
++        ? (state.messages.get(telegramMessageKey(chat.id, messageId)) ?? null)
++        : null;
++}
+ function createOutboundMessage(state, body, text) {
+     const chat = resolveTelegramChat(state, body.chat_id);
+     if (!chat) {
+@@ -940,6 +962,7 @@ function createInboundUpdate(state, body) {
+     if (threadId !== undefined && !canTargetTelegramTopic(state, inboundChat)) {
+         return undefined;
+     }
++    const replyToMessage = resolveTelegramReplyToMessage(state, body);
+     return {
+         message: {
+             chat: inboundChat,
+@@ -953,6 +976,7 @@ function createInboundUpdate(state, body) {
+             message_id: messageId ?? nextTelegramMessageId(state, chat.id),
+             ...(entities && entities.length > 0 ? { entities } : {}),
+             ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
++            ...(replyToMessage ? { reply_to_message: replyToMessage } : {}),
+             text,
+         },
+         update_id: updateId ?? state.nextUpdateId,
+@@ -1384,6 +1408,9 @@ async function handleTelegramAdminInbound(params) {
+             (explicitUpdateId.present && explicitUpdateId.value < nextUpdateId)) {
+             return telegramError("Bad Request: explicit IDs must be valid and monotonic");
+         }
++        if (resolveTelegramReplyToMessage(params.state, params.body) === null) {
++            return telegramError("Bad Request: message to be replied not found");
++        }
+         const update = createInboundUpdate(params.state, params.body);
+         params.state.nextUpdateId = nextUpdateId;
+         if (update &&
+@@ -1451,6 +1478,7 @@ async function handleTelegramAdminInbound(params) {
+         }
+         registerTelegramChat(params.state, update.message.chat);
+         params.state.updates.push(update);
++        rememberTelegramMessage(params.state, update.message);
+         params.state.updates.sort((left, right) => left.update_id - right.update_id);
+         if (params.state.webhook) {
+             scheduleTelegramWebhookDelivery(params.state, 0);
+@@ -2044,6 +2072,14 @@ async function handleRequest(params) {
+             state: params.state,
+         });
+         event.accepted = response.ok;
++        if (response.ok) {
++            const sent = (await response.clone().json()).result;
++            rememberTelegramMessage(params.state, sent);
++            // Recorder consumers name a sent message by the message_id a Telegram client sees.
++            if (isJsonObject(sent) && typeof sent.message_id === "number") {
++                event.messageId = sent.message_id;
++            }
++        }
+         try {
+             await appendEvent(params.state, event);
+         }
+@@ -2061,6 +2097,9 @@ async function handleRequest(params) {
+         state: params.state,
+     });
+     event.accepted = response.ok;
++    if (response.ok && botPath.method.toLowerCase() === "editmessagetext") {
++        rememberTelegramMessage(params.state, (await response.clone().json()).result);
++    }
+     await appendEvent(params.state, event);
+     return response;
+ }
+@@ -2118,6 +2157,7 @@ export async function startTelegramServer(params = {}) {
+         chatsByUsername: new Map(),
+         inboundAdmission: Promise.resolve(),
+         maxPendingInboundEvents: resolveMaxPendingInboundEvents(params.maxPendingInboundEvents),
++        messages: new Map(),
+         nextMessageIds: new Map(),
+         nextUpdateId: 1,
+         recorder: createServerRecorder({ recorderPath, onEvent: params.onEvent }),
