@@ -7,6 +7,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../../../shared/assistant-error-format.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { declineBoundaryMaintenance } from "../../context-pressure.js";
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
@@ -59,20 +60,52 @@ type EmbeddedRunOverflowRecoveryOutcome =
       userText: string;
     };
 
+type EmbeddedRunOverflowRecoveryInput = EmbeddedRunCompactionRecoveryInput & {
+  aborted: boolean;
+  signalOwnedInterruption: boolean;
+  promptError: unknown;
+  assistantErrorText?: string;
+  assistantOverflowCandidate?: {
+    message: AssistantMessage;
+    classification: FailoverClassification | null;
+  };
+  attemptCompactionCount: number;
+  prepareCurrentTranscriptRetry: () => void;
+  markOwnedTranscriptRetry: () => void;
+};
+
 export async function recoverEmbeddedRunOverflow(
-  input: EmbeddedRunCompactionRecoveryInput & {
-    aborted: boolean;
-    signalOwnedInterruption: boolean;
-    promptError: unknown;
-    assistantErrorText?: string;
-    assistantOverflowCandidate?: {
-      message: AssistantMessage;
-      classification: FailoverClassification | null;
-    };
-    attemptCompactionCount: number;
-    prepareCurrentTranscriptRetry: () => void;
-    markOwnedTranscriptRetry: () => void;
-  },
+  input: EmbeddedRunOverflowRecoveryInput,
+): Promise<EmbeddedRunOverflowRecoveryOutcome> {
+  const maintenance =
+    input.attempt.preflightRecovery?.pressure === "maintenance" &&
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "precheck";
+  const outcome = await recoverContextPressure(input, maintenance);
+  if (
+    !maintenance ||
+    input.aborted ||
+    input.signalOwnedInterruption ||
+    outcome.action === "retry"
+  ) {
+    return outcome;
+  }
+  // A declined soft threshold never turns a request that still fits into a failure.
+  input.assertRecoveryActive();
+  declineBoundaryMaintenance(input.runParams.runId);
+  log.warn("[context-maintenance] continuing the turn without maintenance; the request still fits");
+  input.markOwnedTranscriptRetry();
+  if (
+    input.attempt.preflightRecovery?.source === "mid-turn" ||
+    !isCurrentAttemptReplaySafe(input.attempt)
+  ) {
+    input.prepareCurrentTranscriptRetry();
+  }
+  return { action: "retry" };
+}
+
+async function recoverContextPressure(
+  input: EmbeddedRunOverflowRecoveryInput,
+  maintenance: boolean,
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const assistant = input.assistantOverflowCandidate?.message;
   const classification = input.assistantOverflowCandidate?.classification;
@@ -81,7 +114,7 @@ export async function recoverEmbeddedRunOverflow(
       ? (() => {
           if (input.promptError) {
             const errorText = formatErrorMessage(input.promptError);
-            if (isLikelyContextOverflowError(errorText)) {
+            if (maintenance || isLikelyContextOverflowError(errorText)) {
               return { text: errorText, source: "promptError" as const };
             }
             // A non-overflow prompt failure must not inherit a stale assistant
@@ -362,6 +395,10 @@ export async function recoverEmbeddedRunOverflow(
       const compactionOutcome = noReduction
         ? "auto-compaction removed nothing"
         : "auto-compaction succeeded";
+      if (maintenance && noReduction) {
+        // Repeating maintenance that removes nothing would stop every later request.
+        declineBoundaryMaintenance(runParams.runId);
+      }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {
@@ -453,9 +490,12 @@ export async function recoverEmbeddedRunOverflow(
       ? `${reasonClass === "timeout" ? "Auto-compaction timed out" : "Auto-compaction failed"} ${failurePhase}. Try again or run /compact.` +
         renderRecoverySideEffectCaution(input.attempt)
       : CONTEXT_OVERFLOW_ERROR_MESSAGE + renderRecoverySideEffectCaution(input.attempt);
-  log.warn(
-    `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
-      `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
-  );
+  // Declined maintenance is reported by its owner; it does not block the run.
+  if (!maintenance) {
+    log.warn(
+      `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
+        `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
+    );
+  }
   return { action: "surface", kind, errorText: failureText, userText };
 }

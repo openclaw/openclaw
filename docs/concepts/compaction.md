@@ -103,6 +103,11 @@ Before automatically reducing the output budget for an OpenAI-compatible tool re
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
+Reserve thresholds schedule maintenance; they do not make a fitting request fail.
+If threshold compaction is declined or cannot reduce context, the turn continues.
+Mid-turn maintenance waits for a settled tool boundary, while a request larger
+than the actual context window still requires recovery before it can be sent.
+
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.

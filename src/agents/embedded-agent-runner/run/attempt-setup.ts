@@ -432,7 +432,10 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   return {
     checkMidTurnPrecheck: (
-      request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
+      request: Pick<
+        Parameters<typeof checkMidTurnPrecheck>[0],
+        "context" | "previousRequest" | "boundarySafe"
+      >,
     ) => {
       // Compaction ownership does not waive host admission at the provider boundary.
       if (
@@ -444,6 +447,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       }
       checkMidTurnPrecheck({
         ...request,
+        runId: attempt.runId,
         // Only persisted, owner-reducible text can satisfy truncation recovery.
         estimateRecoverableToolResultChars: () =>
           estimateToolResultReductionPotential({

@@ -132,7 +132,7 @@ describe("attempt prompt preflight", () => {
       expect(decision.toolResultReducibleChars).toBeGreaterThan(0);
       const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
         attempt: { ...attempt, contextTokenBudget: 1_000_000 },
-        request: { ...decision, route: "truncate_tool_results_only" },
+        request: { ...decision, pressure: "overflow", route: "truncate_tool_results_only" },
         sessionAgentId: "test",
         sessionManager,
         toolResultPromptProjectionState: projectionState,
@@ -253,7 +253,7 @@ describe("attempt prompt preflight", () => {
       const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         attempt: { ...attempt, contextTokenBudget },
-        request: { ...request, route },
+        request: { ...request, pressure: "overflow", route },
         sessionAgentId: "test",
         sessionManager,
         prePromptMessageCount: 4,
@@ -263,6 +263,7 @@ describe("attempt prompt preflight", () => {
         expect(outcome).toEqual({
           preflightRecovery: {
             route: "compact_only",
+            pressure: "overflow",
             source: "mid-turn",
             estimatedPromptTokens: 150,
             promptBudgetBeforeReserve: 100,
@@ -294,7 +295,7 @@ describe("attempt prompt preflight", () => {
       contextTokenBudget: 100,
       pendingInputTokens: 101,
     });
-    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+    expect(result.preflightRecovery).toEqual({ route: "compact_only", pressure: "overflow" });
     expect(result.skipPromptSubmission).toBe(true);
   });
 

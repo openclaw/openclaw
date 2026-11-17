@@ -24,6 +24,7 @@ it("resumes the unfinished keyed turn across accepted steering without growing i
       streamMocks.streamSimple.mockImplementation((_model, context) => {
         requests.push(structuredClone(context.messages));
         throw new MidTurnPrecheckSignal({
+          pressure: "overflow",
           route: "truncate_tool_results_only",
           estimatedPromptTokens: 932_476,
           promptBudgetBeforeReserve: 922_000,

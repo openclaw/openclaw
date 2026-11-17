@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
@@ -13,6 +14,8 @@ import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/sessi
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -244,3 +247,25 @@ export type CompactEmbeddedAgentSessionParams = {
   skillsSnapshot?: unknown;
   trigger?: string;
 };
+
+type TestReplyOperation = ReplyOperation & {
+  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
+  updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
+};
+
+export function createReplyOperation(): TestReplyOperation {
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
+    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
+    updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
+  });
+}
+
+export function createCompactionLifecycle(replyOperation: ReplyOperation) {
+  return {
+    abortSignal: replyOperation.abortSignal,
+    onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+    onSessionIdChanged: (sessionId: string) => replyOperation.updateSessionId(sessionId),
+  };
+}

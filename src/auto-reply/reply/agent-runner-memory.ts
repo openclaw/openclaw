@@ -15,8 +15,6 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import { emitInternalRunUsageDiagnostic } from "../../agents/internal-run-usage.js";
 import { resolveModelCallUrgency } from "../../agents/run-trigger.js";
-import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
@@ -52,6 +50,7 @@ import {
   defersTokenCompactionToChatGPTBoundary,
   followupOwnsNativeCompaction,
   followupUsesCliRuntime,
+  hasWritableMemoryFlushWorkspace,
   resolveFollowupAgentRuntimeId,
   resolveFollowupContextTokens,
 } from "./agent-runner-memory-runtime.js";
@@ -90,6 +89,7 @@ import {
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
+  settleFailedPreflightCompaction,
   shouldReadMemoryFlushTranscript,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
@@ -471,7 +471,13 @@ export async function runSessionCompactionIfNeeded(params: {
         return compactionStore[compactionSessionKey] ?? entry;
       }
       await notifyCompaction("incomplete");
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      assertActive();
+      return settleFailedPreflightCompaction(
+        entry,
+        reason,
+        tokenCountForCompaction,
+        contextWindowTokens,
+      );
     }
 
     if (params.replyOperation && admissionTransition) {
@@ -547,19 +553,7 @@ export async function runMemoryFlushIfNeeded(
     params.followupRun.operatorAuthority?.assertCurrent();
   };
   const memoryFlushWritable =
-    !params.sessionKey ||
-    (await withSandboxRuntimeStatusInWorker(
-      {
-        cfg: params.cfg,
-        agentId: params.followupRun.run.agentId,
-        sessionKey: params.sessionKey,
-        classificationSessionKey: params.runtimePolicySessionKey,
-      },
-      { env: process.env, cwd: process.cwd(), assertCurrent: assertMemoryFlushCurrent },
-      async ({ sandboxed, workspaceAccess: access, classificationAgentId: agentId }) =>
-        !sandboxed ||
-        (access ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) === "rw",
-    ));
+    !params.sessionKey || (await hasWritableMemoryFlushWorkspace(params, assertMemoryFlushCurrent));
 
   let entry =
     params.sessionEntry ??

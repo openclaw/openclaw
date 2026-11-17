@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
+import { MidTurnPrecheckSignal } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -71,6 +72,36 @@ describe("embedded lifecycle", () => {
       });
     }
   });
+
+  it.each(["end", "finishing"] as const)(
+    "keeps scheduled maintenance nonfatal in %s lifecycle events",
+    async (phase) => {
+      emitAgentEventMock.mockClear();
+      const { ctx, onAgentEvent } = errorContext(
+        new MidTurnPrecheckSignal({
+          pressure: "maintenance",
+          route: "compact_only",
+          estimatedPromptTokens: 90,
+          promptBudgetBeforeReserve: 80,
+          overflowTokens: 10,
+          toolResultReducibleChars: 0,
+          effectiveReserveTokens: 20,
+        }).message,
+      );
+      if (phase === "finishing") {
+        ctx.params.terminalLifecyclePhase = phase;
+      }
+      await handleAgentEnd(ctx);
+      expectEvent(onAgentEvent, { phase, livenessState: "working" });
+      expect(emitAgentEventMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ phase, livenessState: "working" }),
+        }),
+      );
+      expect(emitAgentEventMock.mock.calls[0]?.[0].data).not.toHaveProperty("error");
+      expect(ctx.log.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("omits raw HTML auth bodies from console diagnostics", async () => {
     const { ctx, onAgentEvent } = errorContext(

@@ -110,6 +110,8 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    /** Whether stopping at this request boundary leaves the tool batch continuable. */
+    isToolBoundarySafe: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -478,7 +480,11 @@ export function installEmbeddedAttemptStreamGuards(
           ? previous
           : undefined;
       if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
+        contextGuards.checkMidTurnPrecheck({
+          context: args[1],
+          previousRequest,
+          boundarySafe: callbacks.isToolBoundarySafe,
+        });
       }
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(

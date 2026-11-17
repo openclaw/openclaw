@@ -1,0 +1,2 @@
+308
+# Distinct CLI, preflight, recovery, safe-boundary and emitted lifecycle regressions for soft maintenance versus hard overflow.

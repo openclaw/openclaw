@@ -66,6 +66,8 @@ import {
 } from "./agent-runner-memory.js";
 import {
   createMemoryFlushPlan,
+  createReplyOperation,
+  createCompactionLifecycle,
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
   modelRoutingProvenance,
@@ -82,7 +84,6 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
-import { createMockReplyOperation } from "./test-helpers.js";
 
 const {
   compactEmbeddedAgentSessionMock,
@@ -183,28 +184,6 @@ function registerClaudeCliBackend(ownsNativeCompaction = false): void {
       },
     ],
   });
-}
-
-type TestReplyOperation = ReplyOperation & {
-  setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
-  updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
-};
-
-function createReplyOperation(): TestReplyOperation {
-  const { replyOperation } = createMockReplyOperation({ key: "test" });
-  return Object.assign(replyOperation, {
-    phase: "queued" as const,
-    setPhase: vi.fn<ReplyOperation["setPhase"]>(),
-    updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
-  });
-}
-
-function createCompactionLifecycle(replyOperation: ReplyOperation) {
-  return {
-    abortSignal: replyOperation.abortSignal,
-    onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
-    onSessionIdChanged: (sessionId: string) => replyOperation.updateSessionId(sessionId),
-  };
 }
 
 function loadMainSessionEntry(storePath: string): SessionEntry {
@@ -772,6 +751,23 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
+
+  it.each(["guard_blocked", "Compaction timed out after 180000ms"])(
+    "continues a fitting preflight after failed soft maintenance: %s",
+    async (reason) => {
+      const { sessionEntry, run } = await createRequiredPreflight({ totalTokens: 80 });
+      registerMemoryFlushPlanResolverForTest(() =>
+        createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 50 }),
+      );
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason,
+      });
+      await expect(run()).resolves.toBe(sessionEntry);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { reason: "already under target", ok: true, rejects: false },

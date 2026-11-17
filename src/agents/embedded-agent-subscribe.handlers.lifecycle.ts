@@ -27,6 +27,7 @@ import {
 } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
+import { isMidTurnMaintenanceAssistantSignal } from "./embedded-agent-runner/run/midturn-precheck.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   hasAssistantVisibleReply,
@@ -303,7 +304,9 @@ export function handleAgentEnd(
     continueCurrentTurn?: boolean;
   };
   const lastAssistant = ctx.state.lastAssistant;
-  const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  const isMaintenance = isMidTurnMaintenanceAssistantSignal(lastAssistant);
+  const isError =
+    isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error" && !isMaintenance;
   let lifecycleErrorText: string | undefined;
   let errorObservation: ReturnType<typeof projectChatErrorDetail>;
   // Terminal delivery does not depend on streamed text alone: when the streamed
@@ -365,16 +368,19 @@ export function handleAgentEnd(
   // tool-call stop reason, the turn is incomplete even when pre-tool text
   // exists — mark as abandoned so lifecycle consumers do not see a working
   // end state for an interrupted tool chain. (#76477)
-  const derivedWorkingTerminalState = isError
-    ? "blocked"
-    : replayInvalid &&
-        !hadLivenessPreservingSideEffect &&
-        (!hasAssistantVisibleText || incompleteTerminalAssistant)
-      ? "abandoned"
-      : ctx.state.livenessState;
+  const derivedWorkingTerminalState = isMaintenance
+    ? ctx.state.livenessState
+    : isError
+      ? "blocked"
+      : replayInvalid &&
+          !hadLivenessPreservingSideEffect &&
+          (!hasAssistantVisibleText || incompleteTerminalAssistant)
+        ? "abandoned"
+        : ctx.state.livenessState;
   const livenessState =
     ctx.state.livenessState === "working" ? derivedWorkingTerminalState : ctx.state.livenessState;
 
+  // Scheduled maintenance ends the attempt locally; it is not a model failure.
   if (isError && lastAssistant) {
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
@@ -432,7 +438,9 @@ export function handleAgentEnd(
     const terminalStopReason =
       ctx.params.resolveTerminalStopReason?.() ??
       ctx.state.terminalStopReason ??
-      (!isError && isAssistantMessage(lastAssistant) ? lastAssistant.stopReason : undefined);
+      (!isError && !isMaintenance && isAssistantMessage(lastAssistant)
+        ? lastAssistant.stopReason
+        : undefined);
     const terminalAborted = ctx.state.terminalAborted ?? ctx.params.isTerminalAborted?.();
     // Aborted validation loops lose their final tool result. Preserve only the
     // argument-free validator summary; arbitrary tool errors can contain secrets.

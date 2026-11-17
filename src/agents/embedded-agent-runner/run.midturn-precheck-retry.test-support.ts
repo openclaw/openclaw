@@ -65,6 +65,7 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
     promptErrorSource: "precheck",
     preflightRecovery: {
       route: "compact_only",
+      pressure: "overflow",
       source: "mid-turn",
       estimatedPromptTokens: 201_000,
     },
@@ -117,6 +118,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
+            pressure: "overflow",
             source: "mid-turn",
             handled: true,
             truncatedCount: 0,
@@ -151,6 +153,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         session.makeAttemptResult({
           preflightRecovery: {
             route: "truncate_tool_results_only",
+            pressure: "overflow",
             source: "mid-turn",
             handled: true,
             truncatedCount: 0,
@@ -272,7 +275,11 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,
           messagesSnapshot: successor.messages,
-          preflightRecovery: { route: "compact_then_truncate", source: "mid-turn" },
+          preflightRecovery: {
+            route: "compact_then_truncate",
+            pressure: "overflow",
+            source: "mid-turn",
+          },
         });
       })
       .mockResolvedValueOnce(session.makeAttemptResult({ sessionIdUsed: successorId }));
