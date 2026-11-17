@@ -1,0 +1,2 @@
+# Claude retained-output accounting: long-turn and rejection controls; missing stable control-frame suite included.
+294

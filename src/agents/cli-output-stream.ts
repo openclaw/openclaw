@@ -77,7 +77,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let parseErrorText = "";
   let rawChars = 0;
   let rawLines = 0;
-  let ordinaryClaudeLines = 0;
+  let countedClaudeFrames = 0;
   const texts: string[] = [];
   // The last item text is the final message only until a later message or tool
   // call begins; boundary flags set before that text must not blank it.
@@ -199,8 +199,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(currentMessageStart, flushedMessageStart)).trim());
 
-  const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
-    if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
+  const accountClaudeJsonlLine = (lineChars: number, countsFrame = false): boolean => {
+    if (countsFrame && ++countedClaudeFrames > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
       lineBuffer.pending = "";
       return false;
@@ -668,7 +668,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (claudeStreamJson) {
       const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
       const charge = chargeClaudeStreamJsonLine(record, rawLine);
-      if (!accountClaudeJsonlLine(charge.chars, charge.partialMessage)) {
+      if (!accountClaudeJsonlLine(charge.chars, charge.countsFrame)) {
         return;
       }
     }
