@@ -18,7 +18,7 @@ new evidence. Invalid or mismatched assets remain blocking.
    with branch `release/<version>-main-closeout` and exact title
    `chore(release): close out <version> on main`. `<version>` is the published
    stable `YYYY.M.PATCH` (or `YYYY.M.PATCH-N` correction), without the `v` prefix.
-   Audit `release/YYYY.M.PATCH` against it and
+   [Audit `release/YYYY.M.PATCH` against it](#audit-without-per-commit-fetches) and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Normally set `main` to the shipped stable version, not a speculative next
@@ -131,6 +131,15 @@ new evidence. Invalid or mismatched assets remain blocking.
    platform assets, and this closeout are terminal, write the report and open
    its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
    release is not done until that PR is open and its ledger check passes.
+
+## Audit without per-commit fetches
+
+Pin main and release SHAs, then explicitly fetch missing audit blobs in batches of
+at most 1,024 through the existing source-acquisition owner
+([RRI691](https://github.com/openclaw/tideclaw/blob/main/release/retrospectives/2026.11.1.md#L875-L882)).
+Semantically compare release changes—including intermediate changes and merge
+resolutions—against pinned main with `git --no-lazy-fetch`; report missing content
+as an incomplete audit.
 
 ## Recover a failed publication parent
 
