@@ -21,12 +21,12 @@ import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
-import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
+import { withLocalWorkspaceLease } from "./local-workspace-lease.js";
 import {
   localWorkspaceFingerprintPatch,
   readLocalWorkspaceCommit,
@@ -218,15 +218,10 @@ export function withLocalWorkspaceStore<T>(
   }
   return withWorktreeRunEnd(env, () => {
     const finishWait = startWorktreePreparationPhase("workspaceWait");
-    return withOpenClawStateLeaseAsync(
+    return withLocalWorkspaceLease(
       {
-        scope: "workspace.local-reconciliation",
-        key: params.worktreeId,
-        leaseMs: 60_000,
-        waitMs: 600_000,
+        worktreeId: params.worktreeId,
         signal: params.signal,
-        leaseLabel: "local sandbox workspace",
-        operationLabel: "workspace.local-reconciliation",
       },
       context,
       (lease) => {
