@@ -202,7 +202,7 @@ function installedRecoveryCurrent(value, sanitize) {
   }
   const names =
     value.cut === null
-      ? ["update-repair", "next-update", "next-update-status"]
+      ? ["next-update", "next-update-status"]
       : [
           "displacement",
           "missing-status",
@@ -212,6 +212,7 @@ function installedRecoveryCurrent(value, sanitize) {
           "resume-retirement",
           "completed-status",
           "archive-completed",
+          "update-repair",
         ];
   if (
     (value.cut !== null && !retirementCuts.includes(value.cut)) ||
