@@ -551,6 +551,67 @@ describe("retained npm package integrity", () => {
     await expectCompletion(transaction, true, 1);
   });
 
+  it.each([true, false])(
+    "retains baseline stat drift diagnostics and refusal (changed=%s)",
+    async (changed) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const relative = `dist/a-${"private-entry-".repeat(8)}with spaces.js`;
+      const first = path.join(packageRoot, relative);
+      const second = path.join(packageRoot, "dist/z-drift.js");
+      await fs.writeFile(first, "old");
+      await fs.writeFile(second, "old");
+      const seen = new Set<string>();
+      const lstat = fs.lstat.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        // Change real files only at the final rescan, after their hashes settle.
+        if (changed && (file === first || file === second) && seen.has(file)) {
+          await fs.appendFile(file, "more");
+          await fs.utimes(file, new Date(0), new Date(0));
+        }
+        seen.add(file);
+        return lstat(...args);
+      });
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const result = await swapStagedPackageInstall({ ...params, beforeActivate, onLiveMutation });
+      if (!changed) {
+        expect(result.status).toBe("committed");
+        await expectInstallation(packageRoot, launcher, true);
+        return;
+      }
+      expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
+      expect(result.step.stderrTail).toContain(JSON.stringify(relative));
+      const steps = updateRunStepsFromResultStep(result.step);
+      const local = steps.find((step) => step.step === "diagnostic:package-swap")?.detail;
+      expect(local).toContain(JSON.stringify(relative));
+      expect(local).toContain('"size":{"before":"3","after":"7"}');
+      expect(local).toContain("mtimeNs");
+      expect(local).not.toContain("z-drift.js");
+      expect(steps[0].failureFacts).toEqual([
+        expect.objectContaining({
+          code: "baseline-scan-failed",
+          message: expect.stringMatching(
+            /^Package rollback stat changed: fields=size,mtimeNs(?:,ctimeNs)?$/u,
+          ),
+        }),
+      ]);
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "baseline-stat-drift",
+          result: { mode: "npm", status: "error", steps: [result.step], durationMs: 0 },
+          recordedRun: { runId: "baseline-stat-drift", steps },
+        },
+        { env: {}, stateDir: base },
+      );
+      expect(report.body).toContain("Package rollback stat changed: fields=size,mtimeNs");
+      expect(report.body).not.toContain("private-entry-");
+      expect(report.body).not.toContain(base);
+      expectNoCalls(beforeActivate, onLiveMutation);
+      await expectInstallation(packageRoot, launcher);
+    },
+  );
+
   it.each([
     {
       shape: "sibling dependency link",

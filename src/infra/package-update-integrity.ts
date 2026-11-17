@@ -581,8 +581,24 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       for (let start = 0; start < observed.length; start += 32) {
         const results = await Promise.allSettled(
           observed.slice(start, start + 32).map(async ({ file, stat }) => {
-            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
-              throw new Error("Package rollback tree changed during verification");
+            const current = await read(() => fs.lstat(file, { bigint: true }));
+            if (!packageStatUnchanged(stat, current)) {
+              const fields = (
+                ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const
+              ).filter((field) => stat[field] !== current[field]);
+              const entry = path.relative(root, file).split(path.sep).join("/") || ".";
+              const changes = Object.fromEntries(
+                fields.map((field) => [
+                  field,
+                  { before: String(stat[field]), after: String(current[field]) },
+                ]),
+              );
+              // Keep relative paths and primitive values locally; public reports
+              // project only the closed stat-field classification in differences.
+              throw new PackageIntegrityMismatchError(
+                `Package rollback tree changed during verification; entry=${JSON.stringify(entry)}; changes=${JSON.stringify(changes)}`,
+                [`Package rollback stat changed: fields=${fields.join(",")}`],
+              );
             }
           }),
         );
