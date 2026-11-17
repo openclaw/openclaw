@@ -275,6 +275,28 @@ afterEach(() => {
   syncBuiltinESMExports();
 });
 
+it("keeps the physical bootstrap root when the configured workspace alias changes", async () => {
+  const root = await fs.promises.realpath(tempDirs.make("bootstrap-workspace-alias-"));
+  const pinned = path.join(root, "pinned");
+  const other = path.join(root, "other");
+  const alias = path.join(root, "configured");
+  await fs.promises.mkdir(pinned);
+  await fs.promises.mkdir(other);
+  await fs.promises.symlink(pinned, alias, "junction");
+  const params = { workspaceDir: alias, sessionRoot: pinned };
+
+  const selected = await resolveRunBootstrapWorkspaceDir(params);
+  expect(selected).toBe(pinned);
+
+  await fs.promises.unlink(alias);
+  await fs.promises.symlink(other, alias, "junction");
+  expect(await fs.promises.realpath(selected)).toBe(pinned);
+  expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(alias);
+
+  await fs.promises.unlink(alias);
+  expect(await resolveRunBootstrapWorkspaceDir(params)).toBe(alias);
+});
+
 it("selects rooted bootstrap instructions without main-thread Git metadata reads", async () => {
   const root = tempDirs.make("bootstrap-git-owner-");
   const workspace = path.join(root, "agent");

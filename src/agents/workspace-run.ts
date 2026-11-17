@@ -16,6 +16,7 @@ import {
 } from "./agent-scope.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { resolveMatchingWorkspaceRoot } from "./workspace-dir.js";
 
 type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
 
@@ -50,6 +51,11 @@ export async function resolveRunBootstrapWorkspaceDir(
   const root = executionRoot && resolveUserPath(executionRoot);
   if (!root || root === agentWorkspace) {
     return agentWorkspace;
+  }
+  // Session creation pins a physical root; configured workspaces can retain an alias.
+  const sharedRoot = await resolveMatchingWorkspaceRoot(root, agentWorkspace);
+  if (sharedRoot !== undefined) {
+    return sharedRoot;
   }
   const { runGitWorkerOperation } = await import("../infra/git-worker.js");
   return (await runGitWorkerOperation({

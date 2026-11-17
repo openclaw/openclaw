@@ -6,6 +6,7 @@
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import type { BootstrapContextRunKind, BootstrapMode } from "./bootstrap-mode.js";
 import { resolveBootstrapMode } from "./bootstrap-mode.js";
+import { resolveMatchingWorkspaceRoot } from "./workspace-dir.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   isWorkspaceSetupCompleted,
@@ -58,14 +59,20 @@ export async function resolveWorkspaceBootstrapRouting(params: {
     ) ?? false;
   const workspaceBootstrapPending =
     hasBootstrapContent || (await params.isWorkspaceBootstrapPending(params.resolvedWorkspace));
+  const isCanonicalWorkspace =
+    (params.isCanonicalWorkspace ?? true) &&
+    (params.effectiveWorkspace === params.resolvedWorkspace ||
+      (workspaceBootstrapPending &&
+        (await resolveMatchingWorkspaceRoot(
+          params.effectiveWorkspace,
+          params.resolvedWorkspace,
+        )) !== undefined));
   const bootstrapMode = resolveBootstrapMode({
     bootstrapPending: workspaceBootstrapPending,
     runKind: params.bootstrapContextRunKind ?? "default",
     isInteractiveUserFacing: params.trigger === "user" || params.trigger === "manual",
     isPrimaryRun: params.isPrimaryRun,
-    isCanonicalWorkspace:
-      (params.isCanonicalWorkspace ?? true) &&
-      params.effectiveWorkspace === params.resolvedWorkspace,
+    isCanonicalWorkspace,
     hasBootstrapFileAccess:
       params.hasBootstrapFileAccess ||
       (params.bootstrapFilesProvideAccess !== false && hasBootstrapContent),

@@ -1,6 +1,11 @@
 // Coverage for bootstrap routing across canonical and effective workspaces.
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "./bootstrap-routing.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("isPrimaryBootstrapRun", () => {
   it("treats regular sessions as primary bootstrap runs", () => {
@@ -74,6 +79,33 @@ describe("resolveWorkspaceBootstrapRouting", () => {
 
     expect(routing.bootstrapMode).toBe("full");
     expect(routing.includeBootstrapInSystemContext).toBe(true);
+  });
+
+  it("keeps full bootstrap for a physical workspace alias without following a retargeted alias", async () => {
+    const root = await fs.realpath(tempDirs.make("bootstrap-routing-alias-"));
+    const pinned = path.join(root, "pinned");
+    const other = path.join(root, "other");
+    const alias = path.join(root, "configured");
+    await fs.mkdir(pinned);
+    await fs.mkdir(other);
+    await fs.symlink(pinned, alias, "junction");
+    const options = {
+      bootstrapFiles: [{ ...bootstrapFile, path: path.join(pinned, "BOOTSTRAP.md") }],
+      effectiveWorkspace: alias,
+      resolvedWorkspace: pinned,
+    };
+
+    expect(await resolveRouting(options)).toMatchObject({
+      bootstrapMode: "full",
+      includeBootstrapInSystemContext: true,
+    });
+
+    await fs.unlink(alias);
+    await fs.symlink(other, alias, "junction");
+    expect(await resolveRouting(options)).toMatchObject({
+      bootstrapMode: "limited",
+      includeBootstrapInSystemContext: false,
+    });
   });
 
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
