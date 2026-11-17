@@ -18,16 +18,27 @@ export function observeLocalWorkspaceMutations() {
   const samples: Sample[] = [];
   let current: Sample | undefined;
   let segmentStart = 0;
+  const callbacks: number[] = [];
   const finishSegment = () => {
     if (current) {
       current.maxSyncMs = Math.max(current.maxSyncMs, performance.now() - segmentStart);
     }
   };
   const hook = createHook({
-    before() {
-      segmentStart = performance.now();
+    before(id) {
+      if (!callbacks.length) {
+        segmentStart = performance.now();
+      }
+      callbacks.push(id);
     },
-    after: finishSegment,
+    after(id) {
+      if (callbacks.at(-1) === id) {
+        callbacks.pop();
+        if (!callbacks.length) {
+          finishSegment();
+        }
+      }
+    },
   }).enable();
   // Saved for restoration; every invocation below supplies the original Worker receiver.
   // oxlint-disable-next-line typescript/unbound-method
@@ -62,6 +73,9 @@ export function observeLocalWorkspaceMutations() {
         throw new Error("Mutation measurement requires serial requests");
       }
       const started = performance.now();
+      if (!callbacks.length) {
+        segmentStart = started;
+      }
       const cpu = process.threadCpuUsage();
       const allocated = getHeapStatistics().total_allocated_bytes;
       current = {
