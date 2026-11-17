@@ -160,6 +160,16 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   expect(retryState(env, failed.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
   const [healthy] = await materialize(["healthy"], { repoRoot: source });
   expect((await gc()).removed).toEqual([healthy!.id]);
+  await setRetryAt(env, failed.id, Date.now() - 1);
+  expect((await gc()).failedCount).toBe(1);
+  expect(retryState(env, failed.id)).toMatchObject({
+    stage: "repository-corrupt",
+    attempts: 3,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  expect((await gc()).failedCount).toBe(0);
+  expect(retryState(env, failed.id)?.attempts).toBe(3);
   await git(repo, "remote", "set-url", "origin", source);
   expect((await gc(true)).removed.toSorted()).toEqual(
     records.map((record) => record.id).toSorted(),
@@ -168,6 +178,68 @@ it("backs off shared-repository snapshots after a missing-object failure", async
     const restored = await makeService(env).restore({ id: record.id });
     expect(await read(restored.path)).toBe("retained changes\n");
   }
+});
+
+it("records nested repositories as terminal preserved checkouts across restart", async () => {
+  const { env, materialize } = await fixture();
+  const [record] = await materialize(["nested-preserved"]);
+  const nested = path.join(record!.path, "nested");
+  await fs.mkdir(nested);
+  await git(nested, "init", "-b", "main");
+  await fs.writeFile(path.join(nested, "valuable.txt"), "uncommitted inner work\n");
+  await expect(makeService(env).remove({ id: record!.id, reason: "archive" })).rejects.toThrow(
+    "nested git repositories cannot be snapshotted losslessly",
+  );
+  expect(retryState(env, record!.id)).toMatchObject({
+    stage: "nested-repository",
+    attempts: 1,
+    retryAt: null,
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const gc = await makeService(env).gc();
+  expect(gc.removed).toEqual([]);
+  expect(gc.failedCount).toBe(0);
+  expect(gc.issues.some((issue) => issue.reason.includes("automatic retries stopped"))).toBe(true);
+  expect(retryState(env, record!.id)?.attempts).toBe(1);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+});
+
+it("caps permission failures and preserves bytes until an explicit repaired retry", async () => {
+  const { env, materialize } = await fixture();
+  const [record] = await materialize(["permission-preserved"]);
+  await fs.writeFile(path.join(record!.path, "README.md"), "retained changes\n");
+  const execute = gitExec.executeGitCommandBytes;
+  let attempts = 0;
+  let fail = true;
+  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+    if (args.includes("write-tree")) {
+      attempts++;
+      if (fail) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+    }
+    return execute(cwd, args, options);
+  });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await makeService(env).gc();
+    expect(retryState(env, record!.id)).toMatchObject({
+      stage: "permission-denied",
+      attempts: attempt,
+      retryAt: attempt === 3 ? null : expect.any(Number),
+    });
+    if (attempt < 3) {
+      await setRetryAt(env, record!.id, Date.now() - 1);
+    }
+  }
+  await closeOpenClawStateDatabaseAsync();
+  await makeService(env).gc();
+  expect(attempts).toBe(3);
+  expect(await read(record!.path)).toBe("retained changes\n");
+  fail = false;
+  expect((await makeService(env).gc({ retryDeferred: true })).removed).toEqual([record!.id]);
+  expect(await read((await makeService(env).restore({ id: record!.id })).path)).toBe(
+    "retained changes\n",
+  );
 });
 
 it.each([
@@ -668,9 +740,24 @@ describe("nested eviction", () => {
         "external checkout data",
       );
       config.worktreeMaxCount = 1;
-      await service.gc();
-      expect(registry(outer.id)?.removedAt).toEqual(expect.any(Number));
-      expect(await liveIds()).toEqual([replacement.id]);
+      const result = await service.gc();
+      expect(result).toMatchObject({
+        removed: [replacement.id],
+        outcome: "partial",
+        limitsSatisfied: true,
+        issues: [
+          { id: outer.id, reason: expect.stringContaining("cannot be snapshotted losslessly") },
+        ],
+      });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(registry(outer.id)?.gcRetry).toMatchObject({
+        stage: "nested-repository",
+        retryAt: null,
+      });
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
     },
   );
 

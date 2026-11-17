@@ -6,13 +6,10 @@ import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  withWorktreeAllocationLease,
-  withWorktreeMutationLease,
-  type WorktreeAllocationGuard,
-} from "./allocation.js";
+import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
+import { WorktreePreservationError } from "./errors.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
 import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
 import { collectOrphanWorktreeBranches } from "./orphan-branches.js";
@@ -96,7 +93,8 @@ export async function captureManagedWorktreeSnapshot(params: {
           params.signal?.throwIfAborted();
           params.assertCurrent?.();
           // Keep the cleanup owner's shared-repository backoff on failed hydration.
-          throw new Error(
+          throw new WorktreePreservationError(
+            "repository-corrupt",
             `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
             { cause },
           );
@@ -204,7 +202,7 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
   );
 }
 
-/** Explicit retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement owns the same checkout as removal and restore. */
 export async function retireManagedWorktreeSnapshotById(
   input: RetireManagedWorktreeSnapshotParams,
   environment: NodeJS.ProcessEnv = process.env,
@@ -212,7 +210,7 @@ export async function retireManagedWorktreeSnapshotById(
   const context = captureWorktreeRunEndContext(environment);
   const env = { ...environment, ...context.environment };
   const params = { ...input };
-  return await withWorktreeAllocationLease({ ...params, env }, async (guard) => {
+  return await withWorktreeMutationLease({ ...params, env }, async (guard) => {
     const record = await readRegistryWorktree(context, params.id);
     guard.commitGuard();
     if (

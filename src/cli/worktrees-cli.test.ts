@@ -39,6 +39,7 @@ describe("worktrees cli", () => {
         "worktree-id",
         {
           path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
+          gcProtection: "preserved: nested-repository",
         },
       );
       if (command === "list") {
@@ -53,6 +54,7 @@ describe("worktrees cli", () => {
         const output = text.mock.calls.map(([line]) => String(line)).join("\n");
         expect(output).toContain("/repo/café\\nforged");
         expect(output).toContain(record.branch);
+        expect(output).toContain("preserved:");
         expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
       } else {
         expect(text).toHaveBeenCalledWith("worktree-id\t/state/café\\nforged\\tpath\\r");

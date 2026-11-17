@@ -87,6 +87,9 @@ it("routes checkout operations through the managed worktree service", async () =
   const createParams = { repoRoot: "/repo", name: "task-one", baseRef: "main" };
 
   await expectResult(invoke("list"), { worktrees: [record] });
+  await expectResult(invoke("list", {}, admin), {
+    worktrees: [{ ...record, gcProtection: "branch-moved" }],
+  });
   await expectResult(invoke("create", createParams, admin), record);
   await expectResult(invoke("remove", { id: record.id, force: true }), removed);
   await expectResult(invoke("restore", { id: record.id }), restored);
