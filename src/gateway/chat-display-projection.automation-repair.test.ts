@@ -71,7 +71,9 @@ it.each(["cron_failure_repair", "restart"] as const)(
         projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }).payload;
       expect(live(repair)).toBeUndefined();
       if (sourceTool === "restart") {
-        expect(history.messages[1]).toMatchObject({ __openclaw: { turnBoundary: true } });
+        expect(history.messages[1]).toMatchObject({
+          __openclaw: { turnBoundary: true, continuation: { source: "restart" } },
+        });
       }
       expect(live(answer)?.message).toMatchObject(answer);
       if (sourceTool === "restart") {
@@ -80,7 +82,8 @@ it.each(["cron_failure_repair", "restart"] as const)(
           sessionKey: scope.sessionKey,
           projectionState: { assistantErrorPending: false, turnBoundaryPending: false },
         });
-        expect(hidden.projectionState.turnBoundaryPending).toBe(true);
+        // A restart resumes interrupted work, so the live row continues its turn.
+        expect(hidden.projectionState.turnBoundaryPending).toBe("restart");
         const continued = projectSessionMessagePayload({
           message: answer,
           sessionKey: scope.sessionKey,
@@ -88,7 +91,11 @@ it.each(["cron_failure_repair", "restart"] as const)(
         });
         expect(continued.payload?.message).toMatchObject({
           ...answer,
-          __openclaw: { runId: "cron-failure-repair:repair-1", turnBoundary: true },
+          __openclaw: {
+            runId: "cron-failure-repair:repair-1",
+            turnBoundary: true,
+            continuation: { source: "restart" },
+          },
         });
       }
       const pending = projectPendingInputMessage(

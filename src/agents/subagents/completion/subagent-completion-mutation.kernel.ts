@@ -253,13 +253,18 @@ function commitCompletionMutations(
       row: bindSubagentRunRecord(subagent),
       cleanupHandled: subagent.cleanupHandled,
     }));
-  const retiredRunIds = mutations
-    .filter((mutation) => mutation.retire)
-    .map(({ subagent }) => subagent.runId);
+  const retired = mutations.filter((mutation) => mutation.retire);
+  const retiredRunIds = retired.map(({ subagent }) => subagent.runId);
   writeSubagentRunValuesInDatabase(
     database,
     rows.map(({ row }) => row),
     retiredRunIds,
+    retiredRunIds.length
+      ? {
+          reason: "requester_settled",
+          terminalRows: new Map(retired.map(({ subagent }) => [subagent.runId, subagent])),
+        }
+      : undefined,
   );
   return {
     applied: true,
@@ -385,6 +390,9 @@ function mutateRequesterBatch(
       subagent.pauseReason !== "sessions_yield" &&
       subagent.expectsCompletionMessage === true &&
       (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+        (!params.outcome.delivered &&
+          subagent.delivery?.status === "failed" &&
+          subagent.delivery.disposition === "retryable") ||
         settleExpiredDelivery)
     ) {
       if (params.outcome.delivered) {

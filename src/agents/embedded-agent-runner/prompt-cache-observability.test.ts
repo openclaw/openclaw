@@ -4,6 +4,10 @@ import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { normalizeUsage } from "../usage.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
@@ -87,6 +91,43 @@ describe("prompt cache observability", () => {
       });
       expect(JSON.stringify(observer.getObservation())).not.toContain("selected-human");
     }
+  });
+
+  it("attributes the request after a provider compaction checkpoint to compaction", async () => {
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("provider-compaction"), streamStrategy: "test" },
+      () => {},
+    );
+    const model = { provider: "openai", id: "gpt-5.4", api: "openai-responses" as const };
+    const user = makeAgentUserMessage({ content: "run the probe" });
+    const checkpoint = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "compacted" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_1",
+        data: "encrypted",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.4",
+      },
+    });
+    const next = makeAgentUserMessage({ content: "continue", timestamp: 1 });
+    const later = makeAgentUserMessage({ content: "again", timestamp: 2 });
+    const requests = [[user], [user, checkpoint, next], [user, checkpoint, next, later]];
+    const causes = [];
+    for (const [index, messages] of requests.entries()) {
+      await observer.onModelRequest(model, { systemPrompt: "stable", messages });
+      observer.onModelUsage({ cacheRead: [40_000, 2_000, 0][index]!, input: 10 });
+      const { dropCause, changes } = observer.getObservation()!;
+      causes.push([dropCause, changes?.map(({ code }) => code) ?? null]);
+    }
+    // The checkpoint request is a compaction rebuild; a later drop is not attributed to it.
+    expect(causes).toEqual([
+      [undefined, null],
+      ["tracked-input-change", ["compaction"]],
+      ["unattributed:provider-prompt-unavailable", null],
+    ]);
   });
 
   it("bounds field details while detecting later item and tail changes", () => {

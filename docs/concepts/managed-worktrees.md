@@ -254,7 +254,10 @@ renames. Initialization retains the identities and timestamp eligibility observe
 while hashing its private checkout, so the first reuse can use those same facts.
 Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
-open does not rewrite their inventories.
+open does not rewrite their inventories. Local checkpoint acceptance reuses the
+prepared tree and checks the affected target paths for conflicts. It does not
+build another target manifest that the checkpoint would discard; rollback
+journals and pending-conflict recovery retain their existing ownership.
 
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
@@ -357,8 +360,10 @@ Creation hydrates only the selected commit's missing contents. Its object census
 returns only missing IDs, keeping preparation responses small for large checkouts.
 The batch fetch uses that commit as its only negotiation tip, avoiding reads of
 unrelated session branch tips even though object negotiation is disabled.
-It does not scan every promisor pack to classify missing objects; that proof belongs to snapshot
-removal, where lost locally authored data must preserve the checkout. Successful
+Neither creation nor snapshot removal scans every promisor pack to classify missing
+objects. Removal fetches missing contents first and requires an offline census with
+no missing objects before snapshot capture. Unrecoverable locally authored data
+still preserves the checkout. Successful
 default-base hydration is already shared by commit while the Git worker remains
 active. Hydration failures are not cached.
 
@@ -499,7 +504,7 @@ Concurrent creations from the same source checkout share remote-default preparat
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
-Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing promised blobs from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. The snapshot validates those objects locally before recording the capture or removing the checkout. Missing non-promisor objects, failed fetches, or lost removal authority preserve the checkout; restore remote access or repair the repository before retrying cleanup.
+Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing contents from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. A second offline census requires all HEAD contents to be present locally, avoiding a scan of every promisor pack to classify the missing objects. Snapshot capture also runs offline before recording the capture or removing the checkout. A missing promisor remote, failed fetch, remaining missing object, or lost removal authority preserves the checkout; restore remote access or repair the repository before retrying cleanup. Locally authored contents can be recovered when the selected remote serves their exact object IDs; remote configuration or a successful fetch alone never proves local object custody.
 
 Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
 

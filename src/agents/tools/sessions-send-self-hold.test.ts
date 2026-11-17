@@ -469,7 +469,7 @@ it.each([
         targetAgentId: "main",
         sessionId: "target-id",
         storePath: "/fixture/store",
-        targetRun: null,
+        hadTask: false,
         requesterParentOwned: false,
       };
       const call = (origin: string) =>
@@ -733,7 +733,7 @@ it.each([false, true])(
                     targetAgentId: "main",
                     sessionId: "target",
                     storePath: "/fixture/store",
-                    targetRun: null,
+                    hadTask: false,
                     requesterParentOwned: false,
                   },
                   id,

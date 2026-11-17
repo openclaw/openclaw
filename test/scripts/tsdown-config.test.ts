@@ -95,6 +95,65 @@ it("keeps retirement reads outside the Doctor restoration graph", async () => {
   }
 });
 
+it("keeps database-opening workers outside update migration attribution", async () => {
+  const name = "infra/fs-safe-copy.worker";
+  const selected = configs.find(
+    (config) =>
+      typeof config.entry === "object" &&
+      config.entry !== null &&
+      !Array.isArray(config.entry) &&
+      name in config.entry,
+  );
+  const source = selected
+    ? (selected.entry as Record<string, string | undefined>)[name]
+    : undefined;
+  if (!selected || !source) {
+    throw new Error("Missing private fs-safe copy worker build config");
+  }
+  const root = createTempDir("openclaw-db-worker-attribution-build-");
+  const modules: string[] = [];
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { [name]: source },
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+    plugins: [
+      selected.plugins,
+      {
+        name: "db-worker-attribution-proof",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              modules.push(
+                ...Object.keys(chunk.modules).map((id) =>
+                  path.relative(process.cwd(), id).split(path.sep).join("/"),
+                ),
+              );
+            }
+          }
+        },
+      },
+    ],
+  });
+  try {
+    // Opening a database must not copy update inspection into every private worker graph.
+    expect(
+      modules.filter((id) =>
+        /^src\/infra\/update-(?:doctor-migration-attribution|candidate-state|database-generations)/u.test(
+          id,
+        ),
+      ),
+    ).toEqual([]);
+    expect(modules).toContain("src/infra/update-doctor-migration-context.ts");
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
 it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
   const selected = configs.find((config) =>
     hasWorkerEntry(config, "node-host-launcher-bootstrap", "src/node-host/launcher-bootstrap.ts"),

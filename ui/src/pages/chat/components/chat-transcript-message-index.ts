@@ -11,7 +11,10 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  explicitlyAbortedRunId,
+} from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
@@ -20,6 +23,7 @@ import {
   type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getChatItemsGeneration,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -49,6 +53,7 @@ type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  interruptedRunIds: ReadonlySet<string>;
   runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
@@ -250,7 +255,14 @@ export function projectTranscriptChain(
           }
         : undefined;
   }
+  const interruptedRunIds = new Set(
+    (options.messages ?? []).flatMap((message) => {
+      const runId = explicitlyAbortedRunId(message);
+      return runId ? [runId] : [];
+    }),
+  );
   const value: TranscriptChain = {
+    interruptedRunIds,
     runDurations,
     collapsedItems,
     transcriptItems,
@@ -323,15 +335,17 @@ function messageRevision(message: object): string {
 
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
+  sharedExpansion: Map<string, boolean>,
   props: Pick<
     ChatThreadProps,
     "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
   >,
+  readerExpandedWork?: ReadonlySet<string>,
 ): TranscriptIndex {
   const cacheKey = [
-    expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
+    sharedExpansion,
+    getExpansionStateVersion(sharedExpansion),
+    readerExpandedWork,
     props.assistantName,
     props.currentAgentId,
     props.agents,
@@ -340,6 +354,13 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // This derived view is pane-local; it never publishes automatic expansion.
+    const expandedToolCards = readerExpandedWork?.size ? new Map(sharedExpansion) : sharedExpansion;
+    for (const key of readerExpandedWork ?? []) {
+      if (getExplicitToolExpansion(sharedExpansion, key) === undefined) {
+        expandedToolCards.set(key, true);
+      }
+    }
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
     const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {

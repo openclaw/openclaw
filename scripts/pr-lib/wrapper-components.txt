@@ -365,6 +365,7 @@ src/agents/session-slug.ts
 src/agents/core-tool-facts.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
+src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
@@ -497,6 +498,7 @@ src/agents/worktrees/run-lease-store.kernel.ts
 src/agents/worktrees/run-lease-store.ts
 src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
+src/agents/worktrees/storage-root.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
@@ -1191,6 +1193,7 @@ src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
+src/infra/package-release-slot-path.ts
 src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts
 src/infra/package-update-activation-immutable.ts
@@ -1419,6 +1422,7 @@ src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-config.ts
 src/infra/update-doctor-lint-schema.ts
 src/infra/update-doctor-migration-attribution.ts
+src/infra/update-doctor-migration-context.ts
 src/infra/update-doctor-result.ts
 src/infra/update-doctor-scan-receipts.ts
 src/infra/update-failure-facts-format.ts
@@ -2051,6 +2055,7 @@ src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
+src/shared/subagent-completion.ts
 src/shared/tool-block-contract.ts
 src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
@@ -2546,6 +2551,7 @@ src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
 src/config/sessions/session-transcript-hydration-caller.ts
+src/config/sessions/session-transcript-hydration-decoder.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2688,6 +2694,7 @@ src/agents/live-model-errors.ts
 src/agents/sandbox-host.ts
 src/agents/sandbox-widget-scroll-bridge.ts
 src/agents/sessions/session-manager-append-codec.ts
+src/agents/sessions/tools/tool-contracts.ts
 src/agents/tools/chat-history-text.ts
 src/agents/usage.ts
 src/auto-reply/reply/history.ts
@@ -2699,6 +2706,7 @@ src/boards/board-website.ts
 src/boards/github-actions-capability.ts
 src/boards/session-actor-board-memory.ts
 src/chat/sender-identity.ts
+src/chat/transcript-display-position.ts
 src/chat/work-context.ts
 src/config/sessions/ambient-transcript-watermark-projection.ts
 src/config/sessions/cleanup-service-read.policy.ts

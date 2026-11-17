@@ -293,7 +293,6 @@ describe("production lint suppressions", () => {
         "src/agents/computer-use-node-capabilities.ts|unicorn/no-array-sort|1",
         // Sort only freshly materialized private arrays; avoid a second copying sort.
         "src/agents/embedded-agent-runner/model.static-catalog.ts|unicorn/no-array-sort|2",
-        "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-context-summary.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
         // Stream wrappers preserve the original source iterator's rejection value.

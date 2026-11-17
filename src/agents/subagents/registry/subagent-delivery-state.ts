@@ -81,7 +81,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
+  if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
+    // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
     return true;
   }
@@ -107,6 +108,9 @@ export function projectSubagentRunForMaintenance(
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,
+    requesterSettleWake: entry.requesterSettleWake
+      ? { status: entry.requesterSettleWake.status }
+      : undefined,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
     killReconciliation: entry.killReconciliation
@@ -224,6 +228,14 @@ export function recordRequesterDelivery(
   }
 }
 
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.delivery?.requesterDelivery?.state === "consumed" &&
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
 /** A cancelled private continuation cannot unconsume its committed input. */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
@@ -232,13 +244,7 @@ export function resolveRequesterDeliveryOutcome(
   return outcome &&
     !outcome.delivered &&
     entries.length > 0 &&
-    entries.every(
-      (entry) =>
-        entry.delivery?.requesterDelivery?.state === "consumed" &&
-        entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-        (entry.completionTarget === "parent" ||
-          entry.requesterSettleWake?.privateInput !== undefined),
-    )
+    entries.every(hasConsumedPrivateRequesterInput)
     ? { delivered: true, path: "direct" }
     : outcome;
 }

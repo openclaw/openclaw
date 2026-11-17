@@ -8,6 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
@@ -221,7 +222,7 @@ describe("artifact usage", () => {
   }
   const usage = () => readLatestSessionUsageFromTranscriptFileAsync(id, storePath);
 
-  test("aggregates assistant usage asynchronously without readFileSync", async () => {
+  test("aggregates assistant usage without synchronous filesystem calls", async () => {
     writeUsage([
       assistant({
         provider: "anthropic",
@@ -231,7 +232,7 @@ describe("artifact usage", () => {
       assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
       assistant({ provider: "openclaw", model: "command" }),
     ]);
-    const readFile = vi.spyOn(fs, "readFileSync");
+    using measured = observeMainThreadFs();
     const snapshot = await usage();
     expect(snapshot).toMatchObject({
       modelProvider: "anthropic",
@@ -243,7 +244,7 @@ describe("artifact usage", () => {
       totalTokensFresh: true,
     });
     expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
-    expect(readFile).not.toHaveBeenCalled();
+    expect(measured.stacks()).toEqual([]);
   });
 
   test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(

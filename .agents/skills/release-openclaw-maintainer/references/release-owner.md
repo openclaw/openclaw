@@ -155,7 +155,8 @@ do not re-arm a watcher that has no new transition or work.
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input
 evidence where allowed. P-only, credential, or infrastructure recovery does not
-change C/Q. A qualification-harness repair does. Do not scan moving main for
+change C/Q. A qualification-only repair may preserve C and newly admit an
+explicit reviewed main-ancestor Q; it requires a new request and successful parent. Do not scan moving main for
 opportunistic additions or let unrelated red main CI become the release queue.
 
 Keep the progress card compact: current validation/publication run link,

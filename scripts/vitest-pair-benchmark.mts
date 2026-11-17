@@ -1,12 +1,14 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   assertSingleWorkflowAttempt,
   loadBenchmarkManifest,
+  validateNodeCacheManifest,
   withTerminalManifest,
 } from "./lib/vitest-pair-benchmark-contract.mts";
-import { runVitestPairBenchmark } from "./lib/vitest-pair-benchmark.mts";
+import { runNodeCacheBenchmark, runVitestPairBenchmark } from "./lib/vitest-pair-benchmark.mts";
 
 function parseArgs(argv: string[]) {
   const knownOptions = new Set([
@@ -19,6 +21,9 @@ function parseArgs(argv: string[]) {
     "pnpm-bin",
     "run-attempt",
     "scratch",
+    "mode",
+    "workload",
+    "seed",
   ]);
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
@@ -44,7 +49,32 @@ function parseArgs(argv: string[]) {
     return value;
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const mode = values.get("mode");
+  if (mode !== undefined && mode !== "node-compile-cache") {
+    throw new Error(`unknown benchmark mode: ${mode}`);
+  }
+  if (mode === "node-compile-cache") {
+    for (const name of ["baseline", "baseline-sha", "candidate", "candidate-sha"]) {
+      if (values.has(name)) {
+        throw new Error(`--${name} is not supported in node-compile-cache mode`);
+      }
+    }
+    return {
+      mode,
+      workloadDir: required("workload"),
+      seedDir: required("seed"),
+      manifestPath: required("manifest"),
+      outputDir: required("output"),
+      pnpmBin: required("pnpm-bin"),
+      runAttempt: required("run-attempt"),
+      scratchDir: required("scratch"),
+    } as const;
+  }
+  if (values.has("workload") || values.has("seed")) {
+    throw new Error("--workload and --seed require node-compile-cache mode");
+  }
   return {
+    mode: "source-pair" as const,
     baselineDir: required("baseline"),
     baselineSha: required("baseline-sha"),
     candidateDir: required("candidate"),
@@ -59,16 +89,24 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-await withTerminalManifest(options.outputDir, async () => {
+if (options.mode === "node-compile-cache") {
   assertSingleWorkflowAttempt(options.runAttempt);
-  await runVitestPairBenchmark({
-    baselineDir: options.baselineDir,
-    baselineSha: options.baselineSha,
-    candidateDir: options.candidateDir,
-    candidateSha: options.candidateSha,
-    manifest: loadBenchmarkManifest(options.manifestPath),
-    outputDir: options.outputDir,
-    pnpmBin: options.pnpmBin,
-    scratchDir: options.scratchDir,
+  await runNodeCacheBenchmark({
+    ...options,
+    manifest: validateNodeCacheManifest(JSON.parse(readFileSync(options.manifestPath, "utf8"))),
   });
-});
+} else {
+  await withTerminalManifest(options.outputDir, async () => {
+    assertSingleWorkflowAttempt(options.runAttempt);
+    await runVitestPairBenchmark({
+      baselineDir: options.baselineDir,
+      baselineSha: options.baselineSha,
+      candidateDir: options.candidateDir,
+      candidateSha: options.candidateSha,
+      manifest: loadBenchmarkManifest(options.manifestPath),
+      outputDir: options.outputDir,
+      pnpmBin: options.pnpmBin,
+      scratchDir: options.scratchDir,
+    });
+  });
+}
