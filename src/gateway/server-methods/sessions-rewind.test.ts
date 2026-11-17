@@ -305,6 +305,22 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
 }
 
 describe("session message-cut methods", () => {
+  it("reports the history budget refusal without changing the session", async () => {
+    await appendTranscriptEvent(transcriptScope, {
+      type: "custom",
+      id: "huge",
+      parentId: "assistant-entry",
+      data: "x".repeat(8 * 1024 * 1024),
+    });
+    const before = await readEntry();
+    const respond = await invoke("sessions.rewind", "user-entry");
+    expectCutFailure(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: expect.stringContaining("safe memory budget"),
+    });
+    expect(await readEntry()).toEqual(before);
+  });
+
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
     const { options } = await restrictedOperator(
       "restricted-fork-creator@example.com",

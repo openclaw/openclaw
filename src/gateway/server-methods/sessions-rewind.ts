@@ -20,6 +20,7 @@ import {
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
@@ -584,8 +585,10 @@ async function mutatePreparedSessionAtMessage({
           throw error;
         }
         if (error instanceof ModelSelectionLockedError) {
-          reject(error.message);
-          return;
+          return reject(error.message);
+        }
+        if (error instanceof SqliteJsonlReadBudgetExceededError) {
+          return reject(error.message, ErrorCodes.UNAVAILABLE);
         }
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
         return;
