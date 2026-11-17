@@ -205,6 +205,9 @@ struct ChatMessageFooter: View {
     }
 }
 
+/// The tap-to-open context table (web chat-composer-context-panel.tsx:163-264 and
+/// chat-context-breakdown.tsx): this reply's prompt budget with its bar and parts, then the
+/// reply's work and cost, then the model and exact time.
 private struct ChatMessageFooterDetails: View {
     let duration: String?
     let exactTime: String?
@@ -212,43 +215,196 @@ private struct ChatMessageFooterDetails: View {
     let model: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let duration {
-                Text(duration)
-                    .font(OpenClawChatTypography.footnote)
-                    .foregroundStyle(.primary)
+        let rows = self.usage?.rows ?? []
+        let hasUsage = self.usage?.context != nil || !rows.isEmpty
+        let facts = self.replyFacts
+        VStack(alignment: .leading, spacing: 12) {
+            if let context = self.usage?.context {
+                self.budget(context)
             }
-            Group {
-                if let exactTime {
-                    Text(exactTime)
-                }
-                if let usage {
-                    Text(usage.text)
-                        .monospacedDigit()
-                        .foregroundStyle(usage.pressure.tint)
-                        .accessibilityLabel(String(localized: "Message usage"))
-                        .accessibilityValue(usage.accessibilityValue)
-                }
-                if let model {
-                    // The full provider/model id: the footer no longer abbreviates it.
-                    Text(model)
-                        .accessibilityLabel(String(format: String(localized: "Model: %@"), model))
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(rows, id: \.component) { row in
+                        ChatContextUsageRow(row: row)
+                    }
                 }
             }
-            .font(OpenClawChatTypography.caption)
-            .foregroundStyle(.secondary)
+            if !facts.isEmpty {
+                if hasUsage {
+                    Divider()
+                }
+                self.replyRow(facts)
+            }
+            if self.model != nil || self.exactTime != nil {
+                if hasUsage || !facts.isEmpty {
+                    Divider()
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    if let model {
+                        // The full provider/model id: the footer never abbreviates it here.
+                        Text(verbatim: model)
+                            .accessibilityLabel(String(format: String(localized: "Model: %@"), model))
+                    }
+                    if let exactTime {
+                        Text(exactTime)
+                    }
+                }
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            }
         }
-        .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
-        .padding(14)
-        .frame(minWidth: 200, maxWidth: 320, alignment: .leading)
+        .padding(16)
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private var replyFacts: [String] {
+        [
+            self.duration,
+            self.usage?.cost.map {
+                String(format: String(localized: "Cost %@"), ChatMessageUsagePresentation.cost($0))
+            },
+        ].compactMap(\.self)
+    }
+
+    private func budget(_ context: ChatMessageUsagePresentation.Context) -> some View {
+        let pressure = self.usage?.pressure ?? .normal
+        let detail = "\(ChatMessageUsagePresentation.tokens(context.promptTokens)) / "
+            + "\(ChatMessageUsagePresentation.tokens(Double(context.windowTokens))) · "
+        let label = Text("Prompt budget")
+            .textCase(.uppercase)
+            .tracking(0.4)
+            .foregroundStyle(.secondary)
+        let value = HStack(spacing: 0) {
+            Text(verbatim: detail)
+            Text(verbatim: "\(context.percent)%")
+                .foregroundStyle(pressure.tint)
+        }
+        .monospacedDigit()
+        return VStack(alignment: .leading, spacing: 8) {
+            // Large text stacks the value under its label instead of truncating either.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    label
+                    Spacer(minLength: 0)
+                    value
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    label
+                    value
+                }
+            }
+            .font(OpenClawChatTypography.captionSemiBold)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(String(localized: "Prompt budget"))
+            .accessibilityValue(Self.budgetAccessibilityValue(context, pressure: pressure))
+            ChatContextBudgetBar(segments: context.segments)
+        }
+    }
+
+    private func replyRow(_ facts: [String]) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("This reply")
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Text(verbatim: facts.joined(separator: " · "))
+                .monospacedDigit()
+                .multilineTextAlignment(.trailing)
+        }
+        .font(OpenClawChatTypography.footnote)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "This reply"))
+        .accessibilityValue(facts.joined(separator: ", "))
+    }
+
+    private static func budgetAccessibilityValue(
+        _ context: ChatMessageUsagePresentation.Context,
+        pressure: ChatMessageUsagePresentation.Pressure) -> String
+    {
+        let format = switch pressure {
+        case .normal: String(localized: "%1$@ percent, %2$@ of %3$@ tokens")
+        case .warning: String(localized: "Warning: %1$@ percent, %2$@ of %3$@ tokens")
+        case .danger: String(localized: "Critical: %1$@ percent, %2$@ of %3$@ tokens")
+        }
+        return String(
+            format: format,
+            context.percent.formatted(),
+            Int(min(context.promptTokens, Double(Int.max))).formatted(),
+            context.windowTokens.formatted())
+    }
+}
+
+/// One part of the reply's usage: a dot matching its bar segment, the label, the count.
+private struct ChatContextUsageRow: View {
+    let row: ChatMessageUsagePresentation.Row
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(self.row.component.tint)
+                .frame(width: 7, height: 7)
+            Text(self.row.component.title)
+            Spacer(minLength: 12)
+            Text(verbatim: ChatMessageUsagePresentation.tokens(Double(self.row.tokens)))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .font(OpenClawChatTypography.footnote)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.row.component.title)
+        .accessibilityValue(String(format: String(localized: "%@ tokens"), self.row.tokens.formatted()))
+    }
+}
+
+/// A thin capsule over the context window, split into the prompt's parts.
+private struct ChatContextBudgetBar: View {
+    let segments: [ChatMessageUsagePresentation.Segment]
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 1) {
+                ForEach(self.segments.indices, id: \.self) { index in
+                    let segment = self.segments[index]
+                    let gap: CGFloat = index < self.segments.count - 1 ? 1 : 0
+                    Rectangle()
+                        .fill(segment.component?.tint ?? Color.secondary)
+                        .frame(width: max(0, proxy.size.width * min(1, segment.fraction) - gap))
+                }
+            }
+        }
+        .frame(height: 4)
+        .background(Color.secondary.opacity(0.2))
+        .clipShape(Capsule())
+        .accessibilityHidden(true)
+    }
+}
+
+extension ChatMessageUsagePresentation.Component {
+    fileprivate var title: String {
+        switch self {
+        case .cacheRead: String(localized: "Cache read")
+        case .cacheWrite: String(localized: "Cache write")
+        case .input: String(localized: "Input")
+        case .output: String(localized: "Output")
+        }
+    }
+
+    /// Semantic chart tints; output is not part of the prompt, so its dot stays neutral.
+    fileprivate var tint: Color {
+        switch self {
+        case .cacheRead: .blue
+        case .cacheWrite: .indigo
+        case .input: .teal
+        case .output: .secondary
+        }
     }
 }
 
 extension ChatMessageUsagePresentation.Pressure {
     fileprivate var tint: Color {
         switch self {
-        case .normal: OpenClawChatTheme.muted
+        case .normal: .primary
         case .warning: OpenClawChatTheme.warning
         case .danger: OpenClawChatTheme.danger
         }

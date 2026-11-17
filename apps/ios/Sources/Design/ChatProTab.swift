@@ -249,6 +249,8 @@ struct ChatProTab: View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
+        // The badge alone is narrower than a touch target; the expanded status keeps its own width.
+        .frame(minWidth: 44)
         .openClawToolbarHitTarget(preservesIntrinsicWidth: true)
         .contentShape(Rectangle())
         .buttonStyle(.plain)

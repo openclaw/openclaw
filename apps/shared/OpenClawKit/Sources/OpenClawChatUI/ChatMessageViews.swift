@@ -48,28 +48,69 @@ struct ChatSystemNoticeRow: View {
 }
 
 #if os(iOS)
-/// Inline label + chevron disclosure for transcript rows inside the iOS List.
+/// The one disclosure for transcript rows inside the iOS List: a fixed header (label + rotating
+/// chevron, 44 pt target) that never moves, with content easing in below it. A default
+/// DisclosureGroup there turns into an outline row that the label tap does not toggle.
 struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
+    enum Chevron {
+        case tint
+        case secondary
+    }
+
+    var chevron: Chevron = .tint
+
     func makeBody(configuration: Configuration) -> some View {
+        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron)
+    }
+}
+
+private struct ChatInlineDisclosure: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let configuration: DisclosureGroupStyleConfiguration
+    let chevron: ChatInlineDisclosureStyle.Chevron
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                configuration.isExpanded.toggle()
+                // The state changes inside the transaction, so the List row resizes with it and the
+                // rows below slide instead of snapping.
+                withAnimation(self.reduceMotion ? .easeInOut(duration: 0.2) : .snappy(duration: 0.25)) {
+                    self.configuration.isExpanded.toggle()
+                }
             } label: {
-                HStack {
-                    configuration.label
-                    Spacer(minLength: 8)
-                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                HStack(alignment: .center, spacing: 8) {
+                    self.configuration.label
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right")
                         .font(.caption)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(self.chevronStyle)
+                        .rotationEffect(.degrees(self.configuration.isExpanded ? 90 : 0))
                         .accessibilityHidden(true)
                 }
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
-            if configuration.isExpanded {
-                configuration.content
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(self.configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
+            // Content enters below the header only; the clip keeps it from sliding over the header.
+            VStack(alignment: .leading, spacing: 0) {
+                if self.configuration.isExpanded {
+                    self.configuration.content
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(self.reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .clipped()
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var chevronStyle: AnyShapeStyle {
+        switch self.chevron {
+        case .tint: AnyShapeStyle(.tint)
+        case .secondary: AnyShapeStyle(.secondary)
         }
     }
 }

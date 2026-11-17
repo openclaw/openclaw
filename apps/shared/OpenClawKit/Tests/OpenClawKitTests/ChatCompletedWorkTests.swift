@@ -43,7 +43,7 @@ struct ChatCompletedWorkTests {
         #expect(Self.work(in: unanswered).map(\.isActivityRun) == [true])
     }
 
-    @Test func `interim replies fold while final phase answers and media remain visible`() throws {
+    @Test func `plain earlier replies final phase answers and media remain visible`() throws {
         let progress = Self.message("assistant", "Checking", at: 2000)
         let firstAnswer = Self.message("assistant", "First answer", at: 4000, phase: "final_answer")
         let mixed = try Self.decode(#"""
@@ -57,12 +57,44 @@ struct ChatCompletedWorkTests {
             content: [.init(type: "image", text: nil, mimeType: "image/png", fileName: "layout.png", content: nil)],
             timestamp: 6000)
         let rows = Self.collapse([progress, firstAnswer, mixed, media])
-        // Unphased interim text is work; explicit final answers and media are not.
-        #expect(Self.work(in: rows).map { $0.messages.map(\.id) } == [[progress.id]])
-        #expect(Self.visibleIDs(rows) == [firstAnswer.id, mixed.id, media.id])
-        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), mixed])) == [mixed.id])
+        // An unphased reply that did not stop for tools is a reply, not narration; no tools, no fold.
+        #expect(Self.work(in: rows).isEmpty)
+        #expect(Self.visibleIDs(rows) == [progress.id, firstAnswer.id, mixed.id, media.id])
+        let tool = Self.toolCall(at: 3000)
+        let withTool = Self.collapse([progress, tool, mixed])
+        #expect(Self.visibleIDs(withTool) == [progress.id, mixed.id])
+        #expect(Self.work(in: withTool).map { $0.messages.map(\.id) } == [[tool.id]])
         let legacyFinal = Self.message("assistant", "Legacy final", at: 7000)
-        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), legacyFinal])) == [legacyFinal.id])
+        #expect(Self.visibleIDs(Self.collapse([progress, Self.toolCall(at: 3000), legacyFinal])) == [
+            progress.id,
+            legacyFinal.id,
+        ])
+    }
+
+    @Test func `an opening greeting before a reply never folds into empty work`() {
+        // The screenshot-mode demo chat: two plain assistant replies and no user message yet.
+        let greeting = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(
+                type: "text",
+                text: "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.")],
+            timestamp: 1000,
+            transcriptMessageID: "greeting",
+            stopReason: "stop")
+        let workflow = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(
+                type: "text",
+                text: "A small release workflow:\n\n```mermaid\nflowchart TD\n  Draft --> Review\n```")],
+            timestamp: 2000,
+            transcriptMessageID: "workflow",
+            stopReason: "stop")
+        let rows = Self.collapse([greeting, workflow])
+        #expect(Self.work(in: rows).isEmpty)
+        #expect(Self.visibleIDs(rows) == [greeting.id, workflow.id])
+        // Commentary alone is still not work worth a fold.
+        let narration = Self.message("assistant", "Looking now", at: 500, phase: "commentary")
+        #expect(Self.work(in: Self.collapse([narration, workflow])).isEmpty)
     }
 
     @Test func `later reply run commentary after the answer folds into its work`() {

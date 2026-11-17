@@ -210,7 +210,7 @@ final class AdaptiveLayoutUITests: XCTestCase {
         let composer = app.otherElements["chat-composer-surface"].firstMatch
         XCTAssertTrue(show.waitForExistence(timeout: 30))
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
-        let transcript = app.scrollViews["chat-transcript"].firstMatch
+        let transcript = app.descendants(matching: .any)["chat-transcript"].firstMatch
         XCTAssertTrue(transcript.waitForExistence(timeout: 10))
         // The composer surface is the reading column of whatever width the chat pane gets.
         XCTAssertEqual(composer.frame.width, Self.expectedColumn(paneWidth: transcript.frame.width), accuracy: 1)

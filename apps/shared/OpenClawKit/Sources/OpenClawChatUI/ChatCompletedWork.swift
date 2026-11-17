@@ -191,7 +191,12 @@ extension ChatTranscriptRow {
                 }
             }
         }
-        guard let last = work.last else { return turn }
+        // Text alone is not work: a fold needs tool activity in its output segment (calls,
+        // results or reasoning, folded or kept on an unresolved row), so a turn of plain
+        // replies (a greeting, an opening message) never folds.
+        guard let last = work.last,
+              turn[start...end].contains(where: { $0.workMessage?.recordsWork == true })
+        else { return turn }
         // History prepends change the first work row, but not the visible boundary
         // that follows it (including a continuing steer turn).
         let anchor = answers.first?.row.id ?? continuationID ?? last.message.presentationID
@@ -382,14 +387,23 @@ extension OpenClawChatMessage {
                 (self.role.lowercased() == "assistant" && self.content.contains(where: \.isWorkContent)))
     }
 
-    /// Tool output, reasoning, and assistant text that is not an explicit final answer, including
-    /// narration and interim replies; media and spoken renditions stay visible
-    /// (web isCollapsibleWorkGroup, chat-turn-presentation.ts:131-147).
+    /// Tool output, reasoning, and narration that is not an explicit final answer; media and spoken
+    /// renditions stay visible (web isCollapsibleWorkGroup, chat-turn-presentation.ts:131-147).
+    /// Visible text is narration only when it is marked commentary, stopped for tool use, or rides
+    /// with tool blocks; a plain earlier reply stays visible.
     fileprivate var foldsAsWork: Bool {
         guard !self.isForwardedTurnBoundary, !self.isRealtimeVoiceTranscript, !self.hasWorkMedia else { return false }
         let role = self.role.lowercased()
         if ["tool", "toolresult", "tool_result"].contains(role) { return true }
-        return role == "assistant" && self.workPhase != "final_answer"
+        guard role == "assistant", self.workPhase != "final_answer" else { return false }
+        return !self.hasWorkReplyContent || self.workPhase == "commentary" || self.stoppedForToolUse ||
+            self.content.contains { $0.isToolCall || $0.isToolResult }
+    }
+
+    /// A tool call or result, or a reasoning step: what makes a fold worth showing.
+    fileprivate var recordsWork: Bool {
+        ["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
+            self.content.contains(where: \.isWorkContent)
     }
 
     /// A row that shows only tool operations: no narration, media, final answer, or the

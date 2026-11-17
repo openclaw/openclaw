@@ -641,7 +641,7 @@ private struct ChatToolActivityRowContent: View {
                 .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             } else if self.expandable {
                 Button {
-                    withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    withAnimation(self.reduceMotion ? .easeInOut(duration: 0.2) : .snappy(duration: 0.25)) {
                         self.expanded.toggle()
                     }
                 } label: {
@@ -718,6 +718,8 @@ private struct ChatToolActivityRowContent: View {
                     }
                 }
                 .padding(.leading, self.isDesktopLayout ? 0 : 19)
+                // Fade only: the panel sits under its own header row, which must not be overlapped.
+                .transition(.opacity)
             }
         }
         .modifier(ChatWorkCardStyle())
@@ -952,6 +954,9 @@ struct ChatToolActivityList: View {
                         .foregroundStyle(.secondary)
                 }
                 .tint(.secondary)
+                #if os(iOS)
+                .disclosureGroupStyle(ChatInlineDisclosureStyle(chevron: .secondary))
+                #endif
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
