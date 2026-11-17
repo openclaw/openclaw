@@ -225,6 +225,7 @@ export function buildReplyRunStateParams(run: FollowupRun["run"]) {
     approvalReviewerDeviceId: run.approvalReviewerDeviceId,
     terminalReplyExpectation: run.terminalReplyExpectation,
     clientCaps: run.clientCaps,
+    pinnedWidgetAuthoring: run.internalEventExecution?.pinnedWidgetAuthoring,
     bootstrapUserProfileId: run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.gatewayUiCommandTarget,
     taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
