@@ -5,7 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { watchAgentScope } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import {
   hasCronFormErrors,
@@ -31,6 +31,7 @@ import {
   hasCronInventoryEvents,
   isCronInventoryInvalidation,
 } from "../../lib/cron/inventory-connection.ts";
+import { resolveCronModelAgentId } from "../../lib/cron/model-suggestions.ts";
 import { loadCronRuns, selectCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -197,12 +198,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     applySnapshot();
     cleanups.push(
       observeAgentScope(currentContext.agentSelection),
-      watchSelectedAgent(currentContext.agentSelection, (agentId) => {
-        if (presentation.modelRequest?.agentId !== agentId) {
-          presentation.resetModels();
-          publish();
-        }
-      }),
       currentContext.gateway.subscribeEvents((event) => {
         if (
           active &&
@@ -324,8 +319,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       presentation.resetModels();
       return;
     }
-    const agentId = context().agentSelection.state.selectedId;
-    if (!canRefreshCron() || !cron.connected || !cron.client || !agentId) {
+    const agentId = resolveCronModelAgentId(cron);
+    if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
     const request = presentation.modelRequest;
@@ -718,6 +713,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     canManageJob,
     canCreateCron,
     cronModelSuggestions: presentation.modelSuggestions,
+    cronModels: presentation.models,
     listTab,
     detailTab,
     actions,

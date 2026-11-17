@@ -2,19 +2,22 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { tryResolveCronJobEffectiveAgentId } from "../../../../src/cron/agent-id.ts";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
-import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
+import {
+  resolveConfiguredCronModelSuggestions,
+  resolveCronModelAgentId,
+} from "../../lib/cron/model-suggestions.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
-
-const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
@@ -55,12 +58,15 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
           : "",
       ),
     ]);
+    const modelAgentId = resolveCronModelAgentId(cron);
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
       ...page.cronModelSuggestions(),
-      ...resolveConfiguredCronModelSuggestions(configValue),
+      ...resolveConfiguredCronModelSuggestions(configValue, modelAgentId),
       ...cron.cronJobs.map((job) => {
         const payload = job.payload;
-        return payload.kind === "agentTurn" && typeof payload.model === "string"
+        return tryResolveCronJobEffectiveAgentId(job) === modelAgentId &&
+          payload.kind === "agentTurn" &&
+          typeof payload.model === "string"
           ? payload.model.trim()
           : "";
       }),
@@ -166,7 +172,15 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
     agentSuggestions,
     modelSuggestions,
-    thinkingSuggestions: THINKING_SUGGESTIONS,
+    thinkingOptions: (
+      page
+        .cronModels()
+        .find(
+          (model) =>
+            buildQualifiedChatModelValue(model.id, model.provider) ===
+            cron.cronForm.payloadModel.trim(),
+        )?.thinkingLevels ?? []
+    ).map((level) => ({ value: level.id, label: level.label })),
     timezoneSuggestions,
     deliveryToSuggestions,
     failureAlertToSuggestions,

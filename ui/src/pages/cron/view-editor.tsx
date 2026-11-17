@@ -14,6 +14,7 @@ import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createCronEditorClearance } from "./editor-clearance.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
+import { CronThinkingPicker } from "./thinking-picker.tsx";
 import { DeliverySection, Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -299,15 +300,20 @@ function PromptSection(
               />
             }
           />
-          <CronInput
-            {...props}
-            field="payloadThinking"
+          <FieldRow
             label={t("cron.form.thinking")}
+            controlId=""
             help={t("cron.form.thinkingHelp")}
-            errorKey="payloadThinking"
-            describeError={false}
-            list="cron-thinking-suggestions"
-            placeholder={t("cron.form.thinkingPlaceholder")}
+            error={props.fieldErrors.payloadThinking}
+            errorId={errorIdForField("payloadThinking")}
+            control={
+              <CronThinkingPicker
+                value={props.form.payloadThinking}
+                options={props.thinkingOptions}
+                invalid={Boolean(props.fieldErrors.payloadThinking)}
+                onChange={(payloadThinking) => props.onFormChange({ payloadThinking })}
+              />
+            }
           />
         </>
       ) : undefined}{" "}

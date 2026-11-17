@@ -313,7 +313,8 @@ const enCron = {
       modelHelp:
         "Start typing to pick a known model, or enter a custom one. Routine jobs (summaries, triage, classification) run well on a lighter model — cheaper and faster than your default.",
       thinking: "Reasoning",
-      thinkingPlaceholder: "low",
+      defaultThinking: "Default reasoning",
+      customThinking: "Custom reasoning level…",
       thinkingHelp: "Use a suggested level or enter a provider-specific value.",
       failureAlerts: "Failure alerts",
       failureAlertInherit: "Inherit global setting",

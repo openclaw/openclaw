@@ -10,6 +10,7 @@ import {
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
+import { resolveCronModelAgentId } from "../../lib/cron/model-suggestions.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -17,7 +18,7 @@ import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connect
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
-  readAgentModelCatalog,
+  readModelCatalog,
   subscribeModelCatalogCache,
 } from "../../lib/model-catalog-store.ts";
 
@@ -32,24 +33,24 @@ type CronPresentationDeps = {
 
 /** Presents admitted cron work; the plain owners retain every request decision. */
 export function createCronPresentation(deps: CronPresentationDeps) {
-  type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
+  type ModelReceipt = { state: CronState; agentId: string | undefined; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(
+  const cronModels = createMemo(
     () => {
       const state = deps.readState();
-      const agentId = deps.context().agentSelection.state.selectedId;
+      const agentId = resolveCronModelAgentId(state);
       const receipt = modelReceipt();
       if (receipt?.state !== state || receipt.agentId !== agentId) {
         return [];
       }
-      return readAgentModelCatalog(state.client, agentId)
-        .models.filter((entry) => entry.manualSelectionAllowed !== false)
-        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+      return readModelCatalog(state.client, { agentId }).models.filter(
+        (entry) => entry.manualSelectionAllowed !== false,
+      );
     },
     { lazy: true },
   );
-  let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
+  let modelSuggestionsRequest: { state: CronState; agentId: string | undefined } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
   // Receipts describe work already admitted by the plain owner. Reading them
   // never starts an RPC or transfers its cancellation/publication authority.
@@ -198,14 +199,14 @@ export function createCronPresentation(deps: CronPresentationDeps) {
 
   async function loadModelSuggestions(cronState: CronState) {
     const client = cronState.client;
-    const agentId = deps.context().agentSelection.state.selectedId;
+    const agentId = resolveCronModelAgentId(cronState);
     // Last-good suggestions belong to one agent, including when its successor has no catalog.
     if (modelSuggestionsRequest?.agentId !== agentId) {
       modelSuggestionsRequest = null;
       setModelReceipt(null);
       deps.publish(cronState);
     }
-    if (!client || !agentId || !isGatewayAvailable(deps.context().gateway.snapshot)) {
+    if (!client || !isGatewayAvailable(deps.context().gateway.snapshot)) {
       return;
     }
     const connectionScope = deps.connection.capture();
@@ -223,7 +224,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
           }
         }
       },
-      () => ({ agentId: deps.context().agentSelection.state.selectedId ?? undefined }),
+      () => ({ agentId: resolveCronModelAgentId(deps.currentState()) }),
     );
     const request = { state: cronState, agentId };
     modelSuggestionsRequest = request;
@@ -233,7 +234,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       deps.currentState() === cronState &&
       deps.connection.isCurrent(connectionScope) &&
       modelSuggestionsRequest === request &&
-      deps.context().agentSelection.state.selectedId === agentId;
+      resolveCronModelAgentId(deps.currentState()) === agentId;
     const result = loadModelCatalog(client, { agentId })
       .then((catalog) => {
         if (isCurrent()) {
@@ -273,7 +274,9 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       stopModelSuggestions?.();
       modelSuggestionsRequest = null;
     },
-    modelSuggestions: cronModelSuggestions,
+    models: cronModels,
+    modelSuggestions: () =>
+      cronModels().map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
     get modelRequest() {
       return modelSuggestionsRequest;
     },

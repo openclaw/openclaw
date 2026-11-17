@@ -28,6 +28,8 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 
 ### Agent-turn options
 
+In Control UI, the model picker follows the automation’s agent rather than the agent selected elsewhere in the app. Clearing the agent override uses the task’s scoped session key when present; otherwise the Gateway resolves its configured default. Saved and custom model references remain editable. The reasoning picker offers the selected model’s advertised levels, plus Default and a custom value; changing models does not rewrite an existing reasoning override.
+
 <ParamField path="--message" type="string" required>
   Prompt text for an agent-turn job, including main, isolated, current, and custom sessions.
   Creation preserves leading and trailing whitespace in nonblank prompts and treats a whitespace-only message input as missing.

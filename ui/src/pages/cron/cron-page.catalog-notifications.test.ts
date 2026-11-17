@@ -7,9 +7,11 @@ import {
   createContext,
   createGateway,
   createPage,
+  cronListResponse,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
 import { cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
+import { createCronViewJob } from "./view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -112,6 +114,119 @@ it("loads the catalogue only for an open editor and retires closed-editor invali
     click(page, '[data-test-id="cron-new-task"]');
     await waitForCronPage(() => expect(modelCalls()).toHaveLength(2));
     await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["editor-model"]));
+  } finally {
+    page.remove();
+  }
+});
+
+it("offers the edited task's models instead of the page agent's catalog", async () => {
+  const job = createCronViewJob("writer-task", {
+    agentId: "writer",
+    payload: { kind: "agentTurn", message: "Draft the report", model: "custom/saved" },
+  });
+  const request = cronRpc({
+    "cron.list": () =>
+      cronListResponse([
+        job,
+        createCronViewJob("other-agent-task", {
+          agentId: "main",
+          payload: { kind: "agentTurn", message: "Other task", model: "fixture/unrelated-job" },
+        }),
+      ]),
+    "cron.update": () => ({ ...job, payload: { ...job.payload, model: "fixture/writer-model" } }),
+    "models.list": (params) => ({
+      models: [
+        {
+          provider: "fixture",
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "xhigh", label: "Extra high" },
+          ],
+          id:
+            (params as { agentId?: string }).agentId === "writer"
+              ? "writer-model"
+              : "page-agent-model",
+        },
+      ],
+    }),
+  });
+  const page = createPage(
+    createContext(createGateway(createTestGatewayClient(request), true), null, "main"),
+    { render: true },
+  );
+  try {
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-row-writer-task"]')).not.toBeNull(),
+    );
+    click(page, '[data-test-id="cron-row-writer-task"]');
+    await waitForCronPage(() =>
+      expect(page.cronModelSuggestions).toEqual(["fixture/writer-model"]),
+    );
+    expect(page.cron.cronForm.payloadModel).toBe("custom/saved");
+    expect(request).toHaveBeenCalledWith("models.list", { agentId: "writer", view: "configured" });
+    fillInput(page, "#cron-agent-id", "");
+    await page.settle();
+    expect(page.cronModelSuggestions).toEqual(["fixture/writer-model"]);
+    fillInput(page, "#cron-agent-id", "writer");
+    const picker = page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!;
+    picker.click();
+    await waitForCronPage(() =>
+      expect(
+        page.querySelector('[role="option"][data-value="fixture/writer-model"]'),
+      ).not.toBeNull(),
+    );
+    expect(page.querySelector('[role="option"][data-value="fixture/unrelated-job"]')).toBeNull();
+    page.querySelector<HTMLElement>('[role="option"][data-value="fixture/writer-model"]')!.click();
+    await page.settle();
+    const thinking = page.querySelector<HTMLButtonElement>("#cron-payload-thinking")!;
+    expect(thinking.tagName).toBe("BUTTON");
+    thinking.click();
+    await waitForCronPage(() =>
+      expect(page.querySelector('[role="option"][data-value="xhigh"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="xhigh"]')!.click();
+    await page.settle();
+    click(page, '[data-test-id="cron-submit"]');
+    await waitForCronPage(() =>
+      expect(request).toHaveBeenCalledWith(
+        "cron.update",
+        expect.objectContaining({
+          id: job.id,
+          patch: expect.objectContaining({
+            agentId: "writer",
+            payload: expect.objectContaining({ model: "fixture/writer-model", thinking: "xhigh" }),
+          }),
+        }),
+      ),
+    );
+  } finally {
+    page.remove();
+  }
+});
+
+it("uses a scoped session or the Gateway default when the draft clears its agent", async () => {
+  const request = cronRpc({
+    "models.list": (params) => ({
+      models: [{ id: (params as { agentId?: string }).agentId ?? "gateway-default" }],
+    }),
+  });
+  const page = createPage(createContext(createGateway(createTestGatewayClient(request), true)), {
+    render: true,
+  });
+  try {
+    click(page, '[data-test-id="cron-new-task"]');
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["main"]));
+    fillInput(page, "#cron-agent-id", "");
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["gateway-default"]));
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    page.patchForm({ sessionKey: "agent:writer:main" });
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["writer"]));
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "writer" });
+    page.patchForm({ agentId: "main", clearAgent: true });
+    await page.settle();
+    expect(page.cronModelSuggestions).toEqual(["writer"]);
+    page.patchForm({ sessionKey: "" });
+    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["gateway-default"]));
   } finally {
     page.remove();
   }
