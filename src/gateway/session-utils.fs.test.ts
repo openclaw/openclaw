@@ -223,7 +223,7 @@ describe("artifact usage", () => {
   }
   const usage = () => readLatestSessionUsageFromTranscriptFileAsync(id, storePath);
 
-  test.each(["generated", "relative", "absolute", "indirect-link"])(
+  test.for(["generated", "relative", "absolute", "indirect-link"])(
     "aggregates assistant usage without synchronous filesystem calls (%s)",
     async (mode, context) => {
       writeUsage([

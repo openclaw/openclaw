@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../../infra/boundary-path.js";
+import { resolveSessionFilePathCoreAsync } from "./paths-async.js";
 import {
   resolveSessionFilePathCore,
-  resolveSessionFilePathCoreAsync,
   resolveSessionStorePathCore,
   SessionStoreAgentIdRequiredError,
 } from "./paths.js";
