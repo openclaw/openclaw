@@ -10,13 +10,14 @@ import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
 } from "../agents/tools/in-process-gateway.js";
+import { prepareSessionsSendFollowup } from "../agents/tools/sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   captureGatewayDeviceRevocation,
@@ -85,6 +86,83 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it.each(["current", "revoked", "attribution only"] as const)(
+    "prepares owner followup only with retained live authority: %s",
+    (boundary) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        const owner = ensureGatewayOwnerProfile("Local Owner");
+        const client = createOperatorClient({
+          profileId: owner.id,
+          scopes: ["operator.read", "operator.write"],
+        });
+        if (boundary !== "attribution only") {
+          client.internal = { authenticatedOperator: true };
+        }
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const device = captureGatewayDeviceRevocation(
+          context,
+          { deviceId: "owner-followup-device", role: "operator" },
+          () => true,
+          undefined,
+          { isCurrent: () => true, subscribe: () => () => {} },
+        );
+        const requesterSessionKey = "agent:main:owner-requester";
+        const targetSessionKey = "agent:main:owner-child";
+        for (const sessionKey of [requesterSessionKey, targetSessionKey]) {
+          await putSession(sessionKey, {
+            sessionId: `${sessionKey}-id`,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          });
+        }
+        try {
+          await inScope(
+            {
+              client,
+              context,
+              resolveGatewayContext: () => context,
+              hasCurrentClientAuthority: device.isCurrent,
+            },
+            () =>
+              withGatewayToolCallerIdentity(
+                { agentId: "main", sessionKey: requesterSessionKey },
+                async () => {
+                  const pending = prepareSessionsSendFollowup({
+                    runId: "owner-followup",
+                    requesterAgentId: "main",
+                    requesterSessionKey,
+                    targetAgentId: "main",
+                    targetSessionKey,
+                  });
+                  if (boundary === "attribution only") {
+                    await expect(pending).rejects.toThrow("no retained original caller policy");
+                    return;
+                  }
+                  const request = await pending;
+                  assert(request, "Expected owner followup custody");
+                  try {
+                    expect(() => request.custody.assertCurrent()).not.toThrow();
+                    if (boundary === "revoked") {
+                      invalidateGatewayDeviceRevocation(context, "owner-followup-device", "operator");
+                      expect(() => request.custody.assertCurrent()).toThrow();
+                      const effect = vi.fn();
+                      expect(() => request.custody.run(effect)).toThrow();
+                      expect(effect).not.toHaveBeenCalled();
+                    }
+                  } finally {
+                    request.custody.release();
+                  }
+                },
+              ),
+          );
+        } finally {
+          device.release();
+        }
+      }),
+  );
 
   it("dispatches only the captured plugin reload once", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {

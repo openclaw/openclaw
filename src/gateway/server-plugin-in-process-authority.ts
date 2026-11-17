@@ -203,6 +203,11 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         client: captured
           ? mergePluginRuntimeClientInternal(resolved.client, {
               operatorRunAuthority: captured.authority,
+              // Capture validates the source; attribution alone must not mint this actor.
+              operatorRoleActor: resolveGatewayOperatorRoleActor(resolved.client) ?? {
+                kind: "operator",
+                profileId: captured.authority.profileId,
+              },
             })
           : resolved.client,
         context: resolved.context,
