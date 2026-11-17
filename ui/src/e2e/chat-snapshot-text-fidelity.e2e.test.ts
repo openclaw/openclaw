@@ -8,6 +8,108 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { createActiveTranscriptReloadFixture } from "../test-helpers/control-ui-team-scale-history-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+function installTranscriptScrollWriteProbe() {
+  const records: Array<{
+    atMs: number;
+    kind: string;
+    before: number;
+    after: number;
+    failed: boolean;
+    stack: string[];
+  }> = [];
+  let armed = false;
+  let dropped = 0;
+  const remember = (record: (typeof records)[number]) => {
+    if (records.length === 128) {
+      records.shift();
+      dropped++;
+    }
+    records.push(record);
+  };
+  const selected = (element: Element) =>
+    armed && element.matches(".chat-pane-cache__pane--active .chat-thread");
+  const invoke = (element: Element, kind: string, call: () => unknown) => {
+    if (!selected(element)) {
+      return call();
+    }
+    const before = element.scrollTop;
+    const atMs = performance.now();
+    const stack = (new Error().stack ?? "")
+      .split("\n")
+      .flatMap((line) => {
+        const frame = line.match(
+          /((?:ui\/)?src\/pages\/chat\/[^?:)\s]+|node_modules\/@tanstack\/virtual-core\/[^?:)\s]+|scripts\/perf\/warm-reload-transcript-probe\.ts)(?:\?[^)\s]*?)?:(\d+):(\d+)/u,
+        );
+        return frame ? [`${frame[1]}:${frame[2]}:${frame[3]}`] : [];
+      })
+      .slice(0, 6);
+    let failed = false;
+    try {
+      return call();
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      remember({ atMs, kind, before, after: element.scrollTop, failed, stack });
+    }
+  };
+  const top = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  if (!top?.get || !top.set) {
+    throw new Error("Missing native scrollTop descriptor");
+  }
+  const methods = (["scrollTo", "scrollBy"] as const).map((name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, name);
+    if (!descriptor || typeof descriptor.value !== "function") {
+      throw new Error(`Missing native ${name} descriptor`);
+    }
+    return { name, descriptor, original: descriptor.value };
+  });
+  Object.defineProperty(Element.prototype, "scrollTop", {
+    ...top,
+    set(this: Element, value: number) {
+      invoke(this, "scrollTop", () => top.set?.call(this, value));
+    },
+  });
+  for (const { name, descriptor, original } of methods) {
+    Object.defineProperty(Element.prototype, name, {
+      ...descriptor,
+      value(this: Element, ...args: unknown[]) {
+        return invoke(this, name, () => Reflect.apply(original, this, args));
+      },
+    });
+  }
+  const scroll = (event: Event) => {
+    if (event.target instanceof Element && selected(event.target)) {
+      const offset = event.target.scrollTop;
+      remember({
+        atMs: performance.now(),
+        kind: "scroll",
+        before: offset,
+        after: offset,
+        failed: false,
+        stack: [],
+      });
+    }
+  };
+  document.addEventListener("scroll", scroll, true);
+  const probe = {
+    arm: () => {
+      armed = true;
+    },
+    read: () => ({ records, dropped }),
+    stop: () => {
+      armed = false;
+      document.removeEventListener("scroll", scroll, true);
+      Object.defineProperty(Element.prototype, "scrollTop", top);
+      for (const { name, descriptor } of methods) {
+        Object.defineProperty(Element.prototype, name, descriptor);
+      }
+    },
+  };
+  Reflect.set(window, "__transcriptScrollWrites", probe);
+  return probe;
+}
+
 function afterTwoFrames(): Promise<void> {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -82,12 +184,18 @@ suite.define(() => {
             await Reflect.get(pane!, "sessionSnapshotStore").flush();
           });
           await page.addInitScript({
-            content: `(() => { const __name = (fn) => fn; (${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(anchor)}); })();`,
+            content: `(() => { const __name = (fn) => fn; (${installTranscriptScrollWriteProbe.toString()})(); (${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(anchor)}); })();`,
           });
           await page.reload();
           await gateway.waitForRequest("connect");
           await page.locator(".chat-thread-inner--virtual").waitFor({ state: "visible" });
-          await page.waitForFunction(() => Reflect.get(window, "__activeTranscriptReload").ready);
+          await page.waitForFunction(() => {
+            if (!Reflect.get(window, "__activeTranscriptReload").ready) {
+              return false;
+            }
+            Reflect.get(window, "__transcriptScrollWrites").arm();
+            return true;
+          });
           await gateway.setHistoryMessages(twoRounds ? fixture.intermediate : fixture.live);
           await gateway.resolveDeferred("connect");
           await page
@@ -136,8 +244,12 @@ suite.define(() => {
             }
             await page.evaluate(afterTwoFrames);
           }
-          const result: ReturnType<ReturnType<typeof installWarmReloadTranscriptProbe>["read"]> =
-            await page.evaluate(() => Reflect.get(window, "__activeTranscriptReload").read());
+          const result: ReturnType<ReturnType<typeof installWarmReloadTranscriptProbe>["read"]> & {
+            scrollWrites: ReturnType<ReturnType<typeof installTranscriptScrollWriteProbe>["read"]>;
+          } = await page.evaluate(() => ({
+            ...Reflect.get(window, "__activeTranscriptReload").read(),
+            scrollWrites: Reflect.get(window, "__transcriptScrollWrites").read(),
+          }));
           const frames = result.frames;
           if (appendedPairs === 1) {
             expect(result.missingAnchorFrames).toBe(0);
@@ -158,7 +270,7 @@ suite.define(() => {
                       retained.y,
                   ) <= 1,
               ),
-              JSON.stringify(frames),
+              JSON.stringify(result),
             ).toBe(true);
           } else {
             if (appendedPairs === 1) {
@@ -191,6 +303,9 @@ suite.define(() => {
                 .evaluate((thread) => thread.scrollHeight - thread.clientHeight - thread.scrollTop),
             ).toBeLessThanOrEqual(1);
           }
+        },
+        async ({ page }) => {
+          await page.evaluate(() => Reflect.get(window, "__transcriptScrollWrites")?.stop());
         },
       );
     },
