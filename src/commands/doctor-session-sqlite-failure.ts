@@ -385,8 +385,9 @@ function redactAbsoluteHomePaths(value: string, home: string | undefined): strin
   if (!home) {
     return value;
   }
+  let redacted = value;
   for (const prefix of new Set([home, home.replaceAll("\\", "/"), home.replaceAll("/", "\\")])) {
-    value = value.split(prefix).join("~");
+    redacted = redacted.split(prefix).join("~");
   }
-  return value;
+  return redacted;
 }
