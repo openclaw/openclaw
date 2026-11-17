@@ -247,14 +247,8 @@ export class ComposerDictationSession {
       await this.closeRemote();
       throw new Error(t("chat.composer.dictationAudioUnsupported"));
     }
-    const media = await this.input.open(inputDeviceId);
-    if (this.stopped) {
-      return;
-    }
-    if (this.context?.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
-      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
-    }
-    const context = this.context;
+    // Listen before awaiting the permission prompt: a provider failure while it is
+    // open must stop startup instead of capturing against a removed session.
     this.unsubscribe = this.client.addEventListener((frame) => {
       const payload = eventPayload(frame);
       if (
@@ -291,6 +285,14 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
+    const media = await this.input.open(inputDeviceId);
+    if (this.stopped || this.failed) {
+      return;
+    }
+    if (this.context?.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
+      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
+    }
+    const context = this.context;
     this.inputMeter = new RealtimeTalkMediaStreamMeter((level) => {
       this.inputLevel.set(level);
       this.callbacks.onLevel?.(level);

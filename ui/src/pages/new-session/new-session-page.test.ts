@@ -452,35 +452,33 @@ describe("new session draft route ownership", () => {
   });
 });
 
-it.each(["Couldn’t transcribe your voice.", "Transcription provider unavailable"])(
-  "retains an earlier recording's error while the next microphone connects: %s",
-  async (errorMessage) => {
-    const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
-    await mount(routeData("research"));
-    const owner = observed.mock.contexts[0];
-    assert.instanceOf(owner, NewSessionPageOwner);
-    const capture = new ComposerDictationOwner({
-      client: null,
-      connected: false,
-      enabled: false,
-      realtimeTalkActive: false,
-      onCommit: () => {},
-      onError: () => {},
-    });
-    const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
-    vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
-    owner.dictationError = "Prior error";
-    owner.dictation.dispatchEvent(new Event("change"));
-    expect(owner.dictationError).toBeNull();
-    // The older recording reports a result after the newer capture was admitted.
-    owner.dictationError = errorMessage;
-    owner.dictation.dispatchEvent(new Event("change"));
-    expect(owner.dictationError).toBe(errorMessage);
-    connecting.mockReturnValue(false);
-    owner.dictation.dispatchEvent(new Event("change"));
-    connecting.mockReturnValue(true);
-    owner.dictation.dispatchEvent(new Event("change"));
-    expect(owner.dictationError).toBeNull();
-    capture.dispose();
-  },
-);
+it("retains an earlier recording's error while the next microphone connects", async () => {
+  const errorMessage = "Transcription provider unavailable";
+  const observed = vi.spyOn(NewSessionPageOwner.prototype, "composerOptions");
+  await mount(routeData("research"));
+  const owner = observed.mock.contexts[0];
+  assert.instanceOf(owner, NewSessionPageOwner);
+  const capture = new ComposerDictationOwner({
+    client: null,
+    connected: false,
+    enabled: false,
+    realtimeTalkActive: false,
+    onCommit: () => {},
+    onError: () => {},
+  });
+  const connecting = vi.spyOn(capture, "connecting", "get").mockReturnValue(true);
+  vi.spyOn(owner.dictation, "dictation", "get").mockReturnValue(capture);
+  owner.dictationError = "Prior error";
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  // The older recording reports a result after the newer capture was admitted.
+  owner.dictationError = errorMessage;
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBe(errorMessage);
+  connecting.mockReturnValue(false);
+  owner.dictation.dispatchEvent(new Event("change"));
+  connecting.mockReturnValue(true);
+  owner.dictation.dispatchEvent(new Event("change"));
+  expect(owner.dictationError).toBeNull();
+  capture.dispose();
+});

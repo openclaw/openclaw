@@ -824,6 +824,27 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectAppended());
   });
 
+  it("stops startup when the admitted session fails during the permission prompt", async () => {
+    const permission = createDeferred<ReturnType<typeof microphone>>();
+    getUserMedia.mockReturnValueOnce(permission.promise);
+    recordRequests();
+    const { controller, onError, target } = createHarness();
+    await startHold(target);
+    await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
+
+    emit({ type: "error", message: "Provider connection failed" });
+    await waitForFast(() =>
+      expect(onError).toHaveBeenCalledWith(
+        "Provider connection failed",
+        expect.objectContaining({ kind: "interrupted" }),
+      ),
+    );
+    permission.resolve(microphone());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(processors).toHaveLength(0);
+    expect(controller.active).toBe(false);
+  });
+
   it("reports busy without opening the microphone when no Gateway session is free", async () => {
     recordRequests(async () => {
       throw new GatewayProtocolRequestError({
