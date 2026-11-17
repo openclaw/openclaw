@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createBaselineFixture,
+  createIncomingBaselineFixture,
   reuseBaselineFixture,
   failRestore,
 } from "./pr-baseline-native.test-support.js";
@@ -186,11 +187,11 @@ const fixture = reuseBaselineFixture((root) => {
 const directFixture = reuseBaselineFixture((root) => createBaselineFixture(root, 1));
 
 const boundFixture = reuseBaselineFixture((root) => {
-  const f = createBaselineFixture(root, 1);
+  // Start the retained predecessor chain once, without discarded preparation evidence.
+  const f = createIncomingBaselineFixture(root, 1);
   const incomingReview = JSON.parse(f.readLocal("review.json").toString());
   incomingReview.findings[0].id = "R1";
   f.writeLocal("review.json", JSON.stringify(incomingReview));
-  f.prepGit("reset", "--hard", f.incoming);
   f.pass("prepare-correction-init");
   const original = f.snapshot(["pr-meta.json", "pr-meta.env", "review.json"]);
   const advance = (name: string) => {

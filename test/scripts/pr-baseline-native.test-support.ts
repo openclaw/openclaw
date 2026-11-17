@@ -125,7 +125,7 @@ export function signBaselineRequest(
 
 // This fixture owns a real canonical wrapper, registered PR checkout, signing key,
 // local Git remote, and credential-free GitHub adapter. No owner entry is mocked.
-export function createBaselineFixture(
+export function createIncomingBaselineFixture(
   root: string,
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
@@ -309,9 +309,6 @@ if (args[0] === 'api' && args[1] === 'user') {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     return result;
   };
-  pass("prepare-correction-init");
-  writeProduct(worktree, product, "corrected\n");
-  commit(worktree, "fix: fixture correction");
   const approve = () => {
     pass("prepare-correction-review-init");
     const file = local("correction-review.json");
@@ -323,7 +320,6 @@ if (args[0] === 'api' && args[1] === 'user') {
       "Verified the corrected fixture behavior.";
     writeFileSync(file, JSON.stringify(candidateReview));
   };
-  approve();
   const advanceMain = (label: string, changed = product) => {
     writeProduct(repo, changed, `${label}\n`);
     commit(repo, `test: ${label}`);
@@ -434,4 +430,19 @@ if (args[0] === 'api' && args[1] === 'user') {
     incoming,
     meta,
   };
+}
+
+export function createBaselineFixture(
+  root: string,
+  productCount = 16,
+  incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+) {
+  const fixture = createIncomingBaselineFixture(root, productCount, incomingSeverity);
+  fixture.pass("prepare-correction-init");
+  for (const path of fixture.product) {
+    writeFileSync(join(fixture.worktree, path), "corrected\n");
+  }
+  fixture.prepGit("commit", "-qam", "fix: fixture correction");
+  fixture.approve();
+  return fixture;
 }
