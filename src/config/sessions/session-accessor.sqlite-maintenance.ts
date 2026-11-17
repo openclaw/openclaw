@@ -1,12 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { captureRuntimeWorkerGenerationContext } from "../../infra/runtime-worker-generation.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import type { captureOpenClawDatabaseMaintenanceResource } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
@@ -25,6 +28,7 @@ import type {
 import {
   capturePendingSessionMaintenanceAgeChanges,
   type SessionEntryMaintenanceAgeChange,
+  type SessionEntryMaintenanceAgeFact,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   applySessionEntryMaintenanceInDatabase,
@@ -66,9 +70,33 @@ const SESSION_TRANSCRIPT_BYTE_QUERY_BATCH = MAX_SESSION_MAINTENANCE_BATCH_ENTRIE
 const SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES = MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
 const plannerMaintenanceByStore = new Map<string, Promise<void>>();
 
+export type SessionEntryMaintenanceState = {
+  activeSessionKeys: Set<string>;
+  ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
+  assertCurrent: () => void;
+  captureExecution: () => Promise<OpenClawAgentDatabaseExecution | undefined>;
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
+  runInRuntimeGeneration: ReturnType<typeof captureRuntimeWorkerGenerationContext>;
+  maintenanceResource?: ReturnType<typeof captureOpenClawDatabaseMaintenanceResource>;
+  execution?: OpenClawAgentDatabaseExecution;
+  active?: Promise<void>;
+  release?: Promise<void>;
+  retirement?: Promise<void>;
+  generation: number;
+  running: boolean;
+  ageFact?: SessionEntryMaintenanceAgeFact;
+  noCandidates?: boolean;
+  rejections: number;
+  retryDelayMs?: number;
+  immediate?: ReturnType<typeof setImmediate>;
+  timer?: ReturnType<typeof setTimeout>;
+  timerDeadlineMonotonicMs?: number;
+  unregisterClose?: () => void;
+};
+
 export function releaseSessionEntryMaintenanceExecution(
   databasePath: string,
-  owner: { execution?: OpenClawAgentDatabaseExecution; release?: Promise<void> },
+  owner: Pick<SessionEntryMaintenanceState, "execution" | "release">,
 ): void {
   if (!owner.execution) {
     return;
@@ -93,6 +121,8 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
   > & {
     ageChanges: Map<string, SessionEntryMaintenanceAgeChange>;
     assertCurrent: () => void;
+    retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   },
 ): Promise<
   Extract<SqliteSessionReclamationResult, { kind: "maintenance-age" | "maintenance-plan-stale" }>
@@ -101,6 +131,8 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
   const result = await runSqliteSessionReclamation({
     diagnostics: { kind: "maintenance-age" },
     assertCommitAllowed: params.assertCurrent,
+    retainedExecution: params.retainedExecution,
+    readCustody: params.readCustody,
     plan: {
       kind: "maintenance-age",
       databaseOptions: params.databaseOptions,
@@ -117,7 +149,11 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
 export async function refreshSqliteSessionPlannerStatisticsBestEffort(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
   deletedEntries: number,
-  options: { isCurrent?: () => boolean; retainedExecution?: OpenClawAgentDatabaseExecution } = {},
+  options: {
+    isCurrent?: () => boolean;
+    retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
+  } = {},
 ): Promise<void> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (deletedEntries < SESSION_PLANNER_ANALYSIS_MIN_DELETED_ENTRIES || !isCurrent()) {
@@ -149,6 +185,7 @@ export async function refreshSqliteSessionPlannerStatisticsBestEffort(
         resolveSessionReclamationDatabaseOptions(toDatabaseOptions(scope)),
         options.retainedExecution,
         assertCurrent,
+        options.readCustody,
       )
     : runSqliteSessionReclamation({
         diagnostics: { kind: "maintenance-statistics" },
@@ -405,6 +442,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     deletedEntriesBeforeMaintenance?: number;
     isCurrent?: () => boolean;
     retainedExecution?: OpenClawAgentDatabaseExecution;
+    readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
     publishArchives?: (
       requested: readonly SessionLifecycleArchivedTranscript[],
     ) => Promise<SessionLifecycleArchivedTranscript[]>;
@@ -537,7 +575,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent, retainedExecution: options.retainedExecution },
+      options,
     );
     return emptyResult();
   }
@@ -554,7 +592,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     await refreshSqliteSessionPlannerStatisticsBestEffort(
       scope,
       options.deletedEntriesBeforeMaintenance ?? 0,
-      { isCurrent, retainedExecution: options.retainedExecution },
+      options,
     );
     return emptyResult();
   }
@@ -617,6 +655,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
                 plan,
                 options.retainedExecution,
                 assertCommitAllowed,
+                options.readCustody,
               )
             : runSqliteSessionReclamation({
                 diagnostics: { kind: "maintenance-finalize" },
@@ -670,10 +709,7 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
     }
   }
   if (isCurrent()) {
-    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, {
-      isCurrent,
-      retainedExecution: options.retainedExecution,
-    });
+    await refreshSqliteSessionPlannerStatisticsBestEffort(scope, deletedEntries, options);
   }
   return { archivedTranscripts: publishedTranscripts, ...committedCounts };
 }

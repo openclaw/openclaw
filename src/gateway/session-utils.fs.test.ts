@@ -8,6 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
@@ -15,6 +16,7 @@ import {
   createArchiveSourceSnapshotFixture,
   createResetKeptTailTranscriptFixture,
 } from "./session-transcript-archive.test-support.js";
+import { resolveSessionTranscriptCandidatesAsync } from "./session-transcript-files.fs.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
@@ -221,30 +223,43 @@ describe("artifact usage", () => {
   }
   const usage = () => readLatestSessionUsageFromTranscriptFileAsync(id, storePath);
 
-  test("aggregates assistant usage asynchronously without readFileSync", async () => {
-    writeUsage([
-      assistant({
-        provider: "anthropic",
+  test.each(["generated", "relative", "absolute"])(
+    "aggregates assistant usage without synchronous filesystem calls (%s)",
+    async (mode) => {
+      writeUsage([
+        assistant({
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
+        }),
+        assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
+        assistant({ provider: "openclaw", model: "command" }),
+      ]);
+      using measured = observeMainThreadFs();
+      const sessionFile =
+        mode === "generated"
+          ? undefined
+          : mode === "relative"
+            ? `${id}.jsonl`
+            : path.join(tmpDir, `${id}.jsonl`);
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+        id,
+        storePath,
+        sessionFile,
+      );
+      expect(snapshot).toMatchObject({
+        modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
-        usage: { input: 1800, output: 400, cacheRead: 600, cost: { total: 0.0055 } },
-      }),
-      assistant({ usage: { input: 2400, output: 250, cacheRead: 900, cost: { total: 0.006 } } }),
-      assistant({ provider: "openclaw", model: "command" }),
-    ]);
-    const readFile = vi.spyOn(fs, "readFileSync");
-    const snapshot = await usage();
-    expect(snapshot).toMatchObject({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      inputTokens: 4200,
-      outputTokens: 650,
-      cacheRead: 1500,
-      totalTokens: 3550,
-      totalTokensFresh: true,
-    });
-    expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
-    expect(readFile).not.toHaveBeenCalled();
-  });
+        inputTokens: 4200,
+        outputTokens: 650,
+        cacheRead: 1500,
+        totalTokens: 3550,
+        totalTokensFresh: true,
+      });
+      expect(snapshot?.costUsd).toBeCloseTo(0.0115, 8);
+      expect(measured.stacks()).toEqual([]);
+    },
+  );
 
   test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
     "retains a meaningful zero-cost artifact snapshot without a %s model identity",
@@ -309,12 +324,18 @@ describe("artifact usage", () => {
 });
 
 describe("transcript path safety", () => {
-  test("drops unsafe session IDs instead of producing traversal paths", () => {
+  test("drops unsafe session IDs instead of producing traversal paths", async () => {
     expect(resolveSessionTranscriptCandidates("../etc/passwd", storePath)).toStrictEqual([]);
+    await expect(
+      resolveSessionTranscriptCandidatesAsync("../etc/passwd", storePath),
+    ).resolves.toStrictEqual([]);
   });
 
-  test("drops unsafe sessionFile candidates and keeps safe fallbacks", () => {
+  test("drops unsafe sessionFile candidates and keeps safe fallbacks", async () => {
     const candidates = resolveSessionTranscriptCandidates("safe", storePath, "../../etc/passwd");
+    await expect(
+      resolveSessionTranscriptCandidatesAsync("safe", storePath, "../../etc/passwd"),
+    ).resolves.toStrictEqual(candidates);
     expect(candidates.every((candidate) => !candidate.includes("etc/passwd"))).toBe(true);
     expect(candidates.map((candidate) => path.resolve(candidate))).toContain(
       path.join(tmpDir, "safe.jsonl"),

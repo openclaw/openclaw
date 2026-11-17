@@ -2,7 +2,10 @@ import fs from "node:fs";
 import { MessageChannel } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
+import { RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS } from "../../gateway-shutdown-budget.mjs";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import { hasErrnoCode } from "./errno.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import {
@@ -68,6 +71,12 @@ export function startGatewayStateOwnerHeartbeat(
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(url),
     });
+    const closed = createDeferredCore();
+    worker.on("message", (message: unknown) => {
+      if (message === "closed") {
+        closed.resolve();
+      }
+    });
     worker.unref();
     let nextVerification = 0;
     const pending = new Map<
@@ -107,9 +116,10 @@ export function startGatewayStateOwnerHeartbeat(
       rejectPending(error);
       onLost(error);
     });
-    worker.once("exit", () =>
-      rejectPending(new Error("Gateway state ownership verification worker stopped")),
-    );
+    worker.once("exit", () => {
+      closed.resolve();
+      rejectPending(new Error("Gateway state ownership verification worker stopped"));
+    });
     let termination: Promise<number> | undefined;
     const remainingUntilInspection = () => {
       const renewedAt = Atomics.load(lastBeat, 0);
@@ -214,8 +224,18 @@ export function startGatewayStateOwnerHeartbeat(
         clearTimeout(timer);
         rejectPending(new Error("Gateway state ownership is no longer current"));
         port1.close();
+        worker.ref();
         worker.postMessage("stop", []);
-        termination = worker.terminate();
+        termination = (async () => {
+          if (!(await settlesWithin(closed.promise, RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS))) {
+            // A stuck worker may leak its lock fds on runtimes without an exit sweep.
+            process.emitWarning(
+              `Gateway state-owner heartbeat did not close within ${RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS}ms; forcing termination. Lock file descriptors may remain open until process exit.`,
+              { code: "GATEWAY_STATE_HEARTBEAT_CLOSE_TIMEOUT" },
+            );
+          }
+          return worker.terminate();
+        })();
       }
       return Promise.all([termination, renewal]).then(() => undefined);
     };

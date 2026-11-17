@@ -1,5 +1,5 @@
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
-import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
+import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -10,6 +10,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasAcceptedSessionSpawn,
@@ -123,7 +124,7 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
-  let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -135,10 +136,9 @@ async function runCliAgentInternal(
     const target = params.sessionTarget;
     generation =
       target && !params.sessionManager && !params.isolatedCompletion
-        ? await prepareCronRootSessionGeneration(
+        ? await acquireCronRootTranscriptLease(
+            chatRef({ ...target, sessionKey: params.sessionKey ?? target.sessionKey }),
             {
-              ...target,
-              sessionKey: params.sessionKey ?? target.sessionKey,
               sessionId: params.sessionId,
               lifecycleRevision:
                 params.expectedLifecycleRevision ?? params.sessionEntry?.lifecycleRevision,

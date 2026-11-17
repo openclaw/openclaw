@@ -283,6 +283,62 @@ suite.define(() => {
     await expectDraft(composingDraft, 1);
   });
 
+  it("stops the run with Escape outside the composer after menus take theirs", async () => {
+    const { page, gateway, pane, composer, button } = await quotedChat(
+      "user",
+      "Earlier message.",
+      "escape-outside-source",
+    );
+    await composer.fill("Keep this run active.");
+    await button("Send message").click();
+    const sendParams = requireRecord((await gateway.waitForRequest("chat.send")).params);
+    const runId = requireString(sendParams.idempotencyKey, "active run");
+    const stop = button("Stop");
+    await stop.waitFor({ state: "visible" });
+
+    // An open menu owns Escape; closing it leaves the run alone.
+    await pane
+      .locator('.chat-bubble[data-entry-id="escape-outside-source"]')
+      .click({ button: "right" });
+    const menu = page.locator(".chat-reply-context-menu");
+    await menu.waitFor({ state: "visible" });
+    // The menu installs its document keyboard listener on the next frame.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
+    );
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    await expectRequestCountStable(gateway, "chat.abort", 0);
+    expect(await stop.isVisible()).toBe(true);
+
+    // Focus in the transcript, or on the page after a reload, still stops the run.
+    await pane.locator(".chat-thread").focus();
+    await page.keyboard.press("Escape");
+    const abort = await gateway.waitForRequest("chat.abort");
+    expect(requireRecord(abort.params)).toEqual({
+      sessionKey: defaultSessionKey,
+      runId,
+      userInitiated: true,
+    });
+    await stop.waitFor({ state: "detached" });
+  });
+
+  it("stops the run with Escape when focus is on the page", async () => {
+    const { page, gateway, composer, button } = await openChat();
+    await composer.fill("Keep this run active.");
+    await composer.press("Enter");
+    await gateway.waitForRequest("chat.send");
+    await button("Stop").waitFor({ state: "visible" });
+    await composer.evaluate((element) => element.blur());
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await page.keyboard.press("Escape");
+    await gateway.waitForRequest("chat.abort");
+    await button("Stop").waitFor({ state: "detached" });
+  });
+
   it.each(["queue", "steer", "collect"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {

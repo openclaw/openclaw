@@ -80,6 +80,12 @@ Key/value environment overrides merged on top of the inherited environment.
 Return a running process handle after this delay (ms), at most 120000; larger values are capped and the running result says so. On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
+<ParamField path="awaitResults" type="boolean" default="false">
+Keep the tool call open until the command exits and its terminal result is collected. Use this for bounded tests and builds whose result is needed before continuing, including headless coding runs, instead of a short `yieldMs` followed by polling. It takes precedence over `yieldMs`; Stop and process deadlines still apply. Cannot be combined with `background: true` or `durable: true`.
+
+In [Code Mode](/tools/code-mode/tool-surface#required-results), set `awaitResults: true` on the outer cell to collect ordinary nested shell commands without model polling. Explicit `background: true` commands remain detached.
+</ParamField>
+
 <ParamField path="background" type="boolean" default="false">
 Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
@@ -161,17 +167,22 @@ Notes:
 - Capable nodes receive channel/subagent routing context separately from custom environment overrides and inject the fixed markers themselves. See [node execution context](/nodes/node-exec#channel-and-subagent-context) for capability negotiation and mixed-version behavior.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` requests are still rejected instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
-- Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
+- Exec does not read or lint script files. Python and Node report their own errors. When a shell chain, pipeline or wrapper starts a Python or Node program from a file or stdin, the command text does not show which program runs. On the Gateway host, approval policy treats such a command as an allowlist miss where it asks (`security=allowlist` with `ask=on-miss`), when it can bind the command for approval. With `security=full`, with `ask=off`, or in a sandbox, the command runs. This fact never refuses a command.
 - For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
-- When the command's exit will start a turn in this conversation, the running result says so and tells the agent to end the turn if only waiting remains, instead of polling or starting another command that waits for the same result. With `tools.exec.notifyOnExitEmptySuccess=false`, the wake needs output or a failure, so that advice applies only when the command prints its result; a command that may succeed silently is still collected with `process poll`. An idle `process poll` of such a command repeats the guidance. The running result also lists the other background commands still running in the same conversation, because the turn-start snapshot does not show commands started later in the same turn.
+- When the command's exit will start a turn in this conversation, the running result says so, shows the deadline (`times out in 29m59s`) and tells the agent to end the turn if only waiting remains, instead of polling or starting another command for the same result. Every exit wakes the conversation, including a success with no output. To wait for a condition or a time, the agent runs one command that loops until it holds, exits non-zero on failure states and prints the result. To wait on a change it caused, it pins the expected state, for example the exact commit it pushed, and exits non-zero if that state moved. An idle `process poll` of such a command repeats the guidance. The running result also lists the other background commands still running in the same conversation, because the turn-start snapshot does not show commands started later in the same turn.
+- The exit wake carries the exit code, the duration and the last 2,000 characters of output, so the woken turn does not need `process log`. When the output is longer, the wake ends with `Full output: <path> (<N> bytes)`. Read only the part you need from that file with `read`.
+- Gateway-host commands write all stdout and stderr, in arrival order, to an owner-only file in the OS temp directory while they run. The file has a hard limit of 64 MiB; later output is discarded and the wake says so. OpenClaw keeps the file only when a result or wake omits some of its output. The file survives a Gateway restart and the OS temp-directory cleanup removes it, the same as `web_fetch` spill files. A foreground result that lost output at the in-memory retention cap names the same file.
+- Sandbox, node and durable commands keep no such file, because a sandboxed `read` cannot reach host temp files and a node runs on another machine. Their wake says how much output was omitted, and `process log` has the rest up to the retention cap. With `tools.fs.workspaceOnly`, `read` cannot reach the temp directory either; use `exec` to read the file.
+- With `tools.exec.notifyOnExitEmptySuccess=false`, a silent success does not wake the conversation. The running result then gives manual-collection guidance, because only output or a failure would wake it.
 
-- When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
+- When `tools.exec.notifyOnExit=false`, a running result gives manual-collection guidance in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
 - Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
-- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Their running and `process` results give manual-collection guidance instead of a wake promise. Collect the result with `process poll` before yielding without another completion source.
+- Hidden subagent runs and isolated cron runs are one-shot: their final reply is the result, so ending the turn does not wait for a background command. Their running result tells the agent to call `sessions_yield` if only waiting remains. `sessions_yield` then awaits the wake-armed commands that this run started, and the first exit resumes the same run with the same wake content (exit code, duration, last 2,000 characters). A hidden subagent resumes as its original task, so its final result still goes to its requester. A cron run continues in place, and the resumed turn's reply is the run's result. The command's `timeoutSeconds` bounds the wait, because a timeout also ends the command and resumes the run. A command with `timeoutSeconds: 0` has no deadline, so its running result gives manual-collection guidance instead. Visible spawned sessions are woken like other sessions.
+- Without `sessions_yield`, a hidden subagent that ends its turn gets the exit only as a passive notice in its next turn, and a cron run that has ended gets no completion turn. A cron job with delivery `none` suppresses exec completion, so its commands keep manual-collection guidance.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
-- For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
+- A one-time wait inside the current conversation (CI, a deploy, a short delay) is one background command. When its running result says the exit wakes the conversation, the agent ends the turn; otherwise it collects the result with `process poll`. Saved reminders, recurring work and follow-ups from another session use [automations](/automation/cron-jobs).
 
 ## Config
 
@@ -360,10 +371,16 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Ordinary work that yields a handle, then poll:
+Bounded tests or builds needed before continuing:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
+{ "tool": "exec", "command": "npm run build", "awaitResults": true, "timeoutSeconds": 120 }
+```
+
+If ordinary work returns a running handle, collect that handle instead of restarting the command:
+
+```json
+{"tool":"exec","command":"npm run build"}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

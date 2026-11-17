@@ -90,7 +90,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps blocked palette readiness out of creation errors", async () => {
+  it("explains blocked palette readiness and clears it before creation", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
@@ -101,13 +101,18 @@ suite.define(() => {
       await input.press("Tab");
       await input.fill("Keep preparation out of errors");
       const start = palette.locator(".cmd-palette__create");
+      const notice = palette.locator(".cmd-palette__creation-error");
       expect(await start.isDisabled()).toBe(true);
-      expect(await palette.locator(".cmd-palette__creation-error").count()).toBe(0);
+      expect(await notice.count()).toBe(0);
       await input.press("ControlOrMeta+Enter");
-      expect(await palette.locator(".cmd-palette__creation-error").count()).toBe(0);
+      await expect.poll(() => notice.textContent()).toBe("Refreshing agent defaults…");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await input.inputValue()).toBe("Keep preparation out of errors");
       await gateway.resolveDeferred("agents.list");
       await palette.locator(".cmd-palette__create:not(:disabled)").waitFor();
+      expect(await notice.count()).toBe(0);
+      expect(await input.inputValue()).toBe("Keep preparation out of errors");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await start.click();
       await gateway.waitForRequest("sessions.create");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);

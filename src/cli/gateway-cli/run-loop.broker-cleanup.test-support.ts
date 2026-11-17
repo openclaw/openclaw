@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { writeSync } from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
@@ -28,7 +28,7 @@ trace("service-child-cleanup-deadline");
 // omit unrelated core services, as in server.spawn-broker.test.ts.
 const serverUrl = pathToFileURL(path.resolve("src/gateway/server.ts")).href;
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-const hooks = registerHooks({
+const hooks = nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL === serverUrl && specifier === "./server-start.js") {
       return {

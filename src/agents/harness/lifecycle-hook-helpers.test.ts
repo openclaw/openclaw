@@ -116,7 +116,7 @@ describe("agent harness lifecycle hook helpers", () => {
     },
   );
 
-  it("admits agent_end handlers inside the turn's plugin scope when evidence loads late", async () => {
+  it("runs agent_end handlers after the turn's plugin scope is released", async () => {
     const plugin = createOwnedTestInstance("agent-end-probe");
     const scope = new PluginInvocationScope(plugin.owner!.registry!, [plugin], { retained: true });
     const outcomes: unknown[] = [];
@@ -142,7 +142,8 @@ describe("agent harness lifecycle hook helpers", () => {
     try {
       await scope.run(() => runAgentEndSideEffectsAsync({ event, ctx, hookRunner }));
     } finally {
-      // The foreground turn releases its prepared plugin scope once finalization returns.
+      // The foreground turn releases its prepared plugin scope once finalization returns;
+      // the late handler then takes ordinary counted admission on its live instance.
       scope.release();
     }
     await vi.waitFor(() => expect(outcomes).toHaveLength(1));

@@ -940,7 +940,6 @@ describe("mcp loopback server", () => {
       turnSourceAccountId: "bound-account",
       turnSourceThreadId: "bound-thread",
     });
-    expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
     expect(toolCallerIdentity).toMatchObject({
       agentId: "main",
       sessionKey: boundContext.sessionKey,

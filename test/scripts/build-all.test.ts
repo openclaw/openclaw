@@ -777,6 +777,13 @@ describe("resolveBuildAllSteps", () => {
         OPENCLAW_DEV_SOURCE_ROOT:
           env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? process.cwd() : "/serving-checkout",
       });
+      // The updater's marker must reach the limit checker so size budgets stay advisory.
+      const exportCheck = invocations.find((call) =>
+        call.args.includes("scripts/check-plugin-sdk-exports.mts"),
+      );
+      expect(exportCheck?.options.env.OPENCLAW_UPDATE_IN_PROGRESS).toBe(
+        env.OPENCLAW_UPDATE_IN_PROGRESS,
+      );
       expect(env).toEqual(originalEnv);
     },
   );

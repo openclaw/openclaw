@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { listRunningSessions } from "../agents/bash-process-registry.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   resolveSessionYieldWait,
@@ -38,11 +37,7 @@ import {
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import {
-  GatewayDrainingError,
-  isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkAdmission,
-} from "../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
@@ -60,6 +55,7 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
@@ -73,12 +69,13 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import {
+  captureSessionRestartOperatorSource,
+  prepareSessionSystemTurnAuthority,
+} from "./session-system-turn-authority.js";
 
 const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
-const BACKGROUND_EXEC_STOPPED_TEXT =
-  "Background exec processes were stopped; rerun them if still needed.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
 // to six hours before process start; longer stops lose this one-time upgrade resume.
 // Remove this bridge once stable includes the graceful-restart redesign (#185730).
@@ -89,9 +86,9 @@ type SessionIdentity = {
   sessionKey: string;
   storePath: string;
   sessionId?: string;
-  hadBackgroundExec?: true;
   needsResume: boolean;
   parked?: boolean;
+  operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
 };
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
@@ -147,13 +144,15 @@ async function persistRunningSessions(
         storePath,
         sessionKey: root.sessionKey,
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
-        hadBackgroundExec: input.hadBackgroundExec,
         needsResume: input.needsResume !== false,
         parked: input.parked,
+        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
       });
     } else {
       existing.needsResume ||= !input.parked && input.needsResume !== false;
-      existing.hadBackgroundExec ||= input.hadBackgroundExec;
+      if (root.sessionKey === input.sessionKey && input.operatorSource) {
+        existing.operatorSource = input.operatorSource;
+      }
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -174,6 +173,7 @@ async function persistRunningSessions(
       agentId: operation.agentId,
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
+      operatorSource: captureSessionRestartOperatorSource(operation),
       // Completed replies can retain execution custody only to settle workspace uploads.
       needsResume:
         (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
@@ -194,12 +194,6 @@ async function persistRunningSessions(
   }
   for (const root of listLiveSubagentRootSessions()) {
     add(root);
-  }
-  for (const process of listRunningSessions()) {
-    const sessionKey = process.sessionKey ?? process.scopeKey;
-    if (sessionKey) {
-      add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
-    }
   }
   for (const session of listYieldWaitingSessions()) {
     add(session);
@@ -264,7 +258,8 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
-                  ...(session.hadBackgroundExec ? { hadBackgroundExec: true } : {}),
+                  operatorSource:
+                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 },
               },
             });
@@ -451,12 +446,10 @@ async function resumeRestartStore(
   { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
 ): Promise<boolean> {
   let completed = true;
-  const assertRecoveryCurrent = () => {
-    signal.throwIfAborted();
-    if (isGatewayRestartDraining()) {
-      throw new GatewayDrainingError();
-    }
-  };
+  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
+    { context, signal, log },
+    { target, entries },
+  );
   const summary = createRestartResumeSummary("startup");
   const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
@@ -614,6 +607,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
+              operatorSource: marker.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";
@@ -659,18 +653,13 @@ async function resumeRestartStore(
             const receipt = withPluginRuntimeGatewayContextResolver(
               context.resolveGatewayContext,
               () =>
-                enqueueSessionEventForHost(
-                  marker.hadBackgroundExec
-                    ? `${GATEWAY_RESTART_RESUME_TEXT} ${BACKGROUND_EXEC_STOPPED_TEXT}`
-                    : GATEWAY_RESTART_RESUME_TEXT,
-                  {
-                    agentId,
-                    sessionKey,
-                    source: "restart",
-                    expectedTarget: captured,
-                    abortSignal: signal,
-                  },
-                ),
+                enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
+                  agentId,
+                  sessionKey,
+                  source: "restart",
+                  expectedTarget: captured,
+                  abortSignal: signal,
+                }),
             );
             const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
             authority = undefined;
@@ -726,5 +715,7 @@ async function resumeRestartStore(
   } finally {
     summary.publish();
   }
+  // Admit restart inputs before recovered completion notices can start a turn.
+  resume();
   return completed;
 }

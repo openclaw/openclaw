@@ -65,6 +65,7 @@ const SPAWN_OPERATIONS = {
   "github.profile-token": "github.identity",
   "github.profile-stage": "github.identity",
   "github.profile-refresh": "github.identity",
+  "checkout.bootstrap-workspace": "repository.identities",
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
   "checkout.revision": "checkout.revision",
@@ -96,6 +97,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.equal": "workspace.manifest",
   "workspace.manifest.snapshot": "workspace.manifest",
   "workspace.manifest.document": "workspace.manifest",
+  "workspace.manifest.initial": "workspace.manifest",
   "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
@@ -113,6 +115,10 @@ const SPAWN_OPERATIONS = {
   "workspace.reconcile.preflight": "workspace.manifest",
   "workspace.reconcile.patch": "workspace.manifest",
   "workspace.reconcile.diff": "workspace.manifest",
+  "workspace.reconcile.ownership": "workspace.manifest",
+  "workspace.reconcile.apply": "workspace.manifest",
+  "workspace.reconcile.recover": "workspace.manifest",
+  "workspace.reconcile.temporary": "workspace.manifest",
 } satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
 function runtime(): GitWorkerRuntime {
@@ -195,6 +201,7 @@ export type GitWorkerOperationOptions = {
   transferList?: (command: GitWorkerCommand) => readonly Transferable[];
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  onNotification?: () => boolean;
   /** Host-owned Git policy; the broker still owns authority and process settlement. */
   git?: {
     text: typeof runGitBytes;
@@ -230,11 +237,13 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
   const admitted = transferList
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
-  const baseEnv = command.type.startsWith("github.profile-") ? {} : { ...process.env };
+  const filesystemOnly =
+    admitted.type.startsWith("github.profile-") || admitted.type === "checkout.bootstrap-workspace";
+  const baseEnv = filesystemOnly ? {} : { ...process.env };
   // Pooled workers do not inherit later environment changes. Git discovery
   // overrides must disable direct metadata reads for this admission too.
   admitted.filesystemRefs =
-    !command.type.startsWith("github.profile-") &&
+    !filesystemOnly &&
     options.git === undefined &&
     !Object.entries(baseEnv).some(
       ([key, value]) =>
@@ -516,7 +525,7 @@ async function executeOperation(
       transferList: options.transferList,
       signal: options.signal,
       timeoutMs: WORKER_PHASE_TIMEOUT_MS,
-      onNotification: authority?.onNotification,
+      onNotification: authority?.onNotification ?? options.onNotification,
       // Host exchanges retain the command's own deadline and process-tree cleanup.
       onRequest: (value, context) => {
         if (firstHostRequest) {

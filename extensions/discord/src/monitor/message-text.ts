@@ -1,5 +1,6 @@
 import { ComponentType } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import type { Message } from "../internal/discord.js";
 import {
   formatDiscordSnapshotAuthor,
@@ -86,12 +87,14 @@ function resolveDiscordMentions(text: string, message: Message): string {
   if (!Array.isArray(mentions) || mentions.length === 0) {
     return text;
   }
-  let out = text;
-  for (const user of mentions) {
-    const label = user.globalName || user.username || user.id;
-    out = out.replace(new RegExp(`<@!?${user.id}>`, "g"), () => `@${label}`);
-  }
-  return out;
+  const codeRegions = findCodeRegions(text);
+  return text.replace(/<@!?(\d+)>/g, (mention: string, id: string, offset: number) => {
+    if (isInsideCode(offset, codeRegions)) {
+      return mention;
+    }
+    const user = mentions.find((mentionedUser) => mentionedUser.id === id);
+    return user ? `@${user.globalName || user.username || user.id}` : mention;
+  });
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {

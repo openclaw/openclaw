@@ -849,11 +849,9 @@ try {
       if (!withDependencyCacheLock(cache, use)) {
         const stage = withDependencyCacheLock(cache, lock => stageDependencyCache(lock, entry, anchor));
         try {
-          const archive = join(stage, ".pr-source.tar");
-          git(canonical, ["archive", "--format=tar", `--output=${archive}`, revision]);
-          execFileSync("tar", ["-xf", archive, "-C", stage]);
-          rmSync(archive);
-          // Verify archive bytes, including symlinks, before any package lifecycle runs.
+          execFileSync("python3", ["-I", "-B", join(dirname(lifetime), "export-tree.py"),
+            gitBinary, canonical, revision, stage], { stdio: "inherit" });
+          // Verify exported bytes, including symlinks, before any package lifecycle runs.
           const sourcePaths = new Set();
           for (const row of sourceRows) {
             const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([^\0]+)$/.exec(row);
@@ -965,7 +963,7 @@ try {
     // Resolve the inventory in one tree walk, rather than walking from the
     // commit root again for each of the thousands of revision:path queries.
     const wanted = new Set(paths), hashes = new Map();
-    const listing = git(repository, ["ls-tree", "-r", "-t", "-z", "--full-tree", revision]);
+    const listing = git(repository, ["--literal-pathspecs", "ls-tree", "-r", "-t", "-z", "--full-tree", revision, "--", ...paths]);
     for (const row of listing.toString("utf8").split("\0")) {
       const tab = row.indexOf("\t"), name = row.slice(tab + 1);
       if (wanted.has(name)) hashes.set(name, row.slice(0, tab).split(" ")[2]);
@@ -1228,7 +1226,7 @@ pr_verify_bootstrap() {
   IFS=$'\t' read -r revision record <<< "$selection"
   [ -z "$pr_bootstrap_revision" ] || [ "$revision" = "$pr_bootstrap_revision" ] || return 1
   pr_batch_wrapper_git verify "$canonical_repo_root" "$revision" "$pr_bootstrap_root" \
-    "${pr_bootstrap_components[@]}" || return 1
+    "${pr_bootstrap_components[@]}" scripts/pr-lib/export-tree.py || return 1
   pr_bootstrap_revision="$revision"
 }
 
@@ -1246,15 +1244,19 @@ pr_prepare_bootstrap() {
     IFS=$'\t' read -r revision record <<< "$selection"
     pr_batch_wrapper_git bootstrap-owner "$canonical_repo_root" "$anchor" "$$" || return 1
     mkdir -m 700 "$pr_bootstrap_root" || return 1
-    # Fixed component paths never use the caller's inventory. A missing new
-    # helper on trusted main refuses before any import; verification rejects links.
-    if ! pr_git -C "$canonical_repo_root" archive "$revision" -- \
-      "${pr_bootstrap_components[@]}" > "$pr_bootstrap_root/source.tar" ||
-      ! tar -xf "$pr_bootstrap_root/source.tar" -C "$pr_bootstrap_root"; then
+    # Qualify the standalone exporter before loading any extracted helper.
+    mkdir -p "$pr_bootstrap_root/scripts/pr-lib" || return 1
+    if ! pr_git -C "$canonical_repo_root" show "$revision:scripts/pr-lib/export-tree.py" > "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" ||
+      ! pr_batch_wrapper_git verify "$canonical_repo_root" "$revision" "$pr_bootstrap_root" scripts/pr-lib/export-tree.py; then
+      echo "Bootstrap helper qualification failed; retaining $anchor." >&2
+      return 1
+    fi
+    # Fixed component paths never use the caller's inventory.
+    if ! python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" "$GIT_EXEC" "$canonical_repo_root" "$revision" \
+        "$pr_bootstrap_root" "${pr_bootstrap_components[@]}"; then
       echo "Bootstrap closure unavailable; retaining $anchor without executing caller helpers." >&2
       return 1
     fi
-    rm "$pr_bootstrap_root/source.tar"
     printf '%s' "$record" > "$pr_bootstrap_root/source.json" || return 1
     chmod 400 "$pr_bootstrap_root/source.json" || return 1
     pr_bootstrap_revision="$revision"
@@ -1459,9 +1461,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # the fetched ref itself, so a queued PR stops paying a rebase + CI lap
         # for unrelated wrapper drift on main. Requires the anchor entrypoint
         # to understand the handoff; older anchors fall through to the refusal.
-        # Archive emits paths relative to its cwd, so run it (and the
-        # verification listing) from the worktree toplevel to keep component
-        # paths intact in the materialized tree.
+        # Resolve exports and verification from the worktree toplevel.
         anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor-v3.$$.XXXXXX" 2>/dev/null); then
@@ -1487,14 +1487,10 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
           pr_batch_wrapper_git bootstrap-disjoint "$anchor_git_root" "$anchor_commit" \
             "${anchor_components[@]}" || exit 1
           anchor_extraction_valid=0
-          # BSD tar can stop at the end marker before Git finishes writing padding,
-          # causing SIGPIPE under pipefail. Require producer completion before reading.
-          if pr_git -C "$anchor_git_root" archive "$anchor_commit" -- \
-            "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" 2>/dev/null &&
-            tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir" 2>/dev/null; then
-            rm "$anchor_exec_dir/anchor.tar"
+          if python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" "$GIT_EXEC" \
+            "$anchor_git_root" "$anchor_commit" "$anchor_exec_dir" "${anchor_components[@]}"; then
             # Verify every extracted file byte-matches its anchor blob so an
-            # archive/extract fault can never smuggle different code past the
+            # export fault can never smuggle different code past the
             # trust boundary. The temp dir is 0700 and exec'd immediately —
             # the same TOCTOU class as the canonical-substitution exec above.
             if pr_batch_wrapper_git verify "$anchor_git_root" "$anchor_commit" \
@@ -1502,7 +1498,7 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
               anchor_extraction_valid=1
             fi
           fi
-          # A selected archive must not replace the separately authenticated
+          # A selected export must not replace the separately authenticated
           # parent closure, including on a partial/failed extraction.
           pr_verify_bootstrap || { echo "Bootstrap changed during selected extraction; retaining $anchor_exec_dir." >&2; exit 1; }
           if [ "$anchor_extraction_valid" = "1" ] &&

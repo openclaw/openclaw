@@ -715,8 +715,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
             if (
               !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
               !(await eagerLifecycleRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
-              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
-              !eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+              !(await eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)) ||
+              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner)
             ) {
               throw new Error("managed update helper lost exact ownership during service parking");
             }

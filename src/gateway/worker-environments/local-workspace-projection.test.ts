@@ -412,7 +412,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const capture = vi.spyOn(manifests, "captureInitialLocalWorkspaceManifest");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -609,7 +609,7 @@ it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
 it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
@@ -882,10 +882,10 @@ it("reports successful native eviction and restores accepted workspace contents"
   const authored = "accepted guest edit before native eviction\n";
   await writeText(projection, "source.txt", authored);
   await synchronize();
-  const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+  const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
   const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
   await expect(
-    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+    withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
       evictManagedWorktree({
         env: process.env,
         record: owner.worktree,

@@ -101,6 +101,17 @@ of this skill; initial generation must never overwrite them.
      --write-ledger
    ```
 
+   For a read-only historical audit, add `--source-ref <tag-or-sha>` to select
+   the immutable initial notes through the shared release-changelog resolver.
+   It resolves the supplied ref once and records the exact commit, entry and
+   record paths in `changelogSource` in the manifest and JSON result. The default
+   remains working-tree notes; `--target` alone does not select notes. A selected
+   docs mirror still fails the initial-format guard. `--source-ref` cannot be
+   combined with `--write-ledger`, and manifest/snapshot outputs cannot alias
+   source artifact paths. This produces an accounting proposal, not approval of
+   final counts, editorial content or credits; never initialize or copy notes
+   to manufacture a historical source.
+
    For beta generation, use `--version YYYY.M.PATCH-beta.N` and omit `--base`
    on the first inventory run. Start an exact-version section with Highlights,
    Changes and Fixes using the shared writer; generate the delta manifest, then
@@ -120,6 +131,33 @@ of this skill; initial generation must never overwrite them.
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
    <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
+   Historical issue recovery ([incident and contract: PR #199961](https://github.com/openclaw/openclaw/pull/199961)):
+   unavailable historical issues may be recovered only with explicit
+   `--historical-issue-snapshot <path>` and
+   `--historical-issue-snapshot-sha256 <sha256>` inputs. Supply the original,
+   immutable canonical snapshot and its independently retained digest, never a
+   retargeted snapshot. This evidence reader is separate from exact-range live
+   caching; output paths must not alias its input. The repository must match,
+   and the original historical range must be contained in the current range.
+   Cumulative releases may use the uniquely matching committed historical
+   contribution record; its original audited base and target remain unchanged.
+   Recovery requires exact issue-specific GitHub `NOT_FOUND`, a historical human
+   reporter with complete, unique reciprocal closing-PR evidence, and a committed
+   contribution row preserving that issue and reporter. The row's exact audited
+   range must cover the included PR's merge or one unambiguous release adaptation
+   with the exact merge-title suffix and either `Source commit: <full-sha>` plus
+   same-repository `Source PR: https://github.com/openclaw/openclaw/pull/<number>`
+   markers, or one standard `(cherry picked from commit <full-sha>)` trailer.
+   Conflicting origin markers are rejected.
+   The PR must still resolve with the same author, merge SHA, and merge time;
+   its live closing-issue edge may have disappeared with issue visibility.
+   Partial historical connections, conflicting identities/relationships,
+   unrelated missing references, and authentication/rate/transport errors fail
+   closed. Current matching issue data wins without historical replacement.
+   Recovered issues appear in the manifest and verification result as
+   `recoveredIssues` with historical identity, snapshot digest/range, ledger
+   target, canonical PR/merge, and covered release commit. Their retained reporter
+   credit stays bound to that PR, never presented as newly verified authorship.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
    fails and a live same-repository Actions lookup confirms the exact run ID.

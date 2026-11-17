@@ -81,7 +81,6 @@ async function createTarget() {
     commitBackgroundResultToSession({
       agentId: "main",
       sessionKey,
-      expectedGeneration: generation,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -669,50 +668,41 @@ it("does not commit when cancelled during display preparation", async () => {
   expect(await loadTranscriptEvents(target.scope)).toEqual([]);
 });
 
-it.each<[string, Partial<SessionEntry>, string]>([
-  ["archived conversation", { archivedAt: 2 }, "archived"],
-  ["session-id replacement", { sessionId: "replacement-session" }, "session rebound"],
-  [
-    "same-id lifecycle replacement",
-    { lifecycleRevision: "replacement-revision" },
-    "session rebound",
-  ],
-])("refuses %s", async (_, replacement, reason) => {
+it("refuses an archived conversation", async () => {
   const target = await createTarget();
-  await target.replace(replacement);
+  await target.replace({ archivedAt: 2 });
 
   await expect(target.commit()).resolves.toMatchObject({
     ok: false,
-    reason: expect.stringContaining(reason),
+    reason: expect.stringContaining("archived"),
   });
 
-  await expect(
-    loadTranscriptEvents({
-      ...target.scope,
-      sessionId: replacement.sessionId ?? target.sessionId,
-    }),
-  ).resolves.toEqual([]);
+  await expect(loadTranscriptEvents(target.scope)).resolves.toEqual([]);
 });
 
-it("treats a missing lifecycle revision as exact generation state", async () => {
+it("follows a message edit to the conversation's current transcript", async () => {
   const target = await createTarget();
-  const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };
-  await target.replace({ lifecycleRevision: undefined });
+  // Rewind and branch switch rotate the transcript id inside the same incarnation.
+  await target.replace({ sessionId: "edited-session" });
+
+  await expect(target.commit()).resolves.toMatchObject({ ok: true });
+
+  expect(await loadTranscriptEvents(target.scope)).toEqual([]);
+  expect(
+    (await loadTranscriptEvents({ ...target.scope, sessionId: "edited-session" })).map(
+      (event) => (event as { message?: { model?: string } }).message?.model,
+    ),
+  ).toContain(automationResult.model);
+});
+
+it("follows the conversation key through a reset", async () => {
+  const target = await createTarget();
+  await target.replace({ lifecycleRevision: "reset-revision" });
 
   await expect(
     target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:4000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:4000" },
+      idempotencyKey: "cron-current-completion:cron:job-key:5000",
+      provenance: { kind: "cron", jobId: "job-key", runId: "cron:job-key:5000" },
     }),
   ).resolves.toMatchObject({ ok: true });
-
-  await target.replace({ lifecycleRevision: "materialized-revision", updatedAt: 3 });
-  await expect(
-    target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:5000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:5000" },
-    }),
-  ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
 });

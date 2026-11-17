@@ -4,7 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -493,10 +493,10 @@ it.each([
       const entered = createDeferredCore();
       const release = createDeferredCore();
       invalidateQuestionReadFacts();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
       let held = false;
       const spy = vi
-        .spyOn(projectionLane.pool, "run")
+        .spyOn(sessionStoreLane.pool, "run")
         .mockImplementation(async (input, options) => {
           let exact = false;
           const result = await run(async () => {

@@ -817,7 +817,7 @@ exit "$status"
     expect(fixture.gitText(["rev-parse", ref])).toBe(successor);
   });
 
-  itPosix("keeps the captured revision when main advances during archive materialization", () => {
+  itPosix("keeps the captured revision when main advances during blob materialization", () => {
     const fixture = workflowFixture();
     writeFileSync(
       fixture.reviewPath,
@@ -833,7 +833,7 @@ exit "$status"
 "${resolveCommand("git")}" "$@"
 status=$?
 case " $* " in
-  *' archive '*) "${resolveCommand("git")}" -C "${fixture.canonical}" update-ref refs/remotes/origin/main ${advanced} ;;
+  *' cat-file --batch '*) "${resolveCommand("git")}" -C "${fixture.canonical}" update-ref refs/remotes/origin/main ${advanced} ;;
 esac
 exit "$status"
 `,
@@ -1598,8 +1598,8 @@ exec "$anchor/scripts/pr" "$@"
     const appended = `\nimport { writeFileSync as recordReplacement } from "node:fs"; recordReplacement(${JSON.stringify(marker)}, "bad");\n`;
     const shellAppended = "'" + appended.replaceAll("'", "'\\''") + "'";
     writeExecutable(
-      join(fixture.bin, "tar"),
-      `#!/bin/sh\nif [ "$(basename "$2")" = anchor.tar ]; then\n  printf '%s' ${shellAppended} >> "$4/.pr-bootstrap/scripts/pr-lib/cache-lifetime.mjs"\n  exit 9\nfi\nexec '${resolveCommand("tar")}' "$@"\n`,
+      join(fixture.bin, "python3"),
+      `#!/bin/sh\ncase " $* " in *" scripts/pr-lib "*)\n  printf '%s' ${shellAppended} >> "$7/.pr-bootstrap/scripts/pr-lib/cache-lifetime.mjs"\n  exit 9 ;;\nesac\nexec '${resolveCommand("python3")}' "$@"\n`,
     );
     const result = runWrapper(fixture, ["ls"]);
     expect(result.status).not.toBe(0);
@@ -1701,7 +1701,7 @@ exec "$anchor/scripts/pr" "$@"
     fixture.commit([inventory, dependency, "scripts/pr-lib/review-artifacts.mjs"], true);
   }
 
-  function archiveFaultFixture(
+  function exportFaultFixture(
     fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
     failure: string,
     phase: "bootstrap" | "selected",
@@ -1727,7 +1727,7 @@ for (let i = 0; i < args.length; i++) {
   if (/^-(?:C|c)./.test(args[i]) || ["--no-pager", "--literal-pathspecs", "--no-replace-objects"].includes(args[i])) continue;
   command = args[i]; break;
 }
-const components = args.includes("--") ? args.slice(args.indexOf("--") + 1) : [];
+const components = tool === "export" ? args.slice(7) : args.includes("--") ? args.slice(args.indexOf("--") + 1) : [];
 const componentPhase = components.includes("scripts/pr-lib") ? "selected"
   : components.includes("scripts/pr-lib/cache-lifetime.mjs") ? "bootstrap" : undefined;
 let input;
@@ -1735,10 +1735,7 @@ let targeted = false;
 let destination;
 let extractedPhase;
 if (tool === "git") {
-  if (command === "archive") {
-    appendFileSync(env.OPENCLAW_TEST_ARCHIVES, JSON.stringify({ phase: componentPhase, components }) + "\n");
-    targeted = componentPhase === phase;
-  } else if (command === "ls-tree") {
+  if (command === "ls-tree") {
     // Before extraction these listings also check namespace disjointness and
     // source selection. Fault only the selected extraction's verification.
     targeted = componentPhase === phase && (phase === "bootstrap" || existsSync(extracted));
@@ -1750,17 +1747,15 @@ if (tool === "git") {
     targeted = phase === "bootstrap" ? bootstrap : selected;
   }
 } else {
-  // The wrapper uses -xf, not separate -x -f. Parse both native spellings.
-  const fileIndex = args.findIndex(arg => /^-[^-]*f$/.test(arg));
-  const file = fileIndex >= 0 ? args[fileIndex + 1] : undefined;
-  extractedPhase = basename(file ?? "") === "source.tar" ? "bootstrap"
-    : basename(file ?? "") === "anchor.tar" ? "selected" : undefined;
-  destination = args[args.indexOf("-C") + 1];
+  extractedPhase = componentPhase;
+  destination = args[6];
   targeted = extractedPhase === phase;
+  appendFileSync(env.OPENCLAW_TEST_ARCHIVES, JSON.stringify({ phase: componentPhase, components }) + "\n");
+  if (targeted && failure === "producer failure") process.exit(42);
   if (extractedPhase === "selected") appendFileSync(env.OPENCLAW_TEST_READER_LOG, "started\n");
 }
 const capture = tool === "git" && (command === "ls-tree" || command === "hash-object");
-const result = spawnSync(tool === "git" ? env.OPENCLAW_TEST_GIT : env.OPENCLAW_TEST_TAR, args, {
+const result = spawnSync(tool === "git" ? env.OPENCLAW_TEST_GIT : env.OPENCLAW_TEST_PYTHON, args, {
   env: backendEnv, input, stdio: [input === undefined ? 0 : "pipe", capture ? "pipe" : 1, 2],
 });
 if (result.stderr) writeFileSync(2, result.stderr);
@@ -1770,10 +1765,9 @@ if (result.status !== 0) {
   process.exit(result.status ?? 1);
 }
 let output = result.stdout;
-if (extractedPhase === "selected") writeFileSync(extracted, "selected archive extracted\n");
+if (extractedPhase === "selected") writeFileSync(extracted, "selected export completed\n");
 if (targeted) {
-  if ((tool === "git" && command === "archive" && failure === "producer failure") ||
-      (tool === "tar" && failure === "reader failure") ||
+  if ((tool === "export" && failure === "reader failure") ||
       (tool === "git" && command === "ls-tree" && failure === "listing producer failure") ||
       (tool === "git" && command === "hash-object" && failure === "hash producer failure")) {
     if (output) writeFileSync(1, output);
@@ -1788,7 +1782,7 @@ if (targeted) {
     const retained = failure === "incomplete hash output" ? records.slice(0, -1)
       : records.filter(record => record.slice(record.indexOf("\t") + 1) !== "package.json");
     output = Buffer.from(retained.join(separator) + separator);
-  } else if (tool === "tar") {
+  } else if (tool === "export") {
     const relative = phase === "bootstrap" ? "scripts/pr-lib/cache-lifetime.mjs"
       : failure === "parent symlink" ? "scripts/lib"
       : failure === "leaf symlink" ? "scripts/lib/plain-gh.mjs"
@@ -1808,18 +1802,18 @@ if (output) writeFileSync(1, output);
     writeExecutable(
       join(fixture.bin, "git"),
       `#!/bin/sh
-# Only archive verification needs Node; other prefixes retain its Git parser.
+# Only export verification needs Node; other prefixes retain its Git parser.
 # Restore the backend PATH for direct calls so policy Git cannot select this stub again.
 case "$1:\${3-}" in
-  -C:|-C:-*|-C:archive|-C:ls-tree|-C:hash-object) ;;
+  -C:|-C:-*|-C:ls-tree|-C:hash-object) ;;
   --version:|-C:*) PATH="$OPENCLAW_TEST_BACKEND_PATH" exec "$OPENCLAW_TEST_GIT" "$@" ;;
 esac
 exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
 `,
     );
     writeExecutable(
-      join(fixture.bin, "tar"),
-      '#!/bin/sh\nexec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" tar "$@"\n',
+      join(fixture.bin, "python3"),
+      `#!/bin/sh\ncase "\${3-}" in */export-tree.py) exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" export "$@" ;; esac\nexec '${resolveCommand("python3")}' "$@"\n`,
     );
     return {
       readerLog,
@@ -1827,7 +1821,7 @@ exec "$OPENCLAW_TEST_NODE" "$OPENCLAW_TEST_FAULT_HELPER" git "$@"
       env: {
         ...fixture.env,
         OPENCLAW_TEST_GIT: resolveCommand("git"),
-        OPENCLAW_TEST_TAR: resolveCommand("tar"),
+        OPENCLAW_TEST_PYTHON: resolveCommand("python3"),
         OPENCLAW_TEST_NODE: requireNodeTool("node"),
         OPENCLAW_TEST_BACKEND_PATH: process.env.PATH,
         OPENCLAW_TEST_FAULT_HELPER: helper,
@@ -3099,17 +3093,16 @@ EOF_HELD_PROJECTION
     (fault) => {
       const fixture = makeFrozenDependencyFixture();
       writeExecutable(
-        join(fixture.bin, "tar"),
+        join(fixture.bin, "python3"),
         `#!/bin/sh
-"$PR_TEST_REAL_TAR" "$@" || exit
-case "$4" in
-  */install-*) ${fault === "changed manifest" ? "printf 'changed manifest' > \"$4/package.json\"" : 'touch "$4/.pnpmfile.cjs"'} ;;
+'${resolveCommand("python3")}' "$@" || exit
+case "\${7-}" in
+  */install-*) ${fault === "changed manifest" ? "printf 'changed manifest' > \"$7/package.json\"" : 'touch "$7/.pnpmfile.cjs"'} ;;
 esac
 `,
       );
       const result = fixture.run({
         OPENCLAW_PR_TOOLING_ROOT: fixture.tooling,
-        PR_TEST_REAL_TAR: resolveCommand("tar"),
       });
       expect(result.status, result.stdout + result.stderr).toBe(1);
       expect(result.stderr).toContain(
@@ -3298,11 +3291,11 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     parkCanonicalOffAnchor(fixture);
     writeExecutable(
-      join(fixture.bin, "tar"),
-      '#!/bin/sh\n"$PR_TEST_REAL_TAR" "$@" || exit\nchmod -x "$4/scripts/pr"\n',
+      join(fixture.bin, "python3"),
+      `#!/bin/sh\n'${resolveCommand("python3")}' "$@" || exit\ncase "\${3-}" in */export-tree.py) chmod -x "$7/scripts/pr" ;; esac\n`,
     );
     const result = runWrapper(fixture, ["unknown-command"], "linked", {
-      env: { ...fixture.env, PR_TEST_REAL_TAR: resolveCommand("tar") },
+      env: fixture.env,
     });
     expect(result.status, result.stdout + result.stderr).toBe(1);
     collectFinishedDependencies(fixture);
@@ -3310,32 +3303,44 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
     expect(result.stderr).toContain("Unable to execute the materialized scripts/pr wrapper.");
   });
 
-  itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
+  itPosix("rejects altered exporter bytes before executing them", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     parkCanonicalOffAnchor(fixture);
-    const git = join(fixture.bin, "git");
-    writeFileSync(
-      git,
+    const executed = join(fixture.root, "unverified-exporter-executed");
+    writeExecutable(
+      join(fixture.bin, "git"),
       `#!/bin/sh
-PATH="$OPENCLAW_TEST_BACKEND_PATH" "$OPENCLAW_TEST_GIT" "$@" || exit
-if [ "$3" = archive ]; then
-  # Valid zero padding exceeds a pipe buffer even when tar has read every entry.
-  dd if=/dev/zero bs=65536 count=32 2>/dev/null
-fi
+case "$*" in
+  *"show "*":scripts/pr-lib/export-tree.py")
+    printf '%s\\n' 'from pathlib import Path' 'Path(${JSON.stringify(executed)}).touch()'
+    exit 0 ;;
+esac
+exec '${resolveCommand("git")}' "$@"
 `,
     );
-    chmodSync(git, 0o755);
+    const result = runWrapper(fixture, ["unknown-command"]);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("Bootstrap helper qualification failed");
+    expect(existsSync(executed)).toBe(false);
+  });
+
+  itPosix("materializes only selected blobs in a partial clone", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    fixture.write("unrelated.bin", "unrelated promised content\n");
+    fixture.commit(["unrelated.bin"], true);
+    const missing = fixture.gitText(["rev-parse", "HEAD:unrelated.bin"]);
+    const object = join(fixture.canonical, ".git/objects", missing.slice(0, 2), missing.slice(2));
+    parkCanonicalOffAnchor(fixture);
+    fixture.git(fixture.canonical, ["config", "remote.origin.promisor", "true"]);
+    fixture.git(fixture.canonical, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+    rmSync(object);
+    const trace = join(fixture.root, "export.trace");
     const result = runWrapper(fixture, ["unknown-command"], "linked", {
-      env: {
-        ...fixture.env,
-        OPENCLAW_TEST_GIT: resolveCommand("git"),
-        OPENCLAW_TEST_BACKEND_PATH: process.env.PATH,
-      },
+      env: { ...fixture.env, GIT_TRACE2_PERF: trace },
     });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+    expect(result.status, result.stdout + result.stderr).toBe(2);
     expect(result.stderr).toContain("running wrapper code materialized from");
-    expect(result.stdout).toContain("Usage:");
-    expect(result.stderr).not.toContain("Refusing to silently substitute");
+    expect(readScript(trace)).not.toContain("fetch_count:");
   });
 
   itPosix.each([
@@ -3357,7 +3362,7 @@ fi
       advanceAnchorReviewDependency(fixture);
     }
     parkCanonicalOffAnchor(fixture);
-    const fault = archiveFaultFixture(fixture, failure, "selected");
+    const fault = exportFaultFixture(fixture, failure, "selected");
     const result = runWrapper(fixture, ["unknown-command"], "linked", { env: fault.env });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain("Refusing to silently substitute");
@@ -3393,7 +3398,7 @@ throw new Error("untrusted caller helper executed");
 `,
     );
     fixture.commit(["scripts/pr-lib/materialized-anchor.mjs"], false, fixture.linked);
-    const fault = archiveFaultFixture(fixture, failure, "bootstrap");
+    const fault = exportFaultFixture(fixture, failure, "bootstrap");
     const result = runWrapper(fixture, ["unknown-command"], "linked", { env: fault.env });
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stderr).toContain(
@@ -3407,24 +3412,28 @@ throw new Error("untrusted caller helper executed");
     expect(result.stderr).not.toContain("running wrapper code materialized from");
     expect(existsSync(callerExecuted)).toBe(false);
     expect(existsSync(fault.readerLog)).toBe(false);
-    const archives = jsonLines(fault.archives);
-    expect(archives).toEqual([
-      {
-        phase: "bootstrap",
-        components: [
-          "scripts/pr",
-          "scripts/pr-lib/wrapper-components.txt",
-          "scripts/pr-lib/cache-lifetime.mjs",
-          "scripts/pr-lib/materialized-anchor.mjs",
-          "scripts/pr-lib/cache-lifetime-process.py",
-          "scripts/pr-lib/dependency-lifetime-inherit.cjs",
-          "scripts/pr-lib/git-invocation.mjs",
-          "scripts/pr-lib/materialize-dependencies.mjs",
-          "scripts/pr-lib/dependency-inputs.json",
-          "scripts/windows-cmd-helpers.mjs",
-        ],
-      },
-    ]);
+    const archives = existsSync(fault.archives) ? jsonLines(fault.archives) : [];
+    expect(archives).toEqual(
+      failure === "hash producer failure"
+        ? []
+        : [
+            {
+              phase: "bootstrap",
+              components: [
+                "scripts/pr",
+                "scripts/pr-lib/wrapper-components.txt",
+                "scripts/pr-lib/cache-lifetime.mjs",
+                "scripts/pr-lib/materialized-anchor.mjs",
+                "scripts/pr-lib/cache-lifetime-process.py",
+                "scripts/pr-lib/dependency-lifetime-inherit.cjs",
+                "scripts/pr-lib/git-invocation.mjs",
+                "scripts/pr-lib/materialize-dependencies.mjs",
+                "scripts/pr-lib/dependency-inputs.json",
+                "scripts/windows-cmd-helpers.mjs",
+              ],
+            },
+          ],
+    );
     const anchors = matchingEntries(fixture.root, "openclaw-pr-anchor-v3.");
     expect(anchors).toHaveLength(1);
     const anchor = join(fixture.root, anchors[0]!);
@@ -3432,7 +3441,7 @@ throw new Error("untrusted caller helper executed");
     expect(statSync(anchor).uid).toBe(statSync(fixture.root).uid);
     expect(statSync(anchor).mode & 0o777).toBe(0o700);
     expect(existsSync(join(anchor, ".pr-bootstrap/scripts/pr-lib/cache-lifetime.mjs"))).toBe(
-      failure !== "producer failure",
+      failure !== "producer failure" && failure !== "hash producer failure",
     );
   });
 

@@ -75,6 +75,7 @@ describe("OpenClaw ID member role preset activation", () => {
       assignments: { byGithubLogin: { maintainer: "custom" } },
       definitions: {
         operator: { ...presets.viewer },
+        guest: { ...presets.operator },
         custom: { sessions: { others: "none" }, agents: "*", scopes: ["operator.admin"] },
       },
     };
@@ -111,6 +112,7 @@ describe("OpenClaw ID member role preset activation", () => {
     await f.save(edited);
     await f.service.reconcileRuntimePolicy();
     expect((await f.read()).gateway?.roles?.definitions.viewer).toEqual(presets.viewer);
+    expect((await f.read()).gateway?.roles?.definitions.guest).toEqual(presets.guest);
   });
 
   it("does not write with OpenClaw ID off or after the service stops", async () => {

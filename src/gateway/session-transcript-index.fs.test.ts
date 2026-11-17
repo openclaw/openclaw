@@ -215,7 +215,7 @@ test("rejects an oversized source line before decoding while retaining ordinary 
   const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
   const parse = vi.spyOn(recordParser, "parseTranscriptRecord");
   const reads = vi.spyOn(fileReads, "readFileWindowFully");
-  const oversized = "Transcript source message exceeds the 8388608-byte page limit";
+  const oversized = "Chat history message exceeds the 8388608-byte page limit";
   await expect(sourcePage(reader)).rejects.toThrow(oversized);
   expect(parse).not.toHaveBeenCalled();
   expect(

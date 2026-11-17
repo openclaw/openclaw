@@ -708,6 +708,7 @@ it.each(["cancelled", "retired"])(
     const instructions = await fs.readFile(filePath, "utf8");
     expect(selected).toMatchObject({ filePath: `${remote}/SKILL.md`, baseDir: remote });
     expect(selected.sourceInfo).toEqual(snapshot.resolvedSkills![0]!.sourceInfo);
+    expect(selected).not.toHaveProperty("resourceRootIdentity");
     expect(snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
     for (const prompt of [
       resources!.snapshot.prompt,
