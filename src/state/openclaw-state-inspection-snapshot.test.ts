@@ -3,7 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
-import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "./openclaw-state-db-readonly.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "./openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { withArtifactPreservingStateSnapshot } from "./openclaw-state-inspection-snapshot.js";
 
@@ -24,18 +27,40 @@ it("shares one private image with SQLite readers and none with readers selected 
     const first = await getActiveOpenClawStateDatabaseReadSnapshotAsync();
     const again = await getActiveOpenClawStateDatabaseReadSnapshotAsync();
     // Status opens this scope before the configured engine is selected for its ledger reads.
-    const postgres = await withDatabaseEngineSelection(
-      {
-        effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
-        postgres: { connection: "postgres://fixture.invalid/state", schemaPrefix: "state" },
-      },
-      () => getActiveOpenClawStateDatabaseReadSnapshotAsync(),
+    const postgres = await withPostgresState(() =>
+      getActiveOpenClawStateDatabaseReadSnapshotAsync(),
     );
-    return { first: first?.location, again: again?.location, postgres };
+    const postgresRead = await withPostgresState(() => settle(readExisting()));
+    return { first: first?.location, again: again?.location, postgres, postgresRead };
   });
+  // Outside any inspection scope, the same PostgreSQL-selected read takes its normal path.
+  const unscopedPostgresRead = await withPostgresState(() => settle(readExisting()));
 
   expect(seen.first).toBeDefined();
   expect(seen.first).not.toBe(databasePath);
   expect(seen.again).toBe(seen.first);
   expect(seen.postgres).toBeUndefined();
+  expect(seen.postgresRead).toEqual(unscopedPostgresRead);
 });
+
+function withPostgresState<T>(operation: () => T): T {
+  return withDatabaseEngineSelection(
+    {
+      effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+      postgres: { connection: "postgres://fixture.invalid/state", schemaPrefix: "state" },
+    },
+    operation,
+  );
+}
+
+function readExisting() {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(() => "read");
+}
+
+async function settle<T>(read: Promise<T>) {
+  try {
+    return { value: await read };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
