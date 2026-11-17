@@ -5,8 +5,8 @@ import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "openclaw/plugin-sdk/file-lock";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
   readMatrixIdbSnapshotJson,
+  type MatrixSnapshotStateAccess,
   type MatrixSnapshotStateReader,
-  type MatrixSnapshotStateRuntime,
 } from "./crypto-state-store.js";
 import {
   isMatrixCryptoStoreUnsafe,
@@ -65,7 +65,7 @@ export async function listMatrixCryptoUnsafeState(
 export async function recoverMatrixCryptoUnsafeState(params: {
   storageRootDir: string;
   acceptSnapshotRollback: boolean;
-  stateRuntime: MatrixSnapshotStateRuntime;
+  stateRuntime: MatrixSnapshotStateAccess;
 }): Promise<void> {
   if (!params.acceptSnapshotRollback) {
     throw new Error("Matrix crypto recovery requires explicit --accept-snapshot-rollback.");

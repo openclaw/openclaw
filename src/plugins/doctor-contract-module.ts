@@ -338,6 +338,13 @@ function coerceProviderRenames(value: unknown): PluginDoctorProviderRename[] {
     .parse(value ?? []);
 }
 
+/** Only callability is required; registration ignores results and keeps source-bound identity. */
+function isPluginDoctorRecoveryCliRegistrar(
+  value: unknown,
+): value is PluginDoctorRecoveryCliRegistrar {
+  return typeof value === "function";
+}
+
 /** Coerce a loaded doctor contract once for both registry use and declaration validation. */
 export function coercePluginDoctorContractModule(
   mod: PluginDoctorContractModule,
@@ -381,10 +388,10 @@ export function coercePluginDoctorContractModule(
     mod.stateMigrations ?? defaultExport?.stateMigrations,
   );
   const recoveryCli = mod.registerRecoveryCli ?? defaultExport?.registerRecoveryCli;
-  if (recoveryCli !== undefined && typeof recoveryCli !== "function") {
+  if (recoveryCli !== undefined && !isPluginDoctorRecoveryCliRegistrar(recoveryCli)) {
     throw new Error("Doctor registerRecoveryCli must be a function");
   }
-  const registerRecoveryCli = recoveryCli as PluginDoctorRecoveryCliRegistrar | undefined;
+  const registerRecoveryCli = recoveryCli;
   const providerRenames = coerceProviderRenames(
     mod.providerRenames ?? defaultExport?.providerRenames,
   );

@@ -159,7 +159,6 @@ describe("matrix doctor contract state migrations", () => {
       storageRootDir,
       snapshotJson: "[]",
       databaseCount: 0,
-      stateRuntime: { openKeyedStoreV2: params.context.openPluginStateKeyedStore },
     });
     const snapshot = params.context.openPluginStateKeyedStore(
       openMatrixIdbSnapshotStoreOptions(storageRootDir),

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { PluginDoctorRecoveryCliContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { registerMatrixDoctorCommands } from "../cli-doctor.js";
@@ -30,11 +31,14 @@ const keyStore = { name: "keys", keyPath: null, autoIncrement: false, indexes: [
 const keysSnapshot = (records: unknown[], indexes: unknown[] = []) => [
   { ...database, stores: [{ ...keyStore, records, indexes }] },
 ];
+const context: PluginDoctorRecoveryCliContext["context"] = {
+  openPluginStateKeyedStore: (options) => getMatrixRuntime().state.openKeyedStoreV2(options),
+};
 const recover = (acceptSnapshotRollback = true) =>
   recoverMatrixCryptoUnsafeState({
     storageRootDir,
     acceptSnapshotRollback,
-    stateRuntime: getMatrixRuntime().state,
+    stateRuntime: { openKeyedStoreV2: context.openPluginStateKeyedStore },
   });
 const inspect = () => listMatrixCryptoUnsafeState(stateDir, getMatrixRuntime().state);
 function writeSnapshot(root = storageRootDir, databases: unknown[] = [database]) {
@@ -56,9 +60,7 @@ function doctor() {
   registerMatrixDoctorCommands({
     program: command.command("doctor"),
     stateDir,
-    context: {
-      openPluginStateKeyedStore: (options) => getMatrixRuntime().state.openKeyedStoreV2(options),
-    },
+    context,
   });
   return {
     recover: (account = "default") =>
