@@ -311,12 +311,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
       // +3: accepted WorkerRetention policy, operation, and observation types (#189346).
       // +1: accepted pluginCommandResultContinuesAgent for native command continuation.
+      // +3: type-only MemoryPluginDreaming{Provider,Status,PhaseStatus} for slot owners reporting dreaming status (#155860).
       // +2: settled execution lifecycle classifiers on agent-lifecycle (#192413).
       // +2: channel display-mention and mention-adapter types (#192473).
       // +1: shared plugin-owned Control UI message translation.
       // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
       // +2: appendReplyMediaFailures and ReplyMediaFailure receipts on reply-payload (#186751).
-      3867,
+      3870,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

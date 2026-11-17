@@ -33,6 +33,7 @@ export function createDreamingViewProps(
       loading: false,
       canUpdateConfig: true,
       refreshLoading: false,
+      owner: { active: true, locksToggle: false },
     },
     onRefresh: () => {},
     onSetEnabled: () => {},

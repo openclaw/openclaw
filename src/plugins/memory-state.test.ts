@@ -14,6 +14,7 @@ import {
   registerMemoryPromptPreparation as registerPreparation,
   registerMemoryPromptSupplement as registerSupplement,
   registerTestMemoryPromptBuilder as registerBuilder,
+  resolveActiveMemoryDreamingStatus as dreamingStatus,
   resolveMemoryFlushPlan as flushPlan,
   type MemoryPluginPublicArtifact as Artifact,
 } from "./memory-state.test-fixtures.js";
@@ -284,4 +285,37 @@ it("does not adopt memory sidecars across conflicting plugin owners", () => {
   expect(scoped.memoryCorpusSupplements).toEqual([]);
   expect(scoped.memoryPromptPreparations).toEqual([]);
   expect(scoped.memoryPromptSupplements).toEqual([]);
+});
+
+it("passes the slot owner's dreaming report through by reference", async () => {
+  const report = {
+    enabled: true,
+    timezone: "Europe/Berlin",
+    phases: {
+      rem: { enabled: true, cron: "15 1 * * *", scheduled: true },
+      light: { enabled: true, scheduled: true },
+    },
+    stats: { promotedTotal: 139 },
+  };
+  registerCapability("third-party-memory", { dreaming: { getStatus: async () => report } });
+  await expect(dreamingStatus({ cfg: {}, agentId: "main" })).resolves.toBe(report);
+});
+
+it("reports no dreaming status without a provider or when it declines", async () => {
+  registerCapability("memory-core", {});
+  await expect(dreamingStatus({ cfg: {}, agentId: "main" })).resolves.toBeNull();
+  clearMemoryPluginState();
+  registerCapability("third-party-memory", { dreaming: { getStatus: async () => undefined } });
+  await expect(dreamingStatus({ cfg: {}, agentId: "main" })).resolves.toBeNull();
+});
+
+it("keeps the host resolution when a dreaming provider throws", async () => {
+  registerCapability("third-party-memory", {
+    dreaming: {
+      getStatus: async () => {
+        throw new Error("provider exploded");
+      },
+    },
+  });
+  await expect(dreamingStatus({ cfg: {}, agentId: "main" })).resolves.toBeNull();
 });

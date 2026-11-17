@@ -1,5 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
@@ -18,6 +16,7 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { blocksHostEnable, resolveDreamingOwner, statusPromotedCount } from "./dreaming-owner.ts";
 import {
   canCallDreamingMethod,
   clearSettledDreamingRead,
@@ -36,6 +35,7 @@ import {
   type WikiPagePreview,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
+import { wikiPagePreviewFromResponse } from "./wiki-page-preview.ts";
 
 registerDreamingEnglish();
 
@@ -330,8 +330,12 @@ export function createAgentMemory(
     }
   }
 
+  const ownerBlocks = (enabled: boolean | null) =>
+    blocksHostEnable(dreaming.dreamingStatus, enabled);
+
   function setEnabled(enabled: boolean) {
     if (
+      ownerBlocks(enabled) ||
       !canCallDreamingMethod(dreaming, "config.patch", "operator.admin") ||
       dreaming.dreamingModeSaving ||
       toggleRequest?.pending ||
@@ -363,6 +367,11 @@ export function createAgentMemory(
   }
 
   function confirmToggle(): Promise<void> | undefined {
+    // The owner's report can arrive while the confirmation is already open.
+    if (ownerBlocks(pendingEnabled)) {
+      cancelToggle();
+      return undefined;
+    }
     const enabled = pendingEnabled;
     if (
       enabled == null ||
@@ -394,9 +403,12 @@ export function createAgentMemory(
 
   async function updateToggle(scope: DreamingTaskScope, enabled: boolean) {
     const runtimeConfig = context.runtimeConfig;
+    // Rechecked before each write step: the owner's report can also land while
+    // the write awaits the schema lookup.
     const canDispatch = () =>
       isTaskScopeCurrent(scope) &&
       context.runtimeConfig === runtimeConfig &&
+      !ownerBlocks(enabled) &&
       canCallDreamingMethod(scope.state, "config.patch", "operator.admin");
     const updated = await runDreamingTask(
       (dreamingState) => updateDreamingEnabled(dreamingState, runtimeConfig, enabled, canDispatch),
@@ -406,6 +418,14 @@ export function createAgentMemory(
       return;
     }
     if (!updated) {
+      // Declined by the owner lock, not failed: close like the early guard does.
+      if (ownerBlocks(enabled)) {
+        pendingEnabled = null;
+        dreaming.dreamingStatusError = null;
+        // The write's own cleanup is gated on canDispatch, which the lock now fails.
+        dreaming.dreamingModeSaving = false;
+        return;
+      }
       throw new Error(dreaming.dreamingStatusError ?? t("dreaming.toggleConfirmation.failed"));
     }
     await runtimeConfig.refresh();
@@ -435,24 +455,7 @@ export function createAgentMemory(
     if (!isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
       return null;
     }
-    const payload = asOptionalObjectRecord(response);
-    const content =
-      typeof payload?.content === "string" && payload.content.length > 0
-        ? payload.content
-        : t("dreaming.wiki.noContent");
-    const updatedAt = normalizeOptionalString(payload?.updatedAt);
-    const totalLines =
-      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-        ? Math.max(0, Math.floor(payload.totalLines))
-        : undefined;
-    return {
-      title: normalizeOptionalString(payload?.title) ?? lookup,
-      path: normalizeOptionalString(payload?.path) ?? lookup,
-      content,
-      ...(totalLines === undefined ? {} : { totalLines }),
-      ...(payload?.truncated === true ? { truncated: true } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-    };
+    return wikiPagePreviewFromResponse(response, lookup);
   }
 
   function read() {
@@ -465,6 +468,11 @@ export function createAgentMemory(
     // Defaults apply to an accepted config, not an unavailable or stale snapshot.
     const dreamingOn =
       dreamingStatus?.enabled ?? (configObject !== null && configuredDreaming.enabled);
+    const owner = resolveDreamingOwner({
+      status: dreamingStatus,
+      pluginId: configuredDreaming.pluginId,
+      dreamingOn,
+    });
     const loading =
       (dreaming.resourceReads.dreamingStatus?.pending ?? false) || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
@@ -475,7 +483,7 @@ export function createAgentMemory(
       (dreaming.resourceReads.dreamDiary?.pending ?? false);
 
     return {
-      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading },
+      header: { configuredDreaming, dreamingOn, loading, canUpdateConfig, refreshLoading, owner },
       dreaming: {
         access: {
           canOpenConfig: canCallDreamingMethod(dreaming, "config.openFile", "operator.admin", {
@@ -487,7 +495,7 @@ export function createAgentMemory(
           canResetGroundedShortTerm: canRunAction("doctor.memory.resetGroundedShortTerm"),
           canRepairDreamingArtifacts: canRunAction("doctor.memory.repairDreamingArtifacts"),
         },
-        active: dreamingOn,
+        active: owner.active,
         selectedAgentId: dreaming.selectedAgentId ?? "",
         statusError: dreaming.dreamingStatusError,
         readStatus: () => readResource(resourceReads.dreamingStatus()),
@@ -549,6 +557,7 @@ export function createAgentMemory(
       toggle: {
         open: pendingEnabled !== null,
         enabling: pendingEnabled === true,
+        ownerPluginId: owner.pluginId,
         disabled: !canUpdateConfig,
         onConfirm: confirmToggle,
         onCancel: cancelToggle,
@@ -671,7 +680,7 @@ export function createAgentMemory(
     const status = result.value ?? readResource(result);
     return {
       shortTermCount: status?.shortTermCount ?? 0,
-      promotedCount: status?.promotedToday ?? 0,
+      promotedCount: statusPromotedCount(status ?? null),
       phases: status?.phases,
       shortTermEntries: status?.shortTermEntries ?? [],
       promotedEntries: status?.promotedEntries ?? [],

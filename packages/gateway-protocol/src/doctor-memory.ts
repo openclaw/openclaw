@@ -32,6 +32,7 @@ type DoctorMemoryDreamingPhase = {
   cron: string;
   limit: number;
   managedCronPresent: boolean;
+  lastRunAtMs?: number;
   nextRunAtMs?: number;
 };
 
@@ -73,6 +74,28 @@ export type DoctorMemoryDreamingPayload = DoctorMemoryDreamingConfig & {
   shortTermEntries: DoctorMemoryDreamingEntry[];
   signalEntries: DoctorMemoryDreamingEntry[];
   promotedEntries: DoctorMemoryDreamingEntry[];
+  /**
+   * Whether the memory slot owner reports its own dreaming as running. Kept
+   * apart from `enabled`, which stays the memory-core configuration the page's
+   * switch writes.
+   */
+  reportedEnabled?: boolean;
+  /**
+   * Whether the memory slot owner reported anything at all. A report may omit
+   * `enabled` and carry only phases or counters; the page still treats the
+   * sweep as owner-run and locks the host switch.
+   */
+  reportedByProvider?: boolean;
+  /**
+   * Consolidation counters the memory slot owner reported, kept beside
+   * memory-core's own figures above, which stay tied to the entry lists.
+   */
+  reportedStats?: {
+    shortTermCount?: number;
+    promotedTotal?: number;
+    promotedToday?: number;
+    lastPromotedAt?: string;
+  };
 };
 
 export type DoctorMemoryStatusPayload = {
