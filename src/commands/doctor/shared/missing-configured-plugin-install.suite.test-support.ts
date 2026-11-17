@@ -265,7 +265,10 @@ vi.mock("../../../plugins/manifest-registry.js", async (importOriginal) => {
 });
 
 // mock-isolation: resolve installs into the fixture's private plugin roots.
-vi.mock("../../../plugins/install-paths.js", () => installPathMocks);
+vi.mock("../../../plugins/install-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/install-paths.js")>()),
+  ...installPathMocks,
+}));
 
 vi.mock("../../../plugins/install.js", () => ({
   installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,

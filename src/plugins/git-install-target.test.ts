@@ -21,6 +21,11 @@ import {
   requestDeferredPluginInstall,
   takePluginInstallTransaction,
 } from "./install-transaction.js";
+import {
+  collectMissingPluginInstallPayloads,
+  isPayloadMissing,
+  runPluginPayloadSmokeCheck,
+} from "./payload-verification.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
 import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
 
@@ -174,6 +179,15 @@ describe("git install target ownership", () => {
       expect(records.demo).not.toHaveProperty("gitDirectory");
       expect(records.nested?.gitDirectory).toBe(directory);
       expect(records.nested?.installPath).toBe(installed.targetDir);
+      expect({
+        missing: isPayloadMissing(process.env, records.nested?.installPath),
+        missingRecords: await collectMissingPluginInstallPayloads({ records }),
+        smoke: await runPluginPayloadSmokeCheck({ records, env: process.env }),
+      }).toEqual({
+        missing: false,
+        missingRecords: [],
+        smoke: { checked: ["demo", "nested"], failures: [] },
+      });
       const discovered = discoverOpenClawPlugins({
         installRecords: records,
         bundledRoot: state.path("empty-bundled"),

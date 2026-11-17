@@ -3,14 +3,13 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { safeStat } from "../infra/path-existence.js";
-import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
@@ -41,11 +40,10 @@ export type MissingPluginInstallPayload = {
 };
 
 export function isPayloadMissing(env: NodeJS.ProcessEnv, rawInstallPath?: string): boolean {
-  const installPath = normalizeOptionalString(rawInstallPath);
-  if (!installPath) {
+  if (!rawInstallPath?.trim()) {
     return true;
   }
-  const resolved = resolveUserPath(installPath, env);
+  const resolved = resolveRecordedPluginPath(rawInstallPath, env);
   const bundleFormat = detectBundleManifestFormat(resolved);
   return (
     !existsSync(path.join(resolved, "package.json")) &&
@@ -89,12 +87,12 @@ export async function collectMissingPluginInstallPayloads(params: {
         continue;
       }
     }
-    const rawInstallPath = normalizeOptionalString(record.installPath);
-    if (!rawInstallPath) {
+    const rawInstallPath = record.installPath;
+    if (!rawInstallPath?.trim()) {
       missing.push({ pluginId, reason: "missing-install-path" });
       continue;
     }
-    const installPath = resolveUserPath(rawInstallPath, env);
+    const installPath = resolveRecordedPluginPath(rawInstallPath, env);
     if (!(await pathExists(installPath))) {
       missing.push({ pluginId, installPath, reason: "missing-package-dir" });
       continue;
@@ -136,9 +134,9 @@ export async function runPluginPayloadSmokeCheck(params: {
     if (!record || typeof record !== "object" || !TRACKED_SOURCES.has(record.source)) {
       continue;
     }
-    const rawInstallPath = normalizeOptionalString(record.installPath);
+    const rawInstallPath = record.installPath;
     checked.push(pluginId);
-    if (!rawInstallPath) {
+    if (!rawInstallPath?.trim()) {
       failures.push({
         pluginId,
         reason: "missing-install-path",
@@ -146,7 +144,7 @@ export async function runPluginPayloadSmokeCheck(params: {
       });
       continue;
     }
-    const installPath = resolveUserPath(rawInstallPath, params.env);
+    const installPath = resolveRecordedPluginPath(rawInstallPath, params.env);
 
     const dirStat = await safeStat(installPath);
     if (!dirStat?.isDirectory()) {
