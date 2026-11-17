@@ -133,7 +133,8 @@ async function executeProbe({ ctx }: HeadlessParams, condition = false) {
 }
 
 it("borrows the current Gateway plugins for detached conditions before and after reload", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  // Freeze elapsed-time inputs while allowing native broker startup timers.
+  vi.useFakeTimers({ toFake: ["Date", "performance"] });
   const loadGateway = async (cfg: OpenClawConfig) => {
     const input = { config: cfg, workspaceDir: state.workspaceDir };
     const metadata = loadPluginMetadataSnapshot(input);
@@ -191,7 +192,6 @@ it("borrows the current Gateway plugins for detached conditions before and after
       await expectGeneration(nextRuntime, 2);
     }
   } finally {
-    vi.useRealTimers();
     await owner.close();
   }
 });
@@ -200,7 +200,7 @@ it.each(["gateway", "standalone"] as const)(
   "preserves %s artifact selection through both real preparation loads",
   async (owner) => {
     // Artifact selection must not depend on how long cold module loading takes.
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     const metadataSnapshot = loadPluginMetadataSnapshot({
       config,
       workspaceDir: state.workspaceDir,
