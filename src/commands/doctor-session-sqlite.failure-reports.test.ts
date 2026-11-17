@@ -50,6 +50,54 @@ function failureManifest(
 }
 
 describe("runDoctorSessionSqlite", () => {
+  it.each(["HOME", "USERPROFILE"] as const)(
+    "redacts home paths in generated and saved failure issues using %s",
+    (homeSource) => {
+      const store = createLegacyStore();
+      const manifestPath = path.join(store.tempDir, "home-redaction.json");
+      const forwardHome = store.tempDir.replaceAll("\\", "/");
+      const backslashHome = store.tempDir.replaceAll("/", "\\");
+      const manifest = failureManifest(store, "home-redaction");
+      expectDefined(manifest.targets[0], "fixture target").issues = [
+        {
+          code: "startup_failure",
+          message: `Failed at ${store.storePath}; ${forwardHome}/private/forward.json; ${backslashHome}\\private\\backslash.json`,
+        },
+      ];
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+      vi.stubEnv("HOME", homeSource === "HOME" ? store.tempDir : undefined);
+      vi.stubEnv("USERPROFILE", store.tempDir);
+      vi.stubEnv("OPENCLAW_HOME", path.join(store.tempDir, "override"));
+      try {
+        const generated = expectDefined(
+          createSessionSqliteMigrationFailureIssue(manifestPath),
+          "generated issue",
+        );
+        const { jsonPath } = writeSessionSqliteMigrationFailureReports(manifestPath, {
+          reason: "migration failed",
+        });
+        const saved = expectDefined(
+          createSessionSqliteMigrationFailureIssue(manifestPath),
+          "saved issue",
+        );
+        for (const body of [generated.body, saved.body, fs.readFileSync(jsonPath, "utf8")]) {
+          expect(body).not.toContain(forwardHome);
+          expect(body).not.toContain(backslashHome);
+        }
+        for (const { body } of [generated, saved]) {
+          expect(body).toContain(
+            `- Store: ~${path.sep}${path.relative(store.tempDir, store.storePath)}`,
+          );
+          expect(body).toContain("- SQLite: ~");
+          expect(body).toContain("~/private/forward.json");
+          expect(body).toContain("~\\private\\backslash.json");
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it.each([false, true])(
     "records a rejected SQLite import (journal failure=%s)",
     async (journalFailure) => {
