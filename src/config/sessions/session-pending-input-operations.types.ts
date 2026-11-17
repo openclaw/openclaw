@@ -56,6 +56,7 @@ export type PendingInputMutation =
       trackCompletion: boolean;
       inputId: string;
       messageJson: string;
+      originSourceJson?: string;
     })
   | (PendingInputSettlementIdentity & {
       kind: "complete";

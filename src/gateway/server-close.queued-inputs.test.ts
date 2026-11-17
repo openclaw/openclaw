@@ -191,34 +191,29 @@ it.for([false, true])(
         sessionKey,
       );
       const marker = JSON.parse(String(session?.entry_json)).resumeAfterRestart;
-      expect(marker.queuedInputIds).toEqual(revoke ? [] : [inputId]);
+      expect(marker).toEqual({});
+      const [stored] = readClosedDatabase(
+        databasePath,
+        "SELECT state, message_json, run_id, origin_source_json FROM session_pending_inputs WHERE input_id = ?",
+        inputId,
+      );
+      expect(stored).toMatchObject({ state: revoke ? "cancelled" : "queued", run_id: runId });
       if (revoke) {
-        expect(marker.queuedInputSources).toBeUndefined();
+        expect(stored?.origin_source_json).toBeNull();
       } else {
-        expect(marker.queuedInputSources).toMatchObject({
-          [inputId]: {
-            runId,
-            source: {
-              kind: "gateway",
-              snapshot: {
-                sourceIngress: "principal",
-                scopes: ["operator.read", "operator.write"],
-                ingress: {
-                  pluginId: fixture.pluginId,
-                  audienceId: principal.audienceId,
-                  recoveryId: "queued-ingress-grant",
-                },
-              },
+        expect(JSON.parse(String(stored?.origin_source_json))).toMatchObject({
+          kind: "gateway",
+          snapshot: {
+            sourceIngress: "principal",
+            scopes: ["operator.read", "operator.write"],
+            ingress: {
+              pluginId: fixture.pluginId,
+              audienceId: principal.audienceId,
+              recoveryId: "queued-ingress-grant",
             },
           },
         });
       }
-      const [stored] = readClosedDatabase(
-        databasePath,
-        "SELECT state, message_json, run_id FROM session_pending_inputs WHERE input_id = ?",
-        inputId,
-      );
-      expect(stored).toMatchObject({ state: revoke ? "cancelled" : "queued", run_id: runId });
       expect(JSON.parse(String(stored?.message_json))).toMatchObject(message);
     } finally {
       releaseMarker.resolve();

@@ -46,6 +46,7 @@ export function copySessionPendingInputsForRepair(
             .then(eb.fn.coalesce("end_cause", eb.val("restart-unrecoverable")))
             .else(eb.ref("end_cause"))
             .end(),
+          origin_source_json: null,
           state: eb
             .case()
             .when("state", "=", "cancelled")
@@ -101,6 +102,7 @@ export function copySessionPendingInputsForRepair(
                 : undefined) ??
               existing.end_cause ??
               (consumedEventId === null ? "restart-unrecoverable" : null),
+            origin_source_json: null,
             state:
               existing.state === "cancelled" || row.state === "cancelled"
                 ? "cancelled"
@@ -119,6 +121,7 @@ export function copySessionPendingInputsForRepair(
         state: row.state === "cancelled" ? "cancelled" : "interrupted",
         end_cause:
           row.end_cause ?? (row.consumed_event_id == null ? "restart-unrecoverable" : null),
+        origin_source_json: null,
       }),
     );
   }

@@ -31,7 +31,7 @@ export type SessionPendingInputPage = {
   total: number;
   nextBefore?: number;
 };
-export type SessionPendingInputRow = Omit<Selectable<SessionPendingInputs>, "origin_source_json">;
+export type SessionPendingInputRow = Selectable<SessionPendingInputs>;
 /** Transported facts do not grant custody; the host retains and checks the exact live owner. */
 export type SessionPendingInputWorkerFacts = {
   agentId?: string;

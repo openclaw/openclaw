@@ -844,24 +844,23 @@ describe("committed human mentions", () => {
       const target = { ...fixture.scope, storePath: physical.path };
       const captured = await captureSessionQueuedInputsForRestart(target);
       expect(captured.queuedInputIds).toHaveLength(1);
-      expect(captured.queuedInputSources?.[captured.queuedInputIds[0]!]).toBeDefined();
       await persistRunningSessionsForRestart({ cfg: getRuntimeConfig() });
-      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart?.queuedInputIds).toEqual(
-        captured.queuedInputIds,
-      );
+      expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
       await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
       fixture.context.dedupe.clear();
 
-      const { rows } = await readSessionQueuedInputPage(target, {
-        queuedInputIds: captured.queuedInputIds,
-      });
+      const { rows } = await readSessionQueuedInputPage(target);
       const row = rows[0];
       if (!row) {
         throw new Error("Expected a captured graceful-restart input");
       }
       expect(row.request_hash).toMatch(/^request:/);
+      expect(JSON.parse(row.origin_source_json!)).toMatchObject({
+        kind: "gateway",
+        snapshot: { profileId: fixture.aliceId },
+      });
       const message = parseSessionPendingInputMessage(row.message_json);
       expect(message["__openclaw"]?.humanMentions).toEqual(fixture.params.mentions);
       const held = holdResumedDispatch();
@@ -869,7 +868,6 @@ describe("committed human mentions", () => {
         await continueSessionQueuedInputs(fixture.context, target, {
           signal,
           assertCurrent: () => signal.throwIfAborted(),
-          ...captured,
         });
         const resumed = await withinTest(held.recorder, signal);
         if (notificationFailure) {

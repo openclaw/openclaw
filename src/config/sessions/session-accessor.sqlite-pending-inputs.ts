@@ -292,13 +292,13 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
-/** Durable queued text is visible only while its ordinary input owner is live. */
+/** Live owners identify queued inputs already held by this process. */
 export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
+): Pick<SessionPendingInputOwner, "inputId">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -308,11 +308,7 @@ export function listLiveSessionPendingInputs(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => ({
-      inputId: owner.inputId,
-      runId: owner.runId,
-      recoverySource: owner.recoverySource,
-    }));
+    .map((owner) => ({ inputId: owner.inputId }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
@@ -685,7 +681,7 @@ export function consumeSessionPendingInput(
       database.db,
       getSessionKysely(database.db)
         .updateTable("session_pending_inputs")
-        .set({ consumed_event_id: pending.inputId })
+        .set({ consumed_event_id: pending.inputId, origin_source_json: null })
         .where("input_id", "in", [...pending.sourceInputIds])
         .where("state", "=", "queued")
         .where("consumed_event_id", "is", null),

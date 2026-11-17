@@ -6,6 +6,7 @@ import {
   normalizeMessageClientSources,
   readMessageClientSources,
 } from "../../chat/message-client-source.js";
+import * as origin from "../../gateway/operator-run-recovery-source.codec.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -236,7 +237,7 @@ type PendingInputStageOptions = PendingInputRequest & {
   lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
-  recoverySource?: SessionPendingInputOwner["recoverySource"];
+  recoverySource?: origin.QueuedOperatorRecoverySource;
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
@@ -552,8 +553,6 @@ async function stagePreparedPendingInput(
       settled: store.settled,
     };
     const ownerScope = {
-      runId: options.runId,
-      recoverySource: options.recoverySource,
       sessionActor: scope.sessionActor,
       agentId: scope.agentId,
       databaseAgentId: store.databaseAgentId,
@@ -651,6 +650,11 @@ async function stagePreparedPendingInput(
             trackCompletion: options.trackCompletion === true,
             inputId,
             messageJson,
+            originSourceJson:
+              existing?.origin_source_json ??
+              (options.recoverySource && options.recoverySource.kind !== "unavailable"
+                ? JSON.stringify(origin.decodeQueuedOperatorRecoverySource(options.recoverySource))
+                : undefined),
           },
           (_stage, facts) => {
             assertPrepared(facts, () => {

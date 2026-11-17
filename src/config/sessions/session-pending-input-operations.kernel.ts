@@ -193,6 +193,7 @@ export function mutatePendingInput(
                   run_id: input.runId,
                   lifecycle_generation: input.lifecycleGeneration,
                   end_cause: null,
+                  origin_source_json: row.origin_source_json ?? input.originSourceJson ?? null,
                 })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
@@ -213,6 +214,7 @@ export function mutatePendingInput(
                   lifecycle_generation: input.lifecycleGeneration,
                   state: "queued",
                   accepted_at: Date.now(),
+                  origin_source_json: input.originSourceJson ?? null,
                 })
                 .returningAll(),
             );
@@ -236,6 +238,7 @@ export function mutatePendingInput(
           const changes = {
             state: input.disposition,
             end_cause: input.endCause,
+            origin_source_json: null,
           };
           const result = executeSqliteQuerySync(
             current.db,

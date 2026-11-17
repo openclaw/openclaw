@@ -18,7 +18,6 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -247,7 +246,8 @@ async function persistRunningSessions(
               ...session,
               sessionId: entry.sessionId,
             });
-            if (!session.needsResume && queued.queuedInputIds.length === 0) {
+            preserve.push({ session, preserve: queued.preserve });
+            if (!session.needsResume) {
               summary.record(session.agentId, sessionKey, "reply-completed");
               continue;
             }
@@ -256,14 +256,11 @@ async function persistRunningSessions(
               entry: {
                 ...entry,
                 resumeAfterRestart: {
-                  queuedInputIds: queued.queuedInputIds,
-                  queuedInputSources: queued.queuedInputSources,
                   operatorSource:
                     session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 },
               },
             });
-            preserve.push({ session, preserve: queued.preserve });
           }
           return { result: preserve, replacements };
         },
@@ -451,7 +448,7 @@ async function resumeRestartStore(
     { target, entries },
   );
   const summary = createRestartResumeSummary("startup");
-  const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
+  const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -461,23 +458,6 @@ async function resumeRestartStore(
   }
   try {
     signal.throwIfAborted();
-    for (const session of orphaned) {
-      try {
-        await interruptOrphanedSessionPendingInputs({ ...target, ...session }, () =>
-          signal.throwIfAborted(),
-        );
-      } catch (error) {
-        signal.throwIfAborted();
-        completed = false;
-        log.warn(
-          `Skipped interrupted input settlement for ${session.sessionKey}: ${String(error)}`,
-        );
-      } finally {
-        if (!entryKeys.has(session.sessionKey)) {
-          sessions.get(session.sessionKey)?.resolve();
-        }
-      }
-    }
     for (const { sessionKey, entry: snapshotEntry } of entries) {
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
@@ -534,7 +514,7 @@ async function resumeRestartStore(
                 selected.status === "interrupted" &&
                 selected.updatedAt <= performance.timeOrigin &&
                 selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
-                ? { queuedInputIds: [] }
+                ? {}
                 : undefined);
             if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
@@ -693,12 +673,23 @@ async function resumeRestartStore(
             },
           );
         }
-        // Each accepted sender retains its own admission even when the owner cannot resume.
+      } catch (error) {
+        signal.throwIfAborted();
+        completed = false;
+        log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
+      } finally {
+        authority?.release();
+        if (!queuedKeys.has(sessionKey)) {
+          sessions.get(sessionKey)?.resolve();
+        }
+      }
+    }
+    for (const session of orphaned) {
+      try {
         await continueSessionQueuedInputs(
           context,
-          { ...target, agentId, sessionKey, sessionId: entry.sessionId },
+          { ...target, ...session },
           {
-            ...marker,
             signal,
             assertCurrent: () => signal.throwIfAborted(),
           },
@@ -706,10 +697,9 @@ async function resumeRestartStore(
       } catch (error) {
         signal.throwIfAborted();
         completed = false;
-        log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
+        log.warn(`Skipped queued input recovery for ${session.sessionKey}: ${String(error)}`);
       } finally {
-        authority?.release();
-        sessions.get(sessionKey)?.resolve();
+        sessions.get(session.sessionKey)?.resolve();
       }
     }
   } finally {

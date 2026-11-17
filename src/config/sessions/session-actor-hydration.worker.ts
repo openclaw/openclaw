@@ -232,6 +232,12 @@ export function hydrateSessionActorState(
                     : pending.val(null)
                   ).as("end_cause"),
                 )
+                .select((pending) =>
+                  (tableHasColumn(database.db, "session_pending_inputs", "origin_source_json")
+                    ? pending.ref("origin_source_json")
+                    : pending.val(null)
+                  ).as("origin_source_json"),
+                )
                 .where(
                   "session_pending_inputs.session_key",
                   "=",

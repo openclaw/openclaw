@@ -8,12 +8,12 @@ import type {
   SessionPendingInputEndCause,
   SessionPendingInputRow,
 } from "../config/sessions/session-pending-input.types.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { queuedChatInputAdmission } from "./queued-chat-input-admission.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
@@ -21,9 +21,6 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 type Target = { agentId: string; storePath: string; sessionKey: string; sessionId: string };
-type QueuedInputSources = NonNullable<
-  NonNullable<InternalSessionEntry["resumeAfterRestart"]>["queuedInputSources"]
->;
 
 async function failQueuedInput(
   target: Target,
@@ -53,15 +50,13 @@ async function failQueuedInput(
   }
 }
 
-/** Continue only accepted FIFO inputs belonging to an explicitly marked graceful shutdown. */
+/** Re-admit durable FIFO rows; only a committed transcript append consumes them. */
 export async function continueSessionQueuedInputs(
   context: GatewayRequestContext,
   target: Target,
   options: {
     signal: AbortSignal;
     assertCurrent: () => void;
-    queuedInputIds: readonly string[];
-    queuedInputSources?: QueuedInputSources;
   },
 ): Promise<void> {
   const assertCurrent = () => {
@@ -70,11 +65,11 @@ export async function continueSessionQueuedInputs(
   };
   const admit = async (row: SessionPendingInputRow) => {
     assertCurrent();
-    const message = parseSessionPendingInputMessage(row.message_json);
-    const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
     let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
     let dispatchAttempted = false;
     try {
+      const message = parseSessionPendingInputMessage(row.message_json);
+      const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
@@ -82,13 +77,12 @@ export async function continueSessionQueuedInputs(
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
-      const retained = options.queuedInputSources?.[row.input_id];
-      if (!retained || retained.runId !== row.run_id) {
+      if (!row.origin_source_json) {
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
         context,
-        source: retained.source,
+        source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,
       });
       const { authority } = admitted;
@@ -177,13 +171,17 @@ export async function continueSessionQueuedInputs(
     } catch (error) {
       assertCurrent();
       // Before dispatch, an unclassified failure means the stored source cannot be restored.
-      // The restart marker is already cleared; no later pass can rediscover this row.
-      const endCause =
-        resolvePendingInputEndCause(
-          undefined,
-          error,
-          dispatchAttempted ? "failed" : "restart-unrecoverable",
-        ) ?? "restart-unrecoverable";
+      const endCause = resolvePendingInputEndCause(
+        undefined,
+        error,
+        dispatchAttempted ? "failed" : "restart-unrecoverable",
+      );
+      if (endCause === undefined) {
+        context.logGateway.warn(
+          `Queued input ${row.run_id} is waiting for restart authority: ${String(error)}`,
+        );
+        return false;
+      }
       context.logGateway.warn(
         `Queued input ${row.run_id} was not sent after restart: ${String(error)}`,
       );
@@ -191,20 +189,23 @@ export async function continueSessionQueuedInputs(
     } finally {
       admitted?.release();
     }
+    return true;
   };
   // History pages are bounded newest-first; admit the older page before this one.
-  const continuePage = async (before?: number): Promise<void> => {
+  const continuePage = async (before?: number): Promise<boolean> => {
     assertCurrent();
     const page = await readSessionQueuedInputPage(target, {
       before,
-      queuedInputIds: options.queuedInputIds,
     });
-    if (page.nextBefore !== undefined) {
-      await continuePage(page.nextBefore);
+    if (page.nextBefore !== undefined && !(await continuePage(page.nextBefore))) {
+      return false;
     }
     for (const row of page.rows.toReversed()) {
-      await admit(row);
+      if (!(await admit(row))) {
+        return false;
+      }
     }
+    return true;
   };
   await continuePage();
 }
