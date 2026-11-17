@@ -43,7 +43,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
   sidebarAgentsMode: "chip" | "roster";
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: "automations" | "customize" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionDataOwner;

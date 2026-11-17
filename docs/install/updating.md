@@ -53,6 +53,22 @@ backup.
 
 ## Update implementation contract
 
+When a package baseline's final rescan detects stat drift, the update still
+refuses package replacement. Local failure output and `openclaw update status --json`
+diagnostics identify the first entry relative to the package root (`.` for the
+root), changed stat fields, and their before/after values. Public failure reports
+retain only the changed field names. An unavailable original inode still refuses
+inspection, identifying the entry and zero inode locally and only the closed
+unavailable-inode classification publicly. These observations do not identify the writer
+or establish why a Windows update failed. The installed updater must contain this
+diagnostic change; a newer candidate cannot change an older updater's scan.
+
+Candidate Doctor compares pending plugin migration obligations independently of
+plugin order and repair guidance. A changed owner, protected path, or migration
+requirement still refuses input publication; diagnostics name added or removed
+owners even when the displayed ID summary is truncated. The candidate must contain
+this repair; the installed updater needs no schema or protocol change.
+
 Gateway update handoff preparation and its parent-side lease reads, identity checks,
 and cleanup run in the existing handoff worker. Slow coordinator filesystem work
 does not block the serving Gateway. Parking and terminal commit still await exact
@@ -472,6 +488,25 @@ selected installation's state directory, including requests from older installed
 updaters. A different profile's database version must not block that inspection.
 The candidate worker must contain this repair; an older updater inspecting with
 its own worker still needs an updated runtime.
+
+For released updaters that still rehearse Doctor on private state, the candidate
+snapshot worker preserves file-backed cold transcript rows and projects their
+payloads into the private `sessions/cold/` directories. Immutable regular files
+use hard links, with a reflink or byte copy when linking is unavailable. Existing
+files are never rewritten or chmodded through those links. Windows always copies,
+because removing a hard link on a filesystem without POSIX delete semantics, such
+as an SMB share, clears the read-only attribute of the shared live file.
+Rehearsal reads keep the normal archive integrity checks; a corrupt payload
+remains corrupt in the copy, and a referenced file already missing from live
+state stays missing. Capture continues with a snapshot warning, so only a Doctor
+repair that reads that archive fails, as it would on live state. The candidate inventory
+adds cold-file bytes to the historical `pluginBytes` allowance so released
+parents budget the full copy fallback and its I/O time. Inventory reads archive
+names from a read-only database snapshot and measures the referenced files;
+unreferenced cold files are excluded, and payload bodies are not read for sizing.
+The candidate worker must contain this fix; no schema or updater protocol change
+is needed. Files created after inventory retain the existing live-growth limit
+of the rehearsal estimate.
 
 Private Doctor and post-core workers validate command fields before entering maintenance.
 The delegated executor admits its grant data separately and still checks live process and
@@ -1699,6 +1734,16 @@ a visible timeout. Stored state and recovery backups retain their existing
 durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Candidate Doctor accepts plugin dependencies inside the private rehearsal copy
+or the staged OpenClaw package, including its nested `node_modules`. Private host
+links deliberately target that staged package; on Windows these are junctions.
+Containment applies to references from the private plugin copy. The trusted
+candidate's own dependencies retain their package-manager resolution, including
+hoisted dependencies and installation-local stores. Plugin entries and repair
+writes remain private-only, and private dependency links into the serving
+installation or user directories remain rejected. The candidate must contain
+this fix; older installed updaters need no new marker or protocol.
+
 Candidate validation uses separate size-aware allowances for snapshots and each
 runtime check. Slow snapshots and Doctor no longer consume the next check's
 allowance or trigger an additional 30-minute limit for the whole validation.
@@ -2046,10 +2091,18 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 `openclaw update` and `openclaw update repair` settle a leftover operation before
 they continue, so a killed publication no longer needs its printed recovery
-command. A killed update usually also leaves its update run unreconciled, which
-is a separate check: `openclaw update` then stops with `Update <id> has
-unfinished recovery` until one `openclaw update repair` reconciles the run.
-Repair settles the publication in the same pass:
+command. A killed update usually also leaves the plugin recovery it reserved,
+which is a separate check. The next `openclaw update` settles that as well when
+`openclaw update repair` would have nothing left to finish: on a package
+install, the killed update was a command-line `openclaw update` whose process
+has exited, the update lease
+store still holds its lease, it did not leave the Gateway stopped, and either
+the previous version is still installed or the Gateway was verified on the new
+one. It reports an `interrupted-update-recovery` warning and continues.
+Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
+can settle it, the reason and the command to run; see
+[how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).
+Both commands settle a leftover publication:
 
 - **Untouched preparation.** It is retired after the original package and
   launchers are verified.
@@ -2585,7 +2638,20 @@ state-owning account after that stop, then have the service owner start the unit
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
-references and unverified processes still preserve the affected artifacts.
+references and unverified same-account processes still preserve the affected
+artifacts. An unreadable service-marker environment from a known foreign account,
+including root, does not block cleanup without positive OpenClaw or runtime-path
+evidence. Unknown process ownership stays conservative. The Doctor performing
+cleanup must contain this fix; it can reclaim runtimes left by older updaters
+without changing their markers or requiring privileged process inspection.
+
+Running node hosts (`openclaw node run`, including the CLI process their
+launcher starts), the macOS app, and its node worker never create updater
+runtimes, so they do not block reclamation on any platform unless they reference
+a runtime. On macOS, helpers that inherit the Gateway's service environment,
+such as credential agents or `adb`, are not OpenClaw processes. A CLI process
+whose title hides its command still preserves runtimes unless its launcher shows
+a command that never updates.
 
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes

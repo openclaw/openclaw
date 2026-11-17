@@ -46,7 +46,7 @@ export type AppSidebarProps = {
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   connectionPending?: boolean;
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: "automations" | "customize" | "sessions" | "online";
   navigationCollapsed: boolean;
   sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;

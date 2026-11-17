@@ -45,12 +45,14 @@ import {
 import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import {
   readSessionForkRequesterFromTurn,
   type SessionForkRequester,
 } from "./session-fork-requester.js";
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "./spawned-context.js";
 
 /**
  * A background agent run on a copy of one session's conversation, through one completed
@@ -260,7 +262,7 @@ async function readSessionForkPin(
  * fork does not read the call as failed. The model view has no persistence target: these
  * results exist only in the fork.
  */
-export async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+async function markRunningToolCalls(manager: SessionManager): Promise<void> {
   // The latest batch is the last assistant message plus the tool results recorded after it.
   const completed = new Set<string>();
   let batch: AssistantMessage | undefined;
@@ -511,6 +513,21 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     projection: "list",
   });
   const agentDir = resolveAgentDir(config, agentId);
+  // Keep the transcript's durable cwd, but prepare sandbox execution exactly as a parent turn.
+  const executionWorkspaceDir =
+    entry?.worktree &&
+    resolveSandboxRuntimeStatus({
+      cfg: config,
+      agentId,
+      sessionKey,
+      preparedSessionEntry: entry,
+    }).sandboxed
+      ? (resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: entry.spawnedBy,
+          workspaceDir: entry.spawnedWorkspaceDir,
+          cwd: entry.spawnedCwd,
+        }) ?? workspaceDir)
+      : workspaceDir;
 
   const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
   // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
@@ -552,7 +569,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         runId,
       },
       sessionManager,
-      workspaceDir,
+      workspaceDir: executionWorkspaceDir,
       permissionMode: sourceEntry.permissionMode,
       abortSignal,
       prompt: params.prompt,
@@ -574,7 +591,10 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.
-      toolExecutionAllow: [...params.tools],
+      // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
+      toolExecutionAllow: params.tools.filter(
+        (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
+      ),
       sessionForkRequest: {
         ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
         ...(pin ? { pin } : {}),

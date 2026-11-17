@@ -11,6 +11,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
+import { resolveCronRouteData } from "./route-model.ts";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
@@ -130,7 +131,13 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   // Route changes retarget Gateway job queries.
   createEffect(
     () => props.routeSearch ?? "",
-    (search) => page.setRouteSearch(search),
+    (search) => {
+      page.setRouteSearch(search);
+      // `?new` is the sidebar's New automation entry.
+      if (resolveCronRouteData(search).create) {
+        page.actions.onOpenCreate();
+      }
+    },
   );
   return <CronPageContent page={page} />;
 }
