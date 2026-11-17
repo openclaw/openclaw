@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { SourceMap } from "node:module";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { installWarmReloadTranscriptProbe } from "../../../scripts/perf/warm-reload-transcript-probe.ts";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
@@ -38,7 +40,7 @@ function installTranscriptScrollWriteProbe() {
       .split("\n")
       .flatMap((line) => {
         const frame = line.match(
-          /((?:ui\/)?src\/pages\/chat\/[^?:)\s]+|node_modules\/@tanstack\/virtual-core\/[^?:)\s]+|scripts\/perf\/warm-reload-transcript-probe\.ts)(?:\?[^)\s]*?)?:(\d+):(\d+)/u,
+          /(assets\/[A-Za-z0-9_-]+\.js|(?:ui\/)?src\/pages\/chat\/[^?:)\s]+|node_modules\/@tanstack\/virtual-core\/[^?:)\s]+|scripts\/perf\/warm-reload-transcript-probe\.ts)(?:\?[^)\s]*?)?:(\d+):(\d+)/u,
         );
         return frame ? [`${frame[1]}:${frame[2]}:${frame[3]}`] : [];
       })
@@ -108,6 +110,59 @@ function installTranscriptScrollWriteProbe() {
   };
   Reflect.set(window, "__transcriptScrollWrites", probe);
   return probe;
+}
+
+// Preview runs execute bundled assets; resolve frames while their exact build still exists.
+function mapTranscriptScrollWrites(
+  writes: ReturnType<ReturnType<typeof installTranscriptScrollWriteProbe>["read"]>,
+  buildRoot: string | undefined,
+) {
+  const maps = new Map<string, SourceMap | null>();
+  return {
+    ...writes,
+    records: writes.records.map((record) => ({
+      ...record,
+      stack: record.stack.map((frame) => {
+        const asset = frame.match(/^assets\/([A-Za-z0-9_-]+\.js):(\d+):(\d+)$/u);
+        if (!asset) {
+          return frame;
+        }
+        if (!buildRoot) {
+          return `${frame} [no-build-root]`;
+        }
+        if (!maps.has(asset[1])) {
+          try {
+            maps.set(
+              asset[1],
+              new SourceMap(
+                JSON.parse(readFileSync(path.join(buildRoot, "assets", `${asset[1]}.map`), "utf8")),
+              ),
+            );
+          } catch {
+            maps.set(asset[1], null);
+          }
+        }
+        const map = maps.get(asset[1]);
+        if (!map) {
+          return `${frame} [map-unavailable]`;
+        }
+        try {
+          const entry = map.findEntry(Number(asset[2]) - 1, Number(asset[3]) - 1);
+          const source = entry.originalSource?.match(
+            /((?:ui\/)?src\/pages\/chat\/[A-Za-z0-9_./-]+|node_modules\/@tanstack\/virtual-core\/[A-Za-z0-9_./-]+)$/u,
+          )?.[1];
+          if (!source || source.split("/").includes("..")) {
+            return `${frame} [source-unavailable]`;
+          }
+          const name =
+            entry.name && /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(entry.name) ? ` ${entry.name}` : "";
+          return `${source}:${entry.originalLine + 1}:${entry.originalColumn + 1}${name}`;
+        } catch {
+          return `${frame} [mapping-failed]`;
+        }
+      }),
+    })),
+  };
 }
 
 function afterTwoFrames(): Promise<void> {
@@ -250,6 +305,10 @@ suite.define(() => {
             ...Reflect.get(window, "__activeTranscriptReload").read(),
             scrollWrites: Reflect.get(window, "__transcriptScrollWrites").read(),
           }));
+          result.scrollWrites = mapTranscriptScrollWrites(
+            result.scrollWrites,
+            inject("controlUiE2eBuildRoot"),
+          );
           const frames = result.frames;
           if (appendedPairs === 1) {
             expect(result.missingAnchorFrames).toBe(0);
