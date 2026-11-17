@@ -9,7 +9,6 @@ import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidat
 import {
   channelToNpmTag,
   DEFAULT_GIT_CHANNEL,
-  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
@@ -336,14 +335,10 @@ export async function resolveUpdateCommandTarget(
       }
 
       const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
-      if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
+      if (unsupportedMainTag) {
         await refuseUpdate(
-          unsupportedMainTag
-            ? "unsupported-package-target"
-            : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-          unsupportedMainTag
-            ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
-            : undefined,
+          "unsupported-package-target",
+          "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow.",
         );
         return undefined;
       }
@@ -509,7 +504,7 @@ export async function resolveUpdateCommandTarget(
             env: packageInstallEnv,
           });
         let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
-        if (channel === "extended-stable") {
+        if (channel === "extended-stable" && !explicitTag) {
           const extendedStable = await resolveExtendedStablePackage({
             installKind: updateInstallKind,
             timeoutMs,
