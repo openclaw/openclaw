@@ -287,7 +287,7 @@ describe("A2A channel inbound dispatch", () => {
         ]);
       } else {
         expect(steered.artifacts).toEqual([]);
-        expect(steered.status.message?.parts).toEqual([{ text: status }]);
+        expect(steered.status).toMatchObject({ message: { parts: [{ text: status }] } });
       }
     },
   );
