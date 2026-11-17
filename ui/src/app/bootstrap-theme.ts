@@ -8,10 +8,6 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import {
-  nativeConversationPreferences,
-  readNativeConversationTheme,
-} from "./native-conversation-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,
@@ -98,13 +94,33 @@ function appearanceKey(settings: UiPreferences): string {
   ]);
 }
 
+function nativeConversationPreferences(settings: UiPreferences): UiPreferences {
+  return {
+    ...settings,
+    theme: "custom",
+    // WKWebView's interface style already follows the native app appearance.
+    themeMode: "system",
+    accent: "theme",
+    fontUi: undefined,
+    fontChat: undefined,
+    customTheme: undefined,
+    background: {
+      ...settings.background,
+      source: { kind: "none" },
+      showOnNewSession: false,
+      showInSessions: false,
+      visibility: 0,
+    },
+  };
+}
+
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
+  nativeTheme?: CatalogTheme,
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  const nativeTheme = readNativeConversationTheme();
   let presentationSettings = nativeTheme ? nativeConversationPreferences(settings) : settings;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;

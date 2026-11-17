@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { nativeEmbedHost } from "./native-web-chrome.ts";
-import type { UiPreferences } from "./settings.ts";
 import type { CatalogTheme } from "./theme-catalog.ts";
 import { normalizeThemePalette } from "./theme-palette.ts";
 
@@ -36,24 +35,4 @@ export function readNativeConversationTheme(): CatalogTheme | undefined {
   } catch {
     return undefined;
   }
-}
-
-export function nativeConversationPreferences(settings: UiPreferences): UiPreferences {
-  return {
-    ...settings,
-    theme: "custom",
-    // WKWebView's interface style already follows the native app appearance.
-    themeMode: "system",
-    accent: "theme",
-    fontUi: undefined,
-    fontChat: undefined,
-    customTheme: undefined,
-    background: {
-      ...settings.background,
-      source: { kind: "none" },
-      showOnNewSession: false,
-      showInSessions: false,
-      visibility: 0,
-    },
-  };
 }

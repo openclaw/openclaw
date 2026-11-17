@@ -84,6 +84,7 @@ import {
 } from "./settings.ts";
 import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
+import type { CatalogTheme } from "./theme-catalog.ts";
 import { bindUpdateConfigWriteInterlock } from "./update-config-interlock.ts";
 import { openUpdateFailureTriage } from "./update-triage.ts";
 import { seedUserPreferences } from "./user-prefs-cache.ts";
@@ -99,6 +100,7 @@ type PendingRouterStartNavigation = {
 export function bootstrapApplication(
   initial = prepareApplicationStartup(),
   earlyGateway?: EarlyApplicationGateway,
+  nativeTheme?: CatalogTheme,
 ): import("./application-runtime.ts").ApplicationRuntime {
   const {
     history,
@@ -235,7 +237,7 @@ export function bootstrapApplication(
       seedUserPreferences(snapshot.client, profileId, PROFILE_UI_PREFERENCE_KEYS, entries);
     }
   });
-  const theme = createApplicationTheme(settings, gateway);
+  const theme = createApplicationTheme(settings, gateway, nativeTheme);
   const agentSelection = createAgentSelectionCapability(
     gateway,
     agents,

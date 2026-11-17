@@ -2,10 +2,12 @@
 
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { beforeEach, expect, it, vi, type Mock } from "vitest";
+import { createThemePaletteFixture } from "../../../test/helpers/theme-fixture.ts";
 import { collectMcpAppStyleVariables } from "../components/mcp-app-theme.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
+import { readNativeConversationTheme } from "./native-conversation-theme.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
 const disposals: Array<() => void> = [];
@@ -32,7 +34,9 @@ beforeEach(({ onTestFinished }) => {
     saveSettings(previous);
     document.querySelectorAll('[id^="openclaw-theme-palette-"]').forEach((link) => link.remove());
     document.documentElement.removeAttribute("style");
+    document.getElementById("openclaw-custom-theme")?.remove();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     for (const link of document.querySelectorAll('link[id^="openclaw-typeface-"]')) {
       if (!existingFontLinks.has(link)) {
         link.remove();
@@ -126,6 +130,32 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   link.dispatchEvent(new Event("load"));
   expect(snapshots).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.themeMode).toBe("light");
+});
+
+it("does not let a disposed web palette overwrite a fresh native presentation owner", () => {
+  patchSettings({ theme: "tide", themeMode: "dark" });
+  const link = pendingPalette();
+  theme.dispose();
+  vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", {
+    platform: "ios",
+    formFactor: "pad",
+    surface: "conversation",
+    appearance: {
+      light: createThemePaletteFixture({ background: "#fafafa" }),
+      dark: createThemePaletteFixture({ background: "#000000" }),
+    },
+  });
+  const { gateway } = createGatewayStoreTestStore({ settings: loadSettings() });
+  disposals.push(() => gateway.stop());
+  theme = createApplicationTheme(loadSettings(), gateway, readNativeConversationTheme());
+  const palette = theme.appliedPalette;
+  const style = document.getElementById("openclaw-custom-theme")?.textContent;
+  expect(style).toContain("#fafafa");
+  link.dispatchEvent(new Event("load"));
+  expect(document.documentElement.dataset.themeId).toBe("custom");
+  expect(document.getElementById("openclaw-custom-theme")?.textContent).toBe(style);
+  expect(document.documentElement.style.getPropertyValue("--app-background-image")).toBe("none");
+  expect(theme.appliedPalette).toBe(palette);
 });
 
 it.each([
