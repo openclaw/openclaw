@@ -9,6 +9,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
+  type SqliteWorkerExecuteOptions,
 } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import { classifyWorkerRequest } from "./sqlite-worker-request-class.js";
@@ -60,13 +61,26 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
   })();
 }
 
+/** Charge backing allocations once; transferred bytes remain resident during command streaming. */
+export function sqliteWorkerTransferredInputBytes(
+  input: SqliteWorkerExecuteOptions["transferredInput"],
+): number {
+  return [...new Set(Object.values(input ?? {}).map((value) => value.buffer))].reduce(
+    (bytes, buffer) => bytes + buffer.byteLength,
+    0,
+  );
+}
+
 export function createSqliteWorkerClient<Operations extends SqliteWorkerOperations>(owner: {
   actor: Actor;
   isDraining: () => boolean;
   isAvailable: () => boolean;
   retireIdle?: () => Promise<void> | undefined;
   dispatch: (
-    payload: Buffer<ArrayBuffer>,
+    input: {
+      payload: Buffer<ArrayBuffer>;
+      transferredInput?: SqliteWorkerExecuteOptions["transferredInput"];
+    },
     signal: AbortSignal | undefined,
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
@@ -107,6 +121,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         );
       }
       let payload: Buffer<ArrayBuffer>;
+      let transferredInput: typeof options.transferredInput;
       let requestClass: string;
       let assertCurrent: (() => void) | undefined;
       const admission = scope?.assertCurrent;
@@ -120,13 +135,19 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
         payload = serialize({ type: commandType, input: command.input });
+        if (options.transferredInput) {
+          const buffers = [
+            ...new Set(Object.values(options.transferredInput).map((value) => value.buffer)),
+          ];
+          transferredInput = structuredClone(options.transferredInput, { transfer: buffers });
+        }
       } catch (error) {
         return Promise.reject(
           toErrorObject(error, "SQLite worker command could not be serialized"),
         );
       }
       const operation = owner.dispatch(
-        payload,
+        { payload, transferredInput },
         options.signal,
         scope,
         assertCurrent,

@@ -265,6 +265,7 @@ export async function dispatchSqliteWorkerJob(
     // Serialized commands are owned by this dispatch; custody keeps their byte charge until settlement.
     slot.worker.postMessage(request, [
       ...postgresPoolTransferList(request.postgresPool),
+      ...new Set(Object.values(request.transferredInput ?? {}).map((value) => value.buffer)),
       ...(request.operationAdmission ? [request.operationAdmission] : []),
       ...("input" in request ? [request.input.buffer] : []),
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),

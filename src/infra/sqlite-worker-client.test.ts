@@ -1,9 +1,10 @@
-import { serialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createSqliteWorkerClient as createClient,
   runSqliteWorkerClientOperation as runOperation,
+  sqliteWorkerTransferredInputBytes,
 } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
 
@@ -55,7 +56,7 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const check = async (type: string, input: unknown, requestClass: string) => {
     const command = { type, input };
     await expect(store.execute(command)).resolves.toBe("committed");
-    expect(dispatch.mock.lastCall?.[0]).toEqual(serialize(command));
+    expect(dispatch.mock.lastCall?.[0].payload).toEqual(serialize(command));
     expect(dispatch.mock.lastCall?.[5]).toBe(requestClass);
   };
   const input = { value: "synthetic-private-payload" };
@@ -123,3 +124,48 @@ it.each(["scope", "command"] as const)(
     );
   },
 );
+
+it("moves publication bytes without detaching the retained recovery pack", async () => {
+  const dispatch = vi.fn<Dispatch>().mockResolvedValue("committed");
+  const { store } = clientFixture<DiagnosticOperations>({ dispatch });
+  const recoveryPack = Uint8Array.from([3, 1, 4]);
+  const publicationPack = new Uint8Array(recoveryPack);
+  await store.execute(
+    { type: "write", input: { journalPack: undefined } },
+    { transferredInput: { journalPack: publicationPack } },
+  );
+  expect(publicationPack.byteLength).toBe(0);
+  expect(recoveryPack).toEqual(Uint8Array.from([3, 1, 4]));
+  expect(deserialize(dispatch.mock.lastCall![0].payload)).toEqual({
+    type: "write",
+    input: { journalPack: undefined },
+  });
+  expect(dispatch.mock.lastCall![0].transferredInput?.journalPack).toEqual(recoveryPack);
+});
+
+it("does not consume publication bytes for already-canceled work", async () => {
+  const dispatch = vi.fn<Dispatch>().mockResolvedValue("committed");
+  const { store } = clientFixture<DiagnosticOperations>({ dispatch });
+  const publicationPack = Uint8Array.from([2, 7]);
+  await expect(
+    store.execute(
+      { type: "write", input: {} },
+      {
+        signal: AbortSignal.abort(new Error("canceled")),
+        transferredInput: { journalPack: publicationPack },
+      },
+    ),
+  ).rejects.toThrow("canceled");
+  expect(publicationPack).toEqual(Uint8Array.from([2, 7]));
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+it("charges aliased transfer views once at their full allocation size", () => {
+  const allocation = new Uint8Array(128);
+  expect(
+    sqliteWorkerTransferredInputBytes({
+      first: allocation.subarray(0, 4),
+      second: allocation.subarray(8, 12),
+    }),
+  ).toBe(128);
+});

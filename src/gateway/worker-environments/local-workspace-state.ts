@@ -94,8 +94,9 @@ export function projectionOperations(
   const update = async (
     patch: Parameters<typeof store.update>[1],
     manifest?: Parameters<typeof store.update>[3],
+    publicationPack?: Uint8Array<ArrayBuffer>,
   ) => {
-    row = await store.update(current(), patch, owner.workerAuthority, manifest);
+    row = await store.update(current(), patch, owner.workerAuthority, manifest, publicationPack);
   };
   const repairBaseline = async () => {
     const repair = await store.manifest(current(), {
@@ -391,10 +392,15 @@ export function projectionOperations(
           journal: {
             load: async () => undefined,
             begin: async (journal) => {
-              await update({
-                journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
-                journal_pack: journal.basePack,
-              });
+              // Publication consumes only this copy; rollback and receipt checks retain basePack.
+              await update(
+                {
+                  journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+                  journal_pack: journal.basePack,
+                },
+                undefined,
+                new Uint8Array(journal.basePack),
+              );
             },
             abort: async () => {
               await update({ journal_json: null, journal_pack: null });

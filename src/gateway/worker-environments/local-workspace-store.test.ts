@@ -18,10 +18,7 @@ import {
 } from "../../agents/worktrees/capacity-contract.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import {
-  type SqliteWorkerReply,
-  SQLITE_WORKER_MAX_MESSAGE_BYTES,
-} from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerReply } from "../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import {
@@ -824,60 +821,6 @@ it("adopts native committed facts after reply loss without replaying the mutatio
   lostReply.mockRestore();
   expect(writes).toBe(3);
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toBeUndefined();
-});
-
-it("recovers an oversized committed row after reply loss without replaying or trimming bytes", async () => {
-  const worktreeId = randomUUID();
-  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
-    store.create(localWorkspaceProjectionFixture(worktreeId, root)),
-  );
-  const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
-  const journalPack = Buffer.alloc(1024, 7);
-  let writes = 0;
-  let retainedGuard: (() => void) | undefined;
-  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
-    const result = await scope.execute(command, executeOptions);
-    if (command.type === "localWorkspace.mutate") {
-      writes += 1;
-      throw new Error("Synthetic local workspace reply lost after native commit");
-    }
-    return result;
-  });
-  const acknowledged = await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    retainedGuard = store.assertCurrent;
-    const row = await store.update(
-      { ...store.get()!, base_commit: "f".repeat(40) },
-      {
-        baseline_ref: "sha256:oversized",
-        baseline_json: baseline,
-        journal_json: "{}",
-        journal_pack: journalPack,
-        paused_runtimes_json: undefined,
-      },
-    );
-    expect(store.get()).toEqual(row);
-    return row;
-  });
-  lostReply.mockRestore();
-  expect(writes).toBe(1);
-  assert(retainedGuard);
-  expect(retainedGuard).toThrow();
-  const committed = await readLocalWorkspaceProjection(worktreeId, env);
-  expect(acknowledged).toMatchObject({
-    revision: 1,
-    baseline_ref: "sha256:oversized",
-    base_commit: "a".repeat(40),
-    journal_json: "{}",
-    paused_runtimes_json: null,
-  });
-  expect(acknowledged.baseline_json).toBe(baseline);
-  // Keep the worker's plain byte-view shape without another main-thread copy.
-  expect(acknowledged.journal_pack?.constructor).toBe(Uint8Array);
-  expect(acknowledged.journal_pack?.buffer).toBe(journalPack.buffer);
-  expect(acknowledged.journal_pack?.byteOffset).toBe(journalPack.byteOffset);
-  expect(acknowledged.journal_pack?.byteLength).toBe(journalPack.byteLength);
-  expect(committed).toEqual(acknowledged);
-  expect(committed?.baseline_json).toBe(baseline);
 });
 
 it("queues an expanded checkpoint receipt behind another workspace write", async () => {

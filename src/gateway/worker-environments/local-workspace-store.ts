@@ -66,6 +66,7 @@ export type LocalWorkspaceStore = {
     patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"],
     authority?: WorktreeWorkerAuthority,
     manifest?: LocalWorkspaceManifestMutation | LocalWorkspaceBaselineDocument,
+    publicationPack?: Uint8Array<ArrayBuffer>,
   ) => Promise<LocalWorkspaceProjection>;
   accept: (
     prepared: LocalWorkspacePreparedUpdate,
@@ -189,6 +190,7 @@ export function withLocalWorkspaceStore<T>(
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
+                  publicationPack?: Uint8Array<ArrayBuffer>,
                 ) => {
                   assertCurrent();
                   if (mutation.kind === "update" && mutation.manifest) {
@@ -228,6 +230,12 @@ export function withLocalWorkspaceStore<T>(
                       };
                     }
                   }
+                  if (publicationPack && wireMutation.kind === "update") {
+                    wireMutation = {
+                      ...wireMutation,
+                      patch: { ...wireMutation.patch, journal_pack: undefined },
+                    };
+                  }
                   let pending:
                     | {
                         mutation: LocalWorkspaceMutation;
@@ -263,16 +271,21 @@ export function withLocalWorkspaceStore<T>(
                         runOpenClawStateWorkerOperation(
                           context,
                           (scope) =>
-                            scope.execute({
-                              type: "localWorkspace.mutate",
-                              input: {
-                                id: params.worktreeId,
-                                mutation: wireMutation!,
-                                preparationEpoch,
-                                predicates,
-                                leases: write.identities,
+                            scope.execute(
+                              {
+                                type: "localWorkspace.mutate",
+                                input: {
+                                  id: params.worktreeId,
+                                  mutation: wireMutation!,
+                                  preparationEpoch,
+                                  predicates,
+                                  leases: write.identities,
+                                },
                               },
-                            }),
+                              publicationPack
+                                ? { transferredInput: { journalPack: publicationPack } }
+                                : undefined,
+                            ),
                           {
                             assertCurrent: assertWrite,
                             createAdmission(operation) {
@@ -397,7 +410,7 @@ export function withLocalWorkspaceStore<T>(
                     await mutate({ kind: "create", row: value }, guard);
                     return row!;
                   },
-                  update: async (previous, patch, guard, manifest) => {
+                  update: async (previous, patch, guard, manifest, publicationPack) => {
                     if (previous.worktree_id !== params.worktreeId) {
                       throw new Error("Local workspace binding changed");
                     }
@@ -425,6 +438,7 @@ export function withLocalWorkspaceStore<T>(
                       await mutate(
                         { kind: "update", revision: previous.revision, patch, manifest },
                         guard,
+                        publicationPack,
                       );
                     }
                     return row!;

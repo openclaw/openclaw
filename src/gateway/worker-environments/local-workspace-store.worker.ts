@@ -53,6 +53,7 @@ export const localWorkspaceOperations = {
     input: {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
+      journalPack?: Uint8Array;
       preparationEpoch: number | undefined;
       leases: readonly OpenClawStateLeaseIdentity[];
       predicates?: readonly WorktreeRegistryPredicate[];
@@ -72,6 +73,9 @@ export const localWorkspaceOperations = {
       input.mutation instanceof Uint8Array
         ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
+    if (input.journalPack && mutation.kind === "update") {
+      mutation.patch.journal_pack = input.journalPack;
+    }
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const committed =

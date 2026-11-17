@@ -48,6 +48,7 @@ import type {
 import {
   createSqliteWorkerClient,
   runSqliteWorkerClientOperation,
+  sqliteWorkerTransferredInputBytes,
 } from "./sqlite-worker-client.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
@@ -370,17 +371,18 @@ export class SqliteWorkerBroker {
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
       retireIdle: options.retireIdle,
-      dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
+      dispatch: (envelope, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
           {
             type: "execute",
             actor: owned.id,
             databaseIdentity,
-            input: payload,
+            input: envelope.payload,
+            transferredInput: envelope.transferredInput,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
           },
-          sqliteWorkerRequestBytes(payload, scope?.stateContext),
+          sqliteWorkerRequestBytes(envelope.payload, scope?.stateContext),
           {
             signal,
             requestClass,
@@ -505,7 +507,8 @@ export class SqliteWorkerBroker {
       return reject(slot.failed);
     }
     const activeInput = body.type === "execute" && bytes > MAX_QUEUED_COMMAND_BYTES;
-    const reservedBytes = activeInput ? SQLITE_WORKER_MAX_MESSAGE_BYTES : bytes;
+    const transferBytes = sqliteWorkerTransferredInputBytes(body.transferredInput);
+    const reservedBytes = (activeInput ? SQLITE_WORKER_MAX_MESSAGE_BYTES : bytes) + transferBytes;
     if (
       body.type !== "close" &&
       ((body.type !== "execute" && bytes > SQLITE_WORKER_MAX_MESSAGE_BYTES) ||
@@ -613,7 +616,9 @@ export class SqliteWorkerBroker {
         this.warnAdmission(this.waiters.get(slot)?.size ?? 0, Date.now() - started);
         resume(new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded"));
       }, ADMISSION_TIMEOUT_MS);
-      const releaseInput = this.inputAdmission.retain(bytes);
+      const releaseInput = this.inputAdmission.retain(
+        bytes + sqliteWorkerTransferredInputBytes(body.transferredInput),
+      );
       waiters.add(resume);
       this.waiters.set(slot, waiters);
       signal?.addEventListener("abort", abort, { once: true });
