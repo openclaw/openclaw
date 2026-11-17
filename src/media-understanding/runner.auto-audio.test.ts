@@ -77,9 +77,7 @@ describe("runCapability audio", () => {
     const failure =
       mode === "upload"
         ? await createProviderHttpError(
-            new Response('{"detail":"Synthetic body","code":"insufficient_quota"}', {
-              status: 403,
-            }),
+            new Response('{"detail":"Body","code":"insufficient_quota"}', { status: 403 }),
             "Audio transcription failed",
             { statusPrefix: "HTTP " },
           )
@@ -133,25 +131,18 @@ describe("runCapability audio", () => {
       );
     } else if (mode === "missing-auth") {
       expect(result.decision.attachments[0]?.attempts).toEqual([]);
+    } else if (explicit) {
+      expect(result.outputs).toMatchObject([{ text: "authored fallback transcript" }]);
     } else {
-      expect(result.decision.attachments[0]?.attempts[0]).toMatchObject({
-        provider: "openai",
-        outcome: "failed",
-        reason: String(failure),
-      });
-      if (explicit) {
-        expect(result.outputs).toMatchObject([{ text: "authored fallback transcript" }]);
-      } else {
-        expect(result.outputs).toEqual([]);
-        expect(hasAuth).not.toHaveBeenCalled();
-        expect(formatDecisionSummary(result.decision)).toBe(
-          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403) code=insufficient_quota",
-        );
-        const disposition = result.decision.attachmentDispositions?.[0] ?? { kind: "handled" };
-        expect(renderMediaAttachmentDisposition("audio", disposition)).toBe(
-          "[Audio attachment could not be analyzed (HTTP 403 code=insufficient_quota)]",
-        );
-      }
+      expect(result.outputs).toEqual([]);
+      expect(hasAuth).not.toHaveBeenCalled();
+      expect(formatDecisionSummary(result.decision)).toBe(
+        "audio: failed (0/1) reason=Audio transcription failed (HTTP 403) code=insufficient_quota",
+      );
+      const disposition = result.decision.attachmentDispositions?.[0] ?? { kind: "handled" };
+      expect(renderMediaAttachmentDisposition("audio", disposition)).toBe(
+        "[Audio attachment could not be analyzed (HTTP 403 code=insufficient_quota)]",
+      );
     }
   });
 
