@@ -10,6 +10,8 @@ const enChatMedia = {
       previous: "Previous image",
       next: "Next image",
       position: "{current} / {total}",
+      thumbnails: "Image thumbnails",
+      thumbnail: "Show image {current}: {title}",
       label: "Image preview: {title}",
       open: "Open image {title}",
       openOriginal: "Open in new tab",

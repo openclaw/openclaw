@@ -1,10 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   exactButton,
@@ -413,17 +414,15 @@ suite.define(() => {
       await polledAttribute(image, "src").toContain("width=1920");
       expect(renditionSources()).toEqual([sources[0]]);
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
-      await page.keyboard.press("ArrowRight");
-      await polledAttribute(image, "alt").toBe("after.png");
-      await polledText(lightbox.locator(".gallery-counter")).toContain("2 / 3");
-      expect(renditionSources()).toEqual(sources.slice(0, 2));
-      await page.keyboard.press("ArrowRight");
+      await lightbox.getByRole("button", { name: "Show image 3: hover.png" }).click();
       await polledAttribute(image, "alt").toBe("hover.png");
+      await polledText(lightbox.locator(".gallery-counter")).toContain("3 / 3");
+      expect(renditionSources()).toEqual([sources[0], sources[2]]);
       // Routing disables HTTP caching: an unretained neighbor would be fetched again.
       await protocol.send("HeapProfiler.collectGarbage");
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
-      expect(renditionSources()).toEqual(sources);
+      expect(renditionSources()).toEqual([sources[0], sources[2], sources[1]]);
       expect(metadataSources.toSorted()).toEqual(sources.toSorted());
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
@@ -530,6 +529,49 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expectFocused(trigger);
     }
+  });
+
+  it("jumps between loaded chat images through the thumbnail strip", async () => {
+    const page = await newPage({ reducedMotion: "reduce" });
+    await installImageGalleries(page);
+    const trigger = await revealImage(page, "Gallery 1 image 1");
+    await trigger.click();
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const image = lightbox.locator(".image");
+    await expectLoadedImage(image);
+    const capture = async (name: string) => {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        lightbox.locator(".lightbox"),
+        [image, exactButton(lightbox, "Close image preview")],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
+    };
+    await capture("desktop");
+    const thumbnails = lightbox.locator(".gallery-thumbnail");
+    await expect.poll(() => thumbnails.count()).toBe(8);
+    await thumbnails.nth(7).click();
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("8 / 8");
+    await polledAttribute(image, "alt").toBe("Gallery 5 image 5");
+    await polledAttribute(thumbnails.nth(7), "aria-current").toBe("true");
+    await exactButton(lightbox, "Zoom in").click();
+    await thumbnails.nth(1).click();
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("2 / 8");
+    await polledText(exactButton(lightbox, "Reset zoom")).toContain("100%");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await thumbnails.nth(7).click();
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("8 / 8");
+    await page.keyboard.press("ArrowLeft");
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("7 / 8");
+    await polledAttribute(thumbnails.nth(6), "aria-current").toBe("true");
+    await thumbnails.nth(0).focus();
+    await page.keyboard.press("Enter");
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("1 / 8");
+    await capture("mobile");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => lightbox.count()).toBe(0);
+    await expectFocused(trigger);
   });
 
   it("navigates the loaded thread and restores the original tile focus", async () => {
