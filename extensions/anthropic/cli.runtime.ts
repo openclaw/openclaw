@@ -330,7 +330,6 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   // parent-lane receipt. A warm process would lend them the next turn's tool and MCP authority.
   const holdsBackgroundTasks =
     turn.pendingBackgroundTaskIds.size > 0 || session.runningDescendants.size > 0;
-  session.currentTurn = undefined;
   // Unfinished injected input would run as an orphan native turn; the host replays it instead.
   const orphanedInput = turn.injectedInputs.size > 0;
   rejectInjectedInputs(
@@ -343,9 +342,6 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
     // A failed parent does not stop native background continuations. Never lend them a new turn.
     // Input written into a turn that ended unanswered is the same kind of debt.
     session.handle.close(holdsBackgroundTasks || orphanedInput ? "abort" : "idle");
-  } else {
-    session.idleTimer = setTimeout(() => session.handle.close("idle"), IDLE_TIMEOUT_MS);
-    session.idleTimer.unref();
   }
 }
 
@@ -601,10 +597,14 @@ export async function* executeClaudeCli(
   context.abortSignal?.throwIfAborted();
   const capability = context.liveSession;
   const existing = capability?.current();
-  const reusable =
+  let reusable =
     existing && existing.fingerprint === capability?.fingerprint
       ? sessions.get(existing)
       : undefined;
+  if (reusable?.currentTurn) {
+    reusable.handle.close("abort");
+    reusable = undefined;
+  }
   if (!reusable && capability) {
     await capability.restart();
   }
@@ -771,7 +771,13 @@ export async function* executeClaudeCli(
     context.abortSignal?.removeEventListener("abort", abort);
     // Iterator.return() is cancellation too; a partially consumed turn cannot stay warm.
     if (session.currentTurn === turn) {
-      session.handle.close("abort");
+      if (turn.sawTerminalResult && !session.closed) {
+        session.currentTurn = undefined;
+        session.idleTimer = setTimeout(() => session.handle.close("idle"), IDLE_TIMEOUT_MS);
+        session.idleTimer.unref();
+      } else {
+        session.handle.close("abort");
+      }
     }
     await startup;
     if (session.closed) {

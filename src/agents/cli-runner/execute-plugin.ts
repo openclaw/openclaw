@@ -37,16 +37,18 @@ import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import {
-  restartCliLiveSession,
+  closeCliLiveSession,
   createCliLiveSessionCapability,
   ensureCliLiveSessionMemory,
   getCliLiveSessionApprovalGrants,
+  restartCliLiveSession,
 } from "./cli-live-session-registry.js";
 import {
   requestCliNativeToolApproval,
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
+import { runCliCleanup } from "./cleanup.js";
 import { closePluginIterator, waitForIteratorValue } from "./execute-plugin-iterator.js";
 import { bindCliTurnStatus } from "./execute-plugin-status.js";
 import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
@@ -720,7 +722,27 @@ export async function executePluginOwnedProcess(params: {
     // Closing the turn fences those capabilities before any outer cleanup runs.
     controller.abort(new Error("CLI plugin runtime turn is no longer active."));
     detachReplyBackend?.();
-    await closePluginIterator(iterator);
+    try {
+      await runCliCleanup(
+        run,
+        "cli-plugin-runtime-close",
+        () => closePluginIterator(iterator),
+        "required",
+      );
+    } catch (error) {
+      if (liveSession) {
+        try {
+          await closeCliLiveSession(params.context, "abort");
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "CLI plugin runtime failed to close and its live session could not be retired.",
+            { cause: error },
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   return {
