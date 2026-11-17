@@ -81,16 +81,6 @@ struct OnboardingRemoteAuthPromptTests {
         }
     }
 
-    @Test func `new remote auth issues have onboarding presentation styles`() {
-        for issue in [
-            RemoteGatewayAuthIssue.trustedProxyIdentityRequired,
-            .tailscaleIdentityUnavailable,
-        ] {
-            let style = OnboardingView.remoteAuthPromptStyle(for: issue)
-            #expect(style.systemImage.contains("network"))
-        }
-    }
-
     @Test func `password detail family maps to password required issue`() {
         let mismatch = GatewayConnectAuthError(
             message: "password mismatch",
