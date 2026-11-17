@@ -52,7 +52,10 @@ import {
 } from "./subagent-announce-output.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
-import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
+import {
+  createRequesterSettleReceiptAdmission,
+  recordRequesterReplacementNotice,
+} from "./subagent-announce.requester-settle-receipt.js";
 import {
   readSharedBatchState,
   createRequesterSettleBatchCompletion,
@@ -377,6 +380,23 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // `/new` keeps the session id but rotates the lifecycle revision, so compare the
     // whole incarnation; a deliverable continuation must not post old findings into a reset session.
     if (privateRows.some((entry) => !matchesSubagentRequesterSession(entry, requesterIdentity))) {
+      // Only a host-authored diagnostic crosses the reset; child findings stay private.
+      // Persist it before retiring the batch so a failed notice keeps the obligation retryable.
+      const notified = await recordRequesterReplacementNotice({
+        requester,
+        identity: requesterIdentity,
+        batchRunIds,
+        rearmGeneration: selectedState.rearmGeneration,
+        assertCommitAllowed: () => {
+          params.signal?.throwIfAborted();
+          if (!params.isSourceCurrent() || !isStoreCurrent() || !isBatchCurrent()) {
+            throw new Error("Subagent completion notice lost its source");
+          }
+        },
+      });
+      if (!notified) {
+        return false;
+      }
       await completeBatch(settledBatch, selectedState, {
         delivered: false,
         path: "none",
