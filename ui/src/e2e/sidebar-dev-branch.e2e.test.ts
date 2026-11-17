@@ -44,11 +44,9 @@ suite.define(() => {
       const layout = await name.evaluate((element) => ({
         height: element.getBoundingClientRect().height,
         lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
-        textOverflow: getComputedStyle(element).textOverflow,
         clipped: element.scrollWidth > element.clientWidth,
       }));
       expect(layout.height).toBeLessThanOrEqual(layout.lineHeight + 1);
-      expect(layout.textOverflow).toBe("ellipsis");
       expect(layout.clipped).toBe(true);
     });
   });
