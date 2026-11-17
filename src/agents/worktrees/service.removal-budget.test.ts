@@ -173,7 +173,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 it.each([
   ["promised", 1],
   ["promised-retry", 2],
-  ["unpromised", 0],
+  ["unpromised", 1],
   ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],

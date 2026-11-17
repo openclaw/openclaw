@@ -5,8 +5,8 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   createSqliteWorkerOperationAdmission,

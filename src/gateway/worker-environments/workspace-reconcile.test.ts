@@ -215,6 +215,11 @@ it("applies a staged mixed workspace delta without per-entry worker verification
   for (const operation of ["workspace.manifest.file", "workspace.manifest.nodes"]) {
     expect(operations).not.toContainEqual(expect.objectContaining({ operation }));
   }
+  await fs.writeFile(path.join(local, "conflict.txt"), currentFiles["conflict.txt"]);
+  const begin = vi.fn();
+  const replayed = await apply(base, current, { begin });
+  expect(replayed.conflictPaths).toEqual([]);
+  expect(begin).not.toHaveBeenCalled();
 });
 
 it("keeps local-only paths outside a Git workspace's accepted manifest", async () => {

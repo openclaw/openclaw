@@ -10,6 +10,7 @@ import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
+import { prepareWatchedSessionsHarnessContext } from "../../plugin-sdk/agent-harness-runtime.js";
 import {
   handleSessionStateSessionReset,
   registerMainSessionGroupWatch,
@@ -58,7 +59,9 @@ async function probeMain({ stateDir }: { stateDir: string }) {
 
     statements.subscribe(observe);
     // A real admitted query proves the observer sees host SQL before counting the async path.
-    const probe = stores.state.prepare("SELECT 7 AS value");
+    const postgres = isPostgresSqlConnection(stores.state) ? stores.state : stores.agent;
+    assert.ok(isPostgresSqlConnection(postgres));
+    const probe = postgres.prepare("SELECT 7 AS value");
     withEngineStoreAdmission(() => assert.equal(probe.get()?.value, 7));
     const admittedStatements = hostStatements;
     assert.throws(() => probe.get(), /PostgreSQL connections must run in a worker/);
@@ -70,8 +73,25 @@ async function probeMain({ stateDir }: { stateDir: string }) {
       assertCurrent() {},
     };
     const prepared = await prepareWatchedSessionsPromptAsync(input);
+    let harnessActive = true;
+    const closed = new Error("Harness authority closed");
+    const harnessInput = {
+      ...input,
+      assertCurrent() {
+        if (!harnessActive) {
+          throw closed;
+        }
+      },
+    };
+    const harnessContext = await prepareWatchedSessionsHarnessContext(harnessInput);
+    harnessActive = false;
+    await assert.rejects(
+      prepareWatchedSessionsHarnessContext(harnessInput),
+      (error) => error === closed,
+    );
     await handleSessionStateSessionReset(watcher);
     const afterRemoval = await prepareWatchedSessionsPromptAsync(input);
+    const harnessAfterRemoval = await prepareWatchedSessionsHarnessContext(input);
     const emptySnapshot = await prepareWatchedSessionsPromptAsync({
       ...input,
       includeEmptySnapshot: true,
@@ -84,6 +104,8 @@ async function probeMain({ stateDir }: { stateDir: string }) {
       admittedStatements,
       hostStatements,
       prepared,
+      harnessContext,
+      harnessAfterRemoval: harnessAfterRemoval ?? null,
       promptLines: buildWatchedSessionsPromptLines(prepared),
       afterRemoval: afterRemoval ?? null,
       emptySnapshot,

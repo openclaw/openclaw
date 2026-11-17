@@ -1030,6 +1030,51 @@ line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
 and local ClawSweeper report no actionable findings. The shared cleanup helper
 is unchanged and retains its prior 11-pass / one-Windows-skip proof.
 
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution and an actual Vitest `afterEach` fault/retry probe reproduce
+the original hook forgetting its failed root. The candidate preserves the exact
+error, removes a healthy sibling, retains the failed root, and removes it when
+the same hook runs again without the fault. Both versions flush and restore the
+two diagnostics environment variables before removal. Each fault run reports
+one intentional teardown failure after the original assertions execute.
+Temporary instrumentation was restored byte-for-byte.
+
+The clean baseline and candidate each pass the single case (11.64 s and 6.21 s
+wall time; Vitest durations 3.67 s and 1.78 s). These are qualification
+observations, not a performance comparison. Scoped agent-test typecheck, lint,
+formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independent
+preservation and local ClawSweeper review found no actionable issue. The shared
+cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
+
+### Source scan fixture cleanup custody
+
+At `10f6b53ce51827256689604e821c34a7f5e84323`, the source-file scan fixture empties
+its directory tracker before removal succeeds. Reuse the shared cleanup owner
+after the existing pending-scan settlement and reset. All five declarations /
+eight expanded cases remain, including refill concurrency, source ordering,
+pre/post-read limits, decoding, mapper error behavior and live file mutations
+through both collect and map. Keep the asynchronous hook and the `rm` import
+used by the deletion mutation. Production and shared-helper code are unchanged.
+
+Actual Vitest-hook fault injection preserves the original removal error on both
+heads. With a real held scan, every root remains intact until settlement and the
+pending scan is reset before removal. The original hook loses the failed root
+and makes no retry; the candidate retains it, removes a healthy sibling and
+succeeds on the next attempt. Each fault run has one intentional hook failure
+and seven passing cases. Temporary instrumentation was removed and the exact
+candidate bytes restored. All eight clean cases pass on both heads (1.71 s
+baseline; 1.88 s candidate command time); these are correctness runs, not a
+performance comparison. Scoped scripts-test typecheck, lint, formatting and
+both line-cap ratchets pass. Production and shared-helper code are unchanged.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

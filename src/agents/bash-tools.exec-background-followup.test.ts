@@ -10,7 +10,6 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
-  readLatestSessionTranscriptReport,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -675,36 +674,21 @@ test("wakes the same conversation after its session id rotates while the command
   expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
 });
 
-test("withholds a completion from a reset conversation with a visible note", async ({ signal }) => {
+test("wakes a reset conversation by its key", async ({ signal }) => {
   const sessionKey = "agent:main:dashboard:reset-waiter";
   await seedOrigin(sessionKey);
   const release = path.join(state.workspaceDir, "release-reset-waiter");
-  const started = runningSession(
+  runningSession(
     (await backgroundExec(sessionKey, { agentId: "main" })("reset-waiter", waitForRelease(release)))
       .details,
   );
-  // A reset keeps the transcript id and starts a new lifecycle.
+  // A reset keeps the transcript id and starts a new lifecycle; the wake follows the key.
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, { lifecycleRevision: "reset" });
   const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
   const calls = wakes.mock.calls.length;
   await fs.writeFile(release, "release");
   await withinTest(waitForExecScope(sessionKey), signal);
-  await vi.waitFor(async () => {
-    const note = await readLatestSessionTranscriptReport(
-      { agentId: "main", sessionKey, sessionId: sessionKey.replaceAll(":", "-") },
-      ["run-failed-before-reply"],
-    );
-    expect(note).toMatchObject({
-      ok: true,
-      value: {
-        content: expect.stringContaining(
-          `Background command result withheld (${started.sessionId}, code 0): the conversation was reset`,
-        ),
-      },
-    });
-  });
-  expect(wakes.mock.calls.length).toBe(calls);
-  expect(model).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(wakes.mock.calls.length).toBe(calls + 1));
 });
 
 test("does not promise a hidden subagent without sessions_yield an exit wake", async ({
@@ -752,7 +736,9 @@ test("resumes a hidden subagent on exit only after sessions_yield awaits the com
     expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
     expect(started.followUp).not.toContain("wakes this conversation");
     if (yielded) {
-      const awaited = listYieldAwaitableExecs("hidden-run");
+      // Another agent on the same raw session key is a different chat.
+      expect(listYieldAwaitableExecs({ agentId: "research", sessionKey })).toEqual([]);
+      const awaited = listYieldAwaitableExecs({ agentId: "main", sessionKey });
       expect(awaited.map((session) => session.id)).toEqual([started.sessionId]);
       awaitExecsForYield(awaited);
     }
@@ -777,12 +763,12 @@ test("resumes a yielded cron run in place with the exit instead of a session eve
     runId: "cron-yield-run",
     sessionsYieldAvailabilityRef: { value: true },
   });
-  using resume = openExecYieldResume("cron-yield-run");
+  using resume = openExecYieldResume({ agentId: "main", sessionKey });
   const release = path.join(state.workspaceDir, "release-cron-yield");
   try {
     const started = runningSession((await exec("cron-yield", waitForRelease(release))).details);
     expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
-    awaitExecsForYield(listYieldAwaitableExecs("cron-yield-run"));
+    awaitExecsForYield(listYieldAwaitableExecs({ agentId: "main", sessionKey }));
     await fs.writeFile(release, "release");
     expect(await withinTest(resume.next(signal), signal)).toMatch(
       /^Exec completed \([^)]*\):\nWAITER_DONE$/,

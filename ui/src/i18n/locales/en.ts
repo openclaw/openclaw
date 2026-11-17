@@ -1586,6 +1586,11 @@ const startupEnglish = {
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
+    continuationSource: {
+      exec: "Background command finished",
+      restart: "Gateway restarted",
+      subagent: "Agent finished",
+    },
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
@@ -1940,8 +1945,6 @@ const startupEnglish = {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      toolCallsOne: "1 tool call",
-      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

@@ -1,5 +1,5 @@
 // Per-claw mailbox: store-and-forward of opaque, end-to-end authenticated messages.
-import { isKeyFingerprint, type KeyFingerprint } from "../keys.js";
+import { isKeyFingerprint, isRandomId, type KeyFingerprint } from "../keys.js";
 import type { SignedStatement, UnixSeconds } from "../statements/types.js";
 
 /** Who reads a message: the claw's Gateway, every owner device, or one device by key fingerprint. */
@@ -30,12 +30,56 @@ export type MailboxNoticeEvent = (typeof MAILBOX_NOTICE_EVENTS)[number];
 /** Longest notice `ref` (an invite id, key fingerprint or decimal seq). */
 export const MAILBOX_NOTICE_REF_MAX_LENGTH = 128;
 
+/** Display-only member browser requests expire within thirty minutes. */
+export const MEMBER_BROWSER_REQUEST_TTL_SECONDS = 1800;
+
+/** An Inbox hint, not an enrollment or admission statement. Contains no device keys. */
+export type MemberBrowserRequestPayload = {
+  kind: "member_browser_request";
+  request_id: string;
+  action: "request" | "cancel";
+  member_account_id: string;
+  label: string;
+  expires_at: UnixSeconds;
+};
+
+/** Strict bounded shape; receivers separately check membership and their own clock. */
+export function isMemberBrowserRequestPayload(
+  value: unknown,
+): value is MemberBrowserRequestPayload {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  // SAFETY: the guard above establishes an object; each field remains unknown until checked below.
+  const payload = value as Record<string, unknown>;
+  return (
+    Object.keys(payload).every((key) =>
+      ["kind", "request_id", "action", "member_account_id", "label", "expires_at"].includes(key),
+    ) &&
+    payload.kind === "member_browser_request" &&
+    isRandomId(payload.request_id) &&
+    (payload.action === "request" || payload.action === "cancel") &&
+    typeof payload.member_account_id === "string" &&
+    payload.member_account_id.trim().length > 0 &&
+    payload.member_account_id.length <= 256 &&
+    typeof payload.label === "string" &&
+    payload.label.trim().length > 0 &&
+    payload.label.length <= 256 &&
+    typeof payload.expires_at === "number" &&
+    Number.isSafeInteger(payload.expires_at) &&
+    payload.expires_at > 0
+  );
+}
+
 /** Message payloads. Every security-relevant payload is a signed statement the reader verifies. */
 export type MailboxPayload =
+  | MemberBrowserRequestPayload
   | { kind: "node_redemption"; redemption: SignedStatement<"NodeRedemption"> }
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
   /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
   | { kind: "root_statement"; statements: SignedStatement[] }
+  /** Only a current recovery-only member key may authorize its own browser addition. */
+  | { kind: "member_recovery"; statement: SignedStatement<"MembershipChange"> }
   | { kind: "revocation"; revocation: SignedStatement<"Revocation"> }
   /** SAS enrollment messages; `data` per step is defined in docs/discovery.md. */
   | { kind: "enrollment"; request_id: string; step: EnrollmentStep; data: Record<string, unknown> }
@@ -83,9 +127,11 @@ export function parseSeqConflictRef(ref: string): number | undefined {
 
 /** Payload kinds the Gateway accepts from its mailbox. Device-signed MembershipChanges are not among them. */
 export const GATEWAY_MAILBOX_KINDS = [
+  "member_browser_request",
   "invite_redemption",
   "node_redemption",
   "root_statement",
+  "member_recovery",
   "revocation",
 ] as const;
 

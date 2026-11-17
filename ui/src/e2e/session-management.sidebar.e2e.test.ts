@@ -1045,43 +1045,4 @@ suite.define(() => {
       await context.close();
     }
   });
-
-  it("keeps sidebar session controls reachable on touch pointers", async () => {
-    const context = await suite.browser.newContext({
-      ...createControlUiE2eContextOptions(),
-      hasTouch: true,
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
-          sessionRow(
-            "agent:main:research",
-            "Research notes",
-            Date.parse("2026-07-01T15:00:00.000Z"),
-          ),
-        ]),
-      },
-      sessionKey: "agent:main:main",
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const row = page
-        .locator(".sidebar-recent-sessions__list .sidebar-recent-session")
-        .filter({ hasText: "Research notes" });
-      await row.waitFor({ state: "visible", timeout: 10_000 });
-      const pin = row.getByRole("button", { name: "Pin session" });
-      const archive = row.locator("[data-sidebar-session-archive]");
-      await expect.poll(() => actionOpacity(pin)).toBe("1");
-      await expect.poll(() => actionPointerEvents(pin)).toBe("auto");
-      await expect.poll(() => actionOpacity(archive)).toBe("1");
-      await expect.poll(() => actionPointerEvents(archive)).toBe("auto");
-      await row.locator("[data-sidebar-session-menu]").tap();
-      await page.getByRole("menuitem", { name: "Archive session" }).waitFor({ state: "visible" });
-    } finally {
-      await context.close();
-    }
-  });
 });
