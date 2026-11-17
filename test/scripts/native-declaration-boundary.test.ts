@@ -236,9 +236,9 @@ it.each([
   },
 );
 
-it("fails closed when optional SDK relative imports reach a parent install", async () => {
+it("bounds optional SDK relative imports to a checkout nested in a parent install", async () => {
   const ancestor = tempRoot("optional-imports");
-  const root = path.join(ancestor, ".worktrees/validation");
+  const root = path.join(ancestor, ".artifacts/.openclaw-update-preflight-fixture/worktree");
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
   const localTypes = "node_modules/synthetic-fetch/index.d.ts";
@@ -279,17 +279,24 @@ it("fails closed when optional SDK relative imports reach a parent install", asy
     "src/index.ts":
       'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
   });
-  // The compiler reads its real filesystem: an optional import that climbs past the
-  // checkout into a parent install fails with the escaped path instead of being hidden.
-  const ancestorTypes = path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts");
-  await expect(fixture.compile()).rejects.toThrow(
-    `Declaration input escapes checkout: ${ancestorTypes}`,
-  );
-  fs.rmSync(path.dirname(ancestorTypes), { recursive: true });
+  // Shipped updaters build inside the install. Parent types must remain invisible
+  // even when optional SDK imports reach them on the compiler's real filesystem.
   const local = await fixture.compile();
   expect(local.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
   fixture.expectInputs(local.inputs, "src/index.ts", localTypes);
   expect(local.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+  for (const declaration of local.declarations.values()) {
+    expect(declaration.code).not.toContain("ancestor");
+    expect(declaration.code).not.toContain(ancestor);
+    expect(declaration.map.sources.every((file) => file.startsWith(`${root}${path.sep}`))).toBe(
+      true,
+    );
+  }
+  // Subprocess callers do not pass a boundary callback; their fallback stays bounded too.
+  const implicit = await fixture.compile({ assertInput: undefined });
+  expect(implicit.declarations).toEqual(local.declarations);
+  expect(implicit.inputs).toEqual(local.inputs);
+  expect(fs.readdirSync(path.join(root, ".artifacts"))).toEqual([]);
 });
 
 for (const kind of [
@@ -360,7 +367,7 @@ it("rejects a native reference through an unrelated outside symlink back inside"
     "src/index.ts": `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
   });
   expect(fs.realpathSync.native(reference)).toBe(path.join(root, "src/referenced.d.ts"));
-  await expect(f.compile()).rejects.toThrow(`Declaration input escapes checkout: ${reference}`);
+  await expect(f.compile()).rejects.toThrow(`TS6053: File '${reference}' not found`);
 });
 
 it("rejects a checkout config that inherits options from outside the checkout", async () => {

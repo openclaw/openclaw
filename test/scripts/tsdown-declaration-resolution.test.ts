@@ -710,9 +710,19 @@ it.concurrent.for([
     const before = treeHashes(path.join(root, "dist"));
     const failed = await runWriter(command, root);
     expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-    // The compiler reads its real filesystem; the checkout boundary rejects its inputs.
-    expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
-    expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+    const diagnostics = failed.stdout + failed.stderr;
+    // Bounded resolution hides parent files; checkout aliases still fail at the boundary.
+    if (kind === "ancestor module") {
+      expect(diagnostics).toContain("TS2307");
+      expect(diagnostics).toContain("Cannot find module 'synthetic-core'");
+    } else {
+      expect(diagnostics).toContain(
+        kind === "ancestor ambient types" || kind === "source reference"
+          ? "TS6053"
+          : "Declaration input escapes checkout",
+      );
+      expect(diagnostics).toContain(rejectedPath);
+    }
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);
   }),

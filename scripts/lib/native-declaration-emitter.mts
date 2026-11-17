@@ -286,7 +286,8 @@ export async function compileNativeProject({
  * Emit declarations in one compiler command-line pass. The compiler reads the checkout
  * directly, which is several times faster than routing each read through the API
  * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
- * are byte-identical. Inputs come from --listFiles and must stay inside the checkout.
+ * are byte-identical. Inputs come from --listFiles and must stay inside the checkout;
+ * return no result if resolution needs the bounded API filesystem instead.
  * Failed resolution probes are not reported; callers key caches on the namespace
  * topology and every manifest and tsconfig instead.
  */
@@ -376,14 +377,24 @@ async function compileDeclarationsWithCompilerCli({
     );
     const compiled = await run(["-p", leaf, "--listFiles"]);
     // --listFiles prints one absolute path per line after any diagnostics; a checkout
-    // path may itself contain a line break. Admit read files before reporting errors so
-    // an escaped input fails as an escape, not as the type error it causes.
+    // path may itself contain a line break. Check read files before reporting errors:
+    // parent-install types can cause diagnostics that bounded resolution would avoid.
     const separator = root.includes("\n")
       ? new RegExp(`\\r?\\n(?=${root.replaceAll(/[\\^$.*+?()[\]{}|/]/gu, "\\$&")})`, "u")
       : /\r?\n/u;
     const lines = compiled.output.replace(/\r?\n$/u, "").split(separator);
     const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
-    const inputs = [...new Set(read.map((file) => admit(file)))].toSorted();
+    let inputs: string[];
+    try {
+      inputs = [...new Set(read.map((file) => boundary.assert(file)))].toSorted();
+    } catch {
+      // Shipped Git updaters nest their preflight checkout inside the install.
+      // Discard this emit; optional SDK imports must not expose parent types.
+      return undefined;
+    }
+    if (assertInput) {
+      inputs = inputs.map(assertInput);
+    }
     if (compiled.failure) {
       const diagnostics = lines.filter((line) => !read.includes(line)).join("\n");
       throw new Error(diagnostics.trim() || compiled.failure.message);
@@ -416,17 +427,25 @@ export async function emitNativeDeclarations(
   }
   // API baselines check only declaration diagnostics, sometimes with a historical
   // compiler; the command line reports every diagnostic, so they keep the API path.
-  const compilation =
+  const cli =
     options.diagnostics === "declarations"
-      ? await compileNativeProject({
-          ...options,
-          compilerOptions: {
-            ...options.compilerOptions,
-            rootDir: fs.realpathSync.native(options.cwd),
-            declarationMap: true,
-          },
-        })
+      ? undefined
       : await compileDeclarationsWithCompilerCli(options);
+  const boundary =
+    !cli && options.diagnostics !== "declarations"
+      ? createDeclarationInputBoundary(options.cwd)
+      : undefined;
+  const compilation =
+    cli ??
+    (await compileNativeProject({
+      ...options,
+      assertInput: options.assertInput ?? (boundary ? (file) => boundary.assert(file) : undefined),
+      compilerOptions: {
+        ...options.compilerOptions,
+        rootDir: fs.realpathSync.native(options.cwd),
+        declarationMap: true,
+      },
+    }));
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {
