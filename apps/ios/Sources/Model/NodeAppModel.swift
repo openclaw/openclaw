@@ -785,6 +785,8 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
+            conversationOwnership: UIDevice.current.userInterfaceIdiom == .pad ? self.chatSendOwnership : nil,
+            conversationRoutingContract: self.chatSessionRoutingContract,
             mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: connectionProvider),
             sourceResourceLoader: IOSSourceResourceLoader(
                 gateway: self.operatorSession, connectionProvider: connectionProvider))
@@ -814,6 +816,7 @@ final class NodeAppModel {
 
     /// Chat and the persistent sidebar consume the same Gateway-scoped request lifecycle.
     let chatPresentation = IOSChatViewModelOwner()
+    let chatSendOwnership = OpenClawChatSendOwnership()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
     /// Request admission only; the connection controller owns the later handoff.

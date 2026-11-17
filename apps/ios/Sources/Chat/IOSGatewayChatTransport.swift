@@ -18,6 +18,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     private let widgetGateway: GatewayNodeSession?
     private(set) var globalAgentId: String?
     let outboxGatewayID: String?
+    let conversationOwnership: OpenClawChatSendOwnership?
+    let conversationRoutingContract: String?
     private let mediaArtifactLoader: IOSMediaArtifactLoader?
     private let sourceResourceLoader: IOSSourceResourceLoader?
 
@@ -36,6 +38,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         widgetGateway: GatewayNodeSession? = nil,
         globalAgentId: String? = nil,
         outboxGatewayID: String? = nil,
+        conversationOwnership: OpenClawChatSendOwnership? = nil,
+        conversationRoutingContract: String? = nil,
         mediaArtifactLoader: IOSMediaArtifactLoader? = nil,
         sourceResourceLoader: IOSSourceResourceLoader? = nil)
     {
@@ -43,6 +47,8 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         self.widgetGateway = widgetGateway
         self.globalAgentId = globalAgentId?.trimmedNonEmpty?.lowercased()
         self.outboxGatewayID = GatewayStableIdentifier.exact(outboxGatewayID)
+        self.conversationOwnership = conversationOwnership
+        self.conversationRoutingContract = conversationRoutingContract
         self.mediaArtifactLoader = mediaArtifactLoader
         self.sourceResourceLoader = sourceResourceLoader
     }

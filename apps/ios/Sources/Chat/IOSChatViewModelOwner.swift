@@ -8,6 +8,7 @@ import UIKit
 @Observable
 final class IOSChatViewModelOwner {
     private(set) var viewModel: OpenClawChatViewModel?
+    private(set) var conversation: IOSConversationController?
     private(set) var presentationID = UUID()
     private(set) var ownerID = ""
     private(set) var presentationAgentID = "main"
@@ -21,6 +22,7 @@ final class IOSChatViewModelOwner {
     @ObservationIgnored private var hydratedComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @ObservationIgnored private var controlUIInputs: GatewayConnectConfig.ControlUIInputs?
     @ObservationIgnored private var isObservingPendingSend = false
+    @ObservationIgnored private var webOwner: OpenClawWebConversation?
 
     private var hasPendingSend: Bool {
         guard let viewModel else { return false }
@@ -52,6 +54,8 @@ final class IOSChatViewModelOwner {
             }
             if let controlUIInputs { self.controlUIInputs = controlUIInputs }
             if reconnected { viewModel.refresh() }
+            self.installConversationIfAvailable(appModel: appModel, viewModel: viewModel)
+            self.conversation?.reconcile()
             return
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
@@ -74,6 +78,8 @@ final class IOSChatViewModelOwner {
             self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
+        self.conversation?.close()
+        self.conversation = nil
         self.viewModel?.detachTransport()
         self.ownerID = ownerID
         self.transportAgentID = agentID
@@ -84,9 +90,14 @@ final class IOSChatViewModelOwner {
         let voiceNoteRecorder = appModel.voiceNoteRecorder
         let agentName = self.presentationAgentName
         let agentBadge = self.presentationAgentBadge
+        let webOwner = UIDevice.current.userInterfaceIdiom == .pad && !appModel.isLocalGatewayFixtureEnabled &&
+            offlineStore != nil ? OpenClawWebConversation() : nil
+        self.webOwner = webOwner
+        webOwner?.mode = .native
         let viewModel = OpenClawChatViewModel(
             sessionKey: appModel.chatSessionKey,
             transport: appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
+            webConversation: webOwner,
             activeAgentId: appModel.chatDeliveryAgentId,
             sessionRoutingContract: appModel.chatSessionRoutingContract,
             attachmentOwnerIsActive: { [weak voiceNoteRecorder] in
@@ -112,9 +123,24 @@ final class IOSChatViewModelOwner {
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
         if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
         self.viewModel = viewModel
+        self.installConversationIfAvailable(appModel: appModel, viewModel: viewModel)
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
         viewModel.load()
+        self.conversation?.reconcile()
+    }
+
+    private func installConversationIfAvailable(appModel: NodeAppModel, viewModel: OpenClawChatViewModel) {
+        guard self.conversation == nil, let webOwner,
+              let store = appModel.makeChatOfflineStore(), let config = appModel.activeGatewayConnectConfig
+        else { return }
+        self.conversation = IOSConversationController(
+            owner: webOwner,
+            viewModel: viewModel,
+            appModel: appModel,
+            config: config,
+            store: store,
+            ownership: appModel.chatSendOwnership)
     }
 
     private func observePendingSend(appModel: NodeAppModel) {

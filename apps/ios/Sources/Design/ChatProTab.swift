@@ -133,6 +133,14 @@ struct ChatProTab: View {
             self.headerAgentIdentity
         }
         .sharedBackgroundVisibility(.hidden)
+        if let conversation = self.appModel.chatPresentation.conversation, conversation.bridge != nil {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { conversation.requestNativeControls() } label: {
+                    Image(systemName: "mic").font(.system(size: 20))
+                }
+                .accessibilityLabel("Voice & attachments")
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             self.chatActionsMenu
         }
@@ -141,6 +149,15 @@ struct ChatProTab: View {
 
     @ViewBuilder
     private var chatSurface: some View {
+        if let conversation = self.appModel.chatPresentation.conversation, conversation.bridge != nil {
+            IOSConversationView(controller: conversation)
+        } else {
+            self.nativeChatSurface
+        }
+    }
+
+    @ViewBuilder
+    private var nativeChatSurface: some View {
         if let viewModel {
             let owner = self.appModel.chatPresentation
             let presentationID = owner.presentationID
@@ -433,7 +450,14 @@ struct ChatProTab: View {
 
     private var chatActionsMenu: some View {
         Button {
-            self.showsChatActions.toggle()
+            if let conversation = self.appModel.chatPresentation.conversation,
+               let bridge = conversation.bridge, bridge.ready,
+               let context = self.viewModel?.webConversationContext
+            {
+                Task { _ = await bridge.request(.openSessionActions(context)) }
+            } else {
+                self.showsChatActions.toggle()
+            }
         } label: {
             Label {
                 Text("Chat actions")
@@ -461,6 +485,20 @@ struct ChatProTab: View {
     private var chatActionsPopover: some View {
         ScrollView {
             VStack(spacing: 0) {
+                if let conversation = self.appModel.chatPresentation.conversation {
+                    self.chatActionButton(
+                        title: conversation.bridge == nil
+                            ? String(localized: "Use Mac-style chat") : String(localized: "Voice & attachments"),
+                        systemImage: conversation.bridge == nil ? "bubble.left.and.bubble.right" : "mic",
+                        disabled: self.isGatewayTransitionPending)
+                    {
+                        if conversation.bridge == nil {
+                            conversation.resumeWeb()
+                        } else {
+                            conversation.requestNativeControls()
+                        }
+                    }
+                }
                 if self.activeAgent?.workspacegit == true {
                     self.chatActionButton(
                         title: String(localized: "New chat in worktree"),

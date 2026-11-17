@@ -221,6 +221,8 @@ final class ChatSendHydrationTests: XCTestCase {
         }
     }
 
+    /// These fixtures exercise native history/send hydration. No WKWebView is mounted;
+    /// select the actual native-controls path synchronously before its bootstrap can yield.
     private func checkTranscriptHandoff(_ transition: TranscriptTransition) async throws {
         let appModel = NodeAppModel()
         let gateway = ChatSendHydrationGateway(
@@ -262,7 +264,9 @@ final class ChatSendHydrationTests: XCTestCase {
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
             owner.sync(appModel: appModel)
+            owner.conversation?.requestNativeControls()
             let original = try XCTUnwrap(owner.viewModel)
+            XCTAssertFalse(original.usesWebConversation)
             // Hold write-through, not history: this handoff cannot be rescued by disk prepaint.
             original.pendingCacheWriteTask = Task {
                 for await _ in cacheGate {
@@ -298,13 +302,16 @@ final class ChatSendHydrationTests: XCTestCase {
             }
             await gateway.armHistory()
             owner.sync(appModel: appModel)
+            owner.conversation?.requestNativeControls()
             if transition == .pendingAttachment {
                 XCTAssertTrue(owner.viewModel === original)
                 XCTAssertEqual(original.attachments.map(\.fileName), ["synthetic.png"])
                 try original.removeAttachment(XCTUnwrap(original.attachments.first?.id))
                 owner.sync(appModel: appModel)
+                owner.conversation?.requestNativeControls()
             }
             let replacement = try XCTUnwrap(owner.viewModel)
+            XCTAssertFalse(replacement.usesWebConversation)
             let replacementBootstrap = replacement.bootstrapTask
             await gateway.waitForHeldHistory()
             XCTAssertTrue(original.isTransportDetached)
@@ -324,6 +331,7 @@ final class ChatSendHydrationTests: XCTestCase {
             if transition == .rapidSwitch {
                 appModel.focusChatSession("agent:main:other")
                 owner.sync(appModel: appModel)
+                owner.conversation?.requestNativeControls()
                 XCTAssertTrue(replacement.messages.isEmpty)
                 await replacement.bootstrapTask?.value
             }
@@ -416,7 +424,9 @@ final class ChatSendHydrationTests: XCTestCase {
                 onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
             owner.sync(appModel: appModel)
+            owner.conversation?.requestNativeControls()
             let original = try XCTUnwrap(owner.viewModel)
+            XCTAssertFalse(original.usesWebConversation)
             defer { original.detachTransport() }
             await ChatSendHydrationObservation.wait {
                 !original.isLoading && original.hasRestoredOutboxMessages
@@ -443,6 +453,7 @@ final class ChatSendHydrationTests: XCTestCase {
                 // Keep this transition synchronous: the send's scheduled task has not started yet.
                 appModel.gatewayDefaultAgentId = "main"
                 owner.sync(appModel: appModel)
+                owner.conversation?.requestNativeControls()
                 var enteredIterator = entered.makeAsyncIterator()
                 guard await enteredIterator.next() != nil else {
                     XCTFail("The accepted send never entered submission.")
@@ -473,6 +484,7 @@ final class ChatSendHydrationTests: XCTestCase {
                     appModel.focusChatSession("other")
                 }
                 owner.sync(appModel: appModel)
+                owner.conversation?.requestNativeControls()
                 try await gateway.releaseHealth()
             }
             XCTAssertEqual(appModel.chatViewModelOwnerID, ownerID)
