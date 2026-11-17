@@ -314,18 +314,21 @@ async function loadAgentArchiveOperations() {
   } satisfies Handlers;
 }
 
-async function loadSessionColdFtsOperations() {
-  const { sweepSessionColdFtsInTransaction } =
+async function loadSessionColdOperations() {
+  const { sweepSessionColdInTransaction } =
     await import("../config/sessions/session-cold-storage-worker.js");
   return {
-    "session.cold.ftsSweep": (input: { maxRows: number }, { writeTransaction, admit }) => {
+    "session.cold.sweep": (
+      input: { sessionId: string; afterSeq?: number; maxRows: number },
+      { writeTransaction, admit },
+    ) => {
       const startedAt = performance.now();
-      const rows = writeTransaction("session.cold.fts-sweep", "Cold search cleanup", (database) => {
-        const deleted = sweepSessionColdFtsInTransaction(database, input.maxRows);
+      const rows = writeTransaction("session.cold.sweep", "Cold transcript cleanup", (database) => {
+        const deleted = sweepSessionColdInTransaction(database, input);
         admit("commit");
         return deleted;
       });
-      return { rows, elapsedMs: performance.now() - startedAt };
+      return { ...rows, elapsedMs: performance.now() - startedAt };
     },
   } satisfies Handlers;
 }
@@ -541,7 +544,7 @@ export function createAgentWorkerOperationLoaders(
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
-    "session.cold.ftsSweep": loadSessionColdFtsOperations,
+    "session.cold.sweep": loadSessionColdOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,

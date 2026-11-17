@@ -1,7 +1,6 @@
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -15,7 +14,6 @@ import {
   sessionTranscriptIndexNeedsReconcile,
 } from "./session-transcript-index.js";
 import {
-  clearSessionTranscriptActiveFacts,
   prepareColdTranscriptPayload,
   readTranscriptPayload,
   type TranscriptPayloadRecord,
@@ -27,18 +25,41 @@ type ColdDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 export function retainSessionColdNavigationInTransaction(
   database: ColdDatabase,
   sessionId: string,
-): void {
-  // Historical archives can carry an unfinished projection. Qualify it while bodies are available.
-  reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
-  clearSessionTranscriptActiveFacts(database.db, sessionId);
+  afterSeq: number,
+  maxRows: number,
+): { rows: number; afterSeq: number } {
   const db = getNodeSqliteKysely<DB>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["seq", "event_json", "event_zstd", "event_utf8_bytes", "navigation_json"])
+      .where("session_id", "=", sessionId)
+      .where("seq", ">", afterSeq)
+      .orderBy("seq")
+      .limit(maxRows),
+  ).rows;
+  if (rows.length === 0) {
+    return { rows: 0, afterSeq };
+  }
+  const lastSeq = rows.at(-1)!.seq;
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .deleteFrom("session_transcript_active_event_facts")
+      .where("session_id", "=", sessionId)
+      .where("seq", ">", afterSeq)
+      .where("seq", "<=", lastSeq),
+  );
   executeSqliteQuerySync(
     database.db,
     db
       .updateTable("transcript_events")
       .set({ event_json: null, event_zstd: null })
       .where("session_id", "=", sessionId)
-      .where("navigation_json", "is not", null),
+      .where("navigation_json", "is not", null)
+      .where("seq", ">", afterSeq)
+      .where("seq", "<=", lastSeq),
   );
   const update = prepareSqliteQuerySync<TranscriptPayloadRecord & { seq: number }>(
     database.db,
@@ -65,20 +86,16 @@ export function retainSessionColdNavigationInTransaction(
           parameter((row) => row.seq),
         ),
   );
-  for (const row of iterateSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select(["seq", "event_json", "event_zstd", "event_utf8_bytes", "navigation_json"])
-      .where("session_id", "=", sessionId)
-      .where("navigation_json", "is", null)
-      .orderBy("seq"),
-  )) {
+  for (const row of rows) {
+    if (row.navigation_json !== null) {
+      continue;
+    }
     update({
       seq: row.seq,
       ...prepareColdTranscriptPayload(database.db, readTranscriptPayload(row)),
     });
   }
+  return { rows: rows.length, afterSeq: lastSeq };
 }
 
 /** Doctor commits each verified archive independently; rollback leaves it eligible for retry. */

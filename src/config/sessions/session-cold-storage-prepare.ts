@@ -134,7 +134,8 @@ export async function prepareSessionColdBatchInWorker(
 ): Promise<SessionColdBatchPrepared> {
   const result: SessionColdBatchPrepared = {
     freePages: 0,
-    hasColdFtsRows: false,
+    cleanupSessionIds: [],
+    needsReconcile: false,
     protectionKeys: [],
     prepared: [],
     externalizations: [],
@@ -146,7 +147,11 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
-  result.hasColdFtsRows = selection.value.hasColdFtsRows;
+  result.cleanupSessionIds = selection.value.cleanupSessionIds;
+  result.needsReconcile = selection.value.needsReconcile;
+  if (result.needsReconcile) {
+    return result;
+  }
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({

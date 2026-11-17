@@ -41,10 +41,7 @@ import { readSessionColdStorageProtection } from "./session-cold-storage-eligibi
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import { retainSessionColdNavigationInTransaction } from "./session-cold-storage-navigation.js";
 import { writeSessionColdRecordsInTransaction } from "./session-cold-storage-records.js";
-import {
-  readSessionAdmissionProtectionKeys,
-  selectSessionColdFtsSession,
-} from "./session-cold-storage-selection.js";
+import { readSessionAdmissionProtectionKeys } from "./session-cold-storage-selection.js";
 import {
   readSessionColdLockedValidation,
   type prepareSessionColdSourceGuard,
@@ -63,6 +60,7 @@ import {
   readStagedSessionTranscriptAuthority,
 } from "./session-transcript-authority.js";
 import { deleteSessionTranscriptFtsRowsInTransaction } from "./session-transcript-fts.js";
+import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import {
   createSessionTranscriptTurnKernel,
   sqliteSessionTranscriptTurnRebound,
@@ -71,7 +69,7 @@ import { resolveSessionWorkStartError } from "./session-work-start.js";
 
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
-  | { kind: "cold-sweep"; maxRows: number }
+  | { kind: "cold-sweep"; sessionId: string; afterSeq?: number; maxRows: number }
   | {
       kind: "cold-batch";
       prepared: SessionColdPrepared[];
@@ -157,15 +155,57 @@ export async function prepareSessionColdRestoreInWorker(
   return (database) => iterateSessionColdRecords(database.db, plan.databaseOptions.path, archive);
 }
 
-/** Select cold state under the writer so restoration can never lose its rebuilt search rows. */
-export function sweepSessionColdFtsInTransaction(
+/** Recheck the marker before each bounded unit so a restore cancels remaining cleanup. */
+export function sweepSessionColdInTransaction(
   database: OpenClawAgentDatabase,
-  maxRows: number,
-): number {
-  const sessionId = selectSessionColdFtsSession(database);
-  return sessionId === undefined
-    ? 0
-    : deleteSessionTranscriptFtsRowsInTransaction(database.db, sessionId, { maxRows });
+  input: { sessionId: string; afterSeq?: number; maxRows: number },
+): { rows: number; afterSeq?: number } {
+  if (readSessionColdTranscript(database.db, input.sessionId)?.storage !== "file") {
+    return { rows: 0 };
+  }
+  return withSqliteDatabaseWriteScope(
+    database.db,
+    [sqliteSessionIdWriteScope(input.sessionId)],
+    () => {
+      if (input.afterSeq !== undefined) {
+        return retainSessionColdNavigationInTransaction(
+          database,
+          input.sessionId,
+          input.afterSeq,
+          input.maxRows,
+        );
+      }
+      const rows = deleteSessionTranscriptFtsRowsInTransaction(database.db, input.sessionId, {
+        maxRows: input.maxRows,
+      });
+      if (rows > 0) {
+        return { rows };
+      }
+      const db = getNodeSqliteKysely<DB>(database.db);
+      const chunk = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_transcript_cold_archive_chunks")
+          .select("chunk_index")
+          .where("session_id", "=", input.sessionId)
+          .where("archive_blob", "is not", null)
+          .orderBy("chunk_index")
+          .limit(1),
+      );
+      if (!chunk) {
+        return { rows: 0 };
+      }
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("session_transcript_cold_archive_chunks")
+          .set({ archive_blob: null })
+          .where("session_id", "=", input.sessionId)
+          .where("chunk_index", "=", chunk.chunk_index),
+      );
+      return { rows: 1 };
+    },
+  );
 }
 
 export function mutateSessionColdTranscriptInWorker(
@@ -189,8 +229,8 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-sweep") {
-        result.ftsSweep = {
-          rows: sweepSessionColdFtsInTransaction(database, plan.maxRows),
+        result.sweep = {
+          ...sweepSessionColdInTransaction(database, plan),
           elapsedMs: 0,
         };
         onCommit(database);
@@ -217,6 +257,7 @@ export function mutateSessionColdTranscriptInWorker(
           const fresh = readSessionStateDeleteSnapshot(database.db, sessionId);
           if (
             readSessionColdTranscript(database.db, sessionId) ||
+            sessionTranscriptIndexNeedsReconcile(database.db, sessionId) ||
             protectedIds.has(sessionId) ||
             !sqliteSessionStateDeleteSnapshotsEqual(fresh, snapshot) ||
             fresh.transcriptUpdatedAt === null ||
@@ -240,7 +281,6 @@ export function mutateSessionColdTranscriptInWorker(
                   .values({ ...chunk, archive_blob: null }),
               );
             }
-            retainSessionColdNavigationInTransaction(database, sessionId);
           });
           if (fresh.sessionKey) {
             publishUnchangedSessionTranscriptAuthority(database, fresh.sessionKey);
@@ -265,13 +305,6 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             [sqliteSessionIdWriteScope(archive.session_id)],
             () => {
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .updateTable("session_transcript_cold_archive_chunks")
-                  .set({ archive_blob: null })
-                  .where("session_id", "=", archive.session_id),
-              );
               executeSqliteQuerySync(
                 database.db,
                 db
@@ -382,10 +415,10 @@ export function mutateSessionColdTranscriptInWorker(
       return result;
     },
     plan.databaseOptions,
-    { operationLabel: "session cold storage" },
+    { operationLabel: `session.cold.${plan.kind.slice("cold-".length)}` },
   );
-  if (completed.ftsSweep) {
-    completed.ftsSweep.elapsedMs = performance.now() - startedAt;
+  if (completed.sweep) {
+    completed.sweep.elapsedMs = performance.now() - startedAt;
   }
   return completed;
 }

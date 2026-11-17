@@ -129,7 +129,7 @@ function restorationPlan(descriptor: NonNullable<ReturnType<typeof readSessionCo
 }
 
 it.each(["restore", "maintenance"] as const)(
-  "recovers cold FTS after interruption and a bounded partial sweep through %s",
+  "recovers partial cold navigation and FTS cleanup through %s",
   async (recovery) => {
     await archive(); // Simulate losing the process after the atomic flip, before its sweep.
     const remaining = () =>
@@ -148,14 +148,24 @@ it.each(["restore", "maintenance"] as const)(
     }
     const sweep = () =>
       mutateSessionColdTranscriptInWorker(
-        { kind: "cold-sweep", databaseOptions: fixture.options, maxRows: 3 },
+        {
+          kind: "cold-sweep",
+          databaseOptions: fixture.options,
+          sessionId: historicalId,
+          maxRows: 3,
+        },
         undefined,
         () => {},
       );
     const rollback = new Error("interrupted sweep");
     expect(() =>
       mutateSessionColdTranscriptInWorker(
-        { kind: "cold-sweep", databaseOptions: fixture.options, maxRows: 3 },
+        {
+          kind: "cold-sweep",
+          databaseOptions: fixture.options,
+          sessionId: historicalId,
+          maxRows: 3,
+        },
         undefined,
         () => {
           throw rollback;
@@ -163,13 +173,37 @@ it.each(["restore", "maintenance"] as const)(
       ),
     ).toThrow(rollback);
     expect(remaining()).toBe(12);
-    expect(sweep().ftsSweep?.rows).toBe(3);
+    expect(sweep().sweep?.rows).toBe(3);
     expect(remaining()).toBe(9);
+    const navigation = mutateSessionColdTranscriptInWorker(
+      {
+        kind: "cold-sweep",
+        databaseOptions: fixture.options,
+        sessionId: historicalId,
+        afterSeq: -1,
+        maxRows: 3,
+      },
+      undefined,
+      () => {},
+    );
+    expect(navigation.sweep?.rows).toBe(3);
     if (recovery === "maintenance") {
+      // Recovery must discover leftover bodies even after every FTS row was swept.
+      while (remaining() !== 0) {
+        sweep();
+      }
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.options.path) });
       expect(remaining()).toBe(0);
+      expect(
+        fixture
+          .database()
+          .prepare(
+            "SELECT count(*) AS n FROM transcript_events WHERE session_id = ? AND navigation_json IS NOT NULL AND (event_json IS NOT NULL OR event_zstd IS NOT NULL)",
+          )
+          .get(historicalId)!.n,
+      ).toBe(0);
     }
     const plan = restorationPlan(readSessionColdTranscript(fixture.database(), historicalId)!);
     mutateSessionColdTranscriptInWorker(
@@ -178,7 +212,7 @@ it.each(["restore", "maintenance"] as const)(
       () => {},
     );
     expect(fixture.snapshot()).toEqual(original);
-    expect(sweep().ftsSweep?.rows).toBe(0);
+    expect(sweep().sweep?.rows).toBe(0);
     expect(remaining()).toBe(12);
   },
 );
@@ -314,6 +348,10 @@ it("embeds every chunk for a self-contained backup and re-externalizes it", asyn
   // All original files are absent: successful verification depends on the embedded child blobs.
   await prepareSessionColdRestoreInWorker(plan);
   expect((await archive()).externalizedTranscripts).toBe(1);
+  // Publication leaves child blobs for bounded, recoverable cleanup.
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.options.path) });
   expect(
     fixture
       .database()
@@ -413,12 +451,12 @@ it("admits an interactive entry patch between cold FTS sweep transactions", asyn
   let sweeps = 0;
   let patched = false;
   vi.spyOn(sessionWrites, "runExclusiveSqliteSessionWrite").mockImplementation(async (...args) => {
-    if (args[2] === "session.cold.fts-sweep" && sweeps > 0) {
+    if (args[2] === "session.cold.sweep" && sweeps > 0) {
       expect(patched).toBe(true);
     }
     const result = await originalWrite(...args);
-    if (args[2] === "session.cold.fts-sweep" && ++sweeps === 1) {
-      expect(remaining()).toBe(88); // The first transaction may delete only its 512-row budget.
+    if (args[2] === "session.cold.sweep" && ++sweeps === 1) {
+      expect(remaining()).toBe(600); // Navigation yields before search cleanup starts.
       await applySessionEntryOperation(fixture.scope, {
         kind: "fields",
         patch: { label: "interactive between sweeps" },

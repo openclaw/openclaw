@@ -67,7 +67,7 @@ function largestEventBytes(events: Fixture["original"]["events"]) {
     }, 0);
 }
 
-it("clears prepared navigation in one update without changing its retained facts", () =>
+it("bounds navigation cleanup while preserving every untouched event", () =>
   withFixture(async (fixture) => {
     await replaceTranscriptEvents(
       fixture.scope,
@@ -92,12 +92,14 @@ it("clears prepared navigation in one update without changing its retained facts
     );
     try {
       runOpenClawAgentWriteTransaction(
-        (current) => retainSessionColdNavigationInTransaction(current, historicalId),
+        (current) => retainSessionColdNavigationInTransaction(current, historicalId, -1, 3),
         fixture.options,
       );
       expect(work.counts.update).toBe(1);
       expect(read()).toEqual(
-        before.map((row) => Object.assign({}, row, { event_json: null, event_zstd: null })),
+        before.map((row, index) =>
+          index < 3 ? Object.assign({}, row, { event_json: null, event_zstd: null }) : row,
+        ),
       );
     } finally {
       work.restore();

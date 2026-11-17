@@ -5,16 +5,20 @@
  * Run against a fresh copy: --state-dir <copy> [--source-root <baseline-checkout>] [--sweep].
  * --sweep selects the candidate's deferred cleanup; baseline has no sweep operation.
  * --profile records native SQL, zstd and iterator costs separately from uninstrumented timings.
- * --flow uses actual maintenance and an interactive patch, with the companion observer preloaded:
+ * --flow uses actual maintenance and concurrent transcript appends, with the companion observer preloaded:
  * NODE_OPTIONS=--import=./scripts/perf/session-cold-writer-observer.mjs node --import ./scripts/tsx.mjs \
  *   scripts/perf/session-cold-writer.mjs --state-dir <copy> --flow
  * Imports, fixture generation, pre/post digests and close are outside measured owner timings.
- * Archive elapsed includes preparation + flip + all FTS sweeps; restore remains one transaction.
+ * Archive elapsed includes preparation + publication + all cleanup sweeps; restore remains one transaction.
  * Holds include COMMIT, exclude BEGIN wait. Native profile timings include instrumentation overhead.
+ * Set OPENCLAW_COLD_WRITER_PROFILE_DIR to an existing directory for sampled allocations
+ * (including collected objects) and CPU profiles, flushed before worker teardown.
  * Run >=5 alternating baseline/candidate fresh processes serially; retain host load and all samples.
  */
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { channel as diagnosticChannel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { cpus, loadavg, totalmem } from "node:os";
 import path from "node:path";
@@ -33,6 +37,7 @@ const { values } = parseArgs({
     sweep: { type: "boolean" },
     profile: { type: "boolean" },
     flow: { type: "boolean" },
+    appends: { type: "string", default: "200" },
     events: { type: "string", default: "50000" },
     sessions: { type: "string", default: "1" },
   },
@@ -303,21 +308,37 @@ async function measureOwners() {
     const sweepStart = performance.now();
     const sweeps = [];
     if (values.sweep) {
-      let maxRows = 512;
-      while (true) {
-        const { ftsSweep } = owner.mutateSessionColdTranscriptInWorker(
-          { kind: "cold-sweep", databaseOptions: options, maxRows },
-          undefined,
-          () => {},
-        );
-        sweeps.push({ maxRows, ...ftsSweep });
-        if (ftsSweep.rows === 0) {
-          break;
+      for (let session = 0; session < fixture.sessions; session++) {
+        let afterSeq = -1;
+        let maxRows = 256;
+        while (true) {
+          const { sweep } = owner.mutateSessionColdTranscriptInWorker(
+            {
+              kind: "cold-sweep",
+              databaseOptions: options,
+              sessionId: `synthetic-${session}`,
+              afterSeq,
+              maxRows,
+            },
+            undefined,
+            () => {},
+          );
+          sweeps.push({ maxRows, ...sweep });
+          if (sweep.rows === 0) {
+            if (afterSeq === undefined) {
+              break;
+            }
+            afterSeq = undefined;
+          } else {
+            if (afterSeq !== undefined) {
+              afterSeq = sweep.afterSeq;
+            }
+            maxRows = Math.max(
+              1,
+              Math.min(256, Math.floor((sweep.rows * 20) / Math.max(1, sweep.elapsedMs))),
+            );
+          }
         }
-        maxRows = Math.max(
-          1,
-          Math.min(16_384, Math.floor((ftsSweep.rows * 200) / Math.max(1, ftsSweep.elapsedMs))),
-        );
       }
     }
     const sweepMs = performance.now() - sweepStart;
@@ -408,43 +429,77 @@ async function measureFlow() {
       processNamespace: readGatewayLockProcessNamespace(),
     },
   });
-  const scope = { agentId: "main", storePath: options.path, sessionKey: "agent:main:interactive" };
+  const { appendTranscriptEvent } = await load(
+    "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
+  );
+  const scope = {
+    agentId: "main",
+    storePath: options.path,
+    sessionKey: "agent:main:interactive",
+    sessionId: "interactive",
+  };
   const channel = new BroadcastChannel("cold-writer-proof");
+  const reservations = [];
+  const reservationChannel = diagnosticChannel("openclaw.agent-database.reservation");
+  const appendContext = new AsyncLocalStorage();
+  const observeReservation = (record) =>
+    reservations.push({ ...record, appendIndex: appendContext.getStore() });
+  reservationChannel.subscribe(observeReservation);
+  const sessionWriteChannel = diagnosticChannel("openclaw.session.write");
+  sessionWriteChannel.subscribe(observeReservation);
   try {
     await entry.replaceSessionEntry(scope, { sessionId: "interactive", updatedAt: Date.now() });
-    const warm = performance.now();
-    await entry.applySessionEntryOperation(scope, { kind: "fields", patch: { label: "warm" } });
-    const warmPatchMs = performance.now() - warm;
+    await appendTranscriptEvent(scope, {
+      type: "custom",
+      customType: "synthetic",
+      id: "warm",
+      data: "warm",
+    });
+    reservations.length = 0;
     const transactions = [],
       closes = [],
-      patches = [];
-    let issuedAt, completedAt, archivalStartedAt;
+      appends = [],
+      appendLatencies = [];
+    let archivalStartedAt;
+    const appendCount = Number(values.appends);
     channel.addEventListener("message", ({ data }) => {
       if (data.type === "transaction") {
         transactions.push(data);
       } else if (data.type === "close") {
         closes.push(data);
       }
-      if (data.type === "archiving" && patches.length === 0) {
+      if (data.type === "archiving" && archivalStartedAt === undefined) {
         archivalStartedAt = performance.now();
-        patches.push(
-          new Promise((resolve, reject) => {
-            setTimeout(() => {
-              issuedAt = performance.now();
-              entry
-                .applySessionEntryOperation(scope, {
-                  kind: "fields",
-                  patch: { label: "interleaved" },
-                })
-                .then((value) => {
-                  completedAt = performance.now();
-                  resolve(value);
-                }, reject);
-            }, 25);
-          }),
-        );
+        for (let index = 0; index < appendCount; index++) {
+          appends.push(
+            new Promise((resolve, reject) => {
+              setTimeout(
+                () => {
+                  const started = performance.now();
+                  appendContext
+                    .run(index, () =>
+                      appendTranscriptEvent(scope, {
+                        type: "custom",
+                        customType: "synthetic",
+                        id: `append-${index}`,
+                        data: "synthetic append",
+                      }),
+                    )
+                    .then((accepted) => {
+                      assert(accepted);
+                      appendLatencies.push(performance.now() - started);
+                      resolve();
+                    }, reject);
+                },
+                25 + index * 5,
+              );
+            }),
+          );
+        }
       }
     });
+    const cpuStart = process.cpuUsage();
+    const heapStart = process.memoryUsage();
     const start = performance.now();
     const result = await runSessionColdStorageMaintenance({
       config: {
@@ -456,24 +511,87 @@ async function measureFlow() {
       },
     });
     const finishedAt = performance.now();
-    assert(patches.length > 0, "Run --flow with the companion observer in NODE_OPTIONS");
-    await Promise.all(patches);
+    assert(
+      appends.length === appendCount,
+      "Run --flow with the companion observer in NODE_OPTIONS",
+    );
+    await Promise.all(appends);
+    const cpu = process.cpuUsage(cpuStart);
+    const heapAfter = process.memoryUsage();
+    const profileDirectory = process.env.OPENCLAW_COLD_WRITER_PROFILE_DIR;
+    const profileThreads = [...new Set([0, ...transactions.map((record) => record.threadId)])];
+    if (profileDirectory) {
+      await new Promise((resolve) => {
+        const completed = () => {
+          if (
+            profileThreads.every((id) =>
+              ["cpu", "allocation"].every((kind) =>
+                fs.existsSync(path.join(profileDirectory, `${kind}-${process.pid}-${id}.json`)),
+              ),
+            )
+          ) {
+            channel.removeEventListener("message", completed);
+            resolve();
+          }
+        };
+        channel.addEventListener("message", completed);
+        const requestProfileSnapshot = channel.postMessage.bind(channel);
+        requestProfileSnapshot({ type: "profile-snapshot" });
+        completed();
+      });
+    }
+    const quantiles = (samples) => {
+      const sorted = samples.toSorted((a, b) => a - b);
+      return {
+        count: sorted.length,
+        p50: sorted[Math.ceil(sorted.length * 0.5) - 1],
+        p99: sorted[Math.ceil(sorted.length * 0.99) - 1],
+        max: sorted.at(-1),
+      };
+    };
+    const appendReservations = reservations.filter(
+      (record) =>
+        record.appendIndex !== undefined &&
+        record.reentrant === false &&
+        Number.isFinite(record.queueWaitMs),
+    );
+    assert(
+      appendReservations.length > 0,
+      `No transcript append reservation observations: ${JSON.stringify(reservations.map(({ operation, caller, workerOperations, appendIndex }) => ({ operation, caller, workerOperations, appendIndex })))}`,
+    );
+    const appendQueueWait = new Map();
+    for (const record of appendReservations) {
+      appendQueueWait.set(
+        record.appendIndex,
+        (appendQueueWait.get(record.appendIndex) ?? 0) + record.queueWaitMs,
+      );
+    }
     console.log(
       JSON.stringify({
         fixture: JSON.parse(fs.readFileSync(manifestPath, "utf8")),
         environment: environment(),
         source,
         result,
-        warmPatchMs,
         elapsedMs: finishedAt - start,
-        patchLatencyMs: completedAt - issuedAt,
-        patchIssuedAfterArchiveStartMs: issuedAt - archivalStartedAt,
-        patchFinishedBeforeMaintenance: completedAt < finishedAt,
+        appendLatencyMs: quantiles(appendLatencies),
+        appendQueueWaitMs: quantiles([...appendQueueWait.values()]),
+        appendMutationQueueWaitMs: quantiles(
+          appendReservations
+            .filter((record) => record.workerOperations?.includes("transcripts"))
+            .map((record) => record.queueWaitMs),
+        ),
+        cpu,
+        heapBefore: heapStart,
+        heapAfter,
+        ...(profileDirectory ? { profileThreads } : {}),
         transactions,
         closes,
+        reservations,
       }),
     );
   } finally {
+    reservationChannel.unsubscribe(observeReservation);
+    sessionWriteChannel.unsubscribe(observeReservation);
     channel.close();
     await agent.closeOpenClawAgentDatabasesAsync();
     lease.release();
