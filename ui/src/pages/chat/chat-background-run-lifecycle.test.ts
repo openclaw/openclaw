@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { chatItemGroups, partContinuation } from "./chat-agent-run-grouping.ts";
+import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps, makeMessage } from "./chat-thread.test-support.ts";
+import { readProjectedContinuation } from "./chat-turn-boundary.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
@@ -230,12 +231,11 @@ describe("self-woken continuation projection", () => {
       ["activity-run", "settle"],
       ["group", "settle"],
     ]);
-    expect(first!.parts.map((part) => partContinuation(part))).toEqual([
-      undefined,
-      "exec",
-      "subagent",
-      undefined,
-    ]);
+    expect(
+      first!.parts.map((part) =>
+        readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+      ),
+    ).toEqual([undefined, "exec", "subagent", undefined]);
     expect(second!.runId).toBe("next");
   });
 
@@ -258,11 +258,11 @@ describe("self-woken continuation projection", () => {
     const [first, ...rest] = frames(chain);
     expect(rest).toEqual([]);
     // The hidden tool row stays as the part that opens with the Resumed rule.
-    expect(first!.parts.map((part) => partContinuation(part))).toEqual([
-      undefined,
-      "exec",
-      undefined,
-    ]);
+    expect(
+      first!.parts.map((part) =>
+        readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+      ),
+    ).toEqual([undefined, "exec", undefined]);
   });
 
   it("keeps a settle wake's completion receipt in the answered block", () => {
@@ -294,7 +294,11 @@ describe("self-woken continuation projection", () => {
       });
       const [first, ...rest] = frames(chain);
       expect(rest).toEqual([]);
-      expect(first!.parts.map((part) => partContinuation(part))).toContain("subagent");
+      expect(
+        first!.parts.map((part) =>
+          readProjectedContinuation(chatItemGroups(part)[0]?.messages[0]?.message),
+        ),
+      ).toContain("subagent");
     }
   });
 });

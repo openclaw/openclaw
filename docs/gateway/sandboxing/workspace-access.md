@@ -74,6 +74,12 @@ package lifecycle scripts still run.
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
+
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing
 the conversation history. The next turn reuses the same private checkout under
@@ -398,7 +404,12 @@ and stopped containers do not increment it; counters restart with the Gateway.
 Release records `Local workspace unpause` with the same `reason`, elapsed
 `durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
-shorter phases are omitted. Resume inspection, generation validation, and unpause
+shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
+verification, pristine source checks, canonical snapshot preparation, and commit
+bookkeeping during base refresh. These use the same exclusive timing field;
+they include awaited worker and Git work, not
+just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine
 execution. All runtime targets are inspected before the first runtime is paused;

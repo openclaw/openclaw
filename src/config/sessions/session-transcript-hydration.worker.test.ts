@@ -8,8 +8,8 @@ import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import * as readonlyStore from "../../state/openclaw-agent-db-readonly.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { createSessionTranscriptHydrationDecoder } from "./session-transcript-hydration-decoder.js";
+import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import { streamSessionTranscriptHydration } from "./session-transcript-hydration.worker.js";
-import type { SessionTranscriptHydrationChunk } from "./session-transcript-worker.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

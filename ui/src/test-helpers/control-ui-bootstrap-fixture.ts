@@ -19,6 +19,7 @@ type BootstrapFixtureScenario = Pick<
   | "terminalEnabled"
   | "cliAgentsEnabled"
   | "pluginAssetsRequireAuth"
+  | "openclawIdEnabled"
 > & {
   bootstrapPreferences?: ControlUiBootstrapConfig["preferences"];
   methodResponses: Record<string, unknown>;
@@ -33,6 +34,7 @@ export function buildControlUiMockBootstrapConfig(
   return {
     preferences: normalizedScenario.bootstrapPreferences,
     pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
+    openclawIdEnabled: normalizedScenario.openclawIdEnabled,
     pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth
       ? (nativeCatalog?.plugins ?? [])
       : []

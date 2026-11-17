@@ -30,7 +30,10 @@ class FakeProcess extends EventEmitter {
 const spawnMock = vi.hoisted(() =>
   vi.fn<(command: string, args: string[], options: SpawnOptions) => unknown>(),
 );
-vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 describe("FaceTime native audio bridge", () => {
   let activePump: ReturnType<typeof startFaceTimeAudioPump>;

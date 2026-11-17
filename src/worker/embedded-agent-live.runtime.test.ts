@@ -4,10 +4,19 @@ import {
   WorkerLiveEventSchema,
   type WorkerLiveEvent,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  jsonTool,
+  resultDetails,
+  resetCodeModeTestState,
+} from "../agents/code-mode.test-support.js";
 import { recordModelFallbackStop } from "../agents/failover-error.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { readAgentAssistantSource } from "../infra/agent-events.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { testing as sessionTesting } from "../sessions/session-controller.test-support.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 const tool = { toolCallId: "tool-1", toolName: "read" };
@@ -49,6 +58,83 @@ function liveFixture(preview = true) {
 
 describe("createWorkerLiveRuntime", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("publishes a Code Mode guest's pending host call with its own tool name and ID", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:worker-host",
+      sessionId: "worker-host",
+      resetTriggered: false,
+    });
+    const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const events: WorkerLiveEvent[] = [];
+    const live = createWorkerLiveRuntime({
+      enqueuePreview(event) {
+        events.push(event);
+        if (event.kind === "tool" && event.payload.phase !== "update") {
+          attempt.toolEvent({
+            toolName: event.payload.name,
+            toolCallId: event.payload.toolCallId,
+            phase: event.payload.phase === "start" ? "start" : "end",
+          });
+        }
+        return true;
+      },
+      emitTerminal: async () => {},
+    });
+    const started = createDeferred();
+    const release = createDeferred();
+    const target = jsonTool("host_wait", {});
+    target.execute = async () => {
+      started.resolve();
+      await release.promise;
+      return { content: [], details: {} };
+    };
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      agentId: "main",
+      sessionId: "worker-host",
+      sessionKey: operation.key,
+      runId: "worker-host",
+      config: { tools: { codeMode: true } },
+      modelToolsEnabled: true,
+      executeTool: live.executeTool,
+    });
+    try {
+      const { tools } = runtime.compactTools([target]);
+      const exec = tools.find((entry) => entry.name === "exec")!;
+      const execution = exec.execute("guest-call", { code: "return await host_wait({});" });
+      await started.promise;
+      expect(operation.watchdog.snapshot().tools).toMatchObject([
+        {
+          toolName: "host_wait",
+          toolCallId: expect.stringMatching(/^tool_call:guest-call:[^:]+:host_wait:1$/),
+        },
+      ]);
+      expect(events.filter((event) => event.kind === "tool")).toMatchObject([
+        {
+          payload: {
+            phase: "start",
+            name: "host_wait",
+            args: null,
+            toolCallId: expect.stringMatching(/^tool_call:guest-call:[^:]+:host_wait:1$/),
+          },
+        },
+      ]);
+      expect(events.every((event) => Value.Check(WorkerLiveEventSchema, event))).toBe(true);
+      release.resolve();
+      expect(resultDetails(await execution).status).toBe("completed");
+      expect(operation.watchdog.snapshot().tools).toEqual([]);
+      expect(events.at(-1)).toMatchObject({
+        kind: "tool",
+        payload: { phase: "result", result: null },
+      });
+    } finally {
+      release.resolve();
+      runtime.cleanup();
+      operation.complete();
+      sessionTesting.resetSessionControllerForTest();
+      await resetCodeModeTestState();
+    }
+  });
 
   it.each(["text", "thinking"] as const)(
     "paces %s previews and flushes their exact delta before tool activity",

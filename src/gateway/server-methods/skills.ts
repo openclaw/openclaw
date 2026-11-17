@@ -14,7 +14,10 @@ import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
-import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
+import {
+  SkillApiKeyReferenceError,
+  updateSkillConfigEntry,
+} from "../../skills/config/mutations.js";
 import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
@@ -220,7 +223,16 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const updated = await updateSkillConfigEntry(p);
+    let updated: Record<string, unknown>;
+    try {
+      updated = await updateSkillConfigEntry(p);
+    } catch (error) {
+      if (error instanceof SkillApiKeyReferenceError) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
+        return;
+      }
+      throw error;
+    }
     respond(
       true,
       { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },

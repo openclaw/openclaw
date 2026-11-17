@@ -156,6 +156,7 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   expect(planAdd).toHaveBeenCalledWith({
     source,
     config: onDisk,
+    resolvePreferredModel: expect.any(Function),
     sourceMcpServers: expect.any(Function),
   });
   expect(listMcp).not.toHaveBeenCalled();
@@ -201,6 +202,7 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   applyAdd.mockImplementation(async (input) => {
     expect(await input.getPlanningContext()).toEqual({
       config: onDisk,
+      resolvePreferredModel: expect.any(Function),
       sourceMcpServers: expect.any(Function),
     });
     expect(listMcp).not.toHaveBeenCalled();

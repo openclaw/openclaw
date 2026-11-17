@@ -490,6 +490,8 @@ export function* assembleOpenClawCodingTools(
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             currentChatType: options?.chatType,
+            isTurnTainted: options?.isTurnTainted,
+            preparedModelRuntime: options?.preparedModelRuntime,
             computerTransport:
               options?.computerTransport === null
                 ? null
