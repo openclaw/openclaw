@@ -4046,6 +4046,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: var(--menu-selected);
 }
 
+.chat-controls__provider-tab[data-chat-model-provider-toggle="$favorites"]
+  .chat-controls__provider-icon {
+  fill: currentColor;
+}
+
 .chat-controls__provider-tab:not([aria-selected="true"]) .provider-brand-icon {
   color: var(--muted);
 }
