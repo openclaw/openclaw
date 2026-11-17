@@ -730,6 +730,7 @@ export function MessageImageAction(
             ...actions,
             pending: state === "loading",
             reason,
+            previewUrl,
             observeElement: presentation.observeFrame,
             onFocus: state === "unavailable" ? undefined : presentation.admit,
             onOpen: previewUrl

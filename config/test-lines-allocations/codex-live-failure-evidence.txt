@@ -1,2 +1,0 @@
-# Bounded Codex LIVE failure evidence: 53 projector + 129 fixture - 19 live-test lines.
-163

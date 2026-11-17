@@ -112,8 +112,17 @@ export function snapshotProviderPrefix(
       history.push(bytes(message));
     }
   }
+  const system = api === "openai-responses" ? request.instructions : request.system;
+  // Opening-only Anthropic checkpoints may move without changing the model-visible prefix.
+  const stableSystem =
+    api === "anthropic-messages" && Array.isArray(system)
+      ? system.map((rawBlock) => {
+          const { cache_control: _cacheControl, ...block } = object(rawBlock);
+          return block;
+        })
+      : system;
   return {
-    system: bytes(api === "openai-responses" ? request.instructions : request.system),
+    system: bytes(stableSystem),
     tools: bytes(request.tools),
     cacheKey: bytes({
       model: request.model,

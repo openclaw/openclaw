@@ -341,6 +341,7 @@ public actor GatewayChannelActor {
     }
 
     public func connect() async throws {
+        try self.validateTransportRole()
         try Task.checkCancellation()
         guard self.shouldReconnect else {
             throw Self.failure(6, "gateway channel is shut down")
@@ -410,7 +411,17 @@ public actor GatewayChannelActor {
         }
     }
 
+    private func validateTransportRole() throws {
+        if let role = self.session.requiredGatewayRole,
+           role != (self.connectOptions?.role ?? "operator")
+        {
+            throw WebSocketGatewayRoleError.incompatibleRole
+        }
+    }
+
     private func performConnectAttempt() async throws {
+        // Automatic reconnects bypass connect(); keep admission at both entry points.
+        try self.validateTransportRole()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
         try await self.waitForConnectFailureBackoff()
@@ -658,10 +669,14 @@ public actor GatewayChannelActor {
                 explicitGatewayToken: self.token?.trimmedNonEmpty,
                 storedToken: selectedAuth.storedToken,
                 attemptedDeviceTokenRetry: selectedAuth.authDeviceToken != nil)
+            // A rejected Share token marks a revoked or removed companion. Keeping it prevents
+            // the paired app from automatically enrolling Share again.
+            let clearsRejectedToken = options.deviceIdentityProfile != .shareExtension
             if shouldRetryWithDeviceToken {
                 self.pendingDeviceTokenRetry = true
                 self.deviceTokenRetryBudgetUsed = true
-            } else if selectedAuth.authDeviceToken != nil,
+            } else if clearsRejectedToken,
+                      selectedAuth.authDeviceToken != nil,
                       let identity,
                       (error as? GatewayConnectAuthError)?.detail == .authDeviceTokenMismatch
             {
@@ -672,7 +687,8 @@ public actor GatewayChannelActor {
                     gatewayID: options.deviceAuthGatewayID,
                     profile: options.deviceIdentityProfile,
                     observedToken: selectedAuth.authDeviceToken)
-            } else if let identity,
+            } else if clearsRejectedToken,
+                      let identity,
                       let rejectedToken = Self.rejectedStoredDeviceTokenOnlyAuth(
                           selectedAuth: selectedAuth,
                           explicitGatewayToken: self.token?.trimmedNonEmpty,

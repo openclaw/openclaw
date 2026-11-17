@@ -15,6 +15,7 @@ export const chatMetadataSessionFields = [
   "pluginOwnerId",
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "modelOverrideRouteResolution",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",

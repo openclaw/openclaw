@@ -15,7 +15,9 @@ Create `/scale/tmp` with mode 1777, export `TMPDIR=/scale/tmp`, and create writa
 `/lane/scale-results`. Set umask 022. Do not use a live state directory or service.
 
 The fixture materializes a 35.04 GiB SQLite database with compressible zero blobs,
-6,000 current sessions, and 62,000 workspace files totaling 1.1 GB. It creates one
+6,000 initial live sessions, and 62,000 workspace files totaling 1.1 GB. The
+`post-journal` incident scenario adds 40 live sessions plus 411 original sessions
+in a second agent database: 6,451 original witnesses and 6,040 current sessions. It creates one
 synthetic database seed under `/scale`; each subsequent sample reflinks that seed
 into its own protected inode and creates its own workspace. The native
 `session-preservation-witness` owner captures all 6,000 original tuples before any
@@ -26,7 +28,7 @@ witness capture, request formation, and cleanup are outside the timed owner comm
 From `/proof`, run serially with five interleaved samples for each scenario:
 
 ```sh
-for scenario in rotation unchanged; do
+for scenario in post-journal unchanged; do
   for sample in 1 2 3 4 5; do
     for arm in base candidate; do
       node --import ./test-environment.mjs \
@@ -44,14 +46,22 @@ for scenario in rotation unchanged; do
 done
 ```
 
-`rotation` retains the original window and exact generation across two session
-rotations, after its ID disappears from the current entry's direct previous-ID
-reference. The baseline must refuse at strict transcript continuity; the candidate
-must publish `BUILD_PREPARED` with all 6,000 current witnesses. Original journal
-and witness bytes must remain unchanged. These differing outcomes are a
-correctness comparison, not a speedup. `unchanged` must succeed on both arms and
-serves as the common-path performance control. Investigate any unexplained
-increase over 20% in its median wall time, CPU, or sampled allocation.
+`post-journal` captures its original witness through the production owner, then
+changes exactly 36 opaque rewrite generations in place with timestamps strictly
+after journal creation, rotates five other sessions while retaining their original
+windows (four retain an exact generation; one remains empty without a watermark),
+and purges 411 sessions under a completed native deletion receipt while
+retaining that agent database. The selected pointer and live process cwd still
+name the journal candidate. Use merged #195015 as baseline: it must refuse at
+strict transcript continuity; the candidate must publish `BUILD_PREPARED` with
+6,040 current witnesses. Original journal and witness bytes remain unchanged.
+These differing outcomes are a correctness comparison, not a speedup.
+
+`unchanged` must succeed on both arms and serves as the common-path performance
+control. Investigate any unexplained increase over 20% in its median wall time,
+CPU, or sampled allocation. The optional `rotation` scenario retains the original
+window and exact generation across two rotations and must succeed on both arms
+when the baseline includes #195015.
 
 The driver measures the actual lock-bearing `retained-repair-build begin` child.
 GNU time records user/system CPU and peak RSS. Allocation samples use the Node
@@ -64,3 +74,35 @@ limit is raised for the large witness; controller decisions are unchanged.
 
 After collecting results, remove the task-owned seed and fixtures, unmount the
 private btrfs filesystem, delete its loop image, and destroy the container.
+
+## Target freeze race
+
+`measure-target-freeze.mjs` reuses the same fixture, qualification and output
+format. It times the actual lock-bearing `request` → `begin` → `origin` owners,
+including all three processes in GNU time and sampled V8 allocation. Fixture
+construction, complete original-witness capture, and synthetic official-main
+movement happen outside the measurement. No remote fetch or live service runs.
+
+Run the same five interleaved timing samples and two allocation samples per arm
+with `measure-target-freeze.mjs` and scenarios `target-advance` and
+`target-unchanged`. Use the main parent before the target-selector fix as baseline.
+In `target-advance`, the operator selected the previous tip before the mirror
+advanced one commit. Baseline uses that exact SHA and must refuse at origin
+capture after publishing `BUILD_PREPARED`. Candidate uses `main` plus the freshly
+frozen mirror SHA and must publish an intent for that SHA and `ORIGIN_FROZEN`.
+These different outcomes demonstrate correctness, not a speedup.
+
+`target-unchanged` uses a fresh exact SHA on both arms and must succeed; it is the
+common-path A/A performance control. Investigate an unexplained increase over
+20% in its median wall time, CPU, or sampled allocation. Every sample verifies
+all 6,000 witnesses were captured and original journal/witness bytes survived.
+`build-retirement` instead prepares a native completed controller adoption and an
+unbound build intent before timing. Baseline must refuse the unsupported
+`retire-build` action; candidate must return `BUILD_RETIRED` and preserve each
+archived artifact byte-for-byte while removing the active files. This arm measures
+the retirement owner and its incumbent inspection child, and likewise compares
+different outcomes. Allocation aggregation counts only `release-lib.mjs` owner
+processes: synthetic native-observation stubs also inherit the sampler, but their
+allocations are fixture IO and are excluded. All raw profiles remain available.
+The standalone regression suite separately covers captured-operation replay and
+fresh-operation admission after retirement.

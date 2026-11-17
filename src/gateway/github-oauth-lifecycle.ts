@@ -65,6 +65,7 @@ import {
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   nextGitHubOAuthMaintenanceAtMs,
+  maintainNativeGitHubConfig,
   pendingInitialOAuthIdentitySelected,
   REFRESH_SKEW_MS,
   SHUTDOWN_DRAIN_TIMEOUT_MS,
@@ -537,6 +538,7 @@ export function createGitHubOAuthLifecycle(params: {
       }
     }
     await reconcileRecords();
+    nextMaintenanceAtMs = await maintainNativeGitHubConfig(params.getConfig(), nextMaintenanceAtMs);
     for (const configured of configuredOAuthIdentities(params.getConfig())) {
       if (stopping) {
         break;
@@ -573,8 +575,8 @@ export function createGitHubOAuthLifecycle(params: {
       if (stopping) {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
-      assertGitHubCliAvailable();
       const expectedIdentity = captureGitHubOAuthAuthorizationIdentity(params.getConfig(), input);
+      await assertGitHubCliAvailable();
       const agentLifecycleBinding =
         input.scope === "agent"
           ? await captureAgentLifecycleBinding(params.getConfig, input.agentId)

@@ -11,16 +11,26 @@
  * chunk writes and one .env chunk; preserve tracked edits/nonignored user files,
  * improve CPU/allocation without a >20% removal regression. Filesystem caches are
  * warm after creation; every run has fresh process/database state, with workers
- * warmed by creation. This does not claim a cold-storage latency bound.
+ * warmed by creation and one tiny removal. This excludes first-use TypeScript
+ * compilation in the source harness and does not claim a cold-storage latency bound.
  * Each Git subprocess and registry mutation gets an inclusive host-boundary timing; these
  * include IPC/admission and are not native SQL-only times. Main allocation is exact V8;
  * process CPU includes workers but excludes Git children. Use --cpu-prof for CPU profiles.
  * --profile is a separate diagnostic pass: real worker CPU/allocation sampling, SQL
  * statement counts/native duration, and writer-hold intervals; exclude its timings.
  * All files are synthetic. The output retains the fixture, report and operation timings.
+ * --clean keeps the Git tree unchanged and verifies service.restore after removal.
+ * --reuse-fixture can reuse its live synthetic-removal checkout; after restoration,
+ * reinstall its synthetic dependencies from repo/node_modules before the next sample.
  * --mode gc-overlimit prepares a real projection, adds 32 synthetic 32-MiB files,
  * and measures first rejection plus --passes 5 later idle sweeps. It retains all
- * files and the rejected checkpoint. Reopen with --reuse-fixture --report <name>
+ * files and the rejected checkpoint. --archive-overlimit first accepts the ignored
+ * .artifacts/ files in two 512-MiB checkpoints, so only the archive overlay exceeds
+ * the cap. --mode gc-legacy-build accepts 39,000 dist/worker files plus 1,000
+ * .cache/openclaw-bun files before adding Git ignores, then times cleanup of
+ * that historical baseline. --prepare-only separates fixture setup from the first
+ * measured reopen. With --files 22000 --file-bytes 8192, its canonical
+ * checkout has about 64k files / 1.08 GB. Reopen with --reuse-fixture --report <name>
  * for fresh-process A/A controls and five interleaved A/B pairs without rebuilding
  * the 62k-file fixture. Each arm owns its own directory; never switch an arm's code.
  * GC selection advances 25 hours per sweep (persisted across reopens), beyond the
@@ -35,6 +45,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -54,8 +65,14 @@ const { values } = parseArgs({
     profile: { type: "boolean", default: false },
     mode: { type: "string", default: "snapshot" },
     "reuse-fixture": { type: "boolean", default: false },
+    "archive-overlimit": { type: "boolean", default: false },
+    "prepare-only": { type: "boolean", default: false },
     report: { type: "string", default: "report.json" },
     passes: { type: "string", default: "5" },
+    clean: { type: "boolean", default: false },
+    packed: { type: "boolean", default: false },
+    "warm-index": { type: "boolean", default: false },
+    "retained-refs": { type: "string", default: "0" },
   },
 });
 assert(values.output, "--output must name a new task-owned directory");
@@ -65,8 +82,11 @@ const fileBytes = Number(values["file-bytes"]);
 const tracked = Number(values.tracked);
 assert([files, fileBytes, tracked].every((value) => Number.isSafeInteger(value) && value > 0));
 assert(tracked >= 3);
-assert(["snapshot", "gc-overlimit"].includes(values.mode));
-assert(!values["reuse-fixture"] || values.mode === "gc-overlimit");
+assert(["snapshot", "gc-overlimit", "gc-legacy-build"].includes(values.mode));
+const gcMode = values.mode !== "snapshot";
+const legacyBuild = values.mode === "gc-legacy-build";
+assert(!values["prepare-only"] || gcMode);
+assert(!values["archive-overlimit"] || values.mode === "gc-overlimit");
 assert(!values.profile || values.mode === "snapshot");
 if (!values["reuse-fixture"]) {
   fs.mkdirSync(output);
@@ -91,11 +111,16 @@ const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const fingerprint = createHash("sha256");
 for (const relative of [
   "src/agents/worktrees/removal.ts",
+  "src/agents/worktrees/service.ts",
+  "src/agents/worktrees/gc-protection.ts",
+  "src/agents/worktrees/registry-retirement.ts",
   "src/agents/worktrees/snapshot-host.ts",
   "src/agents/worktrees/snapshot-inventory.ts",
   "src/agents/worktrees/provisioned-snapshot.ts",
   "src/agents/worktrees/gc-removal.ts",
   "src/gateway/worker-environments/local-workspace-checkpoint.ts",
+  "src/gateway/worker-environments/local-workspace-state.ts",
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
 ]) {
   const original = baseline && path.join(baseline, relative);
   fingerprint
@@ -117,6 +142,10 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
     GIT_CONFIG_SYSTEM: os.devNull,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ATTR_NOSYSTEM: "1",
+    GIT_TRACE2_PERF: path.join(output, "git.trace"),
+    ...(values.clean
+      ? { GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" }
+      : {}),
     ...(baseline ? { OPENCLAW_BENCH_BASELINE_DIR: baseline } : {}),
     ...profileEnv,
   },
@@ -195,7 +224,7 @@ Object.defineProperty(globalThis, key, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
-    if (values.mode === "gc-overlimit" && url.endsWith("/src/agents/worktrees/service.ts")) {
+    if (gcMode && url.endsWith("/src/agents/worktrees/service.ts")) {
       const relative = path.relative(sourceRoot, fileURLToPath(url));
       const original = baseline && path.join(baseline, relative);
       let source = fs.readFileSync(
@@ -268,7 +297,10 @@ if (!values["reuse-fixture"]) {
   git(["config", "user.name", "Synthetic Benchmark"]);
   git(["config", "user.email", "benchmark@example.invalid"]);
   git(["config", "maintenance.auto", "false"]);
-  fs.writeFileSync(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+  fs.writeFileSync(
+    path.join(repo, ".gitignore"),
+    "node_modules/\n.env.local\n" + (values["archive-overlimit"] ? ".artifacts/\n" : ""),
+  );
   fs.writeFileSync(path.join(repo, ".worktreeinclude"), "node_modules/\n.env.local\n");
   fs.mkdirSync(path.join(repo, "src"));
   for (let index = 0; index < tracked - 2; index++) {
@@ -279,6 +311,20 @@ if (!values["reuse-fixture"]) {
   }
   git(["add", "."]);
   git(["commit", "-m", "synthetic source"]);
+  if (values.packed) {
+    git(["repack", "-ad"]);
+  }
+  const retainedRefs = Number(values["retained-refs"]);
+  assert(Number.isSafeInteger(retainedRefs) && retainedRefs >= 0);
+  if (retainedRefs) {
+    execFileSync("git", ["-C", repo, "update-ref", "--stdin"], {
+      input: Array.from(
+        { length: retainedRefs },
+        (_, index) => `update refs/openclaw/snapshots/synthetic-${index} HEAD\n`,
+      ).join(""),
+      env: process.env,
+    });
+  }
   const dependency = Buffer.alloc(fileBytes, 97);
 
   for (let index = 0; index < files; index++) {
@@ -350,11 +396,22 @@ async function measureOverlimitGc() {
     files: number;
     fileBytes: number;
     sweeps: number;
+    archiveOverlimit?: boolean;
+    legacyBuild?: boolean;
   };
   let fixture: Fixture;
-  const bytes = 32 * 1024 * 1024;
+  const bytes = legacyBuild ? 22 * 1024 : 32 * 1024 * 1024;
+  const payloadCount = legacyBuild ? 40_000 : 32;
+  const payloadPath = (index: number) =>
+    legacyBuild
+      ? index < 39_000
+        ? `dist/worker-${index}.js`
+        : `.cache/openclaw-bun/compiled-${index}.js`
+      : path.join(values["archive-overlimit"] ? ".artifacts" : "", `oversized-${index}.bin`);
   if (values["reuse-fixture"]) {
     fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Fixture;
+    assert.equal(Boolean(fixture.archiveOverlimit), values["archive-overlimit"]);
+    assert.equal(Boolean(fixture.legacyBuild), legacyBuild);
   } else {
     const sessionKey = "agent:main:synthetic-overlimit-gc";
     const created = await service.create({
@@ -367,25 +424,60 @@ async function measureOverlimitGc() {
     });
     const record = (await service.listRegistryRecords()).find((entry) => entry.id === created.id);
     assert(record);
-    const projection = await withLocalWorkspaceProjection(
-      {
-        agentId: "main",
-        sessionKey,
-        sessionId: "synthetic-overlimit-gc",
-        lifecycleRevision: null,
-        worktree: record,
-        env: process.env,
-        assertCurrent() {},
-      },
-      (state) => state.prepare(),
-    );
+    const owner = {
+      agentId: "main",
+      sessionKey,
+      sessionId: "synthetic-overlimit-gc",
+      lifecycleRevision: null,
+      worktree: record,
+      env: process.env,
+      assertCurrent() {},
+    };
+    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     const contents = Buffer.alloc(bytes, 71);
-    for (let index = 0; index < 32; index++) {
-      fs.writeFileSync(path.join(projection, `oversized-${index}.bin`), contents);
+    if (values["archive-overlimit"] || legacyBuild) {
+      fs.mkdirSync(path.join(projection, ".artifacts"), { recursive: true });
+    }
+    if (legacyBuild) {
+      fs.mkdirSync(path.join(projection, "dist"));
+      fs.mkdirSync(path.join(projection, ".cache/openclaw-bun"), { recursive: true });
+      fs.writeFileSync(
+        path.join(projection, ".artifacts/owner-report.md"),
+        "preserved authored work\n",
+      );
+    }
+    for (let index = 0; index < payloadCount; index++) {
+      fs.writeFileSync(path.join(projection, payloadPath(index)), contents);
+      if (
+        (values["archive-overlimit"] || legacyBuild) &&
+        (index === payloadCount / 2 - 1 || index === payloadCount - 1)
+      ) {
+        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      }
+    }
+    if (legacyBuild) {
+      // The old accepted baseline predates current Git eligibility; only cleanup recaptures it.
+      const ignore =
+        fs.readFileSync(path.join(record.path, ".gitignore"), "utf8") +
+        "dist/\n.cache/openclaw-bun/\n.artifacts/\n";
+      for (const directory of [record.path, projection]) {
+        fs.writeFileSync(path.join(directory, ".gitignore"), ignore);
+      }
     }
     await updateRegistryWorktree(process.env, record.id, { lastActiveAt: 0 });
-    fixture = { id: record.id, projection, files, fileBytes, sweeps: 0 };
+    fixture = {
+      id: record.id,
+      projection,
+      files,
+      fileBytes,
+      sweeps: 0,
+      archiveOverlimit: values["archive-overlimit"],
+      legacyBuild,
+    };
     fs.writeFileSync(fixturePath, JSON.stringify(fixture));
+  }
+  if (values["prepare-only"]) {
+    return;
   }
   let removalAttempts = 0;
   const remove = service.remove.bind(service);
@@ -424,21 +516,25 @@ async function measureOverlimitGc() {
     const usedCpu = process.cpuUsage(cpu);
     const usedMainCpu = process.threadCpuUsage(mainCpu);
     const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocation;
-    assert.deepEqual(outcome.removed, []);
+    const firstCleanup = fixture.sweeps === 0;
+    assert.deepEqual(outcome.removed, !baseline && legacyBuild && firstCleanup ? [fixture.id] : []);
     const retained = await readOutcome();
-    assert(retained.rejection, "Over-limit result must be durably rejected");
-    assert(retained.pendingRef, "Rejected result reservation must be retained");
-    if (pendingRef) {
-      assert.equal(retained.pendingRef, pendingRef);
-    } else {
-      pendingRef = retained.pendingRef;
+    if (!legacyBuild) {
+      assert(retained.pendingRef, "Over-limit result reservation must be retained");
     }
+    if ((!baseline || !values["archive-overlimit"]) && !legacyBuild) {
+      assert(retained.rejection, "Over-limit result must be durably rejected");
+      if (pendingRef) {
+        assert.equal(retained.pendingRef, pendingRef);
+      }
+    }
+    pendingRef = retained.pendingRef;
     const record = (await service.listRegistryRecords()).find((entry) => entry.id === fixture.id);
     const sample = {
       pass,
       sweep: fixture.sweeps,
       selectionNow: gcNow,
-      firstRejection: !values["reuse-fixture"] && pass === 0,
+      firstRejection: firstCleanup,
       elapsedMs,
       mainThreadCpuMs: (usedMainCpu.user + usedMainCpu.system) / 1000,
       totalProcessCpuMs: (usedCpu.user + usedCpu.system) / 1000,
@@ -454,25 +550,31 @@ async function measureOverlimitGc() {
     };
     if (!baseline) {
       assert.equal(sample.removalAttempts, sample.firstRejection ? 1 : 0);
-      assert.equal(sample.stagingAttempts, sample.firstRejection ? 1 : 0);
+      assert.equal(sample.stagingAttempts, sample.firstRejection ? (legacyBuild ? 2 : 1) : 0);
+      if (legacyBuild) {
+        assert.equal(retained.rejection, undefined);
+        assert(record?.removedAt, "Legacy build exclusion must let normal cleanup finish");
+      }
       const visible = JSON.stringify(outcome);
-      assert(
-        visible.includes(retained.pendingRef),
-        "GC outcome must expose the retained result ref",
-      );
-      assert(
-        visible.includes(fixture.projection),
-        "GC outcome must locate recoverable guest files",
-      );
-      assert(visible.includes("--retry-deferred"), "GC outcome must explain the recovery step");
+      if (!legacyBuild) {
+        assert(
+          visible.includes(retained.pendingRef!),
+          "GC outcome must expose the retained result ref",
+        );
+        assert(
+          visible.includes(fixture.projection),
+          "GC outcome must locate recoverable guest files",
+        );
+        assert(visible.includes("--retry-deferred"), "GC outcome must explain the recovery step");
+      }
     }
     samples.push(sample);
     fixture.sweeps++;
     fs.writeFileSync(fixturePath, JSON.stringify(fixture));
     console.log(JSON.stringify(sample));
   }
-  for (let index = 0; index < 32; index++) {
-    const filename = path.join(fixture.projection, `oversized-${index}.bin`);
+  for (let index = 0; index < payloadCount; index++) {
+    const filename = path.join(fixture.projection, payloadPath(index));
     assert.equal(fs.statSync(filename).size, bytes);
     const fd = fs.openSync(filename, "r");
     const content = Buffer.alloc(1);
@@ -494,8 +596,8 @@ async function measureOverlimitGc() {
         node: process.version,
         platform: process.platform,
         fixture,
-        changedFiles: 32,
-        changedBytes: 32 * bytes,
+        changedFiles: payloadCount,
+        changedBytes: payloadCount * bytes,
         samples,
       },
       null,
@@ -512,7 +614,7 @@ async function closeMeasurement() {
   Reflect.deleteProperty(globalThis, gcClockKey);
 }
 
-if (values.mode === "gc-overlimit") {
+if (gcMode) {
   try {
     await measureOverlimitGc();
   } finally {
@@ -522,26 +624,76 @@ if (values.mode === "gc-overlimit") {
 }
 
 try {
-  const created = await service.create({
-    repoRoot: repo,
-    name: "synthetic-removal",
-    baseRef: "HEAD",
-    runSetupScript: false,
-  });
+  let created = values["reuse-fixture"]
+    ? (await service.listRegistryRecords()).find((record) => record.name === "synthetic-removal")
+    : await service.create({
+        repoRoot: repo,
+        name: "synthetic-removal",
+        baseRef: "HEAD",
+        runSetupScript: false,
+      });
+  assert(created, "Fixture must have a synthetic-removal record");
+  if (created.removedAt !== undefined) {
+    created = await service.restore({ id: created.id });
+  }
+  if (values["reuse-fixture"]) {
+    fs.cpSync(path.join(repo, "node_modules"), path.join(created.path, "node_modules"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+  }
   assert.equal(
     fs.statSync(path.join(created.path, dependencyDirectory(files - 1), `${files - 1}.js`)).size,
     fileBytes,
   );
-  fs.writeFileSync(path.join(created.path, "src/0.ts"), "export const userEdit = true;\n");
-  fs.writeFileSync(path.join(created.path, "user-notes.txt"), "synthetic unsaved user work\n");
+  if (!values.clean) {
+    fs.writeFileSync(path.join(created.path, "src/0.ts"), "export const userEdit = true;\n");
+    fs.writeFileSync(path.join(created.path, "user-notes.txt"), "synthetic unsaved user work\n");
+  }
   fs.writeFileSync(path.join(created.path, ".env.local"), "SYNTHETIC_SETTING=edited\n");
-  if (values.profile) {
+  const warmupRepo = path.join(output, "warmup-repo");
+  if (!fs.existsSync(warmupRepo)) {
+    fs.mkdirSync(warmupRepo);
+    git(["init", "-b", "main", "--template="], warmupRepo);
+    fs.writeFileSync(path.join(warmupRepo, "source.txt"), "synthetic warmup\n");
+    git(["add", "source.txt"], warmupRepo);
+    git(
+      [
+        "-c",
+        "user.name=Synthetic Benchmark",
+        "-c",
+        "user.email=benchmark@example.invalid",
+        "commit",
+        "-m",
+        "synthetic warmup",
+      ],
+      warmupRepo,
+    );
+  }
+  const warmup = await service.create({
+    repoRoot: warmupRepo,
+    name: "synthetic-warmup",
+    baseRef: "HEAD",
+    runSetupScript: false,
+  });
+  await service.remove({ id: warmup.id, reason: "synthetic warmup" });
+  {
     const { runGitWorkerOperation } = await import("../../src/infra/git-worker.js");
     // Creation and maintenance have separate workers; admit the measured owner first.
     await runGitWorkerOperation({
       type: "worktree.cleanup-inspection",
       input: { kind: "provisioned", checkoutPath: created.path, provisionedPaths: [] },
     });
+  }
+  if (values["warm-index"]) {
+    git(["update-index", "--refresh"], created.path);
+  }
+  fs.writeFileSync(path.join(output, "git.trace"), "");
+  const profiler = values.profile ? new Session() : undefined;
+  if (profiler) {
+    profiler.connect();
+    await profiler.post("Profiler.enable");
+    await profiler.post("Profiler.start");
   }
   await profileWorkers("start");
   const loadBefore = os.loadavg();
@@ -568,12 +720,22 @@ try {
   const gcStats = gc.stop()?.statistics ?? [];
   loop.disable();
   await profileWorkers("stop");
+  if (profiler) {
+    const { profile } = await profiler.post("Profiler.stop");
+    profiler.disconnect();
+    fs.writeFileSync(path.join(output, "removal.cpuprofile"), JSON.stringify(profile));
+  }
   assert(removed.removed && removed.snapshotRef);
-  assert.equal(git(["show", `${removed.snapshotRef}:src/0.ts`]), "export const userEdit = true;");
   assert.equal(
-    git(["show", `${removed.snapshotRef}:user-notes.txt`]),
-    "synthetic unsaved user work",
+    git(["show", `${removed.snapshotRef}:src/0.ts`]),
+    values.clean ? "export const value0 = 0;" : "export const userEdit = true;",
   );
+  if (!values.clean) {
+    assert.equal(
+      git(["show", `${removed.snapshotRef}:user-notes.txt`]),
+      "synthetic unsaved user work",
+    );
+  }
   const states = await getRegistryWorktreeProvisionedState(process.env, created.id);
   assert(states?.some((state) => state.path === ".env.local" && state.chunks === 1));
   assert.equal(
@@ -601,6 +763,7 @@ try {
     sourceDigest,
     baseline: baseline ?? null,
     diagnosticProfile: values.profile,
+    warmIndex: values["warm-index"],
     node: process.version,
     platform: process.platform,
     tracked,
@@ -633,22 +796,43 @@ try {
     path.join(output, "operations.jsonl"),
     timings.map((timing) => JSON.stringify(timing)).join("\n") + "\n",
   );
-  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(result, null, 2));
+  fs.writeFileSync(path.join(output, values.report), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
-  assert.equal(result.persistedDependencyFiles, baseline ? files : 0);
-  assert.equal(result.persistedProvisionedFiles, baseline ? files + 1 : 1);
+  const legacyProvisioning = baseline && !values.clean;
+  assert.equal(result.persistedDependencyFiles, legacyProvisioning ? files : 0);
+  assert.equal(result.persistedProvisionedFiles, legacyProvisioning ? files + 1 : 1);
   assert.equal(
     summary["worktrees.writeProvisionedSnapshot.chunk"]?.count,
-    baseline ? files + 1 : 1,
+    legacyProvisioning ? files + 1 : 1,
   );
   assert.equal(
     summary["worktrees.writeProvisionedSnapshot.chunk"]?.bytes,
-    (baseline ? files * fileBytes : 0) + Buffer.byteLength("SYNTHETIC_SETTING=edited\n"),
+    (legacyProvisioning ? files * fileBytes : 0) + Buffer.byteLength("SYNTHETIC_SETTING=edited\n"),
   );
   if (!baseline && !values.profile) {
     assert(
       result.snapshotMs !== undefined && result.snapshotMs < 10_000,
       "Candidate snapshot exceeded the 10s acceptance bound",
+    );
+  }
+  if (values.clean) {
+    const originalHead = git([
+      "rev-parse",
+      removed.snapshotRef.includes("/clean-v1/") ? removed.snapshotRef : `${removed.snapshotRef}^`,
+    ]);
+    assert.equal(
+      git(["rev-parse", `${removed.snapshotRef}^{tree}`]),
+      git(["rev-parse", `${originalHead}^{tree}`]),
+    );
+    const restored = await service.restore({ id: created.id });
+    assert.equal(git(["rev-parse", "HEAD"], restored.path), originalHead);
+    assert.equal(git(["status", "--porcelain", "--untracked-files=no"], restored.path), "");
+    assert.equal(
+      fs.readFileSync(path.join(restored.path, ".env.local"), "utf8"),
+      "SYNTHETIC_SETTING=edited\n",
+    );
+    console.log(
+      "Verified clean snapshot restore, original HEAD, tracked bytes, and provisioned edit",
     );
   }
 } finally {

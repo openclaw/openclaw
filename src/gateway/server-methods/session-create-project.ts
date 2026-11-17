@@ -22,7 +22,11 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
+import {
+  materializeProjectClone,
+  prepareProjectCloneDefaultBase,
+  refreshProjectClone,
+} from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import {
@@ -36,15 +40,14 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { githubApiToken } from "../github-public-api.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { projectRequesterForClient } from "../project-access.js";
+import { projectRequesterForClient, resolveRequesterProject } from "../project-access.js";
 import { prepareGatewayProjectGitHubIdentity } from "../project-github-identity.js";
-import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
 import { commitPreparedSessionWorkspace } from "../session-lifecycle-preparation.js";
+import { resolveSessionProjectRootForRecord } from "../session-project-source.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { resolveExplicitSessionName } from "../session-title-state.js";
 import {
   prepareSessionWorktree,
-  resolveSessionProjectRoot,
   resolveSessionWorktreeBase,
 } from "../session-worktree-preparation.js";
 import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -52,7 +55,6 @@ import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayClient } from "./client-types.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const SESSION_PROJECT_OWNERSHIP_ERROR =
@@ -62,17 +64,24 @@ const workspacePreparations = new KeyedAsyncQueue();
 type RepositorySource = NonNullable<SessionsCreateParams["repository"]>;
 
 /** A hidden registry project reads as an unknown id to restricted requesters. */
-export async function resolveRequestedSessionProjectRoot(
+export async function resolveRequestedSessionProject(
   cfg: OpenClawConfig,
   params: Pick<SessionsCreateParams, "projectId" | "worktree">,
   client: GatewayClient | null,
-): Promise<Result<string | undefined, ErrorShape>> {
+): Promise<Result<{ root?: string; worktree: boolean }, ErrorShape>> {
   const projectId = normalizeOptionalString(params.projectId);
   if (!projectId) {
-    return ok(undefined);
+    return ok({ worktree: params.worktree === true });
   }
   const requester = projectRequesterForClient(client);
-  return await resolveSessionProjectRoot(cfg, projectId, params.worktree === true, requester);
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
+  if (!project) {
+    return invalidSessionRequest(`unknown project id: ${projectId}`);
+  }
+  // Product-owned clones are maintenance sources, never session checkouts.
+  const worktree = project.source === "cloned" || params.worktree === true;
+  const root = await resolveSessionProjectRootForRecord(project, worktree);
+  return root.ok ? ok({ root: root.value, worktree }) : root;
 }
 
 export function resolveSessionRepositoryCreation(
@@ -350,7 +359,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           current.lifecycleRevision !== entry.lifecycleRevision ||
           current.projectId !== saved.projectId ||
           current.pendingProjectGitUrl !== saved.pendingProjectGitUrl ||
-          !isDeepStrictEqual(current.pendingWorktree, pending)
+          !isDeepStrictEqual(current.pendingWorktree, saved.pendingWorktree)
         ) {
           throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
         }
@@ -404,124 +413,113 @@ export async function prepareSessionWorkspaceForRun(params: {
       if (!directory) {
         throw new Error("Saved worktree workspace is invalid; select the repository and retry.");
       }
-      const root = prepareSessionCreateFilesystemRoot({
-        cfg,
-        // Direct bindings still require containment. Pending managed checkouts use
-        // the saved child requirement and source custody in the preparation owner.
-        enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
-        sandboxRequired: saved.sandbox === "required",
-        requestedProjectId: project?.id ?? saved.projectId,
-        sessionCwd: directory,
-        sessionKey,
-        targetAgentId: agentId,
-      });
-      if (!root.ok) {
-        throw new Error(root.error.message);
-      }
       const status = (phase: Parameters<typeof emitAgentRunStatusEvent>[0]["phase"]) => {
         assertRunOwnership();
         emitAgentRunStatusEvent({ runId: clientRunId, sessionKey, agentId, phase });
       };
-      let prepared: PreparedGatewaySessionLifecycle = {
-        spawnedCwd: root.value.sessionCwd,
-        sessionRoot: root.value.sessionRoot,
-      };
-      if (pending) {
-        if (pending.baseRef && !pending.baseCommit) {
-          let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
-          if (
-            !resolved.ok &&
-            resolved.error.code === ErrorCodes.INVALID_REQUEST &&
-            project?.source === "cloned"
-          ) {
-            await refreshProjectClone(project, cloneOptions);
-            projectIdentity?.assertSelected();
-            assertRunOwnership();
-            resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
-          }
-          if (!resolved.ok) {
-            throw new Error(resolved.error.message);
-          }
-          // Accept once, before setup can fail: retries keep the commit while the
-          // original ref remains publication metadata, never a fallback selection.
-          const next = { ...pending, baseCommit: resolved.value };
-          const updated = await patchSessionEntryCore(
-            target,
-            (current) => {
-              assertSavedWorkspaceIntent(current);
-              return { pendingWorktree: next };
-            },
-            {
-              ...sessionEntryCommitGuardOptions(assertRunOwnership),
-              requireWriteSuccess: true,
-              skipMaintenance: true,
-            },
-          );
-          if (!updated) {
-            throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
-          }
-          saved = { ...saved, ...updated };
-          pending = next;
+      // A pending repository URL also owns a managed checkout, including retries
+      // saved before project sessions stopped binding directly to the shared clone.
+      pending ??= { titleSource: "" };
+      let acceptedBase: { baseRef?: string; baseCommit: string } | undefined;
+      if (!pending.baseCommit && !pending.baseRef && project?.source === "cloned") {
+        acceptedBase = await prepareProjectCloneDefaultBase(project, cloneOptions);
+      }
+      if (pending.baseRef && !pending.baseCommit) {
+        let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
+        if (
+          !resolved.ok &&
+          resolved.error.code === ErrorCodes.INVALID_REQUEST &&
+          project?.source === "cloned"
+        ) {
+          await refreshProjectClone(project, cloneOptions);
+          projectIdentity?.assertSelected();
+          assertRunOwnership();
+          resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         }
-        // Retries inherit workspace intent, not a previous caller's setup authority.
-        const result = await prepareSessionWorktree({
-          cfg,
-          target: {
-            ...target,
-            key: sessionKey,
-            entry: saved,
-            projectId: project?.id ?? saved.projectId,
-            sandboxRequired: saved.sandbox === "required",
+        if (!resolved.ok) {
+          throw new Error(resolved.error.message);
+        }
+        acceptedBase = { baseCommit: resolved.value };
+      }
+      if (acceptedBase) {
+        // Accept once, before setup can fail: retries keep the commit while the
+        // original ref remains publication metadata, never a fallback selection.
+        const next = { ...pending, ...acceptedBase };
+        const updated = await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSavedWorkspaceIntent(current);
+            return { pendingWorktree: next };
           },
-          workspace: directory,
-          name: pending.name,
-          baseRef: pending.baseRef,
-          checkoutCommit: pending.baseCommit,
-          // An existing title can name the checkout; otherwise allocation owns
-          // its short generated name while the chat title is prepared separately.
-          label: resolveExplicitSessionName(saved),
-          runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
-          signal,
-          commitGuard: assertProjectCurrent,
-          onProgress: (stage) =>
-            status(
-              stage === "base"
-                ? "preparing_worktree_base"
-                : stage === "setup"
-                  ? "running_setup"
-                  : "creating_worktree",
-            ),
-          acceptedSource: pending.source,
-          onPromptReady: params.onPromptReady
-            ? async (promptWorkspace) => {
-                // Keep pending intent authoritative until the complete checkout
-                // is published. These path facts let only this admitted turn
-                // initialize its prompt in the final execution directory.
-                const bound = await commitPreparedSessionWorkspace({
-                  prepared: promptWorkspace,
-                  signal,
-                  target,
-                  projectId: project?.id,
-                  assertCurrent: assertRunOwnership,
-                  assertEntry: assertSavedWorkspaceIntent,
-                  missingSessionMessage:
-                    "Session disappeared while preparing its workspace; start a new session.",
-                });
-                // Subsequent Git effects must accept the project binding this
-                // preparation just published, while retaining its pending intent.
-                saved = { ...saved, ...bound };
-                Object.assign(entry, bound);
-                params.onPromptReady?.();
-              }
-            : undefined,
-        });
-        if (!result.ok) {
-          throw new Error(result.error.message);
+          {
+            ...sessionEntryCommitGuardOptions(assertRunOwnership),
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+        if (!updated) {
+          throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
         }
-        prepared = result.value;
+        saved = { ...saved, ...updated };
+        pending = next;
+      }
+      // Retries inherit workspace intent, not a previous caller's setup authority.
+      const result = await prepareSessionWorktree({
+        cfg,
+        target: {
+          ...target,
+          key: sessionKey,
+          entry: saved,
+          projectId: project?.id ?? saved.projectId,
+          sandboxRequired: saved.sandbox === "required",
+        },
+        workspace: directory,
+        name: pending.name,
+        baseRef: pending.baseRef,
+        checkoutCommit: pending.baseCommit,
+        // An existing title can name the checkout; otherwise allocation owns
+        // its short generated name while the chat title is prepared separately.
+        label: resolveExplicitSessionName(saved),
+        runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
+        signal,
+        commitGuard: assertProjectCurrent,
+        onProgress: (stage) =>
+          status(
+            stage === "base"
+              ? "preparing_worktree_base"
+              : stage === "setup"
+                ? "running_setup"
+                : "creating_worktree",
+          ),
+        acceptedSource: pending.source,
+        onPromptReady: params.onPromptReady
+          ? async (promptWorkspace) => {
+              // Keep pending intent authoritative until the complete checkout
+              // is published. These path facts let only this admitted turn
+              // initialize its prompt in the final execution directory.
+              const bound = await commitPreparedSessionWorkspace({
+                prepared: promptWorkspace,
+                signal,
+                target,
+                projectId: project?.id,
+                assertCurrent: assertRunOwnership,
+                assertEntry: assertSavedWorkspaceIntent,
+                missingSessionMessage:
+                  "Session disappeared while preparing its workspace; start a new session.",
+              });
+              // Subsequent Git effects must accept the project binding this
+              // preparation just published, while retaining its pending intent.
+              saved = { ...saved, ...bound };
+              Object.assign(entry, bound);
+              params.onPromptReady?.();
+            }
+          : undefined,
+      });
+      if (!result.ok) {
+        throw new Error(result.error.message);
       }
       const bound = await commitPreparedSessionWorkspace({
-        prepared,
+        prepared: result.value,
         signal,
         target,
         projectId: project?.id,

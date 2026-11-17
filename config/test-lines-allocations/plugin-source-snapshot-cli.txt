@@ -1,2 +1,0 @@
-# Existing install tests retain exact digest expectations and use real source fixtures for snapshot publication.
-18

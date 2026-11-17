@@ -486,7 +486,6 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         const worktreeId = loaded.entry.worktree?.id;
         let acknowledgedInCustody = false;
         const writeLocalFile = async () => {
-          let reviewedGuestVersion: { sha256?: string; mode?: number } | undefined;
           const write = (
             assertCurrent = authorize,
             targetExpectedHash = params.expectedHash,
@@ -509,10 +508,17 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
             filePath: params.path,
           });
           const effectivePath = candidateBrowserPath ?? params.path;
+          // The candidate is workspace-relative. Hand the writer an absolute path so
+          // it does not apply fileRoot a second time when that candidate is nested.
+          const writePath = candidateBrowserPath
+            ? path.join(loaded.root, candidateBrowserPath)
+            : params.path;
           const { withSettledLocalWorkspacePath } =
             await import("../worker-environments/local-workspace-projection.js");
           const { resolveReconciledExpectedHash, acknowledgeLocalWorkspaceConflict } =
             await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
+          const { LocalWorkspaceConflictError } =
+            await import("../worker-environments/local-workspace-conflict-error.js");
           return await withSettledLocalWorkspacePath(
             { cwd: loaded.root, assertCurrent: authorize, allowConflict: true },
             async (custody) => {
@@ -531,7 +537,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
                   conflicts: custody?.conflicts,
                   assertCurrent: currentAuth,
                 });
-              const update = await write(currentAuth, effectiveExpectedHash, effectivePath);
+              const update = await write(currentAuth, effectiveExpectedHash, writePath);
               if (update.status === "updated") {
                 if (update.file.workspacePath) {
                   if (custody?.acknowledgeConflict) {
@@ -550,7 +556,15 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
                   }
                   acknowledgedInCustody = true;
                 }
-                await custody?.synchronizeProjection?.();
+                try {
+                  await custody?.synchronizeProjection?.();
+                } catch (error) {
+                  // This save's accepted bytes are durable even when other paths
+                  // remain conflicted; report that outcome instead of failing.
+                  if (!(error instanceof LocalWorkspaceConflictError)) {
+                    throw error;
+                  }
+                }
               }
               return update;
             },

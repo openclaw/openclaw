@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../infra/errors.js";
+import { readOperatorAuthorityFailure } from "../infra/operator-authority-error.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -201,14 +204,22 @@ function drainLane(
           },
           (err: unknown) => {
             entry.reject(err);
+            const taskIdentity =
+              entry.taskIdentity?.modelFallbackCandidate &&
+              collectNestedErrorCandidates(err).some(isSessionWorkStartInvalidatedError)
+                ? { ...entry.taskIdentity, modelFallbackCandidate: false }
+                : entry.taskIdentity;
             const quietFailure =
               isQuietProbeLane(lane) ||
-              (entry.taskIdentity?.modelFallbackCandidate &&
-                readErrorName(err) === "FailoverError");
+              (taskIdentity?.modelFallbackCandidate && readErrorName(err) === "FailoverError");
             if (!quietFailure && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
-                { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+                {
+                  errorName: readErrorName(err) || undefined,
+                  ...taskIdentity,
+                  ...readOperatorAuthorityFailure(err),
+                },
               );
             } else if (!quietFailure) {
               diag.debug(

@@ -129,7 +129,7 @@ async function seedRegisteredWorktreeConflictSession(workspaceDir: string) {
     worktree: worktreeRecord,
   };
   await sessions.upsertSessionEntryCore(scope, entry);
-  const projectionDir = localWorkspaceProjectionPath({
+  const projectionDir = await localWorkspaceProjectionPath({
     worktree: worktreeRecord,
     env: process.env,
   });
@@ -195,6 +195,39 @@ async function seedPreparedWorktreeConflictSession(
   };
   const projectionDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   return { entry, worktreeRecord, projectionDir, owner, worktreeDir, repoDir };
+}
+
+/** Seed a prepared worktree whose canonical and guest copies diverge on one retained file. */
+async function seedPreparedConflict(
+  workspaceDir: string,
+  options?: {
+    subDir?: string;
+    initialFile?: string;
+    initialContent?: string;
+    canonicalContent?: string;
+    guestContent?: string;
+  },
+) {
+  const seeded = await seedPreparedWorktreeConflictSession(workspaceDir, options);
+  const relative = options?.initialFile ?? "preview.html";
+  fs.writeFileSync(
+    path.join(seeded.worktreeDir, relative),
+    options?.canonicalContent ?? "<h1>canonical</h1>\n",
+  );
+  fs.writeFileSync(
+    path.join(seeded.projectionDir, relative),
+    options?.guestContent ?? "<h1>guest draft</h1>\n",
+  );
+  const { withLocalWorkspaceProjection } =
+    await import("../worker-environments/local-workspace-projection.js");
+  try {
+    await withLocalWorkspaceProjection(seeded.owner as any, (state) =>
+      state.synchronize("canonical"),
+    );
+  } catch {
+    // the divergence seeds the preserved conflict these tests exercise
+  }
+  return seeded;
 }
 
 function seedReplicaPressure(env: NodeJS.ProcessEnv) {
@@ -522,82 +555,13 @@ describe("sessions.files for managed-worktree sessions", () => {
     });
   });
 
-  it("saves a reconciled version when expectedHash matches the inspected guest draft in projection", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { entry, projectionDir } = await seedRegisteredWorktreeConflictSession(
-        state.workspaceDir,
-      );
-      const { withLocalWorkspaceStore } =
-        await import("../worker-environments/local-workspace-store.js");
-      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
-        await import("../worker-environments/local-workspace-store.test-support.js");
-      fs.mkdirSync(projectionDir, { recursive: true });
-      const guestDraft = "<h1>guest draft content</h1>\n";
-      const guestHash = createHash("sha256").update(guestDraft).digest("hex");
-      fs.writeFileSync(file(projectionDir), guestDraft);
-
-      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
-        await store.create({
-          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
-          session_key: key,
-          session_id: entry.sessionId,
-          projection_path: projectionDir,
-          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-          pending_target: "canonical",
-          checkpoint_json: JSON.stringify({
-            conflicts: { "preview.html": { sha256: guestHash, mode: 0o644 } },
-          }),
-        });
-      });
-      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-      const source = {
-        workspaceId: entry.worktree.id,
-        root: entry.spawnedCwd,
-        fileRoot: entry.spawnedCwd,
-      };
-      const result = await invoke("sessions.files.set", {
-        sessionKey: key,
-        path: "preview.html",
-        content: "merged human and guest contribution\n",
-        expectedHash: guestHash,
-        expectedSource: source,
-      });
-      expect(result).toMatchObject([{ ok: true }]);
-      expect(readPreview(entry.spawnedCwd)).toBe("merged human and guest contribution\n");
-
-      const row = await readLocalWorkspaceProjection(entry.worktree.id);
-      expect(row?.checkpoint_json).toBeTruthy();
-      const checkpoint = JSON.parse(row!.checkpoint_json!);
-      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
-      expect(checkpoint.acknowledgedGuestVersions?.["preview.html"]).toMatchObject({
-        sha256: guestHash,
-      });
-    });
-  });
-
   it("preserves compare-and-swap protection for unseen canonical edits outside retained conflicts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { entry, projectionDir } = await seedRegisteredWorktreeConflictSession(
-        state.workspaceDir,
-      );
-      const { withLocalWorkspaceStore } =
-        await import("../worker-environments/local-workspace-store.js");
-      const { localWorkspaceProjectionFixture } =
-        await import("../worker-environments/local-workspace-store.test-support.js");
-      fs.mkdirSync(projectionDir, { recursive: true });
-      fs.writeFileSync(file(projectionDir), preview);
-
-      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
-        await store.create({
-          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
-          session_key: key,
-          session_id: entry.sessionId,
-          projection_path: projectionDir,
-          checkpoint_json: JSON.stringify({ conflicts: {} }),
-        });
+      const { entry, worktreeDir } = await seedPreparedConflict(state.workspaceDir, {
+        canonicalContent: "<h1>canonical A</h1>\n",
+        guestContent: "<h1>guest draft</h1>\n",
       });
-
-      fs.writeFileSync(file(entry.spawnedCwd), "<h1>unseen canonical B</h1>\n");
+      fs.writeFileSync(file(worktreeDir), "<h1>unseen canonical B</h1>\n");
 
       const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
       const source = {
@@ -609,7 +573,7 @@ describe("sessions.files for managed-worktree sessions", () => {
         sessionKey: key,
         path: "preview.html",
         content: "<h1>draft C</h1>\n",
-        expectedHash,
+        expectedHash: createHash("sha256").update("<h1>canonical A</h1>\n").digest("hex"),
         expectedSource: source,
       });
       expect(result).toMatchObject([
@@ -626,33 +590,13 @@ describe("sessions.files for managed-worktree sessions", () => {
 
   it("accepts a newer guest version that the operator actually reviewed in projection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { entry, projectionDir } = await seedRegisteredWorktreeConflictSession(
-        state.workspaceDir,
-      );
-      const { withLocalWorkspaceStore } =
-        await import("../worker-environments/local-workspace-store.js");
-      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
-        await import("../worker-environments/local-workspace-store.test-support.js");
-      const v1Draft = "<h1>guest v1 original conflict</h1>\n";
-      const v1Hash = createHash("sha256").update(v1Draft).digest("hex");
+      const { entry, projectionDir } = await seedPreparedConflict(state.workspaceDir, {
+        guestContent: "<h1>guest v1 original conflict</h1>\n",
+      });
       const v2Draft = "<h1>guest v2 newer reviewed</h1>\n";
       const v2Hash = createHash("sha256").update(v2Draft).digest("hex");
-      fs.mkdirSync(projectionDir, { recursive: true });
-      fs.writeFileSync(file(projectionDir), v2Draft);
+      fs.writeFileSync(path.join(projectionDir, "preview.html"), v2Draft);
 
-      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
-        await store.create({
-          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
-          session_key: key,
-          session_id: entry.sessionId,
-          projection_path: projectionDir,
-          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-          pending_target: "canonical",
-          checkpoint_json: JSON.stringify({
-            conflicts: { "preview.html": { sha256: v1Hash, mode: 0o644 } },
-          }),
-        });
-      });
       const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
       const source = {
         workspaceId: entry.worktree.id,
@@ -669,53 +613,30 @@ describe("sessions.files for managed-worktree sessions", () => {
       expect(result).toMatchObject([{ ok: true }]);
       expect(readPreview(entry.spawnedCwd)).toBe("merged human and newer guest v2\n");
 
+      const { readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
       const row = await readLocalWorkspaceProjection(entry.worktree.id);
-      expect(row?.checkpoint_json).toBeTruthy();
-      const checkpoint = JSON.parse(row!.checkpoint_json!);
-      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
-      expect(checkpoint.acknowledgedGuestVersions?.["preview.html"]).toMatchObject({
-        sha256: v2Hash,
-      });
+      expect(row?.pending_ref).toBeNull();
+      expect(row?.pending_target).toBeNull();
     });
   });
 
   it("resolves canonical workspace-relative path when saving absolute path candidates", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { entry, projectionDir } = await seedRegisteredWorktreeConflictSession(
-        state.workspaceDir,
-      );
-      const { withLocalWorkspaceStore } =
-        await import("../worker-environments/local-workspace-store.js");
-      const { localWorkspaceProjectionFixture, readLocalWorkspaceProjection } =
-        await import("../worker-environments/local-workspace-store.test-support.js");
-      fs.mkdirSync(projectionDir, { recursive: true });
-      const guestDraft = "<h1>guest draft content</h1>\n";
-      const guestHash = createHash("sha256").update(guestDraft).digest("hex");
-      fs.writeFileSync(file(projectionDir), guestDraft);
-
-      await withLocalWorkspaceStore({ worktreeId: entry.worktree.id }, async (store) => {
-        await store.create({
-          ...localWorkspaceProjectionFixture(entry.worktree.id, state.workspaceDir),
-          session_key: key,
-          session_id: entry.sessionId,
-          projection_path: projectionDir,
-          pending_ref: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-          pending_target: "canonical",
-          checkpoint_json: JSON.stringify({
-            conflicts: { "preview.html": { sha256: guestHash, mode: 0o644 } },
-          }),
-        });
+      const { entry } = await seedPreparedConflict(state.workspaceDir, {
+        guestContent: "<h1>guest draft content</h1>\n",
       });
+      const guestHash = createHash("sha256").update("<h1>guest draft content</h1>\n").digest("hex");
+
       const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
       const source = {
         workspaceId: entry.worktree.id,
         root: entry.spawnedCwd,
         fileRoot: entry.spawnedCwd,
       };
-      const absoluteCandidate = file(entry.spawnedCwd);
       const result = await invoke("sessions.files.set", {
         sessionKey: key,
-        path: absoluteCandidate,
+        path: file(entry.spawnedCwd),
         content: "merged via absolute path\n",
         expectedHash: guestHash,
         expectedSource: source,
@@ -723,10 +644,11 @@ describe("sessions.files for managed-worktree sessions", () => {
       expect(result).toMatchObject([{ ok: true }]);
       expect(readPreview(entry.spawnedCwd)).toBe("merged via absolute path\n");
 
+      const { readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
       const row = await readLocalWorkspaceProjection(entry.worktree.id);
-      expect(row?.checkpoint_json).toBeTruthy();
-      const checkpoint = JSON.parse(row!.checkpoint_json!);
-      expect(checkpoint.acknowledgedPaths).toContain("preview.html");
+      expect(row?.pending_ref).toBeNull();
+      expect(row?.pending_target).toBeNull();
     });
   });
 

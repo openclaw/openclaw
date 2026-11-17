@@ -11,7 +11,6 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -180,11 +179,7 @@ function AppSidebarContent(
     },
     { equals: false },
   );
-  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared, () =>
-    owner.sidebarAgentsMode === "roster"
-      ? rosterActivityStore(context).snapshot
-      : context.sessions.listSnapshot(owner.sessionData.sessionListQuery(owner.expandedAgentId())),
-  );
+  createSessionOwnerFilterQuery(owner.sessionOwnerFilter, prepared);
   const narrationEnabled = createMemo(() => {
     // Preparation reads narration while synchronizing the session projection.
     projection.revision();

@@ -50,6 +50,7 @@ const config = {
     "internal/reasoning-tag-text-partitioner":
       "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
+    "internal/session-resources": "packages/ai/src/session-resources.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
   },
@@ -65,6 +66,8 @@ const config = {
   platform: "node",
   target: "node22",
   deps: {
+    // Preserve OpenAI's self-module namespace aliases in its published declarations.
+    dts: { neverBundle: [/^openai(?:\/|$)/u] },
     // Avoid loading the SDKs' individual source files when an adapter is first used.
     alwaysBundle: [/^@mistralai\/mistralai(?:\/|$)/u, /^openai(?:\/|$)/u, /^ws(?:\/|$)/u],
     neverBundle(id) {

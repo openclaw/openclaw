@@ -310,6 +310,7 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   let thinkingSignatureBytes = 0;
   let transcriptMessages = 0;
   let cumulativeWeight = 0;
+  let bytesSinceCheckpoint = 0;
   for (const [index, session] of sessions.entries()) {
     cumulativeWeight += weights[index]!;
     const target = Math.floor((cumulativeWeight / totalWeight) * transcriptBytes);
@@ -327,11 +328,17 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     ];
     let batchBytes = 0;
     const flush = () => {
-      runOpenClawAgentWriteTransaction(
-        (database) =>
-          appendTranscriptEventsInTransaction(database, { ...databaseOptions, ...session }, events),
-        databaseOptions,
-      );
+      const maintenance = runOpenClawAgentWriteTransaction((database) => {
+        appendTranscriptEventsInTransaction(database, { ...databaseOptions, ...session }, events);
+        return database.walMaintenance;
+      }, databaseOptions);
+      bytesSinceCheckpoint += batchBytes;
+      if (bytesSinceCheckpoint >= 64 * 1024 * 1024) {
+        if (!maintenance.checkpoint()) {
+          throw new Error("Fixture transcript WAL checkpoint did not complete");
+        }
+        bytesSinceCheckpoint = 0;
+      }
       events = [];
       batchBytes = 0;
     };

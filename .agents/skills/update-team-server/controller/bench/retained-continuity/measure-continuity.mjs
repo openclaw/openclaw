@@ -21,12 +21,13 @@ syncBuiltinESMExports();
 const { ready, build, descriptor } =
   await import("../../retained-repair-lifecycle-test-support.mjs");
 const { scaleFixture } = await import("./scale-fixture.mjs");
-const [arm, sample, mode, scenario = "rotation"] = process.argv.slice(2),
+const { prepareRewriteFixture } = await import("../../retained-repair-rewrite-test-support.mjs");
+const [arm, sample, mode, scenario = "post-journal"] = process.argv.slice(2),
   alloc = mode === "alloc";
 assert(["base", "candidate"].includes(arm));
 assert(/^\d+$/.test(sample));
 assert(["time", "alloc"].includes(mode));
-assert(["rotation", "unchanged"].includes(scenario));
+assert(["post-journal", "rotation", "unchanged"].includes(scenario));
 const cleanup = [];
 const f = ready({ after: (fn) => cleanup.push(fn), diagnostic: console.log });
 try {
@@ -34,31 +35,36 @@ try {
   if (!existsSync("/scale/template-agent.sqlite"))
     copyFileSync(f.agentDatabasePath, "/scale/template-agent.sqlite", constants.COPYFILE_FICLONE);
   if (arm === "base") copyFileSync("/base/release-lib.mjs", f.library);
+  const rewrites = scenario === "post-journal" ? prepareRewriteFixture(f) : undefined;
+  if (rewrites) shape.sessions = rewrites.currentSessions;
   // Capture the entire original population through the native owner before
   // evolution, rather than timing only the fixture's initial one-tuple floor.
-  const captured = cp.spawnSync(
-    "bash",
-    [
-      "-c",
-      'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"',
-      "continuity-witness",
-      process.execPath,
-      f.library,
-      "session-preservation-witness",
-      f.initial,
-      f.b,
-      f.databasePath,
-    ],
-    { env: f.env, encoding: "utf8", timeout: 120000 },
-  );
-  assert.equal(captured.status, 0, captured.stderr);
-  const witness = JSON.parse(captured.stdout);
-  assert.equal(witness.length, 6000);
+  const captured = rewrites
+    ? undefined
+    : cp.spawnSync(
+        "bash",
+        [
+          "-c",
+          'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"',
+          "continuity-witness",
+          process.execPath,
+          f.library,
+          "session-preservation-witness",
+          f.initial,
+          f.b,
+          f.databasePath,
+        ],
+        { env: f.env, encoding: "utf8", timeout: 120000 },
+      );
+  if (captured) assert.equal(captured.status, 0, captured.stderr);
+  const witness = rewrites ? f.witness : JSON.parse(captured.stdout);
+  assert.equal(witness.length, rewrites?.originalWitnessTuples ?? 6000);
   writeFileSync(f.originalPath, JSON.stringify(witness));
   const { path, ...originalDescriptor } = descriptor(f.originalPath);
   f.record.originalWitness = { name: path.split("/").at(-1), ...originalDescriptor };
   writeFileSync(f.journal, JSON.stringify(f.record) + "\n");
   f.request.source = descriptor(f.journal);
+  rewrites?.evolve();
   if (scenario === "rotation") {
     const db = new DatabaseSync(f.agentDatabasePath);
     const key = "agent:controller-test-agent:existing";
@@ -137,7 +143,7 @@ try {
   const wallMs = performance.now() - start;
   writeFileSync(prefix + ".stdout", result.stdout ?? "");
   writeFileSync(prefix + ".stderr", result.stderr ?? "");
-  const refusal = arm === "base" && scenario === "rotation";
+  const refusal = arm === "base" && scenario === "post-journal";
   assert.equal(result.status, refusal ? 2 : 0, result.stderr);
   if (refusal)
     assert.match(
@@ -148,7 +154,7 @@ try {
     const prepared = JSON.parse(result.stdout);
     assert.equal(prepared.phase, "BUILD_PREPARED");
     const snapshot = JSON.parse(readFileSync(prepared.intent.path));
-    assert.equal(snapshot.currentWitness.length, 6000);
+    assert.equal(snapshot.currentWitness.length, rewrites?.currentSessions ?? 6000);
     assert(
       snapshot.currentWitness.some(
         (encoded) =>
@@ -174,8 +180,10 @@ try {
     shape,
     librarySha256,
     originalWitnessTuples: witness.length,
-    rotations: scenario === "rotation" ? 2 : 0,
-    originalGenerationRetained: true,
+    rewrites: rewrites ? 36 : 0,
+    rotations: rewrites ? 5 : scenario === "rotation" ? 2 : 0,
+    nativeDeleted: rewrites ? 411 : 0,
+    originalGenerationRetained: !rewrites,
     allocations,
   };
   writeFileSync(prefix + ".json", JSON.stringify(metrics, null, 2) + "\n");

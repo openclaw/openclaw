@@ -3,11 +3,8 @@ import type { MemoryProviderStatus } from "../memory-host-sdk/host/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import { fakeSessionOwner } from "./memory-audience.test-support.js";
-import type {
-  MemoryAudience,
-  MemoryCallerContext,
-  MemoryProviderHandle,
-} from "./memory-provider-types.js";
+import type { MemoryProviderHandle } from "./memory-provider-runtime-types.js";
+import type { MemoryAudience, MemoryCallerContext } from "./memory-provider-types.js";
 import type {
   MemoryPluginCapability,
   MemoryProviderRuntime,

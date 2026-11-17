@@ -35,9 +35,13 @@ verification, setup consent, and the handoff to the first chat. The local HTTP
 provider serves a deterministic catalog and reply through the normal inference
 transport. It measures Gateway and renderer cost, not an external provider's
 network or generation latency. No operator credentials or accounts are used.
+The journey checks a first, second, and third reply so comparisons also cover
+ordinary later-turn readiness.
 The child has an isolated home and a system-only `PATH`. macOS application-bundle
 discovery still probes installed apps by absolute path; record that host inventory
 when interpreting detection time. This is fresh OpenClaw state, not an empty OS image.
+Git discovery stops at the synthetic output directory so it cannot inspect the
+benchmark checkout before setup creates the workspace repository.
 
 Add `--first-run-plugins` for the packaged Memory Core, Nostr, and WhatsApp views.
 Dynamic plugin pages are visited only when actually registered; missing pages are
@@ -80,6 +84,12 @@ depth. Screenshots are diagnostic and must be inspected before sharing.
 The CPU, long-task, and CLS window also includes the action's assertion tail;
 its recorded duration can extend beyond first control readiness. WebKit's
 `applicationMs` is input-to-ready elapsed time, not exclusive script CPU.
+
+For server attribution, add `--server-profile` to a separate diagnostic first-run
+journey. It records Gateway CPU profiles for first load and the first two replies,
+the existing reply timeline, and executable-only subprocess timings during setup
+detection. Subprocess arguments and environment are excluded. Profiling adds
+overhead; keep these runs separate from unprofiled acceptance comparisons.
 
 First-run mode ignores `--routes`, `--stream`, and `--boot-route`: it owns one
 continuous onboarding journey, and records any failure without moving on to

@@ -1,2 +1,0 @@
-# Shared voice polling: joined identity, left states, read retries, timeout observations, and scenario evidence.
-57

@@ -3,11 +3,8 @@ import type { ReportDocument, SummaryDocument } from "../types.js";
 import { countDescription, memberSummary, safeExternalUrl } from "./shared.js";
 
 function text(value: string): string {
-  return value
-    .replace(/[\\`*_{}[\]()#+.!|>~-]/g, "\\$&")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\r?\n/g, " ");
+  // Metadata is literal text: escape entity/tag delimiters along with Markdown punctuation.
+  return value.replace(/[\\`*_{}[\]()#+.!|<>&~-]/g, "\\$&").replace(/\r?\n/g, " ");
 }
 
 function modelText(value: string): string {

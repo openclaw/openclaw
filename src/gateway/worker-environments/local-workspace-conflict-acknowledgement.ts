@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
-import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
+import {
+  withLocalWorkspaceStore,
+  type LocalWorkspaceProjection,
+  type LocalWorkspaceStore,
+} from "./local-workspace-store.js";
 
 function resolveCandidateBrowserPath(params: {
   cwd: string;

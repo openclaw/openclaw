@@ -152,7 +152,13 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
             const thread = element
               .closest(".chat-main__conversation")
               ?.querySelector(".chat-thread");
-            if (!(thread instanceof HTMLElement) || !thread.parentElement || !footer) {
+            const content = thread?.querySelector(".chat-thread-inner");
+            if (
+              !(thread instanceof HTMLElement) ||
+              !thread.parentElement ||
+              !(content instanceof HTMLElement) ||
+              !footer
+            ) {
               throw new Error("Expected the composer in the footer beside the transcript.");
             }
             const shellBounds = element.getBoundingClientRect();
@@ -163,7 +169,8 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
               committed:
                 thread.offsetWidth === thread.parentElement.offsetWidth &&
                 thread.offsetHeight === thread.parentElement.offsetHeight,
-              separated: thread.getBoundingClientRect().bottom <= footerBounds.top,
+              // The scrollport overlaps the footer; visible transcript content must clear it.
+              separated: content.getBoundingClientRect().bottom <= footerBounds.top,
               contained:
                 shellBounds.top >= footerBounds.top && shellBounds.bottom <= footerBounds.bottom,
               inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),

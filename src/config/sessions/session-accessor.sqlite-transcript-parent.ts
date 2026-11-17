@@ -158,7 +158,7 @@ export function canRebasePreparedAssistantInTransaction(
             message: {
               role: true,
               excludeFromContext: true,
-              __openclaw: { contextFreeCommand: true },
+              __openclaw: { contextFreeCommand: true, humanAddressed: true },
               provenance: { kind: true, sourceChannel: true },
             },
           }).as("message_json"),
@@ -183,9 +183,11 @@ export function canRebasePreparedAssistantInTransaction(
       "provenance",
     ]).first;
     const internal = fields.get("__openclaw");
-    const command = scanJsonObjectFields(internal?.kind === "object" ? internal.text : "{}", [
-      "contextFreeCommand",
-    ]).first.get("contextFreeCommand");
+    const internalFields = scanJsonObjectFields(
+      internal?.kind === "object" ? internal.text : "{}",
+      ["contextFreeCommand", "humanAddressed"],
+    ).first;
+    const command = internalFields.get("contextFreeCommand");
     const provenance = fields.get("provenance");
     const source = scanJsonObjectFields(provenance?.kind === "object" ? provenance.text : "{}", [
       "kind",
@@ -203,6 +205,8 @@ export function canRebasePreparedAssistantInTransaction(
         readJsonPredicateScalar(command) === true
           ? 1
           : 0,
+      human_addressed:
+        readJsonPredicateScalar(internalFields.get("humanAddressed")) === true ? 1 : 0,
       provenance_kind: jsonScannedValue(source.get("kind")),
       provenance_source_channel: jsonScannedValue(source.get("sourceChannel")),
     };

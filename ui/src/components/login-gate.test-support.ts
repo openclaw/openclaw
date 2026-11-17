@@ -24,6 +24,7 @@ export async function mountFailure(lastError: string, lastErrorCode: string | nu
     showGatewaySecret: false,
     onGatewayUrlChange: vi.fn(),
     onSecretChange: vi.fn(),
+    onBrowserPaired: vi.fn(),
     onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };

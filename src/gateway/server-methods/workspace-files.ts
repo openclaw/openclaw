@@ -270,7 +270,7 @@ export async function listSessionWorkspaceFiles(
     workspaceRoot && "access" in workspaceRoot
       ? undefined
       : params.diffCwd
-        ? insideGitCheckout(params.diffCwd)
+        ? await insideGitCheckout(params.diffCwd)
         : undefined;
   const allowOutside =
     root &&

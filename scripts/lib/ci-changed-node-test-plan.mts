@@ -21,6 +21,7 @@ import {
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
   CONTRACTS_PLUGIN_VITEST_CONFIG,
   E2E_VITEST_CONFIG,
+  hasImportGraphConsumers,
   hasImportGraphImpactOnTargets,
   isRoutableChangedTarget,
   isTestFileTarget,
@@ -35,10 +36,12 @@ import {
   packChangedExtensionConfigShards,
   resolveChangedExtensionRoots,
 } from "./ci-extension-test-shards.mts";
+import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import {
   canSplitWholeConfigGroup,
   listNodeTestConfigFiles,
   listWholeConfigFiles,
+  type NodeTestVolume,
 } from "./ci-node-test-inventory.mts";
 import {
   UI_REAL_GATEWAY_TEST_CONFIG,
@@ -54,6 +57,8 @@ import {
   SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShard,
   type RuntimeTestSelection,
+  type NodeTestVolumeContext,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
@@ -209,7 +214,7 @@ export function hasUiE2eAffectingChange(
       (file) =>
         !file.startsWith("ui/src/") ||
         !isUiTestTarget(file) ||
-        /\.(?:browser|node)\.test\.ts$/u.test(file) ||
+        /\.(?:browser|node)\.test\.tsx?$/u.test(file) ||
         /(?:^|\/)(?:e2e|test-helpers|test-fixtures|fixtures|__fixtures__)(?:\/|$)/u.test(file) ||
         path.posix.normalize(file) !== file ||
         !existsSync(path.join(cwd, file)) ||
@@ -217,6 +222,11 @@ export function hasUiE2eAffectingChange(
     )
   ) {
     return true;
+  }
+  // A complete reverse scan can prove an ordinary unit entry is unshared without
+  // loading every UI consumer. Unknown inventories retain the forward traversal.
+  if (!hasImportGraphConsumers(relevantPaths, cwd, { tooling: true, resolveAliases: true })) {
+    return false;
   }
   // Test entry names are not enough: a fixture or application may import one.
   // Reuse the canonical import graph rather than orphaning that consumer's proof.
@@ -768,7 +778,9 @@ function createChangedTargetShards(
       predictedSeconds: Math.ceil(chunk.reduce((sum, { target }) => sum + costOf(target), 0)),
     };
     const inheritedPolicy = inheritedPolicies.get(chunk[0]!.target);
-    const pretestBuildMode = inheritedPolicy ? inheritedPolicy.mode : buildModeOf(chunk);
+    // Packing can move every runtime consumer out of an originally prepared
+    // row. Charge the build only to its final readers; retain serial admission.
+    const pretestBuildMode = buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
@@ -1058,9 +1070,9 @@ export function packChangedNodeBoundary(shards: ChangedNodeTestShard[]): Changed
   if (!boundary) {
     return shards;
   }
-  // All 97 observed boundary test steps fit 73s, including both runtimes.
-  // Reserve 90s and retain the ordinary 150s selected-row budget.
-  const boundarySeconds = 90;
+  // Seven post-fix Bun boundary runs on two CPUs stayed below 34s.
+  // Keep the 90s Node/dual reserve and the ordinary 150s selected-row budget.
+  const boundarySeconds = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY === "bun-all" ? 60 : 90;
   const recipient = shards
     .filter(
       (shard) =>
@@ -1138,8 +1150,21 @@ export function createChangedNodeTestShards(
       dedicatedUiE2e?: boolean;
       dedicatedUiTests?: boolean;
       selectedTestTargets?: readonly string[];
+      volumeContext?: NodeTestVolumeContext;
     } = {},
 ): ChangedNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const jobs = createChangedNodeTestShards(changedPaths, { ...options, runnerBackend: "hybrid" });
+    return (
+      jobs &&
+      routeBoatNodeTestJobs(
+        jobs,
+        options.compactNodeJobCap === undefined
+          ? undefined
+          : options.compactNodeJobCap + jobs.filter((job) => job.requiresDist).length,
+      )
+    );
+  }
   const cwd = options.cwd ?? process.cwd();
   const fallback = (reason: string) => {
     options.onFallback?.(reason);
@@ -1254,6 +1279,7 @@ export function createChangedNodeTestShards(
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
   // synthetic or alternate source root with coincidentally matching paths.
+  let describeVolume: ((group: NodeTestShardGroup) => NodeTestVolume) | undefined;
   const canonicalShards = canonicalTargets.length
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
@@ -1265,6 +1291,10 @@ export function createChangedNodeTestShards(
           // These exact targets already passed deferral above, including explicit policy watches.
           includeReleaseOnlyRuntimeTests: true,
           includePrExemptRuntimeTests: true,
+          volumeContext: options.volumeContext,
+          onVolumePrepared: (describe) => {
+            describeVolume = describe;
+          },
         })
       : null
     : [];
@@ -1375,20 +1405,34 @@ export function createChangedNodeTestShards(
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;
+  const withVolumes = (result: ChangedNodeTestShard[]) => {
+    if (describeVolume) {
+      for (const job of result) {
+        for (const group of job.groups ?? []) {
+          try {
+            group.volume = describeVolume({ ...group, env: { ...job.env, ...group.env } });
+          } catch {
+            delete group.volume;
+          }
+        }
+      }
+    }
+    return result;
+  };
   if (cap === undefined || bounded.filter((shard) => !shard.requiresDist).length <= cap) {
-    return bounded;
+    return withVolumes(bounded);
   }
   const otherNonDistRows = [...otherShards, ...boundaryShards].filter(
     (shard) => !shard.requiresDist,
   ).length;
   if (shards.filter((shard) => !shard.requiresDist).length <= cap || otherNonDistRows >= cap) {
-    return shards;
+    return withVolumes(shards);
   }
   // Only target chunks may grow to fit the remaining rows; all other owners
   // keep their compact execution envelopes and the workflow owns final admission.
-  return [
+  return withVolumes([
     ...otherShards,
     ...createChangedTargetShards(changedTargets, names, cap - otherNonDistRows),
     ...boundaryShards,
-  ];
+  ]);
 }

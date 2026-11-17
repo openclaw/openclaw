@@ -74,8 +74,8 @@ export type Fixture = {
   registry: PluginRegistry;
   params: (body?: string) => HandleCommandsParams;
   handler: ReturnType<typeof vi.fn<Handler>>;
-  userInputs: () => Promise<unknown[]>;
-  assistantOutputs: () => Promise<unknown[]>;
+  userInputs: (sessionId?: string) => Promise<unknown[]>;
+  assistantOutputs: (sessionId?: string) => Promise<unknown[]>;
   restrictParentTools: () => Promise<unknown>;
   revokeOwner: () => void;
   demoteOwner: () => void;
@@ -276,12 +276,12 @@ export async function withCommandPlugin(
     );
     await state.writeConfig(cfg);
     const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
-    const transcriptContents = async (role: "user" | "assistant") => {
+    const transcriptContents = async (role: "user" | "assistant", sessionId = "command-parent") => {
       const events = await loadTranscriptEvents({
         agentId: "main",
         sessionKey,
         storePath,
-        sessionId: "command-parent",
+        sessionId,
       });
       return events.flatMap((event) => {
         const record = asOptionalRecord(event);
@@ -335,8 +335,8 @@ export async function withCommandPlugin(
         reloadPlugin,
         params,
         handler,
-        userInputs: () => transcriptContents("user"),
-        assistantOutputs: () => transcriptContents("assistant"),
+        userInputs: (sessionId) => transcriptContents("user", sessionId),
+        assistantOutputs: (sessionId) => transcriptContents("assistant", sessionId),
         restrictParentTools: () =>
           upsertSessionEntryCore(
             { agentId: "main", sessionKey, storePath },

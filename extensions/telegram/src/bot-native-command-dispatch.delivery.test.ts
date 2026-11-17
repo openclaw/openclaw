@@ -511,14 +511,13 @@ describe("Telegram registered plugin delivery", () => {
     const upload = resolveTelegramTestUpload(payload, "document");
     expect(await upload.text()).toBe(content);
     expect(payload.message_thread_id).toBe("77");
-    const previousRequests = http.requests.length;
     mediaUrl = forbidden;
-    await expect(
-      bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) }),
-    ).rejects.toThrow(/not under an allowed directory/);
-    expect(
-      http.requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
-    ).toEqual([]);
+    await bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) });
+    expect(effects().filter(({ method }) => method === "sendDocument")).toHaveLength(1);
+    expect(effects().at(-1)?.payload).toMatchObject({
+      text: "Workspace report\n⚠️ private.pdf: Delivery failed. Try sending this file again.",
+      message_thread_id: 77,
+    });
   });
 
   it.each(["presentation", "reaction"] as const)(

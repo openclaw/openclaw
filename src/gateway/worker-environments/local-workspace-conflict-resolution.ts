@@ -6,9 +6,8 @@ import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { LocalWorkspaceSyncTarget as Direction } from "./local-workspace-checkpoint.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import type { LocalWorkspaceProjection } from "./local-workspace-store.js";
-import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import type { LocalWorkspaceStore } from "./local-workspace-store.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-store.types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   parseWorkerWorkspaceManifest,
@@ -275,8 +274,8 @@ export async function commitLocalWorkspaceReconciliation(params: {
   baselineRef?: string | null;
   assertCurrent?: () => void;
   update: (
-    patch: Record<string, unknown>,
-    checkpoint?: LocalWorkspaceManifestCheckpoint,
+    patch: Parameters<LocalWorkspaceStore["update"]>[1],
+    manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
   ) => Promise<void>;
   replaceBaseline: (raw: string, ref: string, patch: Record<string, unknown>) => Promise<void>;
   baselineDocument?: () => Promise<{ rawManifest: string; manifestRef: string }>;
@@ -536,7 +535,10 @@ export async function commitLocalWorkspaceReconciliation(params: {
       const raw = serializeWorkerWorkspaceManifest(params.resolvedManifest);
       await params.replaceBaseline(raw, params.resolvedManifestRef, patch);
     } else if (params.checkpoint) {
-      await params.update(patch, params.checkpoint);
+      await params.update(patch, {
+        ...params.checkpoint,
+        fingerprintsFromCheckpoint: params.checkpoint.fingerprints ? true : undefined,
+      });
     } else {
       await params.replaceBaseline(
         params.snapshot.currentManifestRaw,

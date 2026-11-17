@@ -220,7 +220,6 @@ it("keeps a successor reference busy when a retired save completes", async () =>
   flush();
   click("Save");
   expect(context.onCommit).toHaveBeenCalledTimes(2);
-
   retired.resolve(true);
   await retired.promise;
   await nextFrame();
@@ -278,10 +277,11 @@ it("retries a failed inspection without remounting the credential input", async 
 it("retries inspection after a saved credential without retaining the command error", async () => {
   const { editor, context, scope, input } = await mount();
   scope.client.request.mockRejectedValueOnce(new Error("Saved key inspection unavailable"));
+  editInput(input, "synthetic-saved-ke");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true }));
   editInput(input, "synthetic-saved-key");
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await vi.waitFor(() => expect(editor.textContent).toContain("Saved key inspection unavailable"));
-
   button(editor, "Retry").click();
   await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(3));
   await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());

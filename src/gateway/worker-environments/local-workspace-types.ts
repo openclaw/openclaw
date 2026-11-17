@@ -14,3 +14,19 @@ export type LocalWorkspaceOwner = {
   workerAuthority?: WorktreeWorkerAuthority;
   env?: NodeJS.ProcessEnv;
 };
+
+export type LocalWorkspaceCustody = {
+  worktreeId: string;
+  projectionPath?: string;
+  projectionRevision?: number;
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>;
+  canonicalPaths?: () => Promise<Set<string>>;
+  synchronizeProjection?: () => Promise<void>;
+  acknowledgeConflict?: (
+    path: string,
+    reviewedGuestVersion?: { sha256?: string; mode?: number },
+  ) => Promise<void>;
+  conflicts?: Record<string, unknown>;
+  assertCurrent: () => void;
+  workerAuthority: WorktreeWorkerAuthority;
+};

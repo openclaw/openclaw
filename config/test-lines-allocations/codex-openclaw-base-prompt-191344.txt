@@ -1,3 +1,0 @@
-# Codex threads carry OpenClaw's base prompt: byte parity with the regular prompt, placement
-# beside authored native bases, replacement on cold resume, incognito reuse, and the native model.
-97

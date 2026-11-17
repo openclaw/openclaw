@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { finishBootFrame } from "../../app/boot-composer.ts";
 import { readOfflineStorageScope, type BootRecord } from "../../app/boot-record.ts";
 import {
   sidebarSnapshotInvalidationMatches,
@@ -96,7 +97,7 @@ export function createSessionBootSnapshot(
     void readSidebarBootSnapshot(gateway)
       .then(async (snapshot) => {
         if (!snapshot || retirement.signal.aborted || !current()) {
-          return;
+          return snapshot ? undefined : finishBootFrame();
         }
         routingDefaults = snapshot.routingDefaults;
         const roster = snapshot.roster;

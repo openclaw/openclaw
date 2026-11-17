@@ -19,17 +19,26 @@ same-schema target containing the product fix:
 Read the incident bindings together before preparation; do not reuse values
 from an earlier process or journal:
 
-| Argument                 | Source                                                                                                                                                                     |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPERATION`              | A new UUIDv4, retained for preparation, activation, and resume.                                                                                                            |
-| `TARGET`                 | Full commit SHA on the verified official main mirror, containing the product fix. Preparation freezes official origin evidence and requires a distinct same-schema target. |
-| `CURRENT`                | Full candidate SHA in the retained journal, matching the selected `current` release and live Gateway working directory.                                                    |
-| `PID`                    | `MainPID` of the canonical system Gateway service.                                                                                                                         |
-| `START`                  | Field 22 of `/proc/$PID/stat` (start ticks), parsed after the final closing parenthesis of the process name.                                                               |
-| `JOURNAL_SHA256`         | SHA-256 of the reviewed original canonical `journal/activation.json`.                                                                                                      |
-| `CONFIG_SHA256`          | SHA-256 of the reviewed config at the journal's first protected path. Omit only when reconciliation is unnecessary.                                                        |
-| `BUILD_RECEIPT_SHA256`   | `completed.sha256` in successful preparation's JSON output. Activation inherits its exact config approval without another config argument.                                 |
-| `CURRENT_JOURNAL_SHA256` | On resume, a fresh SHA-256 of the current canonical journal, after reviewing its interrupted phase. This is not the original incident hash.                                |
+| Argument                 | Source                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPERATION`              | A new UUIDv4, retained for preparation, activation, and resume.                                                                                                                                                     |
+| `TARGET`                 | `main` lets the controller fetch and freeze official main before recording its exact target. An explicit full SHA must equal freshly frozen main on first preparation. The target must be distinct and same-schema. |
+| `CURRENT`                | Full candidate SHA in the retained journal, matching the selected `current` release and live Gateway working directory.                                                                                             |
+| `PID`                    | `MainPID` of the canonical system Gateway service.                                                                                                                                                                  |
+| `START`                  | Field 22 of `/proc/$PID/stat` (start ticks), parsed after the final closing parenthesis of the process name.                                                                                                        |
+| `JOURNAL_SHA256`         | SHA-256 of the reviewed original canonical `journal/activation.json`.                                                                                                                                               |
+| `CONFIG_SHA256`          | SHA-256 of the reviewed config at the journal's first protected path. Omit only when reconciliation is unnecessary.                                                                                                 |
+| `BUILD_RECEIPT_SHA256`   | `completed.sha256` in successful preparation's JSON output. Activation inherits its exact config approval without another config argument.                                                                          |
+| `CURRENT_JOURNAL_SHA256` | On resume, a fresh SHA-256 of the current canonical journal, after reviewing its interrupted phase. This is not the original incident hash.                                                                         |
+
+Use `main` for a fresh latest-main repair instead of sampling a SHA before the
+fetch. The owner records the resolved SHA in `build-intent.json`; the `PREPARED`
+output reports that exact SHA. Repeat the same operation and selector after an
+interruption: an existing intent keeps its target, and a captured `origin.json`
+continues to prove that target even after main advances. If interruption or an
+old explicit SHA leaves an intent without an origin capture and main has moved,
+retire that pre-build attempt below and start a fresh operation. Do not edit its
+target or substitute newer evidence into the same operation.
 
 Use the deployment owner's existing private environment and operator profile.
 Preparation requires disabled, inactive deployment timers and the original live
@@ -66,12 +75,42 @@ still have the witnessed physical identity; an absent file also requires
 databases, and an unexplained disappearance remain refusals. Preparation and
 later repair checks consume the same native evidence; they never manufacture it.
 
-Rewrite generations are random tokens, not ordered counters. The current
-watermark records no predecessor or rewrite-owner receipt. A different token,
-even with a later timestamp, does not prove preservation of the saved content.
-Without the exact generation or its verified archive, repair still refuses.
+Rewrite generations are random tokens, not ordered counters. For fix-forward
+from the still-selected failed candidate, preparation also accepts its
+post-incident rewrites: the database device/inode, session ID and window key
+must match the original witness, both session nodes must still select that
+window, and the watermark's integer `updated_at` must be strictly after the
+journal's `createdAt` and no later than observation. Existing preparation checks
+bind both the selected release pointer and live process cwd to that candidate.
+This is explained evolution by the serving candidate, not recovery of the old
+bytes; the invariant is no unexplained transcript loss relative to what the
+candidate itself produced. A timestamp alone is insufficient.
+
+The sealed build witness binds the accepted generation. Later activation checks
+may recognize that same generation after selecting the repair target, but cannot
+accept another rewrite against the captured build, preparation or stopped floors.
+Original historical windows absent from the build witness retain their exact
+generation/archive requirement. Predecessor selection and rollback do not receive
+this exception; neither does a native restore or changed database identity.
 Do not edit watermarks, deletion records, or the original witness to satisfy this
 guard. The operator must diagnose missing evidence before proceeding.
+
+Continuity refusals identify the boundary without printing transcript data or
+session identifiers. `RETAINED_CONTINUITY_SAVED_TUPLE` reports `scope=original`
+for the incident witness, `scope=build-floor` for the same operation's captured
+build witness, or `scope=preparation-floor` / `scope=captured-floor` for later
+sealed floors. Its `reason`, `live`, and `archive` fields name the failed
+invariant. `reason=no-rewrite-authority` means that the exact captured generation
+is no longer preserved; the original selected-candidate rewrite exception does
+not apply to that floor. `RETAINED_CONTINUITY_CURRENT_TUPLE` identifies an
+incomplete current witness, and `RETAINED_CONTINUITY_DATABASE` identifies a lost
+physical database.
+
+A fresh operation never reads another operation's build witness. A rewrite
+between its initial snapshot and a later check can leave all three prebuild
+files present even though preparation refused. Retire that unbound attempt and
+use a fresh operation to capture the settled current generation. Preparation
+and activation still refuse further unexplained changes to their captured floors.
 
 ### Native config audit evidence
 
@@ -178,6 +217,54 @@ evidence bundle and intent precede it. Successful retirement permits a separatel
 approved ordinary deploy; it does not authorize that deploy or enable a timer.
 Never use ordinary `--recover`, unlink the journal, or retire `REPAIR_FAILED`.
 
+## Retire an uncaptured build intent
+
+A `BUILD_PREPARED` intent binds its operation to an exact target even if the
+subsequent official-main observation refuses. Retrying that operation cannot
+select another target. Fresh UUIDs have independent build intents; there is no
+global build-intent slot. Retire abandoned evidence through its owner rather
+than deleting or editing journal files. A completed controller adoption does not
+prevent retirement of an earlier attempt from the same incident.
+
+Run the reviewed replacement packet's `release-lib.mjs` with the existing
+exclusive canonical FD9 lock, using `retained-controller-adoption inspect-build`
+then `retire-build`. Both take `ROOT @stdin` and the same JSON object:
+
+```json
+{
+  "adoption": {
+    "version": 1,
+    "operation": "NEW_ADOPTION_UUID",
+    "source": {},
+    "oldClosure": [],
+    "replacement": []
+  },
+  "buildIntent": {}
+}
+```
+
+`adoption` is the ordinary exact four-file adoption request below; `buildIntent`
+is the reviewed path/device/inode/SHA-256 descriptor of the abandoned operation's
+`repair-<UUID>.build-intent.json`. The approved replacement owner validates the
+immutable snapshot, original source and witness bytes. Its captured closure must
+belong to the current completed adoption or its verified predecessor chain for
+the same incident. A capture made before the first adoption must match that
+adoption's archived old closure. Retirement does not rerun build admission or require an old
+transcript floor to remain current. The current installed closure and live
+process are independently bound. Only its intent, original and witness files
+may exist: an origin
+observation, later build/preparation artifact, native guard or lifecycle effect
+refuses this action. The source journal and live incumbent remain bound unchanged.
+`RETAINED_BUILD_*` refusal codes distinguish snapshot, adoption ancestry, closure,
+source, witness, process, effects and replay failures. They carry no transcript
+content. Preserve the complete stderr and request when a check refuses.
+
+The owner durably records its move intent, archives the three exact inodes under
+`journal/retired-build-<UUID>/`, then emits `BUILD_RETIRED` and writes
+`retirement.json`. Replay the identical request after interruption. The retired
+UUID cannot be reused; ordinary adoption and a fresh repair operation follow.
+This action does not fetch, build, restart, change config or modify databases.
+
 ## Whole-closure adoption boundary
 
 The exceptional adoption owner binds the exact retained V1 incident, old four-file closure, approved replacement closure and actual canonical FD9 inode. An already gate-aware incumbent uses ordinary `prepare` and `apply`. An ungated V2 incumbent first uses the explicit `retained-controller-adoption bootstrap ROOT REQUEST_JSON` action from the approved off-path replacement library; it never treats a gate file, Boolean, timer stop or flock alone as reader exclusion.
@@ -224,6 +311,158 @@ Ordinary adoption consumes that receipt, retains the original backups (not bridg
 **Managed-entry/trusted-root contract:** every controller invocation, including manual readers, must use the literal canonical absolute shell or library path in argv within the same fully visible PID namespace. Relative paths, symlink/FD aliases, sourced/evaluated/imported old code, copied old code, changed process titles and deliberately hidden argv are outside this managed domain. The installer, interpreter environment, PATH and canonical ancestors are trusted/root-controlled. Trusted root must separately settle detached or crash-orphaned old children, pending native jobs and profiling work. This barrier proves canonical-reader retirement only; existing writer/listener/native-job/service custody checks remain mandatory. It makes no claim to fence arbitrary root deliberately running old copies.
 
 Never install an arbitrary partial closure or treat repository publication as live permission. See [SOURCE.md](SOURCE.md) for the captured installed provenance, reviewed differences, and qualification limits.
+
+### Adopt for native-update forward recovery
+
+A schema-crossing native update retained in `ROLLBACK_FAILED` can use the same
+four-file `prepare` (or `historical-successor`) and `apply` adoption sequence.
+Add `nativeRecovery` to its request. This is limited to a completed migration
+whose distinct candidate is still selected and running; it does not admit an
+incomplete migration, restored predecessor, downgrade, or another journal phase.
+Ordinary same-schema adoption keeps its existing request and checks.
+
+`nativeRecovery.receipt` is the exact `{path,device,inode,sha256}` descriptor of
+`<nativeUpdate.backupRoot>.receipt.json`. `nativeRecovery.backup` is the
+`{path,device,inode}` identity of the receipt's existing
+`<nativeUpdate.backupRoot>.databases` directory. The receipt must still say
+`migrated`. Live databases retain its exact device/inode identities; held stores
+may retain those same identities in their owner-safe archive even when the
+receipt lists their original live paths. `nativeRecovery.process` is
+`{pid,generation,release,runtime,uid,port}`: the current system Gateway's PID,
+`/proc` start ticks, canonical candidate release directory, runtime executable,
+runtime UID and listener port. The existing native live-custody owner verifies
+the system service, process, invocation, command, cgroup and listeners. The
+existing `source` descriptor binds every byte of the original journal, including
+its candidate, predecessor/candidate schema
+pair, creation time, and transaction UUID in `nativeUpdate.backupRoot`; V1
+activation journals have no separate `id` field.
+
+For this retained failed migration, a later atomic config replacement is accepted
+only when the selected serving candidate has loaded the current config. The
+controller checks its canonical path, runtime ownership and private mode, then
+binds the current bytes to the Gateway's `config.get` revision and requires that
+revision to be applied. A stale watcher snapshot, invalid or unapplied config,
+or included-file revision cannot authorize this single-file reconciliation.
+The existing installation revision key is read without creating or changing it;
+key material and config contents are never recorded. Adoption records the old
+and current config identities and applied revision in its immutable intent.
+Recovery uses the same proof for its local protected-path snapshot and rechecks
+it after full acceptance. The original journal, witness and native receipt stay
+unchanged; stopped migration/restore and same-schema reconciliation keep their
+existing contracts.
+
+Serving-process binding accepts exactly the system unit's cgroup or its
+`/gateway` leaf, matching `DelegateSubgroup=gateway`. Other leaves, nested
+sandboxes and other units are refused. The observed path stays in the native
+owner witness. Profiling uses the same two process locations; the privileged
+systemd condition instead accepts the unit root or its exact `/.control` leaf.
+Unit `ControlGroup` remains the unit root. Stopped custody checks that root's
+recursive kernel population bit, so empty delegated children do not block it;
+root-owned ancestors and the exact runtime-owned delegation boundary remain
+checked.
+
+The adoption sequence and request shape are unchanged. After a refused binding
+that published no adoption intent, stage the newly reviewed complete four-file
+closure and bind its new descriptors before retrying. Never reuse a replacement
+descriptor for changed file bytes or overwrite a packet referenced by an
+incomplete adoption.
+
+Adoption retains the original journal and all four old controller files through
+the existing immutable adoption archives. It validates the original session
+witness and native backup identity without rewriting either or copying database
+snapshots. Keep the old adoption archives, native backup, receipt and original
+witness in place while the transaction references them.
+
+After completed adoption, run the installed
+`/usr/local/sbin/openclaw-release-deploy --recover` with the same inherited FD9
+lock and existing private operator environment. Keep held agent directories in
+their witnessed archive.
+Successful full candidate acceptance retires the journal without restarting;
+ordinary recovery's failure/rollback behavior remains unchanged. This sequence
+does not deploy a new Gateway release or enable update timers.
+
+Do not use `--prepare-retained-repair` for this operation: that surface prepares
+a distinct same-schema repair release, rather than adopting a controller for
+native forward recovery. Do not remove the journal or install only the library.
+The approved shell, library and both helper files form one adoption closure even
+when only the library changes in this fix.
+
+### Adopt a controller after journal retirement
+
+When the canonical `journal/activation.json` is absent and the installed closure
+has a completed adoption gate, use `steady-successor` through the staged reviewed
+library. This is ordinary controller adoption after recovery or a later accepted
+deployment. It does not require the old incident's candidate, native backup,
+configuration or database identities to remain current. An existing activation
+journal still requires its recovery owner; this action never retires a journal.
+
+Under the existing exclusive FD9 deployment lock, construct the request:
+
+- `version: 1` and a fresh UUIDv4 `operation`.
+- `source`: the exact descriptor in the completed gate's intent `original` field
+  (its archived journal, not the absent canonical path).
+- `oldClosure` and `replacement`: the four installed and staged file descriptors,
+  in the existing shell/library/suspension/startup-profile order.
+- `historical`: exact `gate` and `complete` file descriptors of the current
+  completed adoption. The installed closure must match that completion.
+- `steady.process`: current `{pid,generation,release,runtime,uid,port}`, using
+  the same native serving-process binding described above.
+- `steady.pointers`: `current` and `previous` symlink identities as
+  `{path,sha,device,inode}`. An absent `previous` is `null`.
+
+All file descriptors use `{path,device,inode,sha256}`. Do not include
+`nativeRecovery` or `retirement`. Run the three library commands under that same
+lock and existing private operator environment:
+
+```sh
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  steady-successor "$ROOT" @stdin < "$STAGED/request.json" > "$STAGED/binding.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  apply "$ROOT" @stdin < "$STAGED/binding.json" > "$STAGED/adopted.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  context "$ROOT" @stdin < "$STAGED/binding.json"
+```
+
+The existing adoption owner archives the predecessor gate and all four old
+files, records old/new hashes and publication inodes, and fences incomplete
+closures. Preserve the request, binding, staging inodes and archives after an
+interruption; replay the same commands rather than reinstalling files or deleting
+the gate. It rechecks journal absence, live process and pointers during adoption.
+Once completed, ordinary controller entry checks closure integrity rather than
+pinning future deployments to that process. A subsequent approved deployment
+uses the installed shell normally, and a later controller adoption can use
+`steady-successor` again.
+
+The deployment lock's device/inode binds an in-flight adoption or bootstrap,
+not completed history. After a reboot recreates `/run`, ordinary entry still
+requires the current canonical, exclusively held FD9 file with its expected
+owner and safe mode, and verifies the completed closure and archived evidence.
+It does not require the adoption-time tmpfs inode. An unfinished adoption,
+including a closed bootstrap without completed adoption, remains fenced after
+an inode change; its owner must reconcile recovery. Do not replace the lock,
+rewrite its recorded identity, or delete gates to force replay.
+
+Older installed controllers report `controller adoption lock inode changed`
+even for completed gates after reboot. With no activation journal, recover using
+the `steady-successor` request and three commands above from a **staged fixed
+library**, with all four staged files from the same reviewed, merged commit.
+The installed buggy library cannot load its own historical gate to recover.
+Read fresh installed/staged descriptors, the completed gate and original archive,
+and the current process and pointer identities under the current FD9 lock;
+never reuse the prior boot's request. Preserve the existing operator environment.
+The old operation's `context` is not a successor dry run: it also checks that
+operation's original live source/process, which may have legitimately changed.
+There is no read-only `steady-successor` inspection action; `steady-successor`
+publishes intent and the gate, and `apply` installs the closure. Neither belongs
+in a read-only diagnosis. After completing adoption, `context` with the new
+binding verifies it without performing a deployment.
+
+The absent journal is the canonical owner's ordinary-admission fact, not a
+reconstructed receipt for the historical recovery. The prior immutable intent,
+original journal archive and completion remain evidence of their own operation.
+Adoption does not restart, deploy, migrate state or enable a timer. The native
+forward-recovery path has already retired its journal; do not run `--recover`
+merely to adopt a newer controller.
 
 ## Qualification still required
 

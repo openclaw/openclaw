@@ -6,7 +6,7 @@ import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../.
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
-import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
+import { listSqliteTargetCandidatePathsForSessionStorePath } from "./session-sqlite-target-paths.js";
 
 export type SessionPhysicalDiskUsage = {
   databaseWalBytes: number;
@@ -91,7 +91,14 @@ export async function readSessionPhysicalDiskUsage(
   const sessionsDirFiles = await readSessionsDirFiles(sessionsDir);
   const coldArchiveFiles = await readSessionsDirFiles(path.join(sessionsDir, "cold"));
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
-  const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
+  const candidates = listSqliteTargetCandidatePathsForSessionStorePath(storePath);
+  // Only sibling stores need database ownership inspection.
+  const databasePaths =
+    candidates.length === 1
+      ? candidates
+      : (
+          await import("./session-sqlite-target.js")
+        ).listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
   const databaseMetadataPaths = new Set(
     databasePaths.flatMap((databasePath) =>
