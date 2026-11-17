@@ -82,8 +82,8 @@ export const subagentRegistryOperations = {
     const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
     let committed = false;
     try {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
       context.write((writer) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
         writeSubagentRunValuesInDatabase(writer, values, deleteRunIds, {
           reason: input.removalReason ?? "owner_released",
           terminalRows: input.terminalRows,

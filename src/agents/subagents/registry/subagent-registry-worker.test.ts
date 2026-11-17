@@ -706,6 +706,22 @@ it("installs captured raw postimages and runtime custody before notifying every 
   }
 });
 
+it("leaves the native writer free while initial registry admission waits", async () => {
+  await register(entry("admission-lock"));
+  using writer = probe.writerLock(openOpenClawStateDatabase().path);
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    writer.observe(request.stage);
+    admit(request, grant);
+  });
+  try {
+    await change("admission-lock", { label: "admitted mutation" });
+    expect(writer.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(stored("admission-lock")?.label).toBe("admitted mutation");
+  } finally {
+    admission.mockRestore();
+  }
+});
+
 it.each(["transaction", "commit"] as const)(
   "revalidates live caller authority at native %s admission",
   async (stage) => {
