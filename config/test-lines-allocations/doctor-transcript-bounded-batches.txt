@@ -1,0 +1,2 @@
+# Partial-session migration resumes without dropped repairs or duplicated receipts.
+107
