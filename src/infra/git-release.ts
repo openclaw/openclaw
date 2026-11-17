@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveConfigPath } from "../config/paths.js";
 import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
@@ -84,6 +85,8 @@ export async function publishGitRelease(params: {
       previous,
       version: (await readPackageVersion(params.releaseRoot)) ?? "unknown",
       ...(buildId ? { buildId } : {}),
+      // The update admits only a service whose config selection matches this process.
+      config: resolveConfigPath(process.env),
       createdAt: Date.now(),
       attempts: 0,
     };

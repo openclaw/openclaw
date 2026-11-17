@@ -216,6 +216,34 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
   });
 
+  it("restores a config outside the state directory named with ~", async () => {
+    const { prefix } = await setup();
+    // Outside the state directory, so the state scan cannot find it.
+    const home = (await setup()).stateDir;
+    const config = path.join(home, "cfg", "openclaw.json");
+    await fs.mkdir(path.dirname(config), { recursive: true });
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", "~/cfg/openclaw.json");
+    try {
+      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+      await publishGitRelease({ prefix, releaseRoot: good, trial: false });
+      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await fs.writeFile(`${config}.pre-2.0.0`, "old config");
+    await fs.writeFile(config, "new config");
+    const env = { HOME: home, OPENCLAW_HOME: home, OPENCLAW_CONFIG_PATH: "~/cfg/openclaw.json" };
+
+    startGateway(prefix, env);
+    startGateway(prefix, env);
+
+    expect(startGateway(prefix, env).stdout).toContain("old");
+    expect(await fs.readFile(config, "utf8")).toBe("old config");
+  });
+
   it("stops counting once the trial release reports ready", async () => {
     const { prefix } = await setup();
     await publishGitRelease({

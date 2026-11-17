@@ -13,6 +13,8 @@ export type GitReleaseTrial = {
   buildId?: string;
   createdAt: number;
   attempts: number;
+  /** The resolved config path; a config outside the state directory is not in the scan. */
+  config?: string;
   /** Written by the launcher before it restores anything: what the rollback restores. */
   restoring?: Array<{ suffix: string; files: string[] }>;
 };
@@ -116,7 +118,7 @@ if (trial && counts) {
         retirePlans(path.dirname(prefix), generation);
         const suffix = ".pre-" + generation;
         const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
-        const config = process.env.OPENCLAW_CONFIG_PATH;
+        const config = trial.config;
         if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
           files.push(config);
         }
