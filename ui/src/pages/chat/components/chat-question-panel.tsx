@@ -368,28 +368,53 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               data-chat-autotype-shortcuts="active"
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
-              <div
-                class={[
-                  "chat-question-panel__topline",
-                  { "chat-question-panel__topline--prompt": model().nonBlocking },
-                ]}
-              >
-                {model().nonBlocking ? (
-                  <span class="chat-question-panel__prompt">{item().question}</span>
-                ) : (
-                  <div class="chat-question-panel__title">{model().title}</div>
-                )}
-                {requestNavigation()}
-                <span class="chat-question-panel__progress">{progress()}</span>
-                <button
-                  class="chat-question-panel__collapse"
-                  type="button"
-                  onClick={() => setCollapsed(true)}
-                  aria-label={t("chat.questions.collapse")}
-                  aria-expanded="true"
+              <div class="chat-question-panel__header">
+                <div
+                  class={[
+                    "chat-question-panel__topline",
+                    { "chat-question-panel__topline--prompt": model().nonBlocking },
+                  ]}
                 >
-                  <Icon name="chevronDown" />
-                </button>
+                  {model().nonBlocking ? (
+                    <span class="chat-question-panel__prompt">{item().question}</span>
+                  ) : (
+                    <div class="chat-question-panel__title">{model().title}</div>
+                  )}
+                  {requestNavigation()}
+                  <span class="chat-question-panel__progress">{progress()}</span>
+                  <button
+                    class="chat-question-panel__collapse"
+                    type="button"
+                    onClick={() => setCollapsed(true)}
+                    aria-label={t("chat.questions.collapse")}
+                    aria-expanded="true"
+                  >
+                    <Icon name="chevronDown" />
+                  </button>
+                </div>
+                {model().requestedBySession && (
+                  <div class="chat-question-panel__source" role="note">
+                    <span>{t("chat.questions.requestedBySession")}</span>
+                    <a
+                      data-session-key={model().sessionKey}
+                      href={model().requestedBySessionHref}
+                      onClick={(event) => {
+                        if (
+                          props.panel.onOpenSession &&
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.shiftKey &&
+                          !event.altKey
+                        ) {
+                          event.preventDefault();
+                          props.panel.onOpenSession();
+                        }
+                      }}
+                    >
+                      {model().requestedBySession}
+                    </a>
+                  </div>
+                )}
               </div>
               {!model().nonBlocking && (
                 <div class="chat-question-panel__heading">
