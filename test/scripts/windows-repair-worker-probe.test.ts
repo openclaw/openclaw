@@ -1,9 +1,9 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Header } from "tar";
+import { create as createTar, Header } from "tar";
 import { afterEach, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import {
@@ -81,10 +81,7 @@ async function fixture(
   const lifecycleMarker = path.join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
   await fs.writeFile(lifecycleMarker, "pending\n");
   const tarball = path.join(root, "candidate.tgz");
-  execFileSync("tar", ["-czf", path.basename(tarball), "package"], {
-    cwd: root,
-    env: { ...process.env, COPYFILE_DISABLE: "1" },
-  });
+  await createTar({ cwd: root, file: tarball, gzip: true }, ["package"]);
   await fs.rm(lifecycleMarker);
   return packageFixture(packageRoot, tarball);
 }
@@ -128,9 +125,9 @@ function packageFixture(root: string, tarball: string) {
 
 it("verifies a package member without system tar and rejects changed installed bytes", async () => {
   const source = "export const fixture = true;\n";
-  const pkg = await fixture({ "member.mjs": source });
-  vi.stubEnv("PATH", pkg.file("no-system-tools"));
+  vi.stubEnv("PATH", directories.make("windows-repair-no-system-tools-"));
   try {
+    const pkg = await fixture({ "member.mjs": source });
     await expect(pkg.verify("member.mjs")).resolves.toEqual({
       file: "dist/member.mjs",
       sha256: sha256(source),
