@@ -5,7 +5,7 @@ import {
   resolveAgentRunAbortLifecycleFields,
 } from "../agents/run-termination.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
-import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input.types.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import {
   isOperatorAuthorityUnavailable,
   readOperatorAuthorityFailure,

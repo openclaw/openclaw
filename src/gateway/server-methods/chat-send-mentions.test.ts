@@ -913,6 +913,7 @@ describe("committed human mentions", () => {
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
         recorder?.finishPendingInput?.("cancelled", "failed");
+        await recorder.waitForPendingInputSettlement?.();
       }
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
@@ -925,7 +926,7 @@ describe("committed human mentions", () => {
         fixture.params.message += " Changed request.";
       }
       const response = await fixture.send();
-      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      expect(response.mock.calls[0]?.[0]).toBe(false);
       if (change === "sender") {
         expect(response).toHaveBeenCalledWith(
           false,
@@ -941,9 +942,20 @@ describe("committed human mentions", () => {
           undefined,
           expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
         );
+      } else {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause: "failed" },
+          }),
+        );
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+      expect((await pending(fixture)).items).toEqual([
+        { ...original, state: "cancelled", endCause: change === "cancelled" ? "failed" : "reset" },
+      ]);
       expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
     },
   );

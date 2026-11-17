@@ -312,8 +312,8 @@ export async function runTalkCallerReplay({
       expect(result).toMatchObject({
         ok: false,
         error: {
-          code: "UNAVAILABLE",
-          message: "Realtime agent consult completed before the tool result subscription started.",
+          code: "INVALID_REQUEST",
+          details: { reason: "chat-input-cancelled", endCause: "failed" },
         },
       });
       await expectEffects(dispatches, effectText);

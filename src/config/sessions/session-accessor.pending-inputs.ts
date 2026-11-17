@@ -55,6 +55,7 @@ import {
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import {
   bindPendingInputMentionInvitation,
   finishPendingInputSources,
@@ -69,7 +70,6 @@ import {
   isRetryableSessionPendingInputEndCause,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
-import type { SessionPendingInputEndCause } from "./session-pending-input.types.js";
 import type { PreparedSessionMentionInvitation } from "./session-sharing-authority.types.js";
 import {
   runWithSessionSourceScope,

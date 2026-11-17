@@ -34,6 +34,7 @@ import { AGENT_TOOL_USAGE_SCHEMA_VERSION } from "./openclaw-agent-tool-usage-sch
 import { assertMigrationWitnessRegistryPreserved } from "./openclaw-migration-witness-registry.js";
 import {
   type OpenClawMigrationWitness,
+  agentSchemaVersions,
   registryRowSchema,
   witnessIdentifierSchema as identifier,
   witnessSchema,
@@ -44,9 +45,6 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
-const agentSchemaVersions = new Set([
-  24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
-]);
 
 const ADDITIVE_AGENT_TABLES = new Map([
   ["session_transcript_cold_archive_chunks", AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION],
@@ -60,6 +58,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     ...AGENT_JSON_PREDICATE_COLUMNS,
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
+    session_pending_inputs: ["end_cause", "origin_source_json"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 

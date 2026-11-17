@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { jsonType } from "../infra/database-engine/json-values.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export { AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
@@ -20,12 +22,35 @@ export function migrateAgentPendingInputEndingsInTransaction(database: DatabaseS
   }
   ensureColumn(database, "session_pending_inputs", "end_cause TEXT");
   ensureColumn(database, "session_pending_inputs", "origin_source_json TEXT");
-  // sqlite-allow-raw -- Versioned normalization of pre-end_cause plain-JSON retirement facts.
-  database.exec(`UPDATE session_pending_inputs SET end_cause = 'user-stop'
-    WHERE state = 'cancelled' AND end_cause IS NULL AND (
-      json_type(message_json, '$.__openclaw.pendingInputCancelledByUser') = 'true'
-      OR json_type(message_json, '$.display') = 'false'
-    )`);
+  const db = getNodeSqliteKysely<{
+    session_pending_inputs: {
+      state: string;
+      end_cause: string | null;
+      message_json: string;
+    };
+  }>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .updateTable("session_pending_inputs")
+      .set({ end_cause: "user-stop" })
+      .where("state", "=", "cancelled")
+      .where("end_cause", "is", null)
+      .where((eb) =>
+        eb.or([
+          eb(
+            jsonType(
+              database,
+              eb.ref("message_json"),
+              eb.val("$.__openclaw.pendingInputCancelledByUser"),
+            ),
+            "=",
+            "true",
+          ),
+          eb(jsonType(database, eb.ref("message_json"), eb.val("$.display")), "=", "false"),
+        ]),
+      ),
+  );
 }
 
 export const AGENT_PENDING_INPUT_ENDINGS_POSTGRES_MIGRATION_SQL = `

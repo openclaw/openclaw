@@ -1,8 +1,8 @@
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import type {
-  SessionPendingInputEndCause,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
 } from "./session-pending-input.types.js";

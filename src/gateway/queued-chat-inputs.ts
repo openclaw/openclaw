@@ -1,13 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
-import type {
-  SessionPendingInputEndCause,
-  SessionPendingInputRow,
-} from "../config/sessions/session-pending-input.types.js";
+import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";

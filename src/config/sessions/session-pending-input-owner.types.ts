@@ -2,11 +2,9 @@ import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputAuthority } from "./session-pending-input-authority.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
-import type {
-  SessionPendingInputEndCause,
-  SessionPendingInputWorkerFacts,
-} from "./session-pending-input.types.js";
+import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
 
 export type SessionPendingInputOwner = Omit<
   SessionPendingInputWorkerFacts,

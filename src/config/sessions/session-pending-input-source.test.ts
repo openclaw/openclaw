@@ -74,7 +74,7 @@ it.each(["pending", "committed"] as const)(
     ).toEqual({
       message: receipt.message,
       source: source === "committed" ? "transcript" : "pending",
-      ...(source === "committed" ? { messageSeq: 1 } : {}),
+      ...(source === "committed" ? { messageSeq: 1 } : { state: "queued", endCause: undefined }),
     });
     const db = database().db;
     const invalidMessages = [

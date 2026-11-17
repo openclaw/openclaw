@@ -2,7 +2,7 @@ import { z } from "zod";
 import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
-import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal.js";
+import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal-schema.js";
 
 const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);

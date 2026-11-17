@@ -17,12 +17,12 @@ import {
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
   PendingInputOrphansWorkerInput,
   PendingInputOrphanTarget,
 } from "./session-pending-input-history.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
-import type { SessionPendingInputEndCause } from "./session-pending-input.types.js";
 
 /** Read the pending-input index once per store, never once per session. */
 export function readOrphanedSessionPendingInputTargetsInWorker(

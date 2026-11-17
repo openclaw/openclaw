@@ -695,10 +695,11 @@ async function resumeRestartStore(
       }
     }
     for (const session of orphaned) {
+      const agentId = parseAgentSessionKey(session.sessionKey)?.agentId ?? target.agentId;
       try {
         const remaining = await continueSessionQueuedInputs(
           context,
-          { ...target, ...session },
+          { ...target, ...session, agentId },
           { signal, assertCurrent: () => signal.throwIfAborted() },
         );
         if (remaining) {

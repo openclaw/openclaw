@@ -1,0 +1,11 @@
+# PR #200533: retain queued-input ending, restart, and migration regressions.
+# session-controller-model: durable FIFO replay, exact-once custody, Stop/reset,
+# and owner/delivery settlement under interruption.
+# openclaw-agent-pending-inputs-schema and db-engine.postgres: schema-42 upgrade,
+# atomic end-cause normalization, unchanged message bytes, and absent optional tables.
+# doctor-session-entry-state and canonical-keys.completions: preserve deliberate
+# endings and move only matching, unconsumed legacy queued-source provenance.
+# queued-chat-inputs.metadata and chat-pending-inputs: source-specific authority,
+# replay before fresh input, and visible cancellation causes.
+# Identity guard regression: typeof-ID validation is not identity pinning.
+920

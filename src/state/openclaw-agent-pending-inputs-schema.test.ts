@@ -35,6 +35,10 @@ import {
 } from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
+  assertOpenClawMigrationWitnessPreserved,
+  captureOpenClawMigrationWitness,
+} from "./openclaw-migration-witness.js";
+import {
   expectRow,
   expectRows,
   readRow,
@@ -131,6 +135,10 @@ describe("pending input additive schema", () => {
         )
         .run(String(index), String(index), String(index), message);
     }
+    const witness = captureOpenClawMigrationWitness(database, {
+      role: "agent",
+      agentId: "main",
+    });
     expect(() =>
       runSqliteImmediateTransactionSync(database, () => {
         migrateAgentPendingInputEndingsInTransaction(database);
@@ -166,6 +174,15 @@ describe("pending input additive schema", () => {
         origin_source_json: null,
       })),
     );
+    expect(
+      assertOpenClawMigrationWitnessPreserved(
+        witness,
+        captureOpenClawMigrationWitness(requireNativeSqliteDatabase(admitted), {
+          role: "agent",
+          agentId: "main",
+        }),
+      ),
+    ).toEqual({ warnings: ["Preexisting session history gap: emptyWindows (1)"] });
     admitSqliteSchema(requireNativeSqliteDatabase(admitted));
     const exec = vi.spyOn(admitted, "exec");
     try {

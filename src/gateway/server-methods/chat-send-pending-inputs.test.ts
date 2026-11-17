@@ -814,7 +814,7 @@ describe("ordinary chat input admission", () => {
     { restart: true, attachment: true },
     { restart: false, attachment: false },
   ])(
-    "acknowledges closed recorded input without dispatching again (%j)",
+    "rejects closed recorded input without dispatching again (%j)",
     async ({ restart, attachment }) => {
       await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
       const profile = ensureProfileForEmail("restart-input@example.test");
@@ -841,7 +841,10 @@ describe("ordinary chat input admission", () => {
           await originalRecorder.waitForPendingInputSettlement?.();
         }
         await fixture.finishDispatch();
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+        const endCause = restart ? "reset" : "failed";
+        expect((await pending(fixture)).items).toEqual([
+          { ...original, state: "cancelled", endCause },
+        ]);
         expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
         fixture.context.dedupe.clear();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
@@ -851,12 +854,16 @@ describe("ordinary chat input admission", () => {
         dispatchInboundMessageMock.mockClear();
         const ack = await fixture.send();
         expect(ack).toHaveBeenCalledWith(
-          true,
-          { runId: fixture.params.idempotencyKey, status: "ok" },
+          false,
           undefined,
-          expect.objectContaining({ cached: true }),
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause },
+          }),
         );
-        expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+        expect((await pending(fixture)).items).toEqual([
+          { ...original, state: "cancelled", endCause },
+        ]);
         if (restart) {
           expect(() => originalRecorder.withPendingInput?.(() => {})).toThrow("ownership ended");
         }
@@ -879,6 +886,7 @@ describe("ordinary chat input admission", () => {
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
         recorder?.finishPendingInput?.("cancelled", "failed");
+        await recorder.waitForPendingInputSettlement?.();
       }
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
@@ -891,7 +899,7 @@ describe("ordinary chat input admission", () => {
         fixture.params.message += " Changed request.";
       }
       const response = await fixture.send();
-      expect(response.mock.calls[0]?.[0]).toBe(change === "cancelled");
+      expect(response.mock.calls[0]?.[0]).toBe(false);
       if (change === "sender") {
         expect(response).toHaveBeenCalledWith(
           false,
@@ -907,9 +915,20 @@ describe("ordinary chat input admission", () => {
           undefined,
           expect.objectContaining({ details: { reason: "chat-request-conflict" } }),
         );
+      } else {
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-input-cancelled", endCause: "failed" },
+          }),
+        );
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect((await pending(fixture)).items).toEqual([{ ...original, state: "cancelled" }]);
+      expect((await pending(fixture)).items).toEqual([
+        { ...original, state: "cancelled", endCause: change === "cancelled" ? "failed" : "reset" },
+      ]);
       expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
     },
   );

@@ -813,6 +813,7 @@ src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
+src/config/sessions/session-pending-input-end-cause.types.ts
 src/config/sessions/session-pending-input-operations.types.ts
 src/config/sessions/session-predicate-columns.ts
 src/config/sessions/session-transcript-writer-claim-error.ts
@@ -939,6 +940,7 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
 src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
@@ -2175,6 +2177,7 @@ src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
+src/state/openclaw-agent-pending-input-endings-schema.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
 src/state/openclaw-agent-schema-inspection-response.ts
@@ -2843,6 +2846,7 @@ src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
+src/sessions/transcript-record-visibility.ts
 src/sessions/transcript-visible-record.ts
 src/sessions/user-turn-transcript.metadata.ts
 src/sessions/user-turn-transcript.message.ts

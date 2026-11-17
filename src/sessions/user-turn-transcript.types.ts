@@ -13,7 +13,7 @@ import type {
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionInputLifecycleAdmission } from "../config/sessions/session-input-lifecycle.js";
 import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
-import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input.types.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import type { PreparedSessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {

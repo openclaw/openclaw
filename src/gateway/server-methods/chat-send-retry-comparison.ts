@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
-import type { SessionPendingInputEndCause } from "../../config/sessions/session-pending-input.types.js";
+import type { SessionPendingInputEndCause } from "../../config/sessions/session-pending-input-end-cause.types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";

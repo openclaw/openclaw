@@ -3,11 +3,8 @@ import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-ou
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputReceipt } from "./session-history-read.types.js";
-import type {
-  SessionPendingInput,
-  SessionPendingInputEndCause,
-  SessionPendingInputRow,
-} from "./session-pending-input.types.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
+import type { SessionPendingInput, SessionPendingInputRow } from "./session-pending-input.types.js";
 
 export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
   const value: unknown = JSON.parse(messageJson);

@@ -2,9 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
   SessionPendingInputRow,
-  SessionPendingInputEndCause,
   SessionInputCompletion,
 } from "./session-pending-input.types.js";
 

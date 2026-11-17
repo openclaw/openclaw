@@ -5,18 +5,9 @@ import type {
   SessionPendingInputs,
   SessionInputCompletions,
 } from "../../state/openclaw-agent-db.generated.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
-
-export type SessionPendingInputEndCause =
-  | "user-stop"
-  | "delete"
-  | "reset"
-  | "revoked"
-  | "restart-unrecoverable"
-  | "overflow"
-  | "policy-refused"
-  | "failed";
 
 export type SessionPendingInput = {
   id: string;
