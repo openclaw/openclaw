@@ -55,6 +55,14 @@ project and admitted host checkouts retain their existing diff behavior.
 
 ## Managed project workspaces
 
+File tools serialize operations on the same physical file. Stopping a run cancels
+its queued file operations and signals active sandbox filesystem commands to stop.
+An operation waiting behind another file operation fails after three minutes with
+a busy-file error and the earlier operation's running time. Retry later or work on
+another file; if the file stays busy, ask the operator to restart the Gateway.
+The earlier operation retains its file reservation until it actually finishes,
+so a canceled or timed-out waiter cannot cause overlapping writes.
+
 A sandboxed session with a session-owned managed worktree uses a private Git
 checkout on Docker and Podman. A registered project may be outside the agent's
 configured workspace when it is selected with `worktree: true`. This authorizes
