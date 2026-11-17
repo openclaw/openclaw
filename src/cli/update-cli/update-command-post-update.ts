@@ -680,16 +680,9 @@ async function finishSettledUpdate(
       if (deferPluginConvergence) {
         return resultWithPostUpdate;
       }
-      const maintenanceFailure = await completePostUpdateMaintenance(
-        params,
-        resultWithPostUpdate,
-        assertCurrent,
-        { root: postUpdateRoot, sentinel: sentinelOptions, activationVerified },
-      );
-      if (maintenanceFailure) {
-        const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
-      }
+      await completePostUpdateMaintenance(params, resultWithPostUpdate, assertCurrent, {
+        root: postUpdateRoot,
+      });
 
       return resultWithPostUpdate;
     } catch (error) {
@@ -701,11 +694,7 @@ async function finishSettledUpdate(
           cause: error,
         });
       }
-      if (
-        (error instanceof UpdateCommandFailure &&
-          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
-        hasCommandProcessCleanupError(error)
-      ) {
+      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }

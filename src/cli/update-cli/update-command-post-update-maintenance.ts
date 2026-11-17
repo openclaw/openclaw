@@ -15,10 +15,8 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
-  markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
   UpdateCommandPendingRecoveryFailure,
-  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -156,46 +154,34 @@ export async function completePostUpdateMaintenance(
   params: FinishUpdateParams,
   result: UpdateRunResult,
   assertCurrent: () => void,
-  context: {
-    root: string;
-    activationVerified: boolean;
-    sentinel: Omit<
-      Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
-      "reason"
-    >;
-  },
-): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  context: { root: string },
+): Promise<void> {
   await tryInstallShellCompletion({
     root: context.root,
     jsonMode: Boolean(params.opts.json),
     skipPrompt: Boolean(params.opts.yes),
   });
   if (!params.installKindChanged || result.mode === "git") {
-    return undefined;
+    return;
   }
   const retirement = await retireStandaloneGitWrapper({
     previousRoot: params.previousInstallRoot ?? params.root,
     assertCurrent,
   });
   if (!retirement.error) {
-    return undefined;
+    return;
   }
-  defaultRuntime.error(retirement.error);
-  if (context.activationVerified) {
-    throw new UpdateCommandFailure(
-      { ...result, status: "error", reason: "wrapper-retirement-failed" },
-      1,
-      retirement.error,
-    );
-  }
-  await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-    ...context.sentinel,
-    reason: "wrapper-retirement-failed",
+  result.steps.push({
+    name: "git-wrapper-retirement",
+    command: "openclaw update",
+    cwd: context.root,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: `Could not finish removing the previous Git checkout's openclaw wrapper: ${retirement.error.replace(/\.$/u, "")}. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`,
+    },
   });
-  return {
-    result: { ...result, status: "error", reason: "wrapper-retirement-failed" },
-    detail: retirement.error,
-  };
 }
 
 export function recordPostUpdateWindowsAutoStartFailure(
