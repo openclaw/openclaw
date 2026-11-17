@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
@@ -24,6 +25,7 @@ import {
   type EmbeddedAgentParams,
   type FallbackRunnerParams,
   createTestFallbackSummaryError,
+  createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -488,5 +490,137 @@ describe("executeAgentTurn: provider failures", () => {
 
     expect(payload.text).toBe("⚠️ The AI service is having trouble. Please try again in a moment.");
     expect(payload.text).not.toContain("Something exploded");
+  });
+});
+
+describe("provider failures seen by non-owners in shared chats", () => {
+  const UNAVAILABLE_TEXT = "⚠️ This assistant is temporarily unavailable. Please try again later.";
+  const DOCTOR_HINT = "openclaw doctor --fix";
+  const OWNER_LIST = ["discord:owner-1"];
+  const sharedChat = createNonDirectFailureSessionCtx(
+    expectDefined(NON_DIRECT_FAILURE_SURFACE_CASES[1], "Discord channel"),
+  );
+  const missingOpenAiKey = () =>
+    new ProviderAuthError(
+      "missing-provider-auth",
+      "openai",
+      'No API key found for provider "openai". Configure an API key.',
+    );
+
+  async function replyTo(
+    error: Error,
+    senderIsOwner: boolean | undefined,
+    sessionCtx: TemplateContext = sharedChat,
+    ownerAllowFrom: readonly string[] = OWNER_LIST,
+  ) {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+    const followupRun = createFollowupRun({ senderIsOwner });
+    followupRun.run.config = {
+      ...followupRun.run.config,
+      commands: { ownerAllowFrom: [...ownerAllowFrom] },
+    };
+    return finalPayload(await executeTestTurn({ followupRun, sessionCtx }));
+  }
+
+  it.each([
+    ["a missing API key", missingOpenAiKey],
+    [
+      "an expired provider login",
+      () => new OAuthRefreshFailureError({ provider: "openai", message: "invalid_grant" }),
+    ],
+    [
+      "an unpaid provider account",
+      () =>
+        new FailoverError("402 insufficient credits", {
+          reason: "billing",
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 402,
+          // A saved-login cooldown is not a time when billing will work again.
+          soonestCooldownExpiry: Date.now() + 2 * 60 * 60 * 1000,
+        }),
+    ],
+    [
+      "a provider outage",
+      () =>
+        new FailoverError("503 service unavailable", {
+          reason: "server_error",
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 503,
+        }),
+    ],
+  ])("says the assistant is unavailable for %s", async (_label, makeError) => {
+    const errorLog = vi.mocked((await import("../../runtime.js")).defaultRuntime.error);
+    errorLog.mockClear();
+    const payload = await replyTo(makeError(), false);
+    expect(payload).toMatchObject({ isError: true, text: UNAVAILABLE_TEXT });
+    expect(payload.presentation).toBeUndefined();
+    // The operator still gets the cause in the gateway log.
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining("Embedded agent failed before reply"),
+    );
+  });
+
+  it.each([
+    ["the owner in the same chat", true, sharedChat, OWNER_LIST],
+    ["a non-owner in a direct chat", false, createDirectFailureSessionCtx(), OWNER_LIST],
+    ["a sender of unknown ownership", undefined, sharedChat, OWNER_LIST],
+    ["any sender when no owner list is configured", false, sharedChat, []],
+  ] as const)(
+    "keeps setup guidance for %s",
+    async (_label, senderIsOwner, sessionCtx, ownerAllowFrom) => {
+      const payload = await replyTo(missingOpenAiKey(), senderIsOwner, sessionCtx, ownerAllowFrom);
+      expect(payload.text).toContain(DOCTOR_HINT);
+    },
+  );
+
+  it("keeps the completed-work warning when a run times out", async () => {
+    const timeout = createCliTimeoutError(
+      { provider: "claude-cli" },
+      {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 0,
+      },
+      "cli_overall_timeout",
+    );
+    const payload = await replyTo(timeout, false);
+    expect(payload.text).toContain("Check its results before trying again");
+  });
+
+  it("keeps failures that are not about the provider", async () => {
+    const payload = await replyTo(
+      new Error("Preflight compaction required but failed: summary too large"),
+      false,
+    );
+    expect(payload.text).not.toBe(UNAVAILABLE_TEXT);
+  });
+
+  it("names the provider's reset time without naming the provider", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: new FailoverError("429 rate limited", {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-5.5",
+        status: 429,
+        rateLimitResetAt: Date.UTC(2099, 0, 1, 15, 0),
+      }),
+      sessionCtx: sharedChat,
+      resolvedVerboseLevel: undefined,
+      config: {
+        commands: { ownerAllowFrom: OWNER_LIST },
+        ui: { prefs: { locale: "en-US" } },
+        agents: { defaults: { userTimezone: "UTC" } },
+      },
+      senderIsOwner: false,
+    });
+    expect(payload?.isError).toBe(true);
+    // ICU versions differ in the separator between date and time.
+    expect(payload?.text).toMatch(
+      /^⚠️ This assistant is temporarily unavailable\. Please try again after Jan 1, 2099\D+3:00\sPM UTC\.$/u,
+    );
   });
 });

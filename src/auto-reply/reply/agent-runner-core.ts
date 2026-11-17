@@ -344,6 +344,7 @@ export async function handleReplyAgentRunError(
     returnWithQueuedFollowupDrain: <T>(value: T) => T;
     sessionCtx: TemplateContext;
     config?: OpenClawConfig;
+    senderIsOwner?: boolean;
   },
 ): Promise<ReplyPayload | undefined> {
   const {
@@ -380,6 +381,7 @@ export async function handleReplyAgentRunError(
     config: context.config,
     sessionCtx,
     resolvedVerboseLevel,
+    senderIsOwner: context.senderIsOwner,
   });
   if (knownFailurePayload) {
     replyOperation.fail("run_failed", error);

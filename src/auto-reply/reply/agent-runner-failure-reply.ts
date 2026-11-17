@@ -167,6 +167,80 @@ export function isNonDirectConversationContext(ctx: ExternalFailureConversationC
   return chatType === "group" || chatType === "channel";
 }
 
+const OPERATOR_PROVIDER_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "rate_limit",
+  "overloaded",
+  "server_error",
+  "route_unavailable",
+  "tls_certificate",
+  "model_not_found",
+]);
+
+/**
+ * Shared rooms can include people who do not run this gateway. Credential, billing,
+ * limit and outage copy tells the reader to fix provider setup, which they cannot do
+ * and often read as a problem with their own install. Without an owner list every sender
+ * reads as a non-owner, the operator included, so unknown ownership keeps today's copy.
+ */
+export function resolveNonOwnerProviderFailureText(params: {
+  error: unknown;
+  facts: ReplyFailoverFacts;
+  sessionCtx: ExternalFailureConversationContext;
+  senderIsOwner?: boolean;
+  config?: OpenClawConfig;
+}): string | undefined {
+  const { error, facts } = params;
+  if (
+    params.senderIsOwner !== false ||
+    !params.config?.commands?.ownerAllowFrom?.length ||
+    !isNonDirectConversationContext(params.sessionCtx)
+  ) {
+    return undefined;
+  }
+  const isProviderFailure =
+    (facts.reason !== undefined && OPERATOR_PROVIDER_FAILURE_REASONS.has(facts.reason)) ||
+    classifyOAuthRefreshFailureError(error) !== null ||
+    collectErrorGraphCandidates(error, readErrorCauses).some(
+      (candidate) =>
+        candidate instanceof CliCredentialRemovedError ||
+        isProviderAuthError(candidate) ||
+        (isFailoverError(candidate) && candidate.authProfileFailure !== undefined),
+    );
+  if (!isProviderFailure) {
+    return undefined;
+  }
+  // Only a provider rate-limit reset promises a time when retrying will work.
+  const soon = Date.now() + 60_000;
+  const resetAt =
+    facts.rateLimitResetAt ??
+    readFallbackAttempts(error).find(
+      (attempt) => attempt.reason === "rate_limit" && (attempt.rateLimitResetAt ?? 0) > soon,
+    )?.rateLimitResetAt;
+  if (resetAt === undefined || !Number.isFinite(resetAt) || resetAt <= soon) {
+    return "⚠️ This assistant is temporarily unavailable. Please try again later.";
+  }
+  let when: string;
+  try {
+    // Same shape as the provider reset time in the rate-limit copy.
+    when = new Intl.DateTimeFormat(params.config?.ui?.prefs?.locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+      timeZone: params.config?.agents?.defaults?.userTimezone,
+    }).format(resetAt);
+  } catch {
+    // Invalid saved display preferences must not hide the reset time.
+    when = new Date(resetAt).toISOString();
+  }
+  return `⚠️ This assistant is temporarily unavailable. Please try again after ${when}.`;
+}
+
 export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean {
   return level === "on" || level === "full";
 }
@@ -521,6 +595,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
   config?: OpenClawConfig;
+  senderIsOwner?: boolean;
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
@@ -535,6 +610,14 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
   const failoverFacts = resolveReplyFailoverFacts(params.err, message, params.config);
+  const nonOwnerText = resolveNonOwnerProviderFailureText({
+    ...params,
+    error: params.err,
+    facts: failoverFacts,
+  });
+  if (nonOwnerText) {
+    return markAgentRunFailureReplyPayload({ text: nonOwnerText });
+  }
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,
     message,

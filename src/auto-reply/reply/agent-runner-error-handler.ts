@@ -34,6 +34,7 @@ import {
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
   resolveAgentRunFailureText,
+  resolveNonOwnerProviderFailureText,
   resolveReplyFailureSummary,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
@@ -280,6 +281,18 @@ export async function handleAgentExecutionError(params: {
     return finalFailure(buildContextOverflowRecoveryText());
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
+  const nonOwnerText = resolveNonOwnerProviderFailureText({
+    error: err,
+    facts: failoverFacts,
+    sessionCtx: turn.sessionCtx,
+    senderIsOwner: turn.followupRun.run.senderIsOwner,
+    config: params.runtimeConfig,
+  });
+  if (nonOwnerText) {
+    // The reader cannot act on this; the operator still needs the cause.
+    defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+    return await settleFailure({ text: nonOwnerText });
+  }
   if (providerRequestError) {
     return await settleFailure({
       // Recorded retry exhaustion is more specific than generic quota guidance.
