@@ -323,7 +323,11 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS =
+  withoutAgentPendingInputEndings(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(
+  AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS,
+);
 const AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS = withoutAgentActiveEventFacts(
   AGENT_SCHEMA_BEFORE_TOOL_USAGE,
 );
@@ -349,15 +353,13 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
           ? AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS
           : targetVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION
             ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
-            : OPENCLAW_AGENT_SCHEMA_SQL;
-  const pendingInputSchemaSql =
-    targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
-      ? withoutAgentPendingInputEndings(schemaSql)
-      : schemaSql;
+            : targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
+              ? AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS
+              : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
-      ? withoutAgentColdNavigation(pendingInputSchemaSql)
-      : pendingInputSchemaSql;
+      ? withoutAgentColdNavigation(schemaSql)
+      : schemaSql;
   const coldArchiveSchemaSql =
     targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
       ? withoutAgentColdArchiveChunks(navigationSchemaSql)
