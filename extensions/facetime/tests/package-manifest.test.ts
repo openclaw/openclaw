@@ -57,10 +57,11 @@ describe("FaceTime plugin manifest", () => {
     const pluginManifest = JSON.parse(
       readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
     );
-    // Release preparation (scripts/sync-plugin-versions.ts) moves the package version, peer
-    // range, plugin API range, and build version to the host release together. It deliberately
-    // preserves minHostVersion: that floor only changes when this plugin raises it.
+    // Extended-stable 2026.10.33 ships the signed 2026.11.4 API baseline while
+    // package and build metadata retain the release identity. minHostVersion
+    // remains the independent installation floor chosen by this plugin.
     const hostVersion = packageManifest.version;
+    const apiVersion = hostVersion === "2026.10.33" ? "2026.11.4" : hostVersion;
     expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
 
     expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
@@ -78,7 +79,7 @@ describe("FaceTime plugin manifest", () => {
     expect(packageManifest.files).toContain("skills/facetime/SKILL.md");
     expect(packageManifest.devDependencies.openclaw).toBe("workspace:*");
     expect(packageManifest.private).toBeUndefined();
-    expect(packageManifest.peerDependencies.openclaw).toBe(`>=${hostVersion}`);
+    expect(packageManifest.peerDependencies.openclaw).toBe(`>=${apiVersion}`);
     expect(packageManifest.openclaw.install).toEqual({
       clawhubSpec: "clawhub:@openclaw/facetime",
       npmSpec: "@openclaw/facetime",
@@ -86,7 +87,7 @@ describe("FaceTime plugin manifest", () => {
       minHostVersion: ">=2026.10.3",
       allowInvalidConfigRecovery: true,
     });
-    expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);
+    expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${apiVersion}`);
     expect(packageManifest.openclaw.build).toEqual({
       bundledDist: false,
       openclawVersion: hostVersion,
