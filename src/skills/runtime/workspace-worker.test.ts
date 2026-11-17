@@ -24,6 +24,21 @@ it("validates dependency recipes without source paths", async () => {
   expect(messages).toMatchObject([expected]);
 });
 
+it("serializes completed skill discovery", async () => {
+  const f = fixture();
+  await f.invoke("discovery", {
+    sourcePlan: {
+      workspaceDir: f.workspace,
+      managedSkillsDir: path.join(f.home, "managed"),
+      pluginSkillRoots: [],
+      roots: [],
+    },
+    limits: {},
+    additionalBins: [],
+  });
+  expect(f.messages).toMatchObject([{ entries: [], executionEntries: [] }]);
+});
+
 function fixture() {
   const home = temporary.make("skills-worker-");
   const workspace = path.join(home, "workspace");

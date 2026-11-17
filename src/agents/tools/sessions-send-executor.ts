@@ -433,20 +433,12 @@ export async function executeSessionsSend(
           runId,
         );
       }
-      const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      // Cron script payloads use :trigger and share the run requester's no-detached-reply contract.
+      const isIsolatedCronRequester =
+        isCronRunSessionKey(requesterSessionKey) ||
+        /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-      if (
-        opts?.expectedTargetLifecycleRevision !== undefined &&
-        (targetSessionEntry?.lifecycleRevision ?? null) !== opts.expectedTargetLifecycleRevision
-      ) {
-        return sendFailure(
-          "error",
-          "Target session lifecycle changed before retained send.",
-          displayKey,
-          runId,
-        );
-      }
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,
@@ -494,7 +486,7 @@ export async function executeSessionsSend(
         communication = await prepareSessionsSendCommunication({
           config: cfg,
           allowApproval: opts?.retainedReplay ? false : undefined,
-          expectedTask: opts?.expectedTargetRun,
+          expectTask: opts?.expectTargetTask,
           source,
           target: targetEndpoint(),
           message,
@@ -589,13 +581,11 @@ export async function executeSessionsSend(
             sessionKey: resolvedKey,
             displayKey,
             runId,
-            expectedSessionId,
-            expectedTask: opts?.expectedTargetTask,
             sendParams,
             callGateway: communication.callGateway,
           });
           if (attempt.selfHeld && retainedSend && targetSessionEntry) {
-            return retainedSend(attempt.selfHeld, "resume", attempt.targetTask);
+            return retainedSend(attempt.selfHeld, "resume");
           }
           return attempt.result;
         }
@@ -646,10 +636,9 @@ export async function executeSessionsSend(
           ownedTask: communication.ownedTask,
           isIsolatedCronRequester,
           targetIsSubagent,
+          targetAcpMode: targetAcpMeta?.mode,
           requesterSessionKey: requesterSession.canonicalKey,
-          targetSession: targetSessionEntry
-            ? { ...targetSessionEntry, acp: targetAcpMeta }
-            : undefined,
+          targetSession: targetSessionEntry,
           context: {
             callGateway: gatewayCall,
             targetSessionKey: resolvedKey,

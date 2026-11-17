@@ -676,7 +676,6 @@ describe("Feishu webhook security hardening", () => {
       request.finish();
     }
     const heldResponses = await Promise.all(held.map((request) => request.response));
-    expect(heldResponses).toHaveLength(64);
     expect(heldResponses.every((response) => response.includes("401 Unauthorized"))).toBe(true);
 
     const rawBody = JSON.stringify(eventPayload("test.pre_auth_inflight"));

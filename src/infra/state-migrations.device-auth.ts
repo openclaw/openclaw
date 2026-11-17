@@ -17,7 +17,10 @@ import {
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
-import { openClientCredentialCustody } from "./client-credential-store.js";
+import {
+  openClientCredentialCustodyAsync,
+  runClientCredentialTransactionAsync,
+} from "./client-credential-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -196,7 +199,10 @@ async function migrateLegacyDeviceAuthSource(params: {
     releaseLabel: "Device-auth",
     errorLabel: "Failed migrating legacy device auth",
     run: async (env) => {
-      const owner = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
+      const owner = await openClientCredentialCustodyAsync(env, {
+        createIfMissing: true,
+        migration: true,
+      });
       if (!owner) {
         throw new Error("Local client credentials are unavailable.");
       }
@@ -204,7 +210,9 @@ async function migrateLegacyDeviceAuthSource(params: {
       try {
         const prior = readClientCredentialReceipt(owner.database);
         if (prior) {
-          owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
+          await runClientCredentialTransactionAsync(owner, () =>
+            assertClientCredentialStoreReady(owner.database, env, false),
+          );
           if (prior.receipt.legacyImports[claimKey]) {
             return {
               changes: [],
@@ -220,7 +228,7 @@ async function migrateLegacyDeviceAuthSource(params: {
           return { changes: [], warnings: [] };
         }
         const { snapshot: source, store } = prepared;
-        counts = owner.transaction(() => {
+        counts = await runClientCredentialTransactionAsync(owner, () => {
           const db = owner.database;
           if (!readClientCredentialReceipt(db)) {
             if (readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env))) {

@@ -8,12 +8,11 @@ import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   capabilityGuidance,
-  DecisionEvaluateInput,
-  DecisionEvaluateOutput,
   decisionToolResult,
   parseDecisionEvaluateInput,
   rubricVersion,
 } from "./decision-tool-contract.js";
+import { DecisionEvaluateInput, DecisionEvaluateOutput } from "./decision-tool-schema.js";
 
 /** Bind a conditional core tool to its trusted agent; provider health never changes eligibility. */
 export function createDecisionTool(
@@ -29,27 +28,35 @@ export function createDecisionTool(
   const snapshot =
     options?.preparedModelRuntime?.metadataSnapshot ?? getGatewayPluginMetadataSnapshot();
   const models =
-    config.plugins?.enabled === false
-      ? []
-      : (options?.preparedModelRuntime?.modelCatalog.entries ??
-        (snapshot
-          ? listAvailableManifestContractPlugins({
-              snapshot,
-              config,
-              contract: "decisionProviders",
-            }).flatMap((plugin) =>
-              Object.entries(plugin.modelCatalog?.providers ?? {}).flatMap(([provider, catalog]) =>
-                catalog.models.map((model) => ({ ...model, provider })),
-              ),
-            )
-          : []));
+    config.plugins?.enabled === false ? [] : options?.preparedModelRuntime?.modelCatalog.entries;
+  const plugins = models
+    ? []
+    : snapshot
+      ? listAvailableManifestContractPlugins({ snapshot, config, contract: "decisionProviders" })
+      : [];
   const resolveCapabilities = (selection: ReturnType<typeof resolveDecisionModelSetting>) => {
     if (!selection) {
       return undefined;
     }
     const modelId = splitTrailingAuthProfile(selection.model).model;
-    return models.find((model) => model.provider === selection.provider && model.id === modelId)
-      ?.inference?.decision;
+    if (models) {
+      return models.find((model) => model.provider === selection.provider && model.id === modelId)
+        ?.inference?.decision;
+    }
+    for (const plugin of plugins) {
+      const providers = plugin.modelCatalog?.providers;
+      if (
+        !providers ||
+        !Object.prototype.propertyIsEnumerable.call(providers, selection.provider)
+      ) {
+        continue;
+      }
+      const model = providers[selection.provider]?.models.find((entry) => entry.id === modelId);
+      if (model) {
+        return model.inference?.decision;
+      }
+    }
+    return undefined;
   };
   const capabilities = resolveCapabilities(selected);
   return {
@@ -72,8 +79,10 @@ export function createDecisionTool(
         return decisionToolResult({ status: "unavailable", reason: "unsupported-input" });
       }
       // Load execution only on invocation; the runtime rereads selection and checks live authority.
-      const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
-        await import("../../decisions/runtime.js");
+      const [{ evaluateDecisionV2Operation }, { completeDecisionEvaluation }] = await Promise.all([
+        import("../../decisions/runtime.js"),
+        import("../../decisions/completion.js"),
+      ]);
       operationSignal.throwIfAborted();
       const currentConfig = getRuntimeConfig();
       const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);

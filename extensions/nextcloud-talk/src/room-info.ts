@@ -21,7 +21,7 @@ function cacheRoomInfo(
   kind: NextcloudTalkRoomKind | undefined,
   ttlMs: number,
 ): NextcloudTalkRoomKind | undefined {
-  roomCache.set(key, { kind, expiresAt: Date.now() + ttlMs });
+  roomCache.set(key, { kind, expiresAt: performance.now() + ttlMs });
   pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
   return kind;
 }
@@ -61,7 +61,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
     account.config.network?.dangerouslyAllowPrivateNetwork === true,
   ]);
   const cached = roomCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) {
+  if (cached && performance.now() < cached.expiresAt) {
     return cached.kind;
   }
   roomCache.delete(key);

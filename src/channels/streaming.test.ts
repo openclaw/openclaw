@@ -1,5 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
+import { expect, it } from "vitest";
+import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
   type AgentPlanStep,
@@ -15,7 +15,6 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingProgressCommentary as readCommentary,
   resolveChannelStreamingProgressNarration as readNarration,
-  createChannelProgressDraftGate,
   formatChannelProgressDraftLine as formatLine,
   isChannelProgressDraftWorkToolName,
   resolveChannelStreamingBlockCoalesce as readCoalesce,
@@ -360,7 +359,6 @@ it("replaces a terminal failure when recovered output names no command", () => {
   expect(merged[0]).not.toHaveProperty("detail");
 });
 
-const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const progressEntry = (progress: ChannelStreamingProgressConfig) => ({ streaming: { progress } });
 const render: typeof draftText = (lines, progress, options) =>
   formatText({ entry: progressEntry(progress), lines, ...options });
@@ -369,10 +367,6 @@ const commentary = (text: string) => ({
   text,
   label: "Commentary",
   prefix: false,
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 const coalesce = { minChars: 40, maxChars: 80, idleMs: 250 };
@@ -504,50 +498,182 @@ it("updates keyed progress lines in place", () => {
   expect(render(updated, { label: false })).toBe("• Exec\n• Checking stream");
 });
 
-it("delays rapid work events and joins a single pending startup", async () => {
-  vi.useFakeTimers();
-  const pending = createDeferredCore();
-  const onStart = vi.fn(() => pending.promise);
-  const onStartError = vi.fn();
-  const gate = createChannelProgressDraftGate({ onStart, onStartError });
+it.each([
+  ["read", { path: "/tmp/report.txt" }, "Read", "from /tmp/report.txt"],
+  [
+    "knowledge_record",
+    { id: "00000000-0000-4000-8000-000000000002" },
+    "Read knowledge record",
+    undefined,
+  ],
+  [
+    "knowledge_remember",
+    { requestId: "00000000-0000-4000-8000-000000000001", items: [{ text: "Private claim" }] },
+    "Remember knowledge",
+    undefined,
+  ],
+  [
+    "sessions_history",
+    { sessionKey: "agent:demo:subagent:opaque", limit: 8, includeTools: true },
+    "Read session history",
+    undefined,
+  ],
+  [
+    "sessions_spawn",
+    { label: "Check streaming", runTimeoutSeconds: 600, task: "Private instructions" },
+    "Start subagent",
+    "Check streaming",
+  ],
+  [
+    "sessions_send",
+    {
+      sessionKey: "agent:demo:subagent:opaque",
+      label: "Check streaming",
+      timeoutSeconds: 30,
+      message: "Private instructions",
+    },
+    "Send to session",
+    "Check streaming",
+  ],
+  [
+    "sessions_send",
+    {
+      sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-000000002633",
+      label: "Check streaming",
+    },
+    "Send to session",
+    "Check streaming …2633",
+  ],
+  [
+    "sessions_history",
+    { sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-00000000a4f0" },
+    "Read session history",
+    "…a4f0",
+  ],
+  [
+    "subagents",
+    { action: "steer", target: "Review browser" },
+    "Send to subagent",
+    "Review browser",
+  ],
+  [
+    "subagents",
+    {
+      action: "steer",
+      target: "00000000-0000-4000-8000-000000002633",
+      message: "Private instructions",
+    },
+    "Send to subagent",
+    "…2633",
+  ],
+  ["nodes", { action: "status" }, "List nodes", undefined],
+  ["sessions_send", { sessionKey: "agent:demo:subagent:opaque" }, "Send to session", undefined],
+  [
+    "nodes",
+    {
+      action: "invoke",
+      invokeCommand: "system.which",
+      node: "preview-node",
+      invokeParamsJson: JSON.stringify({ bins: ["git", "node", "pnpm"] }),
+    },
+    "Invoke node operation",
+    "invoke command system.which, node preview-node",
+  ],
+] as const)(
+  "prepares readable %s activity without diagnostic identifiers",
+  (name, args, label, detail) => {
+    const activity = projectAgentToolActivity({ toolCallId: "call", name, args, phase: "start" });
+    expect(activity.status).toBe("running");
+    for (const input of [
+      { event: "item" as const, ...activity, itemKind: activity.kind },
+      toolInput(name, args),
+    ]) {
+      const line = buildForEntry(undefined, input);
+      expect(line?.label).toBe(label);
+      expect(line?.detail).toBe(detail);
+      if (!detail) {
+        expect(formatForEntry(undefined, input)).toBe(
+          input.event === "item" ? `${label}: running` : label,
+        );
+      }
+      expect(line?.text).not.toMatch(/opaque|00000000|Private|timeout|tools true/);
+    }
+  },
+);
 
-  await expect(gate.noteWork()).resolves.toBe(false);
-  await expect(gate.noteWork()).resolves.toBe(false);
-
-  expect(gate.workEvents).toBe(2);
-  expect(onStart).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
-  expect(onStart).not.toHaveBeenCalled();
-
-  await vi.advanceTimersByTimeAsync(1);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  expect(gate.hasStarted).toBe(true);
-  const explicitStart = gate.startNow();
-  let workSettled = false;
-  const workDuringStart = gate.noteWork().then((started) => {
-    workSettled = true;
-    return started;
+it("keeps titled node execution private under status policy and diagnostic under raw policy", () => {
+  const activity = projectAgentToolActivity({
+    toolCallId: "command",
+    name: "exec",
+    phase: "start",
+    args: {
+      title: "Check runtime version",
+      command: "node --version",
+      host: "node",
+      node: "preview-node",
+    },
   });
-  await Promise.resolve();
-  expect(workSettled).toBe(false);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  pending.resolve();
-  await expect(explicitStart).resolves.toBeUndefined();
-  await expect(workDuringStart).resolves.toBe(true);
-  expect(onStart).toHaveBeenCalledTimes(1);
-  expect(gate.hasStarted).toBe(true);
-  gate.reset();
-  const error = new Error("draft unavailable");
-  onStart.mockRejectedValueOnce(error);
-  await expect(gate.noteWork()).resolves.toBe(false);
-  await vi.advanceTimersByTimeAsync(5_000);
+  const input = { event: "item" as const, ...activity, itemKind: activity.kind };
+  expect(formatForEntry(undefined, input)).toBe("Exec: running");
+  expect(buildForEntry(rawCommandEntry, input)?.detail).toBe(
+    "Check runtime version, node: preview-node",
+  );
+});
 
-  expect(onStart).toHaveBeenCalledTimes(2);
-  expect(gate.hasStarted).toBe(false);
-  expect(onStartError).toHaveBeenCalledWith(error);
+function createReasoningProgress(progressConfig: Record<string, unknown>) {
+  return createChannelProgressDraftCompositor({
+    active: true,
+    mode: "progress",
+    seed: "reasoning-rows",
+    entry: { streaming: { mode: "progress", progress: progressConfig } },
+    update: () => true,
+  });
+}
 
-  await expect(gate.startNow()).resolves.toBeUndefined();
+const reasoningRow = (text: string) => ({
+  id: "reasoning:1",
+  kind: "item" as const,
+  text,
+  label: "Reasoning",
+});
 
-  expect(onStart).toHaveBeenCalledTimes(3);
-  expect(gate.hasStarted).toBe(true);
+it("keeps the reasoning burst open when its own projection is admitted as a line", async () => {
+  const progress = createReasoningProgress({ toolProgress: true, maxLines: 8 });
+  try {
+    // The raw text keeps the trailing space the display text drops.
+    expect(progress.mergeReasoningProgress("Reading ")).toBe("Reading");
+    await progress.pushToolProgress(reasoningRow("Reading"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    expect(progress.mergeReasoningProgress("the handler")).toBe("Reading the handler");
+
+    // The opening tag survives admission so the delta that closes it still parses.
+    expect(progress.mergeReasoningProgress("<think>Fresh", { snapshot: true })).toBe("Fresh");
+    await progress.pushToolProgress(reasoningRow("Fresh"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    expect(progress.mergeReasoningProgress(" snapshot</think>")).toBe("Fresh snapshot");
+
+    // Admitted work still delimits the burst.
+    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    expect(progress.mergeReasoningProgress("Next thought")).toBe("Next thought");
+  } finally {
+    progress.cancel();
+  }
+});
+
+it("stores a channel's reasoning rows on a quiet draft but not its tool rows", async () => {
+  const progress = createReasoningProgress({ toolProgress: false, label: false });
+  try {
+    await progress.pushToolProgress(reasoningRow("Reading"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    expect(progress.getSnapshot().lines).toEqual([expect.objectContaining({ id: "reasoning:1" })]);
+  } finally {
+    progress.cancel();
+  }
 });

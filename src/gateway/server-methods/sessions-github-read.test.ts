@@ -184,6 +184,7 @@ it.for(["token", "native"] as const)(
   async (source, { signal }) => {
     useRealIdentity(source === "token" ? "synthetic-options-stale-token" : undefined);
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const credentialRefresh = createDeferredCore<Response>();
     const nativeRefresh = createDeferredCore<ReturnType<typeof commandResult>>();
     const entered = createDeferredCore();
@@ -272,6 +273,7 @@ it("marks only expired personal account facts stale through options revalidation
     );
     fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
     const now = vi.spyOn(Date, "now").mockReturnValue(initialNow);
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     try {
       await verifyGitHubCredential(personalToken);
       now.mockReturnValue(initialNow + 30_000);

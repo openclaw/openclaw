@@ -145,12 +145,7 @@ it.each([undefined, "--show-object-format", "unknown-format"])(
 );
 
 it.each([
-  [
-    "feature",
-    "origin/trunk",
-    ["origin/trunk", "main", "master", "origin/main", "origin/master"],
-    "trunk",
-  ],
+  ["feature", "origin/trunk", ["origin/trunk", "main"], "trunk"],
   ["feature", null, ["main", "master", "origin/main", "origin/master"], "main"],
   ["feature", null, ["master", "origin/main", "origin/master"], "master"],
   ["feature", null, ["origin/main", "origin/master"], "origin/main"],
@@ -161,15 +156,18 @@ it.each([
 ] as const)(
   "resolves branch %s with default %s and refs %j to %s",
   async (branch, symbolicDefault, refs, baseRef) => {
+    const qualify = (ref: string) =>
+      `refs/${ref.startsWith("origin/") ? "remotes" : "heads"}/${ref}`;
     const gitOut = async (_root: string, args: string[]) =>
       args[0] === "symbolic-ref"
-        ? symbolicDefault
-        : refs.some((ref) => ref === args[1])
+        ? symbolicDefault && qualify(symbolicDefault)
+        : refs.some((ref) => qualify(ref) === args[1])
           ? `${args[1]}-base\n`
           : null;
+    const base = baseRef === "HEAD" ? "head-sha" : `${qualify(symbolicDefault ?? baseRef)}-base`;
     await expect(
-      resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
-    ).resolves.toEqual({ base: baseRef === "HEAD" ? "captured-head" : `${refs[0]}-base`, baseRef });
+      resolveSessionDiffBase({ branch, gitOut, head: "head-sha", root: "/repo" }),
+    ).resolves.toEqual({ base, baseRef });
   },
 );
 
@@ -286,7 +284,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
+  "reuses managed diffs from nested and aliased linked worktrees while an index writer holds its lock",
   () =>
     withCheckout("openclaw-linked-diff-", async ({ root }) => {
       const origin = path.join(root, "origin");
@@ -303,7 +301,8 @@ it.skipIf(process.platform === "win32")(
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
-        const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+        const read = () =>
+          loadCheckoutDiff({ cwd, sessionKey: "fixture", refreshIndex: true }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
         expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(

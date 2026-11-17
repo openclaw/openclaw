@@ -5,6 +5,7 @@ import {
   estimateTokensFromChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type {
   OpenAIResponsesCompactEndpointResult,
@@ -41,10 +42,10 @@ export function createResponsesV2CompactionCollector(replayBudget?: OpenAIRespon
     },
     sanitizeImages(request: OpenAIResponsesRequestParams) {
       const sanitized = sanitizeResponsesImagePayload(request);
-      // Image normalization preserves order but copies only JSON fields.
+      // Reused frozen items retain provenance; detached JSON copies need it restored.
       sanitized.input?.forEach((inputItem, index) => {
         const source = request.input?.[index];
-        if (source && Reflect.get(source, RESPONSES_RETAINED_USER)) {
+        if (source && source !== inputItem && Reflect.get(source, RESPONSES_RETAINED_USER)) {
           Object.assign(inputItem, { [RESPONSES_RETAINED_USER]: true });
         }
       });
@@ -171,7 +172,7 @@ function retainV2Users(input: ResponseInput): ResponseInput {
             }
           }
           if (low > 0) {
-            content.push({ ...part, text: part.text.slice(0, low) });
+            content.push({ ...part, text: truncateUtf16Safe(part.text, low) });
           }
         }
         remaining = 0;

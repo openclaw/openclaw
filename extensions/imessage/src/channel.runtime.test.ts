@@ -137,12 +137,12 @@ it("keeps a Gateway-shaped host media capability reader-free", async () => {
 it("enforces the resolved account cap for work", async () => {
   const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
   const client = new IMessageRpcClient();
-  const delivered: Buffer[] = [];
+  const delivered: string[] = [];
   const request = vi.spyOn(client, "request").mockImplementation(async (_method, params) => {
     if (typeof params?.file !== "string") {
       throw new Error("Missing native attachment path");
     }
-    delivered.push(await readFile(params.file));
+    delivered.push(await readFile(params.file, "hex"));
     return { guid: "p:0/account-media" };
   });
   try {
@@ -176,9 +176,9 @@ it("enforces the resolved account cap for work", async () => {
     expect(request).not.toHaveBeenCalled();
     const result = await sendIMessageOutbound({ ...params, mediaUrl: small });
     expect(result.receipt.platformMessageIds).toEqual(["p:0/account-media"]);
-    expect(delivered).toEqual([smallBytes]);
+    expect(delivered).toEqual([smallBytes.toString("hex")]);
     await sendIMessageOutbound({ ...params, accountId: "default", mediaUrl: large });
-    expect(delivered).toEqual([smallBytes, largeBytes]);
+    expect(delivered).toEqual([smallBytes.toString("hex"), largeBytes.toString("hex")]);
   } finally {
     request.mockRestore();
     await client.stop();

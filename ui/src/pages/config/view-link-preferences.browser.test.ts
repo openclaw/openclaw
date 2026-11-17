@@ -17,7 +17,6 @@ it("renders the external-link preference off by default and applies a personal c
   );
   const toggle = row?.querySelector<HTMLInputElement>(".settings-toggle__input");
   expect(toggle?.checked).toBe(false);
-  expect(row?.textContent).toContain("Saved in this browser only.");
   row?.click();
   expect(onAppearanceChange).toHaveBeenCalledWith({ openLinksExternally: true });
 });

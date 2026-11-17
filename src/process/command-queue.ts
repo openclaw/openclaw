@@ -1,5 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../infra/errors.js";
+import { readOperatorAuthorityFailure } from "../infra/operator-authority-error.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -27,7 +30,7 @@ import {
   type QueueEntry,
   type QueuePriority,
 } from "./command-queue.state.js";
-import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type { CommandLaneSnapshot, CommandQueueAdmissionOptions } from "./command-queue.types.js";
 import { isExpectedRunCancellation } from "./expected-run-cancellation.js";
 import {
   GatewayDrainingError,
@@ -42,29 +45,19 @@ export {
   markGatewayRestartDraining as markGatewayDraining,
 } from "./gateway-work-admission.js";
 export type { CommandLaneSnapshot } from "./command-queue.types.js";
-/**
- * Dedicated error type thrown when an active command exceeds its caller-owned
- * lane timeout. The underlying task may still be unwinding, but the lane is
- * released so queued work is not blocked forever.
- */
+/** Controller-owned timeout; queue capacity remains held until raw task settlement. */
 export class CommandLaneTaskTimeoutError extends Error {
   constructor(
     lane: string,
     details:
-      | { cause: "task-budget"; elapsedMs: number; taskBudgetMs: number }
       | { cause: "owner-deadline"; elapsedMs: number; taskBudgetMs: number }
-      | { cause: "progress-idle"; elapsedMs: number; idleMs: number; taskBudgetMs: number }
       | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
       | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
   ) {
     const message = (() => {
       switch (details.cause) {
-        case "task-budget":
-          return `elapsed ${details.elapsedMs}ms reached task budget ${details.taskBudgetMs}ms`;
         case "owner-deadline":
           return `owner deadline reached after ${details.elapsedMs}ms`;
-        case "progress-idle":
-          return `no progress for ${details.idleMs}ms (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
         case "abort-grace":
           return `abort grace ${details.graceMs}ms elapsed (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
         case "release-signal":
@@ -90,7 +83,9 @@ export function isCommandLaneTaskTimeoutError(err: unknown, lane?: string): bool
 
 function isExpectedNonErrorLaneFailure(err: unknown): boolean {
   return (
-    (err instanceof Error && err.name === "LiveSessionModelSwitchError") ||
+    (err instanceof Error &&
+      (err.name === "LiveSessionModelSwitchError" ||
+        err.name === "MemoryFlushToolsUnavailableError")) ||
     isExpectedRunCancellation(err)
   );
 }
@@ -133,7 +128,7 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
+function resolveQueuePriority(priority: CommandQueueAdmissionOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
       return 1;
@@ -174,9 +169,10 @@ function drainLane(
       // Commit the admission before invoking callbacks or logging. Both can
       // synchronously re-enter the queue, and the shared budget must already
       // account for this task when that nested admission is evaluated.
-      state.activeTasks.set(taskId, entry.sessionTarget);
-      started += 1;
       const startTime = Date.now();
+      entry.startedAt = startTime;
+      state.activeTasks.set(taskId, entry);
+      started += 1;
       void (async () => {
         try {
           if (waitedMs >= entry.warnAfterMs) {
@@ -208,14 +204,22 @@ function drainLane(
           },
           (err: unknown) => {
             entry.reject(err);
+            const taskIdentity =
+              entry.taskIdentity?.modelFallbackCandidate &&
+              collectNestedErrorCandidates(err).some(isSessionWorkStartInvalidatedError)
+                ? { ...entry.taskIdentity, modelFallbackCandidate: false }
+                : entry.taskIdentity;
             const quietFailure =
               isQuietProbeLane(lane) ||
-              (entry.taskIdentity?.modelFallbackCandidate &&
-                readErrorName(err) === "FailoverError");
+              (taskIdentity?.modelFallbackCandidate && readErrorName(err) === "FailoverError");
             if (!quietFailure && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
-                { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+                {
+                  errorName: readErrorName(err) || undefined,
+                  ...taskIdentity,
+                  ...readOperatorAuthorityFailure(err),
+                },
               );
             } else if (!quietFailure) {
               diag.debug(
@@ -344,7 +348,7 @@ export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
 export function enqueueCommandInLane<T>(
   lane: string,
   task: () => Promise<T>,
-  opts?: CommandQueueEnqueueOptions,
+  opts?: CommandQueueAdmissionOptions,
 ): Promise<T> {
   if (opts?.abortSignal?.aborted) {
     return Promise.reject(toErrorObject(opts.abortSignal.reason, "Queued command aborted"));
@@ -363,6 +367,7 @@ export function enqueueCommandInLane<T>(
   }
   return new Promise<T>((resolve, reject) => {
     const entry: QueueEntry = {
+      lane: cleaned,
       task: () => runInAsyncContext(runWithGatewayRootWorkReadmission, task),
       resolve: (value) => resolve(value as T),
       reject,
@@ -396,7 +401,7 @@ export function enqueueCommandInLane<T>(
     drainReadyCommandLane(cleaned);
     if (entry.queued) {
       try {
-        opts?.onQueued?.();
+        opts?.onQueued?.(entry);
       } catch (err) {
         diag.error(`lane onQueued callback failed: lane=${cleaned} error="${String(err)}"`);
       }

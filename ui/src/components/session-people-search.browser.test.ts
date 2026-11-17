@@ -58,7 +58,9 @@ it.each(["assignment", "compact assignment", "members"] as const)(
         }
       };
       await shown;
-      await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Assign to…", exact: true }))
+        .toBeVisible();
       const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
       await userEvent.hover(assignment);
@@ -82,16 +84,33 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
     } else {
+      // Assignment search is a visible field, not a collapsed action.
       await expect.element(input).toBeVisible();
     }
     if (surface === "assignment") {
       const style = getComputedStyle(input.element().closest('[role="menu"]')!);
-      expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
+      expect(style).toMatchObject({ width: "320px", maxHeight: "366px", overflowY: "auto" });
     }
     const selector = !members
       ? '[data-value^="assign-owner:"]'
       : 'button.chat-pane__sharing-permission[data-value^="permission:"]';
     await expect.poll(() => root.querySelectorAll(selector).length).toBe(count + (members ? 0 : 2));
+    if (surface === "assignment") {
+      const first = root.querySelector<HTMLElement>(selector)!;
+      const scrollport = input.element().closest<HTMLElement>('[role="menu"]')!;
+      first.focus();
+      scrollport.scrollTop = first.offsetTop;
+      await expect
+        .poll(() => {
+          const rect = input.element().getBoundingClientRect();
+          return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        })
+        .toBe(input.element());
+      await userEvent.click(input);
+      expect(document.activeElement).toBe(input.element());
+      first.focus();
+    }
+
     for (const name of ["Next", "Previous"]) {
       await expect.element(page.getByRole("button", { name, exact: true })).not.toBeInTheDocument();
     }
@@ -110,20 +129,21 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     await reopen();
     if (members) {
       await userEvent.click(sharingSearch);
-    }
-    await expect.element(input).toBeVisible();
-    if (members) {
+      await expect.element(input).toBeVisible();
       await userEvent.click(input);
     }
-    // Assignment typing must enter the visible search without a separate click.
+    // Assignment typing must reach the search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
     await expect
       .element(
-        page.getByText(members ? "No people found" : "No matching people or agents", {
-          exact: true,
-        }),
+        page.getByText(
+          members ? "No people match your search." : "No people or agents match your search.",
+          {
+            exact: true,
+          },
+        ),
       )
       .toBeVisible();
     await userEvent.keyboard("{Escape}");
@@ -132,6 +152,7 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       expect(document.activeElement).toBe(sharingSearch.element());
       await userEvent.click(sharingSearch);
     }
+    // Assignment Escape clears the query and keeps the field focused for the next search.
     await expect.element(input).toHaveValue("");
     await expect.element(input).toBeVisible();
     expect(document.activeElement).toBe(input.element());

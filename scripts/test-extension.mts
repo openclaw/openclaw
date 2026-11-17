@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { mergeExtensionTestPlans, resolveExtensionTestPlan } from "./lib/extension-test-plan.mts";
-import { isDirectScriptRun } from "./lib/vitest-batch-runner.mts";
 import { runVitestCli } from "./lib/vitest-process.mts";
 import { runExtensionBatchPlan } from "./test-extension-batch-run.mts";
 
@@ -59,6 +59,6 @@ async function run(): Promise<void> {
   }
 }
 
-if (isDirectScriptRun(import.meta.url)) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await runVitestCli(undefined, run);
 }

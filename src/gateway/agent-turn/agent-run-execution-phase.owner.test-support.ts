@@ -49,7 +49,11 @@ export function createExecution(
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
+        preparedModelRuntimeLease: {
+          run: <T>(run: () => T): T => run(),
+          [Symbol.asyncDispose]: runtimeRelease,
+          snapshot: {},
+        },
         replyDispatchRuntime: { config: { runtime: "A" }, pluginGeneration: "generation-A" },
         unpersistedOffloadedRefs: [],
         userTurn: {
@@ -89,7 +93,6 @@ export function createExecution(
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-      releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
 }

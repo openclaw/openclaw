@@ -6,7 +6,7 @@ import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox/context.js";
+import type { resolveSandboxContext } from "./sandbox/context.js";
 import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -143,19 +143,25 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       assertCurrent();
       phases.mark("attempt.setup.workspace.sandbox");
-      const sandbox = sandboxRuntimeStatus
-        ? await resolveSandboxContext({
-            config: params.config,
-            agentId: sandboxRuntimeStatus.agentId,
-            execOverrides: params.execOverrides,
-            sessionKey: sandboxSessionKey,
-            skillsSnapshot: params.skillsSnapshot,
-            workspaceDir: resolvedWorkspace,
-            assertCurrent,
-            admittedRunContext: params.admittedRunContext,
-            preparedRuntimeStatus: sandboxRuntimeStatus,
-          })
-        : null;
+      const sandboxRuntime = sandboxRuntimeStatus?.sandboxed
+        ? await import("./sandbox/context.js")
+        : undefined;
+      assertCurrent();
+      const sandbox =
+        sandboxRuntime && sandboxRuntimeStatus
+          ? await sandboxRuntime.resolveSandboxContext({
+              config: params.config,
+              agentId: sandboxRuntimeStatus.agentId,
+              execOverrides: params.execOverrides,
+              sessionKey: sandboxSessionKey,
+              skillsSnapshot: params.skillsSnapshot,
+              workspaceDir: resolvedWorkspace,
+              assertCurrent,
+              abortSignal: params.abortSignal,
+              admittedRunContext: params.admittedRunContext,
+              preparedRuntimeStatus: sandboxRuntimeStatus,
+            })
+          : null;
       try {
         phases.mark("attempt.setup.workspace.roots");
         assertCurrent();

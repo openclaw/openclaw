@@ -1,6 +1,14 @@
-import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import {
+  withSqliteReaderOwner,
+  type SqliteOperationHoldContext,
+} from "../../infra/sqlite-reader-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
+import {
+  assertSessionStoreReadCandidate,
+  type SessionStoreReadCustody,
+} from "./session-store-read-candidates.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerSuccess,
@@ -8,6 +16,7 @@ import type {
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
 const MAX_RETAINED_HISTORY_DATABASES = 64;
+const log = createSubsystemLogger("sqlite/transaction");
 const historyDatabaseScopes = new Map<
   string,
   {
@@ -21,6 +30,8 @@ export async function withHistoryDatabase<T>(
   operationLabel: string,
   operation: () => T | Promise<T>,
   validation?: OpenClawAgentDatabaseReadValidation,
+  holdContext?: SqliteOperationHoldContext,
+  readCustody?: readonly SessionStoreReadCustody[],
 ): Promise<SessionTranscriptWorkerSuccess<T>> {
   const key = JSON.stringify(database);
   let retained = historyDatabaseScopes.get(key);
@@ -33,7 +44,23 @@ export async function withHistoryDatabase<T>(
   try {
     const value = await withSqliteReaderOwner(
       { operation: `sessions.${operationLabel}`, ownerKind: "worker" },
-      () => scope.run({ ...database, validation }, operation),
+      () =>
+        scope.run(
+          {
+            ...database,
+            validation,
+            assertSourceCurrent:
+              readCustody &&
+              (() => {
+                for (const custody of readCustody) {
+                  assertSessionStoreReadCandidate(custody.sourcePath, custody.candidates);
+                }
+              }),
+          },
+          operation,
+        ),
+      { agentId: database.agentId, ...holdContext },
+      log,
     );
     historyDatabaseScopes.delete(key);
     // Tasks without retained connections must not evict useful connections or retain empty scopes.

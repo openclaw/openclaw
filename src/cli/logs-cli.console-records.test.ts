@@ -5,12 +5,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { formatJsonConsoleLine } from "../logging/json-console-line.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { logsConsoleEntrypoints } from "./cli-entrypoint.test-support.js";
 import { cliChildEnv } from "./cli-process-fixture.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const logsUrl = resolveRuntimeWorkerUrl(logsConsoleEntrypoints.logs);
+const sourceImportArgs = resolveRuntimeWorkerArgv(logsUrl).slice(0, -1);
 const expectedLogs = [
   ["warn", "gateway", "console warning"],
   ["error", "worker", "console error"],
@@ -18,8 +22,8 @@ const expectedLogs = [
 ] as const;
 const cliSource = `
   import { Command } from "commander";
-  import { registerLogsCli } from "./src/cli/logs-cli.ts";
-  import { registerPreActionHooks } from "./src/cli/program/preaction.ts";
+  import { registerLogsCli } from ${JSON.stringify(logsUrl.href)};
+  import { registerPreActionHooks } from ${JSON.stringify(resolveRuntimeWorkerUrl(logsConsoleEntrypoints.preaction).href)};
   const program = new Command();
   registerPreActionHooks(program, "test");
   registerLogsCli(program);
@@ -70,7 +74,7 @@ it.each(["sqlite", "postgres"])(
       const run = (...args: string[]) =>
         execFileAsync(
           process.execPath,
-          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", cliSource, "--", ...args],
+          [...sourceImportArgs, "--input-type=module", "-e", cliSource, "--", ...args],
           { cwd: process.cwd(), env, timeout: 60_000, maxBuffer: 1024 * 1024 },
         );
       await fs.writeFile(logFile, original);

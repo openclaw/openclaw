@@ -28,7 +28,7 @@ You need:
 
 - A connected node that exposes `screen.snapshot` or `logbook.snapshot`. The
   macOS app node needs Screen Recording permission. A headless macOS node host
-  (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
+  (`openclaw node run`) gets the plugin-provided `logbook.snapshot`
   command backed by the system `screencapture` tool.
 - The bundled Codex plugin enabled and authenticated. Codex provides
   the structured image-extraction contract Logbook requires. Sign in with
@@ -172,8 +172,12 @@ and clamped to the supported range.
 Without `nodeId`, Logbook prefers a connected app node exposing
 `screen.snapshot`, then falls back to a headless node exposing
 `logbook.snapshot`. In an unpinned setup, a failed node rotates behind other
-eligible nodes. The dashboard pause toggle is session-only and resets when the
-plugin reloads or the Gateway restarts; use `captureEnabled: false` for a persistent stop.
+eligible nodes. **Pause capture** stops new capture attempts, not analysis of
+queued snapshots or captures already in progress. Pending changes show
+**Pausing capture** or **Resuming capture**, rather than claiming the change is complete. The pause is shared by clients
+of this Gateway’s Logbook service and resets when the plugin reloads or the Gateway
+restarts. Use `captureEnabled: false` to keep new captures off across restarts;
+this also leaves queued analysis available.
 
 ### Vision model selection
 

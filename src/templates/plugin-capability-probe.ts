@@ -27,6 +27,10 @@ import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveTemplatePluginSetupRequirements } from "./package-setup-requirements.js";
+import {
+  displayableTemplatePluginId,
+  templatePluginAllowlistMessage,
+} from "./plugin-allowlist-blocker.js";
 import type { TemplatePackage, TemplatePackagePreflightResult } from "./types.js";
 
 export function inspectTemplatePluginCapabilities(
@@ -81,7 +85,7 @@ function configuredPathSelectsPlugin(
 }
 
 export async function sourceHostPluginConflict(
-  pkg: TemplatePackage,
+  pkg: TemplatePackage | { source: "bundled"; path: string },
   pluginId: string,
   options: Pick<TemplatePluginProbeDeps, "env" | "config">,
 ): Promise<string | undefined> {
@@ -112,7 +116,8 @@ export async function sourceHostPluginConflict(
       return undefined;
     }
   }
-  return `Plugin ${pkg.ref}@${pkg.version} cannot become active because this source build prioritizes its bundled plugin ${pluginId}. Use a packaged OpenClaw build or a plugin with a distinct ID.`;
+  const label = pkg.source === "bundled" ? pkg.path : `${pkg.ref}@${pkg.version}`;
+  return `Plugin ${label} cannot become active because this source build prioritizes its bundled plugin ${pluginId}. Use a packaged OpenClaw build or a plugin with a distinct ID.`;
 }
 
 export async function probeTemplatePluginArtifact(
@@ -272,6 +277,18 @@ export async function preflightTemplatePluginPackage(
       rootConfig: options.config,
     });
     if (!activation.enabled) {
+      const allowlistPluginId =
+        activation.reason === "not in allowlist" && (!result.ok || result.action === "install")
+          ? displayableTemplatePluginId(probe.pluginId)
+          : undefined;
+      if (allowlistPluginId) {
+        return {
+          ok: false,
+          code: "plugin_disabled",
+          allowlistPluginId,
+          message: templatePluginAllowlistMessage(`${pkg.ref}@${pkg.version}`, allowlistPluginId),
+        };
+      }
       return {
         ok: false,
         code: "plugin_disabled",

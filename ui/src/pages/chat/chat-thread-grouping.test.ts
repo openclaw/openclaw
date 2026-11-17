@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
@@ -242,7 +243,10 @@ it.each([true, false])(
       idempotencyKey: `${runId}:user`,
     });
     const evidence = tool("read-file", 2, { runId });
-    const answer = message("assistant", "File inspected", 3, { runId });
+    const answer = message("assistant", "File inspected", 3, {
+      runId,
+      __openclaw: { recordTimestampMs: 322 },
+    });
     const queuedMessage = nativeMessage("user", "Queued follow-up", 4, {
       idempotencyKey: "queued-run:user",
     });
@@ -438,7 +442,7 @@ describe("completed-turn rollup", () => {
     );
   });
 
-  it("keeps tool-result images inside their tool group", () => {
+  it("keeps tool-result images inside completed work without hiding the answer", () => {
     const frame = { type: "image", mimeType: "image/png", artifactId: "frame", omitted: true };
     const result = toolResult("frame", "view_image", [textBlock("Loaded"), frame, frame], 3, run);
     const messages = [ask, call("frame", 2, undefined, "view_image"), result, answer];
@@ -446,14 +450,72 @@ describe("completed-turn rollup", () => {
       const items = projected(history);
       expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
         "user",
-        "tool",
+        "work-group",
         "assistant",
       ]);
-      const images = groupsOf(items).map(
-        (group) => JSON.stringify(group.messages).match(/"artifactId":"frame"/g)?.length ?? 0,
-      );
-      expect(images).toEqual([0, 2, 0]);
+      expect(JSON.stringify(work(items)).match(/"artifactId":"frame"/g)).toHaveLength(2);
+      expect(JSON.stringify(visible(items))).not.toContain("artifactId");
+      expect(visible(items)).toContainEqual(answer);
     }
+  });
+
+  it("does not hide image evidence when a run has no answer or a late tool fails", () => {
+    const image = { type: "image", artifactId: "inspection-image", omitted: true };
+    const inspected = toolResult("image", "view_image", [image], 3, run);
+    const failed = toolResult("failed-image", "view_image", [image], 10, { ...run, isError: true });
+    expectHistory([ask, inspected], [0, 1], []);
+    expectHistory([ask, inspected, answer, failed], [0, 2, 3], [1]);
+  });
+
+  it("does not adopt an independent background image as work for an earlier reply", () => {
+    const image = toolResult(
+      "background-image",
+      "view_image",
+      [{ type: "image", artifactId: "background-evidence", omitted: true }],
+      10,
+      { runId: "background-run" },
+    );
+    expectHistory([ask, answer, image], [0, 1, 2], []);
+  });
+
+  it("preserves assistant media emitted alongside a tool call", () => {
+    const preview = message(
+      "assistant",
+      [
+        { type: "image", artifactId: "assistant-preview", omitted: true },
+        { type: "toolCall", id: "continue", name: "read", arguments: {} },
+      ],
+      2,
+      { ...run, stopReason: "toolUse" },
+    );
+    const result = tool("continue", 3, run);
+    const items = projected([ask, preview, result, answer]);
+    expect(visible(items)).toEqual([
+      ask,
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "image", artifactId: "assistant-preview", omitted: true }],
+      }),
+      answer,
+    ]);
+    expect(JSON.stringify(work(items))).toContain("continue");
+  });
+
+  it("keeps an image-only delivered answer outside its inspected work", () => {
+    const inspected = toolResult(
+      "image",
+      "view_image",
+      [{ type: "image", artifactId: "inspection-image", omitted: true }],
+      3,
+      run,
+    );
+    const delivered = message(
+      "assistant",
+      [{ type: "image", artifactId: "delivered-image", omitted: true }],
+      4,
+      { ...run, phase: "final_answer", stopReason: "stop" },
+    );
+    expectHistory([ask, inspected, delivered], [0, 2], [1]);
   });
 
   it("moves work recorded after the answer above it", () => {
@@ -503,3 +565,103 @@ it.each(["error", "aborted"])(
     );
   },
 );
+
+it("keeps each run's reply visible when completions answer without new user input", () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const items = collapse([
+    message("user", "Start two subagents", 1_000),
+    message("assistant", "Spawning both.", 1_500, run("run-user")),
+    { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
+    message("assistant", "Both started.", 3_000, run("run-user")),
+    message("assistant", "Child A finished.", 4_000, run("announce:v1:child-a")),
+    { ...toolResult("lookup", "bash", "ok", 4_500), ...run("announce:v1:child-b") },
+    message("assistant", "Child B finished.", 5_000, run("announce:v1:child-b")),
+    message("assistant", "All children settled.", 6_000, run("announce:requester-settle:a,b")),
+  ]);
+  const text = (entries: unknown[]) =>
+    entries.map((entry) => (entry as { content?: unknown }).content);
+  expect(text(messagesOf(groupsOf(items)))).toEqual([
+    "Start two subagents",
+    "Both started.",
+    "Child A finished.",
+    "Child B finished.",
+    "All children settled.",
+  ]);
+  const rollup = items.find((item) => item.kind === "work-group");
+  expect(rollup?.kind === "work-group" ? text(messagesOf(rollup.groups)) : []).toEqual([
+    "Spawning both.",
+    "ok",
+    "ok",
+  ]);
+});
+
+it.each([
+  ["untagged CLI work of the first run", false, false, ["run-user", "announce:v1:child-a"]],
+  ["untagged CLI work across runs", false, true, undefined],
+  ["tagged work across runs", true, true, undefined],
+] as const)(
+  "frames completed work by its run when earlier runs keep replies: %s",
+  (_name, tagged, laterWork, frameRunIds) => {
+    // CLI runtimes import tool rows without a run id; only the persisted reply carries one.
+    const meta = (runId: string) =>
+      tagged ? { __openclaw: { runId } } : { __openclaw: { importedFrom: "claude-cli" } };
+    const items = coalesceAgentRunFrames(
+      coalesceActivityRuns(
+        collapse([
+          message("user", "Start two subagents", 1_000),
+          toolResult("spawn", "sessions_spawn", "accepted", 2_000, meta("run-user")),
+          message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+          ...(laterWork
+            ? [toolResult("check", "sessions_list", "ok", 3_500, meta("announce:v1:child-a"))]
+            : []),
+          message("assistant", "Child A finished.", 4_000, {
+            __openclaw: { runId: "announce:v1:child-a" },
+          }),
+        ]),
+      ),
+    );
+    const frames = items.filter((item) => item.kind === "agent-run-frame");
+    if (frameRunIds) {
+      // The rollup stays in the frame of the run that did the work.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+      expect(frames.map((frame) => frame.runId)).toEqual(frameRunIds);
+      expect(frames[0]?.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+    } else {
+      // Work across runs has no single owner, with or without run ids.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+    }
+  },
+);
+
+it("times completed work only against the run that owns it", () => {
+  const messages = [
+    nativeMessage("user", "Start two subagents", 1_000, { idempotencyKey: "run-user:user" }),
+    toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
+      __openclaw: { importedFrom: "claude-cli" },
+    }),
+    message("assistant", "Both started.", 3_000, {
+      __openclaw: { runId: "run-user", recordTimestampMs: 8_000 },
+    }),
+    message("assistant", "Child A finished.", 4_000, {
+      __openclaw: { runId: "announce:v1:child-a" },
+    }),
+  ];
+  const durationFor = (lastRunId: string) =>
+    collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey,
+      runWorking: false,
+      session: { key: sessionKey, lastRunId, status: "done", runtimeMs: 7_000 },
+    }).find((item) => item.kind === "work-group")?.durationMs;
+  // The rollup belongs to the user's run; a later completion run's runtime is not its time.
+  expect(durationFor("run-user")).toBe(7_000);
+  expect(durationFor("announce:v1:child-a")).toBe(7_000);
+});

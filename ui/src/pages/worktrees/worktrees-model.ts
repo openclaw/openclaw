@@ -11,6 +11,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -32,6 +33,9 @@ export class WorktreesModel {
   createName = "";
   createBaseRef = "";
   createBranches: string[] = [];
+  get createBranchesRefreshing() {
+    return this.branchesRequest.pending;
+  }
   gateway!: ReturnType<typeof useGatewayPage>;
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
@@ -45,14 +49,21 @@ export class WorktreesModel {
     },
   });
   private readonly branchesRequest = createPageRequest(() => this.update({}), {
-    task: ({ scope, repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
-      scope.client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal }),
-    onComplete: (result) => {
-      this.createBranches = result.branches.map((branch) => branch.name);
-    },
-    onError: () => {
-      this.createBranches = [];
-    },
+    task: ({ repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
+      requestCheckoutSnapshot<WorktreesBranchesResult>(
+        this.context.gateway,
+        "worktrees.branches",
+        { repoRoot },
+        {
+          signal,
+          onSnapshot: (result) => {
+            this.createBranches = result.branches.map((branch) => branch.name);
+            this.publish();
+          },
+        },
+      ),
+    onComplete: () => {},
+    onError: () => {},
   });
 
   constructor(
@@ -146,7 +157,8 @@ export class WorktreesModel {
     }
     if (
       !(await showConfirmDialog({
-        message: t("worktrees.confirmDelete", { name: record.name }),
+        title: t("worktrees.confirmDelete", { name: record.name }),
+        message: t("worktrees.confirmDeleteBody"),
         confirmLabel: t("common.delete"),
         danger: true,
       })) ||
@@ -167,6 +179,7 @@ export class WorktreesModel {
       }
       const reason = result.snapshotError ?? "";
       const force = await showConfirmDialog({
+        title: t("worktrees.confirmForceDeleteTitle"),
         message: t("worktrees.confirmForceDelete", { error: reason }),
         confirmLabel: t("common.delete"),
         danger: true,

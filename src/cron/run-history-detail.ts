@@ -82,10 +82,8 @@ const cronRunLogEntrySchema = z.looseObject({
   runAtMs: optionalCronTimestampSchema,
   durationMs: optionalCronNonnegativeIntegerSchema,
   nextRunAtMs: optionalCronTimestampSchema,
-  triggerFired: z
-    .unknown()
-    .optional()
-    .transform((value) => (value === true ? true : undefined)),
+  // A failed condition check records `false`: no task ran for that entry.
+  triggerFired: z.boolean().optional().catch(undefined),
   model: optionalNonBlankCronStringSchema,
   provider: optionalNonBlankCronStringSchema,
   usage: cronUsageSchema,
@@ -340,7 +338,8 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
       jobId: record.jobId,
       action: "finished",
       sessionKey: record.sessionKey,
-      runId: typeof record.detail.runId === "string" ? record.detail.runId : undefined,
+      // Public request IDs win; scheduled and on-exit runs still need their receipt-backed ID.
+      runId: typeof record.detail.runId === "string" ? record.detail.runId : record.runId,
     },
     { jobId: record.jobId },
   );

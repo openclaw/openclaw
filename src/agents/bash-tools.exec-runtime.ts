@@ -19,7 +19,6 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { resolveHostExecMemoryLimit } from "../process/child-memory.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
@@ -53,6 +52,7 @@ import {
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
+import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
@@ -60,17 +60,20 @@ import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exe
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
+  EXEC_OUTPUT_FILE_MAX_BYTES,
   joinExecFailureOutput,
   type ExecProcessOutcome,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import type { DurableExecOptions, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { DurableExecOptions } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -198,7 +201,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 export async function runExecProcess({
   startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
-  beforeSpawn: initialBeforeSpawn,
+  beforeSpawn,
   assertCurrent: initialAssertCurrent,
   initiateSpawn: initialInitiateSpawn,
   releaseSpawn: initialReleaseSpawn,
@@ -228,6 +231,8 @@ export async function runExecProcess({
   notifyOnExit: boolean;
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
+  /** A one-shot run can await this command's exit only through sessions_yield. */
+  sessionsYieldAvailable?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
@@ -239,6 +244,8 @@ export async function runExecProcess({
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Explicit `background: true` service, handed off rather than stopped at one-shot exit. */
+  independentService?: boolean;
   /** Cancels startup only; background process lifetime belongs to the supervisor. */
   startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -278,6 +285,7 @@ export async function runExecProcess({
         command: opts.command,
         scopeKey: opts.scopeKey,
         sessionKey: opts.sessionKey,
+        sandboxContainerName: opts.sandbox?.containerName,
         cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
         agentId: opts.agentId,
         eventRouting: opts.eventRouting,
@@ -296,6 +304,7 @@ export async function runExecProcess({
         exited: false,
         truncated: false,
         backgrounded: false,
+        ...(opts.independentService ? { independentService: true as const } : {}),
         cursorKeyMode: opts.usePty ? "unknown" : "normal",
       },
       opts.requestOwners,
@@ -306,7 +315,11 @@ export async function runExecProcess({
     retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
   }
 
-  const notificationTarget = prepareExecExitNotification(session, opts.subagentSession === true);
+  const notificationTarget = prepareExecExitNotification(
+    session,
+    opts.subagentSession === true,
+    opts.sessionsYieldAvailable === true,
+  );
   if (notificationTarget) {
     await notificationTarget;
   }
@@ -314,7 +327,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
     ? () => {
         initialAssertCurrent?.();
@@ -376,6 +388,7 @@ export async function runExecProcess({
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
+  let prepareSandboxCurrent: (() => Promise<void>) | undefined;
   let sandboxPrepared = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
@@ -421,13 +434,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        // Root completion does not release descendants that retained the group's lineage fd.
-        managedRun.cancel();
-        const extinction = await managedRun.waitForExtinction();
-        session.cleanupUncertain = extinction?.status === "uncertain";
-        if (session.requestCancelled && session.cleanupUncertain) {
-          throw new Error("Command descendant cleanup could not be confirmed");
-        }
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -496,6 +503,7 @@ export async function runExecProcess({
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
       assertSandboxCurrent = backendExecSpec.assertCurrent;
+      prepareSandboxCurrent = backendExecSpec.prepareCurrent;
       // Cleanup ownership transfers only after buildExecSpec resolves: moving this earlier can
       // double-finalize backend failures, while removing it leaks the registered exec session.
       sandboxPrepared = true;
@@ -545,7 +553,6 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = (input: SpawnInput) =>
     runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
       const assertSourceCurrent = assertSourceActive;
@@ -595,6 +602,7 @@ export async function runExecProcess({
                 grant?.revoke();
               },
               assertCurrent,
+              ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
               beforeSpawn: assertHostPolicyCurrent,
               initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
             }),
@@ -606,6 +614,10 @@ export async function runExecProcess({
       }
     });
 
+  // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
+  if (!opts.sandbox && !opts.durable) {
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+  }
   try {
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();
@@ -613,18 +625,19 @@ export async function runExecProcess({
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
+      executionIntent: "agent-tool" as const,
+      executionScopeKey: opts.sessionKey ?? opts.scopeKey,
       runId: sessionId,
       ...(opts.sandbox ? { cleanupOwnership: "external" as const, exactEnv: true as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
-      memoryLimitBytes: opts.sandbox ? undefined : resolveHostExecMemoryLimit(),
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
-    await assertPreSpawnAuthorized();
+    await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
     if (spawnSpec.mode === "pty") {
       try {
         managedRun = await spawn({
@@ -645,7 +658,7 @@ export async function runExecProcess({
         );
         opts.warnings.push(warning);
         usingPty = false;
-        await assertPreSpawnAuthorized();
+        await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
       }
     }
     if (!managedRun) {
@@ -654,6 +667,8 @@ export async function runExecProcess({
         mode: "child",
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
+        // Host commands own only their foreground; sandbox lifetimes stay with the backend.
+        ...(opts.sandbox ? {} : { releaseOnRootExit: true as const }),
       });
     }
     if (opts.durable && requestSignal?.aborted) {
@@ -674,11 +689,11 @@ export async function runExecProcess({
     throw error;
   } finally {
     launchLifecycle.dispose();
-    beforeSpawn = undefined;
     assertPolicyCurrent = undefined;
     assertSourceActive = undefined;
     operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
+    prepareSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
   recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
@@ -717,9 +732,7 @@ export async function runExecProcess({
     startedAt,
     pid: session.pid ?? undefined,
     promise,
-    kill: () => {
-      managedRun?.cancel("manual-cancel");
-    },
+    kill: () => managedRun?.cancel("manual-cancel"),
     disableUpdates: () => {
       onUpdate = undefined;
     },

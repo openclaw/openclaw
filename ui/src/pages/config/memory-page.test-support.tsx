@@ -453,16 +453,15 @@ export function toggleAddon(element: HTMLElement, label: string, checked: boolea
 
 export function activeEngine(element: HTMLElement): string | null {
   return (
-    element.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.value ?? null
+    element.querySelector<HTMLSelectElement>("select[aria-label='Memory engine']")?.value ?? null
   );
 }
 
 export function selectEngine(element: HTMLElement, value: string) {
-  const input = [...element.querySelectorAll<HTMLInputElement>(".settings-segmented__input")].find(
-    (candidate) => candidate.value === value,
-  );
-  if (!input) {
+  const select = element.querySelector<HTMLSelectElement>("select[aria-label='Memory engine']");
+  if (!select || ![...select.options].some((option) => option.value === value)) {
     throw new Error(`Missing memory engine: ${value}`);
   }
-  input.click();
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
 }

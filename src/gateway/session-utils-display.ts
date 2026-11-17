@@ -307,9 +307,11 @@ export function projectPreparedSessionChild(
   parentKey: string,
   now: number,
   rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
+  hasActiveDescendantRun = false,
 ) {
-  const active = projectGatewaySessionRunState({ ...child, now, rowContext }).fields
-    .hasActiveSubagentRun;
+  const active =
+    hasActiveDescendantRun ||
+    projectGatewaySessionRunState({ ...child, now, rowContext }).fields.hasActiveSubagentRun;
   return {
     included: resolveSessionChildOwners({
       ...child,

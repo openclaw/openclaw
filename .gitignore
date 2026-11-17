@@ -227,6 +227,9 @@ analysis/
 /data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
+# Target-specific offline node runtime dependency inputs
+/node-runtime-dependencies/
+
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json

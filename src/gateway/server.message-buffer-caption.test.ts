@@ -169,7 +169,8 @@ it(
         await listenProvider(provider),
         "buffer-proof",
       );
-      Object.assign(model.config.models[0], { contextWindow: 16000, maxTokens: 256 });
+      // The messaging schema and system prompt project 22K tokens before the first tool call.
+      Object.assign(model.config.models[0], { contextWindow: 32768, maxTokens: 256 });
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {

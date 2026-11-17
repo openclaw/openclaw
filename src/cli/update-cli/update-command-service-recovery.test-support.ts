@@ -392,7 +392,7 @@ export function registerRecoveryTests(
   it.each(["foreign", "profile", "before activation", "after readiness"])(
     "revalidates stale-parent failed-update recovery after %s changes",
     async (change) => {
-      const { root, configPath, mocks } = getFixture();
+      const { root, configPath, mocks, serviceNodeRunner } = getFixture();
       mocks.capability.mockResolvedValue({ kind: "writable" });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         ...maintenanceDefaults,
@@ -415,7 +415,7 @@ export function registerRecoveryTests(
       const replacement = {
         ...command,
         programArguments: [
-          process.execPath,
+          serviceNodeRunner,
           path.join(change === "foreign" ? foreign : root, "dist", "index.js"),
           "gateway",
           "--port",

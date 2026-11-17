@@ -222,10 +222,12 @@ function readElevenLabsProviderConfig(config: SpeechProviderConfig) {
 }
 
 function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): string | undefined {
-  return resolveSpeechProviderApiKey(
-    ...candidates,
-    resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
-    process.env.XI_API_KEY,
+  return (
+    resolveSpeechProviderApiKey(...candidates) ??
+    resolveSpeechProviderApiKey(
+      resolveElevenLabsApiKeyWithProfileFallback() ?? undefined,
+      process.env.XI_API_KEY,
+    )
   );
 }
 

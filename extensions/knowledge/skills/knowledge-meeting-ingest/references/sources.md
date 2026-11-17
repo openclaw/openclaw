@@ -4,6 +4,10 @@
 
 ## Retain the original
 
+- Before uploading a source-bound original again, call `knowledge_source_check`
+  with provider, stable source key and the exact original bytes' sha256. An
+  unchanged receipt is reusable history: verify its IDs and never recreate its
+  outputs. `missing` does not prove the source was never ingested; search too.
 - Host-workspace file: compute its SHA-256 with a host tool, then call
   `knowledge_attach_file` with `filePath`, `sha256`, filename, attribution,
   `expectedVaultId` and a fresh request UUID. The plugin streams the bytes and

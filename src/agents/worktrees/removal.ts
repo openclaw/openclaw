@@ -34,19 +34,44 @@ import {
   retireExactWorktree,
 } from "./removal-git.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
-import { abortWorktreeRemoval } from "./run-lease.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { rebindLiveWorktreeRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import {
   captureManagedWorktreeSnapshot,
   verifyManagedWorktreeExactSnapshot,
 } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeRunEndCleanup,
+  ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
   WorktreeWorkerAuthority,
 } from "./types.js";
+
+export async function claimManagedRemoval(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  params: RemoveWorktreeParams,
+): Promise<string> {
+  const token = params.claimToken ?? randomUUID();
+  const claim = () =>
+    claimWorktreeRemoval(env, {
+      worktreeId: record.id,
+      token,
+      assertCurrent: params.commitGuard,
+      workerAuthority: {
+        ...params.workerAuthority,
+        assertCurrent: params.workerAuthority
+          ? params.workerAuthority.assertCurrent
+          : params.commitGuard,
+        predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "binding", record }],
+      },
+    });
+  await (params.withOwnerMutation ? params.withOwnerMutation(claim) : claim());
+  return token;
+}
 
 export type RemoveWorktreeParams = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
   workerAuthority?: WorktreeWorkerAuthority;
@@ -71,7 +96,7 @@ export async function removeSettledManagedWorktree(
     snapshotRetentionMs: number;
   },
   timing: ReturnType<typeof startGitOperationTiming>,
-  prepareArchive?: (snapshot: string) => Promise<void>,
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>,
 ): Promise<RemoveManagedWorktreeResult> {
   const { env, getConfig, snapshotRetentionMs } = context;
   let params = input;
@@ -161,6 +186,7 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
+    const archive = await prepareArchive?.();
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;
@@ -248,7 +274,11 @@ export async function removeSettledManagedWorktree(
     if (
       (await checkHead()) !== head ||
       (snapshot &&
-        (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !== head)
+        (await git.require(
+          record.repoRoot,
+          ["rev-parse", worktreeSnapshotBase(snapshotRef!, snapshot)],
+          gitOptions,
+        )) !== head)
     ) {
       throw new Error(
         "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
@@ -282,7 +312,7 @@ export async function removeSettledManagedWorktree(
       }
     }
     if (snapshot) {
-      await prepareArchive?.(snapshot);
+      await archive?.(snapshot);
     }
     // Pin the completed capture before deletion. Failed or interrupted deletion
     // must never replace it with a snapshot of a partially removed checkout.
@@ -375,6 +405,7 @@ export async function removeSettledManagedWorktree(
         }
         throw error;
       }
+      timing?.recordRecovery(snapshotRef);
       return {
         removed: true,
         ...(snapshotRef ? { snapshotRef } : {}),

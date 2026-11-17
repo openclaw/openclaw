@@ -33,7 +33,7 @@ try {
   selection = await discoverReusableReleaseChild({
     repository: process.env.GITHUB_REPOSITORY,
     targetSha: process.env.TARGET_SHA,
-    targetVersion: process.env.TARGET_VERSION,
+    policyTargetVersion: process.env.TARGET_VERSION,
     workflowSha: process.env.PARENT_WORKFLOW_SHA,
     role,
     inputs: releaseChildDispatchInputs(source, args),

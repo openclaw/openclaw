@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
@@ -15,10 +16,7 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
-import {
-  prepareSessionDeliveryGeneration,
-  prepareSessionGenerationFacts,
-} from "./session-delivery-generation.js";
+import { prepareChatDeliveryLease, prepareLeaseFacts } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
@@ -74,23 +72,23 @@ describe("memory session actor", () => {
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await actor.patch(activityCommand(10), authority);
-    if (result.kind !== "committed") {
-      throw new Error("Expected a committed receipt");
-    }
+    const result = await actor.patch(activityCommand(10), authority, {
+      committed(value) {
+        Object.assign(value.receipt.afterVersion, { sequence: 100 });
+        value.receipt.postimage.entry!.updatedAt = 100;
+        value.receipt.transcript.after.rawSeq = 100;
+      },
+    });
+    assert(result.kind === "committed", "Expected a committed receipt");
     const retained = actor.snapshot(authority);
+    expect(result.receipt.postimage).toEqual(retained);
+    expect(retained?.entry?.updatedAt).toBe(10);
     Object.assign(result.receipt.afterVersion, { sequence: 100 });
+    result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
-    expect(
-      await actor.patch(
-        {
-          ...activityCommand(99),
-          expected: old.version,
-        },
-        authority,
-      ),
-    ).toMatchObject({
+    const stale = await actor.patch({ ...activityCommand(99), expected: old.version }, authority);
+    expect(stale).toMatchObject({
       kind: "stale-version",
       postimage: { entry: { updatedAt: 10 } },
     });
@@ -357,20 +355,25 @@ describe("memory actor effect adapters", () => {
   it("reads unbound delivery settings and refuses a closed actor after same-key recreation", async () => {
     const { source, target, upsert } = unboundFixture("delivery");
     const facts = { ...source, lifecycleRevision: null };
-    await expect(prepareSessionGenerationFacts(facts)).rejects.toThrow("no longer accepts");
+    await expect(prepareLeaseFacts(facts)).rejects.toThrow("no longer accepts");
     expect(memorySessionActorOwners.read(target)).toBeUndefined();
     await upsert();
-    const delivery = await prepareSessionGenerationFacts(facts);
-    const effect = await prepareSessionDeliveryGeneration(facts);
+    const delivery = await prepareLeaseFacts(facts);
+    const effect = await prepareChatDeliveryLease(chatRef(facts));
     try {
       await upsert({
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
-      expect(delivery.readSessionSettings()).toEqual({
+      expect(delivery.readSessionSettings()).toMatchObject({
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
+      delivery.assertNativeTransactionCurrent();
+      const released = await prepareLeaseFacts(facts);
+      released.release();
+      expect(released.assertNativeTransactionCurrent).toThrow("unavailable");
+      delivery.assertNativeTransactionCurrent();
       await runSessionMutation({
         scope: source.storePath,
         identities: [source.sessionKey, source.sessionId],
@@ -381,6 +384,7 @@ describe("memory actor effect adapters", () => {
       effect.assertCurrent();
       memorySessionActorOwners.closeSession(target, source.sessionKey);
       await upsert();
+      expect(() => delivery.assertNativeTransactionCurrent()).toThrow("unavailable");
       expect(() => delivery.assertCurrent()).toThrow("unavailable");
       expect(() => effect.assertCurrent()).toThrow("unavailable");
     } finally {

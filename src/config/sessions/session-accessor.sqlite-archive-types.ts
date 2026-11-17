@@ -6,6 +6,7 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
+import type { SessionColdSource } from "./session-cold-storage.types.js";
 import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
@@ -172,7 +173,7 @@ export type TranscriptArchivePageResult = {
 };
 
 export type SqliteArchiveOperation =
-  | { operation: "cold-prepare"; input: SessionColdBatchInput }
+  | { operation: "cold-prepare"; input: SessionColdBatchInput & { source: SessionColdSource } }
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
   | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }

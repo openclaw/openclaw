@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { packToArchive } from "../../src/plugins/test-helpers/archive-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -23,7 +24,7 @@ const digest = (file: string, algorithm: "sha256" | "sha512") =>
     .digest(algorithm === "sha256" ? "hex" : "base64");
 const integrity = (file: string) => `sha512-${digest(file, "sha512")}`;
 
-function tarball(
+async function tarball(
   root: string,
   filename: string,
   name: string,
@@ -33,10 +34,14 @@ function tarball(
 ) {
   const staging = join(root, `${filename}-source`);
   mkdirSync(join(staging, "package"), { recursive: true });
-  writeJson(join(staging, "package/package.json"), { name, version });
+  writeJson(join(staging, "package/package.json"), {
+    name,
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson(join(staging, "package/openclaw.plugin.json"), { id: name.split("/").pop() });
   writeFileSync(join(staging, "package/build.txt"), bytes);
-  execFileSync("tar", ["-czf", filename, "-C", staging, "package"], { cwd: outputDir });
-  return join(outputDir, filename);
+  return packToArchive({ pkgDir: join(staging, "package"), outDir: outputDir, outName: filename });
 }
 
 async function expectArchive(url: string, archive: string) {
@@ -80,23 +85,28 @@ it.for([
     const bin = join(root, "bin");
     mkdirSync(artifact);
     mkdirSync(bin);
-    const packages = (scenario === "base" ? ["codex", "discord", "whatsapp"] : ["discord"]).map(
-      (id) => {
-        const name = `@openclaw/${id}`;
-        const published = tarball(root, `${id}-published.tgz`, name, BASELINE, "published bytes");
-        const candidate = tarball(
-          root,
-          `${id}-candidate.tgz`,
-          name,
-          version,
-          "candidate bytes",
-          artifact,
-        );
-        expect(integrity(candidate)).not.toBe(integrity(published));
-        return { id, name, published, candidate };
-      },
-    );
-    const core = tarball(root, "core.tgz", "openclaw", version, "candidate core");
+    const packages = [];
+    for (const id of scenario === "base" ? ["codex", "discord", "whatsapp"] : ["discord"]) {
+      const name = `@openclaw/${id}`;
+      const published = await tarball(
+        root,
+        `${id}-published.tgz`,
+        name,
+        BASELINE,
+        "published bytes",
+      );
+      const candidate = await tarball(
+        root,
+        `${id}-candidate.tgz`,
+        name,
+        version,
+        "candidate bytes",
+        artifact,
+      );
+      expect(integrity(candidate)).not.toBe(integrity(published));
+      packages.push({ id, name, published, candidate });
+    }
+    const core = await tarball(root, "core.tgz", "openclaw", version, "candidate core");
     const manifest = join(artifact, "prepublish-plugin-registry.json");
     writeJson(manifest, {
       schema: "openclaw.prepublish-plugin-registry/v1",
@@ -160,10 +170,11 @@ else if (command === "pack") {
       shell,
       `${source.slice(0, firstPhase)}
 trap - ERR EXIT HUP INT TERM
-trap 'openclaw_e2e_stop_process "\${plugin_registry_pid:-}"' EXIT
+trap 'openclaw_e2e_stop_process "\${plugin_registry_pid:-}"; openclaw_e2e_stop_process "\${clawhub_fixture_pid:-}"' EXIT
 baseline_version="${BASELINE}"
 candidate_version="${version}"
 if [ "$SCENARIO" = legacy-operator-state ]; then configure_plugin_registry baseline; fi
+printf '%s' "\${OPENCLAW_CLAWHUB_URL:-}" > "$FIXTURE_ROOT/clawhub-baseline"
 printf 'registry-stage baseline %s\\n' "\${NPM_CONFIG_REGISTRY:-upstream}"
 read -r next_stage
 openclaw_e2e_stop_process "$plugin_registry_pid"
@@ -171,6 +182,7 @@ plugin_registry_pid=""
 configure_plugin_registry
 printf '%s\\n' "\${published_plugin_registry_args[@]-}" > "$FIXTURE_ROOT/published-paths"
 printf '%s' "\${baseline_plugin_tarball:-}" > "$FIXTURE_ROOT/published-path"
+printf '%s' "\${OPENCLAW_CLAWHUB_URL:-}" > "$FIXTURE_ROOT/clawhub-candidate"
 printf 'registry-stage candidate %s\\n' "$NPM_CONFIG_REGISTRY"
 read -r done
 `,
@@ -225,6 +237,15 @@ read -r done
         assert(companion, "Missing published companion fixture");
         const { name, published } = companion;
         await registryPackage(baselineUrl, name, BASELINE, published);
+        const clawhub = readFileSync(join(root, "clawhub-baseline"), "utf8");
+        expect(clawhub).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u);
+        const packagePath = `/api/v1/packages/${encodeURIComponent(name)}`;
+        const metadata = await (await fetch(`${clawhub}${packagePath}`)).json();
+        expect(metadata.package.latestVersion).toBe(BASELINE);
+        await expectArchive(
+          `${clawhub}${packagePath}/versions/${BASELINE}/artifact/download`,
+          published,
+        );
       }
       writePluginInstallIndexForE2E(
         {
@@ -239,6 +260,19 @@ read -r done
       );
       child.stdin.write("candidate\n");
       const candidateUrl = await waitForStage("candidate");
+      if (scenario === "legacy-operator-state") {
+        const clawhub = readFileSync(join(root, "clawhub-candidate"), "utf8");
+        expect(clawhub).toBe(readFileSync(join(root, "clawhub-baseline"), "utf8"));
+        const companion = packages[0];
+        assert(companion, "Missing candidate companion fixture");
+        const packagePath = `/api/v1/packages/${encodeURIComponent(companion.name)}`;
+        const metadata = await (await fetch(`${clawhub}${packagePath}`)).json();
+        expect(metadata.package.latestVersion).toBe(version);
+        await expectArchive(
+          `${clawhub}${packagePath}/versions/${version}/artifact/download`,
+          companion.candidate,
+        );
+      }
       const publishedPaths = readFileSync(join(root, "published-paths"), "utf8").trim().split("\n");
       for (const { id, name, published, candidate } of packages) {
         const selected = version === BASELINE ? published : candidate;

@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
@@ -12,7 +13,7 @@ import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
 import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
+import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
   config?: OpenClawConfig;
@@ -58,15 +59,18 @@ export async function resolveAgentRuntimePrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  await prepareActiveNodeContext(params.requesterProfileId);
-  const preparedGitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
-    ? params.preparedGitCoauthorPrompt
-    : await resolveSessionGitCoauthorPrompt({
-        config: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-      });
+  const [, preparedGitCoauthorPrompt, host] = await settleCurrentReadPreparations([
+    prepareActiveNodeContext(params.requesterProfileId),
+    Object.hasOwn(params, "preparedGitCoauthorPrompt")
+      ? params.preparedGitCoauthorPrompt
+      : resolveSessionGitCoauthorPrompt({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        }),
+    params.remoteWorkspace ? "" : getMachineDisplayName(),
+  ] as const);
   const systemPromptParams = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -76,14 +80,14 @@ export async function resolveAgentRuntimePrompt(params: {
       ? { preparedRepoRoot: null }
       : Object.hasOwn(params, "preparedRepoRoot")
         ? { preparedRepoRoot: params.preparedRepoRoot }
-        : {}),
+        : { preparedRepoRoot: await resolveSystemPromptRepoRoot(params) }),
     preparedGitCoauthorPrompt,
     preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      host: params.remoteWorkspace ? "" : await getMachineDisplayName(),
+      host,
       os: params.remoteWorkspace ? "" : resolveRuntimeOsLabel(),
       arch: params.remoteWorkspace ? "" : os.arch(),
       node: params.remoteWorkspace ? "" : process.version,

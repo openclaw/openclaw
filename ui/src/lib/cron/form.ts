@@ -198,6 +198,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     name: job.name,
     description: job.description ?? "",
     agentId: job.agentId ?? "",
+    ownerProfileId: job.ownerProfileId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,
@@ -262,6 +263,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     failureAlertTo: failureAlert?.to ?? "",
     failureAlertDeliveryMode: failureAlert?.mode ?? "",
     failureAlertAccountId: failureAlert?.accountId ?? "",
+    failureAlertThreadId: failureAlert?.threadId,
     timeoutSeconds:
       typeof agentTurn?.timeoutSeconds === "number" ? String(agentTurn.timeoutSeconds) : "",
   };

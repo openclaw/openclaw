@@ -8,8 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
+  deriveGitHubPublicationTaskId,
   encodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
+  type GitHubPublicationOrigin,
 } from "../state/github-publication-requester.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { PersonalGitHubAction } from "./github-personal-oauth.js";
@@ -43,20 +45,28 @@ import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-re
 import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
+  bindRepositoryGitHubPublicationCheckpointAsync,
   listRepositoryGitHubPublicationsAsync,
   readRepositoryGitHubPublicationBranchAsync,
   readRepositoryGitHubPublicationAsync,
+  readRepositoryGitHubPublicationInputAsync,
+  reopenRepositoryGitHubPublicationAsync,
 } from "./github-publication-store-async.js";
 import { createRepositoryGitHubPublicationExecution } from "./github-repository-publication-execution.js";
-import { prepareRepositoryGitHubPublicationTarget } from "./github-repository-publication-executor.js";
 import { createRepositoryGitHubPublicationRecovery } from "./github-repository-publication-recovery.js";
 import {
   readPendingRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
   terminalRepositoryGitHubPublication,
+  retryableRepositoryGitHubPublication,
 } from "./github-repository-publication-store.js";
-import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
+import {
+  captureCheckpoint,
+  prepareRepositoryOwner,
+  type RepositoryDiskPublicationSource,
+} from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
+import { prepareRepositoryGitHubPublicationTarget } from "./github-repository-target.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -65,6 +75,8 @@ import type {
 
 export function createRepositoryGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: RepositoryDiskPublicationSource["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
@@ -97,6 +109,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     prepareSource,
     getCommittedRuntimeConfig,
     assertCurrent: params.assertCurrent,
+    prepareIntegration: params.prepareRepositoryIntegration,
+    disk: params.environments && { placements, environments: params.environments },
   });
   const makeRow = async (input: {
     session: SessionIdentity;
@@ -108,6 +122,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     generation?: string;
     claim?: WorkerSessionTurnClaim;
     requesterAuthorityJson: string | null;
+    origin?: GitHubPublicationOrigin;
   }): Promise<RepositoryGitHubPublicationRow> => {
     const { head: previous } = await readRepositoryGitHubPublicationBranchAsync({
       workspaceId: input.workspace.workspaceId,
@@ -116,7 +131,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     });
     const now = Date.now();
     const row: RepositoryGitHubPublicationRow = {
-      request_id: randomUUID(),
+      request_id: input.origin
+        ? deriveGitHubPublicationTaskId(input.origin, input.request.idempotencyKey)
+        : randomUUID(),
       idempotency_key: input.request.idempotencyKey,
       request_digest: "",
       session_id: input.session.sessionId,
@@ -134,9 +151,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       title: input.request.title ?? null,
       body: input.request.body ?? null,
       draft: input.request.draft ? 1 : 0,
-      push_repository: input.target.pushRepository,
-      repository: input.target.repository,
-      base_branch: input.target.baseBranch,
+      push_repository: previous?.push_repository ?? input.target.pushRepository,
+      repository: previous?.repository ?? input.target.repository,
+      base_branch: previous?.base_branch ?? input.target.baseBranch,
       branch: input.workspace.branch,
       previous_head_commit: previous?.pushed_head_commit ?? null,
       claim_id: input.claim?.claimId ?? null,
@@ -165,6 +182,54 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     };
     row.request_digest = repositoryGitHubPublicationDigest(row);
     return row;
+  };
+  const bindIdleCheckpoint = async (
+    row: RepositoryGitHubPublicationRow,
+    requester: Pick<GitHubPublicationRequesterPolicyV2, "assertCurrent" | "prepareSource">,
+    assertReservation: () => void,
+  ) => {
+    const assertCurrent = () => {
+      assertReservation();
+      requester.assertCurrent();
+    };
+    assertCurrent();
+    if (row.checkpoint_ref) {
+      return row;
+    }
+    const session = {
+      sessionId: row.session_id,
+      sessionKey: row.session_key,
+      agentId: row.agent_id,
+      lifecycleRevision: row.session_lifecycle_revision,
+    };
+    const owner = await prepareRepositoryOwner(session);
+    using _ = { [Symbol.dispose]: () => owner.release() };
+    assertCurrent();
+    const workspace = owner().workspace;
+    if (row.owner_profile_id === null && !workspace.diskAuthority && !workspace.checkpointRef) {
+      return projectGitHubPublicationResult(row);
+    }
+    const authority = {
+      assertAction: assertCurrent,
+      assertCustody: params.assertCurrent,
+      prepareSource: () =>
+        prepareSource(requester, {
+          ...session,
+          repositoryWorkspaceId: row.workspace_id,
+          repositoryBranch: row.branch,
+          ...(row.owner_profile_id === null
+            ? {}
+            : { personalOwnerProfileId: row.owner_profile_id }),
+        }),
+    };
+    return await captureCheckpoint(
+      row,
+      assertCurrent,
+      (facts, prepared) =>
+        bindRepositoryGitHubPublicationCheckpointAsync(row, facts, prepared.authority),
+      authority,
+      params.environments && { placements, environments: params.environments },
+    );
   };
   const admitShared = async (
     input: GitHubPublicationSessionRequestV2,
@@ -230,7 +295,16 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       throw new Error("GitHub publication idempotency key was reused.");
     }
     const expected = input.selection?.source === "shared" ? input.selection.expected : undefined;
-    if (existing && terminalRepositoryGitHubPublication(existing)) {
+    const retry =
+      existing?.status === "failed" &&
+      retryableRepositoryGitHubPublication(
+        existing,
+        existing.error_code === "unavailable"
+          ? undefined
+          : await readRepositoryGitHubPublicationInputAsync(existing),
+      );
+    assertCurrent();
+    if (existing && terminalRepositoryGitHubPublication(existing) && !retry) {
       const result = projectGitHubPublicationResult(existing);
       assertExpectedSharedGitHubPublisher(expected, result.publisher!);
       return existing;
@@ -254,7 +328,20 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (!matchesGitHubPublicationIdentityRow(existing, identity)) {
         throw new Error("GitHub publication identity changed.");
       }
-      return existing;
+      if (!retry) {
+        return existing;
+      }
+      const source = await prepareSource(requester, {
+        ...session,
+        repositoryWorkspaceId: existing.workspace_id,
+        repositoryBranch: existing.branch,
+      });
+      try {
+        assertCurrent();
+        return await reopenRepositoryGitHubPublicationAsync(existing, source);
+      } finally {
+        await source.release();
+      }
     }
     const target = await prepareRepositoryGitHubPublicationTarget(
       initial.workspace,
@@ -270,6 +357,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       target,
       claim,
       requesterAuthorityJson,
+      origin: requester.snapshot.origin,
     });
     const source = await prepareSource(requester, {
       ...session,
@@ -328,7 +416,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication run identity changed.");
       }
       const claim = input.expectedRunId !== undefined ? currentClaim : undefined;
-      const row = await admitShared(input, claim);
+      let row = await admitShared(input, claim);
       if (
         terminalRepositoryGitHubPublication(row) ||
         claim ||
@@ -336,12 +424,17 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       ) {
         return projectGitHubPublicationResult(row);
       }
-      return await placements.withRepositoryWorkspaceReservation(
-        {
-          sessionId: row.session_id,
-          sessionKey: row.session_key,
-          agentId: row.agent_id,
-        },
+      const prepared = await placements.withRepositoryWorkspaceReservation(
+        { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
+        (assertReservation) => bindIdleCheckpoint(row, input.requester, assertReservation),
+      );
+      if (!("request_id" in prepared)) {
+        return prepared;
+      }
+      row = prepared;
+      // The input is immutable; worker refresh must not retain a placement-admission hold.
+      return await placements.withWorkspaceExclusion(
+        row.session_id,
         async (assertCustody) =>
           await execute(row, {
             assertCustody,
@@ -376,7 +469,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         idempotencyKey: input.idempotencyKey,
         hasRequest: () => Boolean(existing),
       });
-      return await placements.withRepositoryWorkspaceReservation(
+      const prepared = await placements.withRepositoryWorkspaceReservation(
         action,
         async (assertReservation) => {
           const currentOwner = await prepareRepositoryOwner(action);
@@ -423,13 +516,19 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
           } finally {
             await source.release();
           }
-          return await execute(row, { assertCustody: assertReservation, assertCurrent, action });
+          return await bindIdleCheckpoint(row, action, assertCurrent);
         },
+      );
+      if (!("request_id" in prepared)) {
+        return prepared;
+      }
+      return await placements.withWorkspaceExclusion(prepared.session_id, (assertCustody) =>
+        execute(prepared, { assertCustody, assertCurrent: action.assertCurrent, action }),
       );
     },
     async processClaim(claim: WorkerSessionTurnClaim) {
       const results = [];
-      for (const row of (
+      const selected = (
         await listRepositoryGitHubPublicationsAsync({
           sessionId: claim.sessionId,
           ownerProfileId: null,
@@ -438,13 +537,17 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       ).filter(
         (candidate) =>
           candidate.claim_id === null || matchesRepositoryGitHubPublicationClaim(candidate, claim),
-      )) {
+      );
+      for (const row of selected) {
         await placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await placements.withWorkspaceExclusion(
             row.session_id,
             async (assertOwned) =>
               await execute(row, {
+                captureRequestIds: selected
+                  .filter((entry) => !entry.checkpoint_ref)
+                  .map((entry) => entry.request_id),
                 assertCustody: () => {
                   assertOwned();
                   if (!placements.validateWorkspaceResultClaim(claim)) {
@@ -459,12 +562,13 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     ...createRepositoryGitHubPublicationRecovery({
       placements,
+      disk: params.environments && { placements, environments: params.environments },
       recovery: params.recovery,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
-      execute: (row, assertCustody, recoveryResult) =>
-        execute(row, { assertCustody, recoveryResult }),
+      execute: (row, assertCustody, recoveryResult, captureOnly) =>
+        execute(row, { assertCustody, recoveryResult, captureOnly }),
     }),
     preparePersonalStatus,
     async personalStatusAsync(
@@ -525,14 +629,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         throw new Error("GitHub publication has no accepted checkpoint.");
       }
       await bindPersonalGitHubPublicationSelection(action, input);
-      return await placements.withRepositoryWorkspaceReservation(
-        action,
-        async (assertReservation) =>
-          await execute(row, {
-            assertCustody: assertReservation,
-            assertCurrent: action.assertCurrent,
-            action,
-          }),
+      await placements.withRepositoryWorkspaceReservation(action, async (assertReservation) => {
+        assertReservation();
+        action.assertCurrent();
+      });
+      return await placements.withWorkspaceExclusion(row.session_id, (assertCustody) =>
+        execute(row, { assertCustody, assertCurrent: action.assertCurrent, action }),
       );
     },
     async readAsync(requestId: string) {

@@ -60,12 +60,6 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.chat-context__note {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin: 8px 0;
-}
 .chat-context--popover {
   margin-top: 10px;
   .chat-context__bar {
@@ -83,9 +77,6 @@
   }
   .chat-context__swatch {
     justify-self: center;
-  }
-  .chat-context__note {
-    margin: 0;
   }
   .context-usage__report-skeleton {
     margin-top: 0;

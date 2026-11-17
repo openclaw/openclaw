@@ -641,11 +641,11 @@ describe("Gateway steer FIFO", () => {
         {
           withSteeringTools: true,
           steeringGateMode: mode,
-          observeSteering: preflight ? steerMarker : undefined,
+          observeSteering: steerMarker,
         },
       );
-      const steeringTools = fixture.steeringTools;
-      if (!steeringTools) {
+      const { steeringTools, steeringAdmission } = fixture;
+      if (!steeringTools || !steeringAdmission) {
         throw new Error("steering tool fixture was not configured");
       }
       const first = await sendHeldTurn(fixture, !preflight);
@@ -663,7 +663,11 @@ describe("Gateway steer FIFO", () => {
           const steerResult = await directChat(fixture, steerMarker, steerRunId, "steer");
           expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
           expect(fixture.modelServer.requests).toHaveLength(1);
-          await setImmediate();
+          await vi.waitFor(
+            async () =>
+              expect(await readTrace(steeringAdmission.receiptPath)).toContain(steerMarker),
+            WAIT_OPTS,
+          );
           expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
         }
       } finally {
@@ -857,7 +861,9 @@ describe("Gateway steer FIFO", () => {
   it(
     "hands steered document attachments to the active run as extracted file context",
     async () => {
-      const fixture = await createGatewayFixture("steer-document-context");
+      const fixture = await createGatewayFixture("steer-document-context", {
+        observeSteering: "QUEUED_STEER_DOCUMENT",
+      });
       const first = await sendHeldTurn(fixture, true);
 
       // Real gateway protocol send with a file attachment while the initial
@@ -885,6 +891,16 @@ describe("Gateway steer FIFO", () => {
       );
       expect(steer).toMatchObject({ status: "started" });
 
+      const admission = fixture.steeringAdmission;
+      if (!admission) {
+        throw new Error("steering admission observer was not configured");
+      }
+      // The upload ACK precedes document preparation and runtime steering admission.
+      await vi.waitFor(
+        async () =>
+          expect(await readTrace(admission.receiptPath)).toContain("QUEUED_STEER_DOCUMENT"),
+        WAIT_OPTS,
+      );
       fixture.modelServer.releaseFirst("final");
 
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);

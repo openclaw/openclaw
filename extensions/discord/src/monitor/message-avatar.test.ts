@@ -15,10 +15,6 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({ logDebug: mocks.logDebug })
 
 const { createDiscordAvatarResolver } = await import("./message-avatar.js");
 
-function discordUser(id: string, avatar: string | null): User {
-  return { id, avatar } as User;
-}
-
 const emptyClient = { fetchGuild: vi.fn() } as unknown as Client;
 const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
@@ -28,17 +24,15 @@ function avatarScenario(client = emptyClient, guildId?: string) {
     client,
     guildId,
     conversationId: guildId ? "channel-1" : "dm-1",
-    author: discordUser("user-1", guildId ? "sender-hash" : "hash-1"),
+    author: { id: "user-1", avatar: guildId ? "sender-hash" : "hash-1" } as User,
   };
   return (author = params.author) => resolver.resolve({ ...params, author });
 }
 
-beforeEach(() => {
-  mocks.saveRemoteMedia.mockReset();
-  mocks.logDebug.mockReset();
-});
+beforeEach(() => vi.resetAllMocks());
 
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env[DISCORD_API_URL_ENV];
 });
 
@@ -63,11 +57,11 @@ describe("createDiscordAvatarResolver", () => {
     await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/dm-avatar.png"));
 
     mocks.saveRemoteMedia.mockResolvedValueOnce({ path: "/media/inbound/dm-avatar-new.png" });
-    expect(resolve(discordUser("user-1", "hash-2"))).toBeUndefined();
+    expect(resolve({ id: "user-1", avatar: "hash-2" } as User)).toBeUndefined();
     expect(mocks.saveRemoteMedia).toHaveBeenCalledTimes(2);
   });
 
-  it("uses a lazily fetched guild icon instead of the sender avatar", async () => {
+  it("lazily reuses the guild icon across wall-clock steps instead of the sender avatar", async () => {
     const guildLookup = createDeferred<{ icon: string }>();
     const guildDownload = createDeferred<{ path: string }>();
     const fetchGuild = vi.fn(() => guildLookup.promise);
@@ -89,15 +83,19 @@ describe("createDiscordAvatarResolver", () => {
     guildDownload.resolve({ path: "/media/inbound/guild-icon.png" });
     await vi.waitFor(() => expect(resolve()).toBe("/media/inbound/guild-icon.png"));
     expect(fetchGuild).toHaveBeenCalledTimes(1);
+    const now = Date.now();
+    const wallClock = vi.spyOn(Date, "now");
+    for (const offset of [-10 * 60_000, 10 * 60_000]) {
+      wallClock.mockReturnValue(now + offset);
+      expect(resolve()).toBe("/media/inbound/guild-icon.png");
+      expect(fetchGuild).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("does not fall back to the public CDN when an API override is configured", async () => {
-    const guildLookup = createDeferred<{ icon: string }>();
-    const client = { fetchGuild: vi.fn(() => guildLookup.promise) } as unknown as Client;
+    const client = { fetchGuild: async () => ({ icon: "guild-hash" }) } as unknown as Client;
     process.env[DISCORD_API_URL_ENV] = "http://127.0.0.1:43210/api/v10";
     avatarScenario(client, "guild-1")();
-    guildLookup.resolve({ icon: "guild-hash" });
-
     await vi.waitFor(() =>
       expect(mocks.logDebug).toHaveBeenCalledWith(
         expect.stringContaining("outside the configured REST origin"),

@@ -2,9 +2,12 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { DoctorMemoryEmbeddingRuntimePayload } from "../gateway/server-methods/doctor.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { ManifestOwnerBasePolicyBlockReason } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { MemoryHealth } from "../plugins/memory-provider-types.js";
+import type { MemoryHealth } from "../plugins/memory-provider-runtime-types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
@@ -34,7 +37,7 @@ const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
 const listProviderPolicyOwners = vi.hoisted(() =>
   vi.fn<(provider: string, registry: PluginManifestRegistry) => Array<{ id: string }>>(),
 );
-const loadProviderPolicyArtifacts = vi.hoisted(() =>
+const loadProviderPolicyArtifactsAsync = vi.hoisted(() =>
   vi.fn<
     (owners: Array<{ id: string }>) => {
       owner: { id: string };
@@ -62,7 +65,8 @@ const getMissingLocalMemoryEmbeddingProviderMessage = vi.hoisted(() =>
 // mock-isolation: Capture memory-health notices without rendering terminal UI.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds,
   tryResolveDefaultAgentId: resolveDefaultAgentId,
   resolveAgentDir,
@@ -94,12 +98,19 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 // mock-isolation: Health scenarios must not discover or activate the host's plugins.
 vi.mock("../plugins/plugin-registry.js", () => ({ loadPluginManifestRegistryForPluginRegistry }));
 
+// mock-isolation: Fix installed metadata without mocking effective activation policy.
+vi.mock("../plugins/plugin-registry-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-registry-snapshot.js")>()),
+  loadPluginRegistrySnapshot: () => activeMemoryIndex,
+}));
+
 // mock-isolation: Fixtures select the installed-provider policy outcome explicitly.
 vi.mock("../plugins/manifest-owner-policy.js", () => ({ resolveManifestOwnerBasePolicyBlock }));
 
+// mock-isolation: Memory health fixtures select policy hooks without executing installed plugins.
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   listProviderPolicyOwners,
-  loadProviderPolicyArtifacts,
+  loadProviderPolicyArtifactsAsync,
 }));
 
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
@@ -132,7 +143,13 @@ function expectFirstNoteExcludes(...values: string[]) {
   }
 }
 
-const cfg: OpenClawConfig = {};
+const activeMemoryIndex = createPluginMetadataSnapshotFixture({
+  plugins: [{ id: "active-memory", origin: "bundled", enabledByDefault: false }],
+}).index;
+const { resolveMemorySearchConfig: resolveRealMemorySearchConfig } = await vi.importActual<
+  typeof import("../agents/memory-search.js")
+>("../agents/memory-search.js");
+const cfg: OpenClawConfig = { plugins: { entries: { "active-memory": { enabled: true } } } };
 const skippedGatewayOptions = {
   gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
 } satisfies NonNullable<Parameters<typeof noteMemorySearchHealth>[1]>;
@@ -186,7 +203,7 @@ async function runMemorySearchHealth(
   config: OpenClawConfig = cfg,
 ) {
   stubMemorySearchConfig(provider, overrides);
-  await noteMemorySearchHealth(config, options);
+  await noteMemorySearchHealth({ plugins: cfg.plugins, ...config }, options);
 }
 
 const recallAgent = (rememberAcrossConversations: boolean) => ({
@@ -218,7 +235,7 @@ beforeEach(() => {
   getMissingLocalMemoryEmbeddingProviderMessage.mockClear();
   inspectConfiguredEmbeddingProviderSetup.mockReset().mockResolvedValue(null);
   listProviderPolicyOwners.mockReset().mockReturnValue([{ id: "llama-cpp" }]);
-  loadProviderPolicyArtifacts.mockReset().mockImplementation((owners) => {
+  loadProviderPolicyArtifactsAsync.mockReset().mockImplementation((owners) => {
     const owner = owners[0];
     return owner
       ? {
@@ -256,6 +273,73 @@ function collectFindings(config: OpenClawConfig) {
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   });
 }
+
+it.each([
+  ["missing entry", {}, "Set plugins.entries.active-memory.enabled=true, or"],
+  ["explicit enablement", { plugins: { entries: { "active-memory": { enabled: true } } } }, null],
+  ["recall opt-out", { memory: { search: { rememberAcrossConversations: false } } }, null],
+  ["isolated DM default", { session: { dmScope: "per-peer" } }, null],
+  [
+    "global disablement",
+    { plugins: { enabled: false, entries: { "active-memory": { enabled: true } } } },
+    "Set plugins.enabled=true, or",
+  ],
+  [
+    "denylist",
+    { plugins: { deny: ["active-memory"], entries: { "active-memory": { enabled: true } } } },
+    "Remove active-memory from plugins.deny, or",
+  ],
+  [
+    "restrictive allowlist",
+    { plugins: { allow: ["other-plugin"], entries: { "active-memory": { enabled: true } } } },
+    "Add active-memory to plugins.allow, or",
+  ],
+  [
+    "internal disablement",
+    { plugins: { entries: { "active-memory": { enabled: true, config: { enabled: false } } } } },
+    "Set plugins.entries.active-memory.config.enabled=true, or",
+  ],
+  [
+    "denylist without explicit enablement",
+    { plugins: { deny: ["active-memory"] } },
+    "Remove active-memory from plugins.deny, set plugins.entries.active-memory.enabled=true, or",
+  ],
+] satisfies Array<[string, OpenClawConfig, string | null]>)(
+  "reports effective Active Memory prerequisites with %s in normal Doctor and lint",
+  async (name, overrides: OpenClawConfig, expectedHint) => {
+    const warns = expectedHint !== null;
+    const config: OpenClawConfig = {
+      ...overrides,
+      agents: { entries: { personal: {} } },
+      memory: { search: { provider: "none", ...overrides.memory?.search } },
+    };
+    resolveMemorySearchConfig.mockImplementation(resolveRealMemorySearchConfig);
+    if (name === "missing entry") {
+      expect(resolveRememberAcrossConversations(config, "personal")).toBe(true);
+      expect(isInstalledPluginEnabled(activeMemoryIndex, "active-memory", config)).toBe(false);
+    }
+
+    await noteMemorySearchHealth(config, { includeWorkspaceMemoryHealth: false });
+    const findings = await collectFindings(config);
+    if (warns) {
+      expectFirstNoteContains(
+        "Active Memory plugin is disabled",
+        `disabled. ${expectedHint}`,
+        "memory.search.rememberAcrossConversations to false",
+      );
+      expect(findings).toMatchObject([
+        {
+          checkId: "core/doctor/memory-search",
+          severity: "warning",
+          message: firstNoteMessage(),
+        },
+      ]);
+    } else {
+      expect(note).not.toHaveBeenCalled();
+      expect(findings).toEqual([]);
+    }
+  },
+);
 
 it("reports native provider health as an informational doctor note", async () => {
   const close = configureProviderHealth({ status: "ready", message: "connected" });
@@ -323,7 +407,7 @@ it("emits recall warnings before a later provider diagnostic fails", async () =>
 
   expect(note).toHaveBeenCalledOnce();
   expect(firstNoteMessage()).toBe(
-    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.',
+    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Set plugins.entries.active-memory.enabled=true, or set memory.search.rememberAcrossConversations to false.',
   );
 });
 
@@ -340,7 +424,7 @@ it("uses the memory-core recovery message when the local provider plugin is miss
 });
 
 it("updates a legacy installed provider that has no setup policy artifact", async () => {
-  loadProviderPolicyArtifacts.mockReturnValueOnce({
+  loadProviderPolicyArtifactsAsync.mockReturnValueOnce({
     owner: { id: "llama-cpp" },
     surface: null,
   });
@@ -384,7 +468,7 @@ it.each([
     "openclaw plugins install @openclaw/llama-cpp-provider",
     "openclaw plugins update llama-cpp",
   );
-  expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
+  expect(loadProviderPolicyArtifactsAsync).not.toHaveBeenCalled();
 });
 
 it("reports global plugin disablement before the inactive memory-runtime gate", async () => {
@@ -403,7 +487,7 @@ it("reports global plugin disablement before the inactive memory-runtime gate", 
   );
   expectFirstNoteExcludes("No active memory plugin is registered");
   expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
-  expect(loadProviderPolicyArtifacts).not.toHaveBeenCalled();
+  expect(loadProviderPolicyArtifactsAsync).not.toHaveBeenCalled();
 });
 
 it("uses the policy owner selected after an earlier disabled owner", async () => {
@@ -425,7 +509,7 @@ it("uses the policy owner selected after an earlier disabled owner", async () =>
   expect(resolveManifestOwnerBasePolicyBlock).toHaveBeenCalledWith(
     expect.objectContaining({ plugin: selectedOwner }),
   );
-  expect(loadProviderPolicyArtifacts).toHaveBeenCalledWith([selectedOwner]);
+  expect(loadProviderPolicyArtifactsAsync).toHaveBeenCalledWith([selectedOwner]);
   expectFirstNoteContains("Selected provider needs setup", "Configure the selected provider");
   expectFirstNoteExcludes("openclaw plugins enable a-disabled");
 });

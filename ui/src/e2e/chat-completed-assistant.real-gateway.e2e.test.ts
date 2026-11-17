@@ -209,8 +209,8 @@ suite.define(() => {
           await pane.getByText(answer, { exact: true }).waitFor();
           await expect.poll(() => reads.slice(after).some((read) => read.completed)).toBe(true);
           await expect
-            .poll(() => pane.evaluate((element) => Reflect.get(element, "transcriptLoading")))
-            .toBe(false);
+            .poll(() => pane.evaluate((element) => Reflect.get(element, "transcriptReady")))
+            .toBe(true);
           await pane.evaluate((element) => Reflect.get(element, "updateComplete"));
           const work = pane.locator(".chat-work-group > .chat-activity-group__summary");
           if (await work.count()) {

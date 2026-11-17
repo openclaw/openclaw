@@ -7,7 +7,10 @@ import {
   createWorkerProjectPreparation,
   readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
-import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
+import {
+  createProjectPreparationFixture,
+  runProjectScriptWithGitProbe,
+} from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -24,6 +27,40 @@ async function advanceProject(repository: string) {
   await requireGit(repository, ["commit", "--quiet", "-am", "B"]);
   return (await prepareWorkerProjectSnapshot({ localPath: repository, namespace: "gateway" }))!;
 }
+
+it("verifies transferred objects once and reuses completed worker objects with phase timings", async () => {
+  const f = await fixture();
+  let fscks = 0;
+  f.runScript.mockImplementation((script) =>
+    runProjectScriptWithGitProbe(script, f.home, (args) => {
+      if (args.includes("fsck")) {
+        fscks++;
+      }
+      return undefined;
+    }),
+  );
+  for (const [project, expectedFscks] of [
+    [f.project, 1],
+    [f.project, 0],
+    [await advanceProject(f.repository), 0],
+  ] as const) {
+    fscks = 0;
+    const operation = await f.preparedOperation(undefined, { project });
+    try {
+      const result = await operation.project.prepare(f);
+      expect.soft(fscks).toBe(expectedFscks);
+      expect.soft(result.recipePreparation?.phaseDurationsMs).toMatchObject({
+        inspection: expect.any(Number),
+        seedVerification: expect.any(Number),
+      });
+      for (const duration of Object.values(result.recipePreparation?.phaseDurationsMs ?? {})) {
+        expect(Number.isSafeInteger(duration) && duration >= 0).toBe(true);
+      }
+    } finally {
+      operation.close();
+    }
+  }
+});
 
 it.each(["absent", "skipped"] as const)(
   "completes seed transfer without setup authority (%s recipe)",
@@ -96,40 +133,41 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
         ? await f.preparedOperation()
         : await f.preparedOperation(undefined, { project, key: "b".repeat(64) });
     let calls = 0;
+    const runScript = async (script: string) => {
+      calls++;
+      const result = await f.runScript(script);
+      if (changed === "appeared") {
+        const replacement = await f.preparedOperation();
+        await replacement.project.prepare(f);
+        replacement.close();
+      } else if (calls === 1) {
+        const workspace = prepared.workspaceDir;
+        const git = (...args: string[]) => requireGit(workspace, args);
+        if (changed === "removed") {
+          await fs.rename(path.dirname(workspace), path.join(f.home, "retired"));
+        } else if (changed === "HEAD") {
+          await git("fetch", "--depth=1", "--update-shallow", f.repository, project.baseCommit);
+          await git("checkout", "--detach", project.baseCommit);
+        } else if (changed === "completion") {
+          const completionRoot = manifests(prepared.homeDir);
+          await fs.rename(
+            path.join(completionRoot, prepared.sourceManifestRef.slice(7)),
+            path.join(completionRoot, "0".repeat(64)),
+          );
+        } else {
+          await fs.writeFile(
+            path.join(workspace, ".git/objects/info/alternates"),
+            `${path.join(f.repository, ".git", "objects")}\n`,
+          );
+        }
+      }
+      return result;
+    };
     await expect(
       next.project.prepare({
         ...f,
-        runScriptWithBudget: (createScript) => f.runScriptWithBudget(createScript),
-        runScript: async (script) => {
-          calls++;
-          const result = await f.runScript(script);
-          if (changed === "appeared") {
-            const replacement = await f.preparedOperation();
-            await replacement.project.prepare(f);
-            replacement.close();
-          } else if (calls === 1) {
-            const workspace = prepared.workspaceDir;
-            const git = (...args: string[]) => requireGit(workspace, args);
-            if (changed === "removed") {
-              await fs.rename(path.dirname(workspace), path.join(f.home, "retired"));
-            } else if (changed === "HEAD") {
-              await git("fetch", "--depth=1", "--update-shallow", f.repository, project.baseCommit);
-              await git("checkout", "--detach", project.baseCommit);
-            } else if (changed === "completion") {
-              const completionRoot = manifests(prepared.homeDir);
-              await fs.rename(
-                path.join(completionRoot, prepared.sourceManifestRef.slice(7)),
-                path.join(completionRoot, "0".repeat(64)),
-              );
-            } else {
-              await fs.writeFile(
-                path.join(workspace, ".git/objects/info/alternates"),
-                `${path.join(f.repository, ".git", "objects")}\n`,
-              );
-            }
-          }
-          return result;
-        },
+        runScript,
+        runScriptWithBudget: (createScript) => runScript(createScript(30_000)),
       }),
     ).rejects.toThrow(
       changed === "standalone" ? "Git base is not standalone" : "changed during preparation",
@@ -141,3 +179,14 @@ it.each(["removed", "HEAD", "completion", "standalone", "appeared"] as const)(
     expect(next.getPreparedWorkspace()).toBeUndefined();
   },
 );
+
+it("requires a budgeted transport before transferring a new prepared workspace", async () => {
+  const f = await fixture();
+  const operation = await f.preparedOperation();
+  await expect(
+    operation.project.prepare({ runScript: f.runScript, upload: f.upload }),
+  ).rejects.toThrow("Prepared workspaces require a provider command budget");
+  operation.close();
+  expect(f.runScript).not.toHaveBeenCalled();
+  expect(f.upload).not.toHaveBeenCalled();
+});

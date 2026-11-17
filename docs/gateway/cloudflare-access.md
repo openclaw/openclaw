@@ -61,6 +61,14 @@ consumes them in the next step:
 - `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
   header is present and non-blank; it does not verify the JWT signature.
 
+### Email-code sign-in
+
+Cloudflare Access one-time PIN sign-in resolves a person through the existing
+verified-email profile. OpenClaw requires a successful Access identity response
+with the `onetimepin` provider and an email matching the authenticated user header.
+It does not infer GitHub credit from this identity. Access policies and OpenClaw
+role and access checks still apply; keep the Access policy limited to intended users.
+
 ### OIDC sign-in and existing people
 
 For OIDC sign-in, configure an Access policy that admits the intended users through
@@ -181,7 +189,7 @@ the only path for external traffic.
 browser-origin default when `controlUi.allowedOrigins` is omitted. You only need
 an explicit allowlist for a different browser policy; that list replaces the
 default rather than adding to it. For profile, role, GitHub, and operations setup,
-see [Deploy a team server](/gateway/team-server).
+see [Multiplayer: production deployment](/start/multiplayer#production-deployment).
 
 ## Step 4: Decide how nodes and workers get in
 

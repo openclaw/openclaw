@@ -4,7 +4,7 @@ import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -180,6 +180,7 @@ export function formatNodeInvokeFailureToolResult(params: {
       durationMs: Date.now() - params.startedAt,
       aggregated: text,
       cwd: params.cwd,
+      ...(params.warnings?.length ? { warningText: params.warnings.join("\n") } : {}),
     },
   };
 }

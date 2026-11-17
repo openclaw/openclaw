@@ -123,15 +123,13 @@ export function combineExecutedToolBatches(
     throw mergeToolExecutionFailure(fatal, error).error;
   }
   const terminate = batches.every((batch) => batch.terminate) || completesToolTurn;
-  const terminatingBatch = batches.find((batch) => batch.terminateRun);
+  const repeatStop = batches.find((batch) => batch.repeatStop)?.repeatStop;
   return {
     messages,
     terminalToolCallIds,
     steeringMessages: [...new Set(batches.flatMap((batch) => batch.steeringMessages))],
     terminate,
-    terminateRun: terminatingBatch !== undefined,
-    intervention:
-      terminatingBatch?.intervention ?? batches.find((batch) => batch.intervention)?.intervention,
+    ...(repeatStop ? { repeatStop } : {}),
     fatal,
   };
 }

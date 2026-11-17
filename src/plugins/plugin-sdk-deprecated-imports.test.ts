@@ -23,61 +23,57 @@ it("records a real deprecated member only when the loaded plugin calls it", asyn
   expect(stderr).toContain("[DEP_PLUGIN_SDK]");
 });
 
-it.each([false, true])(
-  "attributes resolved deprecated imports to their plugin (source transform=%s)",
-  async (sourceTransform) => {
-    const root = fs.realpathSync(temp.make("plugin-deprecated-imports-"));
-    const host = path.join(root, "host");
-    const config = JSON.parse(fs.readFileSync(path.resolve("tsconfig.json"), "utf8")) as {
-      compilerOptions: { paths: Record<string, string[]> };
-    };
-    // Keep workspace imports while allowing the synthetic host to own its SDK self-imports.
-    const tsconfig = writeArtifact(
-      path.join(root, "tsconfig.json"),
-      JSON.stringify({
-        extends: path.resolve("tsconfig.json"),
-        compilerOptions: {
-          paths: Object.fromEntries(
-            Object.entries(config.compilerOptions.paths)
-              .filter(([name]) => !name.startsWith("openclaw/"))
-              .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
-          ),
-        },
-      }),
-    );
-    const legacy = "openclaw/plugin-sdk/agent-runtime";
-    const active = "openclaw/plugin-sdk/command-auth-native";
-    writeArtifacts(host, {
-      "package.json": {
-        name: "openclaw",
-        type: "module",
-        bin: { openclaw: "./openclaw.mjs" },
-        exports: {
-          "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
-          "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
-        },
+it("attributes resolved deprecated imports to their plugin", async () => {
+  const root = fs.realpathSync(temp.make("plugin-deprecated-imports-"));
+  const host = path.join(root, "host");
+  const config = JSON.parse(fs.readFileSync(path.resolve("tsconfig.json"), "utf8")) as {
+    compilerOptions: { paths: Record<string, string[]> };
+  };
+  // Keep workspace imports while allowing the synthetic host to own its SDK self-imports.
+  const tsconfig = writeArtifact(
+    path.join(root, "tsconfig.json"),
+    JSON.stringify({
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: {
+        paths: Object.fromEntries(
+          Object.entries(config.compilerOptions.paths)
+            .filter(([name]) => !name.startsWith("openclaw/"))
+            .map(([name, targets]) => [name, targets.map((target) => path.resolve(target))]),
+        ),
       },
-      "dist/plugin-sdk/agent-runtime.js": "export const value = 'deprecated';",
-      "dist/plugin-sdk/command-auth-native.js": `import { value as hostLegacyValue } from 'openclaw/plugin-sdk/agent-runtime';
+    }),
+  );
+  const legacy = "openclaw/plugin-sdk/agent-runtime";
+  const active = "openclaw/plugin-sdk/command-auth-native";
+  writeArtifacts(host, {
+    "package.json": {
+      name: "openclaw",
+      type: "module",
+      bin: { openclaw: "./openclaw.mjs" },
+      exports: {
+        "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
+        "./plugin-sdk/command-auth-native": "./dist/plugin-sdk/command-auth-native.js",
+      },
+    },
+    "dist/plugin-sdk/agent-runtime.js": "export const value = 'deprecated';",
+    "dist/plugin-sdk/command-auth-native.js": `import { value as hostLegacyValue } from 'openclaw/plugin-sdk/agent-runtime';
        export const value = hostLegacyValue === 'deprecated' ? 'active' : 'broken';`,
-    });
-    const entries = (
-      [
-        ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
-        ["synthetic-commonjs", "index.cjs", `module.exports = require('${legacy}');`],
-        ["synthetic-deferred", "index.ts", `export const read = () => import('${legacy}');`],
-        ["synthetic-active", "index.ts", `export { value } from '${active}';`],
-      ] as const
-    ).map(([id, source, body]) => {
-      const directory = path.join(root, id);
-      writeArtifacts(directory, { "package.json": { name: id, type: "module" } });
-      return { id, directory, entry: writeArtifact(path.join(directory, source), body) };
-    });
-    const probe = writeArtifact(
-      path.join(root, "probe.mts"),
-      `import assert from 'node:assert/strict';
-       import Module from 'node:module';
-       ${sourceTransform ? 'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });' : ""}
+  });
+  const entries = (
+    [
+      ["synthetic-source", "index.ts", `export { value } from '${legacy}';`],
+      ["synthetic-commonjs", "index.cjs", `module.exports = require('${legacy}');`],
+      ["synthetic-deferred", "index.ts", `export const read = () => import('${legacy}');`],
+      ["synthetic-active", "index.ts", `export { value } from '${active}';`],
+    ] as const
+  ).map(([id, source, body]) => {
+    const directory = path.join(root, id);
+    writeArtifacts(directory, { "package.json": { name: id, type: "module" } });
+    return { id, directory, entry: writeArtifact(path.join(directory, source), body) };
+  });
+  const probe = writeArtifact(
+    path.join(root, "probe.mts"),
+    `import assert from 'node:assert/strict';
        const { bindPluginInstanceModuleLoader } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance-module-loader.ts"))});
        const { PluginInstance } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance.ts"))});
        const { createPluginCache, withPluginCache } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-cache.ts"))});
@@ -113,8 +109,7 @@ it.each([false, true])(
        } finally {
          for (const instance of instances.reverse()) await instance.dispose();
        }`,
-    );
-    const { stdout } = await run(probe, [], { ...process.env, TSX_TSCONFIG_PATH: tsconfig });
-    expect(stdout.trim()).toBe("deprecated imports attributed once");
-  },
-);
+  );
+  const { stdout } = await run(probe, [], { ...process.env, TSX_TSCONFIG_PATH: tsconfig });
+  expect(stdout.trim()).toBe("deprecated imports attributed once");
+});

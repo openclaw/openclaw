@@ -186,8 +186,10 @@ it.each([
     } else {
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
       await page.removeJob(job);
-      await waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
-      expect(page.cron.cronRunsScope).toBe("all");
+      await waitForCronPage(() => {
+        expect(page.cron.cronEditingJob).toBeNull();
+        expect(page.cron.cronRunsScope).toBe("all");
+      });
       expect(request).toHaveBeenCalledWith("cron.remove", { id: "daily-digest" });
     }
     if (!published) {

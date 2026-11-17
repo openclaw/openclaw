@@ -71,7 +71,7 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       return;
     }
     const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
-    if (request.metadataOnly) {
+    if (request.metadataOnly || selected.length === 0) {
       const metadataConfig = context.getRuntimeConfig();
       const metadataAgent = resolveAgentIdOrRespondError({
         rawAgentId: request.agentId,
@@ -271,11 +271,9 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       const finishProvider = diagnostics?.startWait("provider");
       let catalogList: SessionCatalog[];
       try {
-        if (selected.length > 0) {
-          // Plugin availability callbacks retain synchronous executable resolution contracts.
-          await prepareShellPathFromLoginShell({ env: process.env });
-          progress.assertCurrent();
-        }
+        // Plugin availability callbacks retain synchronous executable resolution contracts.
+        await prepareShellPathFromLoginShell({ env: process.env });
+        progress.assertCurrent();
         catalogList = await Promise.all(
           selected.map(async (provider): Promise<SessionCatalog> => {
             const shareRoute = catalogRegistrations.shareRoutes.get(provider);

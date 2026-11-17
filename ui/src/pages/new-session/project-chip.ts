@@ -45,7 +45,7 @@ export function resolveProjectChip(params: {
     label: params.freshWorkspace
       ? t("newSession.newWorkspace")
       : selectedProject
-        ? selectedProject.displayName
+        ? (selectedProject.repositoryIdentity ?? selectedProject.displayName)
         : params.selectedRemoteProject?.identity
           ? params.selectedRemoteProject.identity
           : folder

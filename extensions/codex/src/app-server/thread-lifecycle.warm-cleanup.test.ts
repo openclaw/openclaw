@@ -4,6 +4,7 @@ import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-ru
 import { describe, expect, it, vi } from "vitest";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import {
+  createAgentLifecycleHarness,
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
   tempDir,
@@ -13,7 +14,6 @@ import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
   createLifecycleRequest,
-  createLeasedCodexLifecycleHarness,
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   type CodexAttemptThreadInput as LifecycleInput,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -40,8 +40,7 @@ const fixtureParams = (name: string) => ({
   config: undefined,
 });
 const createFixture = (respond: Parameters<typeof createLifecycleRequest>[0]) =>
-  createLeasedCodexLifecycleHarness({
-    agentDir: path.join(tempDir, "agent"),
+  createAgentLifecycleHarness({
     respond: createLifecycleRequest(respond),
   });
 function expectNoLifecycleRequests(fixture: Awaited<ReturnType<typeof createFixture>>) {

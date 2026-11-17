@@ -22,6 +22,11 @@ import { CallRecordSchema, type CallRecord, type InitiateCallInput } from "./typ
 import { makeBridge } from "./webhook/realtime-call-control.test-helpers.js";
 import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import {
+  connectCarrierStream,
+  makeRealtimeProvider,
+  sendCarrierStart,
+} from "./webhook/realtime-handler.lifecycle.test-helpers.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
@@ -200,6 +205,66 @@ function answeredEvent(call: CallRecord, id: string) {
     timestamp: Date.now(),
   };
 }
+
+it.each(["partial", "speech-start"] as const)(
+  "stores realtime dialogue by turn start when caller finals arrive after replies (%s)",
+  async (start) => {
+    const { manager, config, read } = await createDelayedStore({
+      provider: new FakeProvider("twilio"),
+      realtime: true,
+    });
+    const { callId } = await manager.initiateCall("+15550000001");
+    const ready = createDeferred<Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]>();
+    const lifecycle = new StreamDisconnectGrace(() => {});
+    const handler = new RealtimeCallHandler(
+      config.realtime,
+      manager,
+      () => ({
+        agentId: "main",
+        instructions: "Synthetic dialogue fixture.",
+        provider: makeRealtimeProvider((request) =>
+          makeBridge({ connect: async () => ready.resolve(request) }),
+        ),
+        providerConfig: {},
+      }),
+      config.serve.path,
+      lifecycle,
+    );
+    const { ws } = await connectCarrierStream(handler);
+    sendCarrierStart(ws, "dialogue-stream", "request-uuid");
+    const callbacks = await ready.promise;
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      for (const reply of ["First answer", "Second answer"]) {
+        if (start === "speech-start") {
+          callbacks.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+        } else {
+          callbacks.onTranscript?.("user", "Yes.", false);
+        }
+        now += 10;
+        callbacks.onTranscript?.("assistant", reply, false);
+        now += 10;
+        callbacks.onTranscript?.("assistant", reply, true);
+        now += 10;
+        callbacks.onTranscript?.("user", "Yes.", true);
+        now += 10;
+      }
+      await handler.close();
+      resetPluginStateStoreForTests();
+      expect((await read(callId))?.transcript.map(({ speaker, text }) => [speaker, text])).toEqual([
+        ["user", "Yes."],
+        ["bot", "First answer"],
+        ["user", "Yes."],
+        ["bot", "Second answer"],
+      ]);
+    } finally {
+      clock.mockRestore();
+      await handler.close();
+      lifecycle.close();
+    }
+  },
+);
 
 it("reserves pending capacity without publishing or dialing an uncommitted call", async () => {
   const { manager, provider, holdNextWrite } = await createDelayedStore();

@@ -34,20 +34,19 @@ export function resolveChatModelSetup(
       : (state.activeSession?.model ?? state.agentModel);
   const modelSetupRequired = requiresChatModelSetup(state);
   const provider = policy?.restricted ? undefined : state.activeSession?.modelProvider;
+  const agentRuntime = policy?.restricted ? undefined : state.activeSession?.agentRuntime?.id;
   const catalog = state.chatModelCatalog;
   const onSetup = state.onSetup;
   const retired = state.catalogRetired === true;
-  const error = state.catalogError;
   const inference =
     state.activeSession?.placement?.state === "active"
       ? state.activeSession.placement.inference
       : undefined;
   let modelUnavailableBanner: ChatComposerDisabledBanner | undefined;
   if (retired) {
-    modelUnavailableBanner = {
-      kind: "above-composer",
-      text: t(error ? "chat.modelControls.modelsUnavailable" : "chat.modelControls.loadingModels"),
-    };
+    modelUnavailableBanner = state.catalogError
+      ? { kind: "above-composer", text: t("chat.modelControls.modelsUnavailable") }
+      : undefined;
   } else if (
     policy?.restricted &&
     policy.defaultModel === null &&
@@ -63,7 +62,7 @@ export function resolveChatModelSetup(
     };
   } else {
     const message = chatModelUnavailableMessage(
-      resolveChatModelUnavailableReason(model, provider, catalog),
+      resolveChatModelUnavailableReason(model, provider, catalog, agentRuntime),
       inference,
     );
     modelUnavailableBanner = message ? createChatModelSetupBanner(onSetup, message) : undefined;
@@ -73,7 +72,9 @@ export function resolveChatModelSetup(
     modelUnavailableBanner,
     requiredReason: modelSetupRequired
       ? t("modelSetup.required.body")
-      : modelUnavailableBanner?.text,
+      : retired
+        ? t("chat.modelControls.modelsUnavailable")
+        : modelUnavailableBanner?.text,
   };
 }
 

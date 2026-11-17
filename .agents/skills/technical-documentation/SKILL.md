@@ -27,7 +27,7 @@ Produce and review technical documentation that is clear, actionable, and mainta
 ## Workflow
 
 1. Classify task: `build` or `review`; context: `brownfield` or `evergreen`.
-2. Inventory full documentation scope early (governance + product docs): AGENTS/CONTRIBUTING/aliases plus docs directories, framework sources, and root/module READMEs.
+2. Inventory the requested file, directory, or diff scope early. Include governance and product docs for documentation-wide work. Repository size alone does not expand a scoped review.
 3. Detect multilingual scope (README/docs in multiple languages) and define required parity level.
 4. Read `references/agent-and-contributing.md` for agent instruction and `CONTRIBUTING.md` workflow rules (inventory, canonical/alias mapping, dual-mode balance, deliverable standards, and precedence/conflict handling).
 5. Read `references/principles.md` for the governing ruleset (Matt Palmer & OpenAI).
@@ -37,7 +37,7 @@ Produce and review technical documentation that is clear, actionable, and mainta
 9. For complex or high-risk tasks (build or review), it is acceptable to run longer, deeper, and more exhaustive investigations when needed for confidence.
 10. When available, use sub-agents for bounded parallel discovery/review work, then merge outputs into one coherent final deliverable.
 11. Use `references/tooling.md` when platform/tooling choices affect recommendations.
-12. Run a proactive issue sweep for both governance and docs-content surfaces, and fix high-confidence defects in the same pass unless explicitly asked for report-only mode.
+12. Run a proactive issue sweep within the requested scope. Fix high-confidence defects in the same pass unless asked for report-only mode.
 13. In brownfield mode, prioritize compatibility with current docs IA, tooling, and release state.
 14. In evergreen mode, prioritize timeless wording, update strategy, and durable structure.
 15. Return deliverables plus validation notes, parity status, and remaining gaps.
@@ -77,3 +77,13 @@ Prefer sub-agents when the repo is large or the requested change set is broad; u
 - Delegation notes when sub-agents were used (scope delegated and how findings were merged).
 - Multilingual parity note (in-sync, partial with rationale, or intentionally divergent).
 - Repository-specific overlay notes when one was used.
+
+## Instruction rules
+
+These apply to `AGENTS.md` files, skills and review prompts.
+
+- A new rule cites an incident: a PR, issue or commit. No incident, no rule.
+- A new rule passes the deletion test: without it, a senior engineer does the wrong thing.
+- A rule has no "unless security, data or money" exception. Name the exact failure.
+- A proof or test demand names the real input and the wrong result. For a speculative race, ask only for the failure mode and its likelihood.
+- A rule added in one layer deletes its looser and stricter copies in the other layers in the same PR.

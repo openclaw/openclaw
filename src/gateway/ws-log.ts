@@ -5,6 +5,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { SESSION_LIST_SOURCES } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isVerbose } from "../globals.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -70,7 +71,7 @@ export function summarizeSessionListForWsLog(input: unknown): Record<string, unk
   };
 }
 
-function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
+function collectWsRestMeta(meta?: Record<string, unknown>, durationMs?: number): string[] {
   const restMeta: string[] = [];
   if (!meta) {
     return restMeta;
@@ -82,6 +83,12 @@ function collectWsRestMeta(meta?: Record<string, unknown>): string[] {
       continue;
     }
     if (WS_META_SKIP_KEYS.has(key)) {
+      continue;
+    }
+    if (
+      key === "pairingLockWait" &&
+      !(durationMs !== undefined && durationMs >= DEFAULT_WS_SLOW_MS)
+    ) {
       continue;
     }
     restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
@@ -146,6 +153,15 @@ export function formatForLog(value: unknown): string {
   } catch {
     return redactLogText(String(value));
   }
+}
+
+/**
+ * Formats peer-declared text, such as connect client metadata, for one console line.
+ * formatForLog keeps line breaks for intentionally multiline diagnostics, so untrusted
+ * fields also drop controls and escapes that could forge entries or drive the terminal.
+ */
+export function formatPeerTextForLog(value: string): string {
+  return sanitizeForLog(formatForLog(value)).replace(/[\u2028\u2029]/gu, "");
 }
 
 function redactLogText(text: string): string {
@@ -336,7 +352,7 @@ export function logWs(
   const headline = readStringValue(
     kind === "req" || kind === "res" ? meta?.method : kind === "event" ? meta?.event : undefined,
   );
-  const restMeta = collectWsRestMeta(meta);
+  const restMeta = collectWsRestMeta(meta, durationMs);
   const trailing: string[] = [];
   if (connId && (!compact || connId !== wsLastCompactConnId)) {
     trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);

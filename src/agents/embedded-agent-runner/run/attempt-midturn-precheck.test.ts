@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -14,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
@@ -21,6 +22,15 @@ import { createToolResultPromptProjectionState } from "../session-prompt-state.j
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput } from "./attempt-prompt-submit.test-support.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+
+// Admission cases change the system prompt or tool definitions between requests on purpose;
+// they exercise request admission, not the session prefix invariant.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),
@@ -188,7 +198,20 @@ describe("provider request admission", () => {
             ingest: async () => ({ ingested: true }),
             assemble: async ({ messages }) => ({
               messages: oversizedAssembly
-                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                ? [
+                    { role: "user", content: "history ".repeat(40_000), timestamp: 1 },
+                    ...Array.from({ length: 6 }, (_, index) => ({
+                      role: "toolResult" as const,
+                      toolName: "read",
+                      toolCallId: `engine-only-${index}`,
+                      content: [
+                        { type: "text" as const, text: "synthetic projection ".repeat(600) },
+                      ],
+                      isError: false,
+                      timestamp: 1,
+                    })),
+                    ...messages,
+                  ]
                 : messages,
               estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
             }),
@@ -411,6 +434,7 @@ describe("provider request admission", () => {
           toolResultMaxChars: cap,
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
+          prepareRequestTokenPressure: createFixedRequestTokenEstimator(),
           onModelRequest: streamGuards.onModelRequest,
           normalizeToolCallIds: streamGuards.normalizeToolCallIds,
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
@@ -420,6 +444,12 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (oversizedAssembly) {
+          expect(pendingPrecheck).toMatchObject({
+            route: "compact_only",
+            toolResultReducibleChars: 0,
+          });
+        }
         if (compatibleBudget) {
           if (responseSchema) {
             expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });

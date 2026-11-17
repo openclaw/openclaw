@@ -6,7 +6,7 @@ import { resolveZstdCodec } from "./zstd-codec.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 11;
+export const USAGE_COST_ROLLUP_VERSION = 12;
 const USAGE_COST_ROLLUP_FORMAT_VERSION = 1;
 export const USAGE_COST_ROLLUP_SCOPE = "session-cost-usage-rollup-v3";
 /**
@@ -24,6 +24,8 @@ export type UsageCostJsonlCheckpoint = {
   device: number;
   inode: number;
   anchorHash: string;
+  /** Last committed totals carried to an archive that can no longer be decoded; never fresh. */
+  undecodable?: 1;
 };
 
 export type UsageCostSqliteCheckpoint = {
@@ -94,7 +96,10 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 }
 
 export type UsageCostFreshnessCheckpoint =
-  | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
+  | Pick<
+      UsageCostJsonlCheckpoint,
+      "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode" | "undecodable"
+    >
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
 
 export function readUsageCostDeferredMetadata(envelope: UsageCostRollupEnvelope):
@@ -113,6 +118,7 @@ export function readUsageCostDeferredMetadata(envelope: UsageCostRollupEnvelope)
           observedMtimeMs: source.observedMtimeMs,
           device: source.device,
           inode: source.inode,
+          ...(source.undecodable ? { undecodable: source.undecodable } : {}),
         }
       : {
           kind: source.kind,
@@ -264,6 +270,7 @@ export function isUsageCostRollupFresh(params: {
   }
   if (checkpoint.kind === "jsonl") {
     return (
+      !checkpoint.undecodable &&
       checkpoint.observedSize === params.file.size &&
       checkpoint.observedMtimeMs === params.file.mtimeMs &&
       checkpoint.device === params.file.device &&

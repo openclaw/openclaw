@@ -1,10 +1,8 @@
 import { stripUserEnvelopeForDisplay } from "../../../auto-reply/reply/user-envelope-display.js";
 import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  evaluateDecisionV2Operation,
-  completeDecisionEvaluation,
-} from "../../../decisions/runtime.js";
+import { completeDecisionEvaluation } from "../../../decisions/completion.js";
+import { evaluateDecisionV2Operation } from "../../../decisions/runtime.js";
 import {
   readPersistedMediaFacts,
   readRuntimePromptMediaFacts,

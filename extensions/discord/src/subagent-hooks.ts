@@ -43,7 +43,10 @@ export async function handleDiscordSubagentEnded(event: {
   await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: targetKind === "subagent" || targetKind === "acp" ? targetKind : undefined,
+    targetKind:
+      targetKind === "subagent" || targetKind === "acp" || targetKind === "session"
+        ? targetKind
+        : undefined,
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });

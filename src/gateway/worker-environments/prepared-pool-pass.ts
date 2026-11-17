@@ -20,7 +20,6 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
       signal.throwIfAborted();
       const key = pool.groupKey(record);
       const generation = key ? eligible.get(key) : undefined;
-      const limits = pool.poolPolicy(options, record.profileId, record.providerId);
       const before = () => {
         signal.throwIfAborted();
         if (record.destroyRequestedAtMs === null && generation) {
@@ -31,7 +30,7 @@ function reconcileAll(ctx: PassContext, eligible: Generations, records: Environm
           if (
             !store.isPreparedIntentWithinCapacity({
               environmentId: record.environmentId,
-              ...limits,
+              ...pool.poolPolicy(options, record.profileId, record.providerId),
             })
           ) {
             throw new Error("Prepared worker no longer satisfies its maintenance policy");
@@ -91,11 +90,13 @@ async function retain(
     const expired =
       record.preparation.expiresAtMs <= now() ||
       (generation !== undefined && generation.expiresAtMs <= now());
+    const reconstructing = ctx.preserveReconstructing?.(record) === true;
     const valid =
-      !isSupersededPresenceReserve(record, ctx.activeDemand) &&
       !expired &&
-      generation?.preparation.key === record.preparation.key &&
-      (!requireRetention || generation.retention !== undefined || generation.deferred) &&
+      (reconstructing ||
+        (!isSupersededPresenceReserve(record, ctx.activeDemand) &&
+          generation?.preparation.key === record.preparation.key &&
+          (!requireRetention || generation.retention !== undefined || generation.deferred))) &&
       ((record.preparation.purpose === "build" && record.state !== "ready") ||
         count < limits.target) &&
       totalKept < limits.maxTotal;
@@ -112,8 +113,9 @@ async function retain(
         cleanup.push(latest);
       }
     } else if (
+      !reconstructing &&
       !generation?.deferred &&
-      (!generation?.presenceOwned || generation.activationEligible || ctx.presence.isPresent())
+      (!generation?.presenceOwned || generation.activationEligible || ctx.presence.isDemandActive())
     ) {
       work.push(latest);
     }
@@ -124,6 +126,11 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
   const { options, presence, activeDemand: demand, presenceDeferred: deferred } = ctx;
   const { store, signal, now } = options;
   for (const [key, generation] of eligible) {
+    // The foreground request owns repository preparation. Maintenance may still
+    // expire/destroy it, but cannot reacquire its user-bound source or allocate.
+    if (pool.isRequestScopedRepositoryBuild(generation.source)) {
+      continue;
+    }
     if (deferred && generation.presenceOwned && !generation.activationEligible) {
       continue;
     }
@@ -163,12 +170,12 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
     });
     if (
       generation.expiresAtMs <= now() ||
-      (!presence.isPresent() &&
+      (!presence.isDemandActive() &&
         demand &&
         generation.preparation.key === demand.preparationKey &&
         !generation.activationEligible)
     ) {
-      pool.skipRefill(ctx, source, "demand expired or authenticated presence ended");
+      pool.skipRefill(ctx, source, "prepared capacity demand expired or ended");
       continue;
     }
     if (slots === 0) {
@@ -179,16 +186,21 @@ async function planRefill(ctx: PassContext, eligible: Generations): Promise<Gene
     }
     try {
       const preparation = generation.preparation;
+      const projectPreparation = "source" in preparation ? undefined : preparation;
       const intent = await options.prepareIntent(source.profileId, {
-        ...(project
-          ? "source" in project
-            ? { projectRepository: project }
-            : { projectPath: project.root, projectCommit: project.baseCommit }
-          : { emptyWorkspace: true }),
+        ...(workerPreparationSourceKey(source.profileSnapshot) === "image"
+          ? { imageReserve: true as const }
+          : project
+            ? "source" in project
+              ? { projectRepository: project }
+              : { projectPath: project.root, projectCommit: project.baseCommit }
+            : { emptyWorkspace: true }),
         ...readWorkerProfileSelection(source.profileSnapshot),
         setupAuthorized:
-          preparation.setupRecipe !== undefined && preparation.runSetupScript !== false,
-        runSetupScript: preparation.runSetupScript,
+          projectPreparation?.setupRecipe !== undefined &&
+          projectPreparation.runSetupScript !== false,
+        runSetupScript: projectPreparation?.runSetupScript,
+        assertCurrent: generation.assertImagePolicyCurrent,
         signal,
       });
       signal.throwIfAborted();
@@ -272,6 +284,7 @@ export async function runPreparedPoolPass(
     isAdmitted,
     activeDemand,
     presenceDeferred,
+    preserveReconstructing: presence.captureReconstruction(),
     inventory,
     oldestFirst: inventory.toSorted((a, b) => a.createdAtMs - b.createdAtMs),
     reportRefill,

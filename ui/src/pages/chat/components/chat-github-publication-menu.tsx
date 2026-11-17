@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuControls, type MenuItem } from "../../../components/solid/menu.tsx";
 import { resolveAvatarInitials } from "../../../lib/identity-avatar.ts";
@@ -7,17 +7,35 @@ import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 
-/** GitHub supplies a login here, not a Gateway profile or a remote avatar URL. */
-export function GitHubPublicationAvatar(props: { login: string }) {
+/** The Gateway supplies verified GitHub account images; initials cover absent or failed loads. */
+export function GitHubPublicationAvatar(props: { login: string; url?: string }) {
+  const [failedUrl, setFailedUrl] = createSignal<string>();
   return (
     <span class="github-publication-mobile__avatar" aria-hidden="true">
-      {resolveAvatarInitials({ username: props.login }).initials}
+      <Show
+        when={props.url !== failedUrl() && props.url}
+        fallback={resolveAvatarInitials({ username: props.login }).initials}
+      >
+        {(url) => (
+          <img
+            src={url()}
+            alt=""
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(props.url)}
+          />
+        )}
+      </Show>
     </span>
   );
 }
 
 type GitHubPublicationMenuProps = {
-  choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
+  choices: readonly {
+    source: "shared" | "personal";
+    login: string;
+    label: string;
+    avatarUrl?: string;
+  }[];
   selected?: "shared" | "personal";
   duplicateLogin: boolean;
   busy: boolean;
@@ -45,7 +63,7 @@ export function createGitHubPublicationAccountMenuItems(
       disabled: props.busy,
       content: props.mobile ? (
         <span class="github-publication-mobile__choice">
-          <GitHubPublicationAvatar login={choice.login} />
+          <GitHubPublicationAvatar login={choice.login} url={choice.avatarUrl} />
           <span class="github-publication-mobile__choice-text">
             <span>{choice.label}</span>
             <span class="github-publication-mobile__choice-login">@{choice.login}</span>

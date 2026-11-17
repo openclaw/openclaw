@@ -12,10 +12,14 @@ describe("gateway cron reconciliation lifecycle", () => {
   beforeEach(() => {
     runHook = vi.fn<RunHook>(async () => undefined);
     closing = false;
+    const config = {};
     reconciliation = createGatewayCronReconciliation({
       port: 18789,
       workspaceDir: "/tmp/openclaw-workspace",
       isClosing: () => closing,
+      getConfig: () => config,
+      getPluginRegistry: () => undefined,
+      logger: { warn: vi.fn() },
       runHook,
     });
   });

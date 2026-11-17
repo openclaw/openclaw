@@ -166,6 +166,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           const prefix = value.slice(0, 498);
           const complete =
             prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
             prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
           return complete
             ? `${complete.trimEnd()} …`
@@ -184,6 +185,7 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
+  warnings?: string[];
 };
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
 type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
@@ -199,6 +201,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -316,6 +319,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           physical = true;
           expectedGenerations = observation.committed;
         }
+        const first = !admitted;
         admitted = true;
         const generations = observation.committed;
         historicalScans.admit(generations);
@@ -325,6 +329,27 @@ export function createUpdateDoctorDatabaseWriteCapture(
         fromGenerations ??= matches ? incoming : generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches;
+        if (!matches && first) {
+          // Published parents bind WAL-index iChange into their capture, so a no-write
+          // index rebuild after capture (readers exiting, then a native reopen) looks like
+          // a write and their forward recovery strands the Gateway. Adopt only that shape;
+          // the receipt stays unchanged=false, so no parent restores, and any other
+          // difference still refuses at the first attributed write. Accepted edge: a commit
+          // after capture that only read-only connections outlive is also rebuilt this way;
+          // a refusal there would still end in the parent's forward migration of those bytes.
+          const { hasRebuiltWalIndexOverFrames } = await import("./update-database-generations.js");
+          const stale = Object.entries(generations).filter(
+            ([pathname, generation]) => generation !== expectedGenerations?.[pathname],
+          );
+          if (stale.every(([pathname]) => hasRebuiltWalIndexOverFrames(pathname))) {
+            for (const [pathname, generation] of stale) {
+              expectedGenerations[pathname] = generation;
+            }
+            options.warn(
+              "SQLite rebuilt a database index after the updater captured it; automatic database restoration is unavailable for this update.",
+            );
+          }
+        }
       }
     },
     async settle() {
@@ -362,6 +387,10 @@ const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
 }>();
+
+export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
+  return doctorConfigWrites.getStore()?.capture;
+}
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(

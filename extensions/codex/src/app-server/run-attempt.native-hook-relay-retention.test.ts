@@ -125,7 +125,6 @@ function createRelay(
     attemptTimeoutMs: 30_000,
     startupTimeoutMs: 1_000,
     turnStartTimeoutMs: 1_000,
-    loopDetectionPreToolUseRelay: false,
     signal,
     hostCapabilities,
     onPreToolUseFailure: () => {},
@@ -284,8 +283,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       target = "child-thread",
       toolName = "multi_agent_v1send_input",
       signal?: AbortSignal,
-    ) =>
-      invokeRelay(
+    ) => {
+      relay.bindForegroundTurn("parent-thread", turnId);
+      return invokeRelay(
         relay.relayId,
         {
           session_id: "parent-thread",
@@ -296,6 +296,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         },
         signal,
       );
+    };
     const followup = (turnId: string, callId: string, signal?: AbortSignal) =>
       invoke(turnId, callId, "child-thread", "collaborationfollowup_task", signal);
     const request = {

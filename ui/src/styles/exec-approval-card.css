@@ -265,14 +265,6 @@
   font-weight: 500;
 }
 
-.exec-approval-source {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-
 .exec-approval-terminal,
 .exec-approval-mobile-summary,
 .exec-approval-fallback-icon,

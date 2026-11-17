@@ -255,6 +255,31 @@ it("preserves a configuration failure instead of blaming model setup", () =>
     ).rejects.toThrow(/newer schema version 999999/u);
   }));
 
+it.each([60_000, -60_000])(
+  "preserves elapsed repair time when the wall clock jumps by %i ms during preparation",
+  (jumpMs) =>
+    withOpenClawTestState({ layout: "home" }, async (state) => {
+      const initialTime = Date.now();
+      using wallClock = vi.spyOn(Date, "now").mockReturnValue(initialTime);
+      using elapsedClock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const entry = mocks.entry.getMockImplementation()!;
+      mocks.entry.mockImplementationOnce((...args) => {
+        // Preparation consumes 250 ms regardless of a simultaneous NTP correction.
+        wallClock.mockReturnValue(initialTime + 250 + jumpMs);
+        elapsedClock.mockReturnValue(1_250);
+        return entry(...args);
+      });
+      mocks.run.mockResolvedValue({ payloads: [{ text: "Repair completed." }] });
+
+      expect(await repairTurn(state, { timeoutMs: 10_000 })).toMatchObject({
+        status: "completed",
+        envelope: { final: "Repair completed.", status: "ok" },
+      });
+      expect(mocks.run).toHaveBeenCalledOnce();
+      expect(mocks.run.mock.calls[0]?.[0].timeoutMs).toBe(9_750);
+    }),
+);
+
 it("keeps disposable selectors but rejects hostile overrides before child execution", () =>
   withOpenClawTestState({ layout: "home" }, async (state) => {
     const before = { ...process.env };

@@ -76,6 +76,8 @@ export const CommandEntrySchema = closedObject({
   skillDisplayName: Type.Optional(BoundedNonEmptyString(COMMAND_NAME_MAX_LENGTH)),
   /** Whether a skill command is also present in the model-visible skill catalog. */
   skillModelVisible: Type.Optional(Type.Boolean()),
+  /** Whether the command supports explicit $skill references, independently of model visibility. */
+  skillReferenceable: Type.Optional(Type.Boolean()),
   scope: CommandScopeSchema,
   acceptsArgs: Type.Boolean(),
   args: Type.Optional(Type.Array(CommandArgSchema, { maxItems: COMMAND_ARGS_MAX_ITEMS })),
@@ -85,6 +87,8 @@ export const CommandEntrySchema = closedObject({
 export const CommandsListParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Registered project selected before session creation; an existing session owns its own project. */
+  projectId: Type.Optional(NonEmptyString),
   provider: Type.Optional(NonEmptyString),
   scope: Type.Optional(CommandScopeSchema),
   includeArgs: Type.Optional(Type.Boolean()),

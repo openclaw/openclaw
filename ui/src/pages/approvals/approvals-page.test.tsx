@@ -18,8 +18,8 @@ import {
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ApprovalsPage } from "./approvals-page.tsx";
 
-const historyTable = ".approval-history-table";
-const grantsTable = ".standing-grants-table";
+const historyTable = ".approval-log";
+const grantsTable = ".settings-section";
 const oldAutomation = "Old Gateway automation";
 const currentAutomation = "Current Gateway automation";
 const operatorHello = (scopes?: string[], recoveryScope?: string) =>
@@ -125,6 +125,74 @@ function createPage({
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("refreshes retained timestamps with locale and accepted history, not grants or loading", async () => {
+  const NativeDateTimeFormat = Intl.DateTimeFormat;
+  let timeZone = "UTC";
+  // Both rendering paths use native formatting with a simulated OS timezone.
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
+    return new NativeDateTimeFormat(locales, { ...options, timeZone });
+  });
+  vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (
+    this: Date,
+    locales,
+    options,
+  ) {
+    return new NativeDateTimeFormat(locales, { ...options, timeZone }).format(this);
+  });
+  try {
+    const retained = terminal("retained", Date.UTC(2026, 0, 2, 15, 4));
+    const older = terminal("older", retained.resolvedAtMs - 60_000);
+    const appended = createDeferred<ApprovalHistoryResult>();
+    const refreshed = createDeferred<ApprovalHistoryResult>();
+    const grants = createDeferred<ExecApprovalGrantsListResult>();
+    const p = createPage({
+      history: replyOnce(
+        { items: [retained], nextCursor: "next" },
+        appended.promise,
+        refreshed.promise,
+      ),
+      grants: replyOnce(grants.promise, { grants: [] }),
+    });
+    const dates = () =>
+      [...p.page.querySelectorAll(`${historyTable} time`)].map((cell) => cell.textContent);
+    const expected = (locale: string, zone: string, items = [retained, older]) => {
+      const formatter = new NativeDateTimeFormat(locale, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: zone,
+      });
+      return items.map((item) => formatter.format(item.resolvedAtMs));
+    };
+    await p.waitText(historyTable, "echo retained");
+    const row = p.query(`${historyTable} li`);
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+
+    timeZone = "America/Los_Angeles";
+    grants.resolve(grantReply("Independent automation"));
+    await p.waitText(grantsTable, "Independent automation");
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+    p.button(".data-table-pagination button")!.click();
+    flush();
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+    appended.resolve({ items: [older] });
+    await waitForSolid(() => expect(dates()).toEqual(expected("en", timeZone)));
+    expect(p.query(`${historyTable} li`)).toBe(row);
+
+    await i18n.setLocale("fr");
+    await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
+    timeZone = "Asia/Tokyo";
+    p.resolveApproval();
+    refreshed.resolve({ items: [retained, older] });
+    await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
+    expect(p.query(`${historyTable} li`)).toBe(row);
+  } finally {
+    vi.restoreAllMocks();
+    await i18n.setLocale("en");
+  }
+});
+
 const standingGrant = (name: string): ExecApprovalStandingGrant => ({
   grantId: "grant-1",
   mintedByApprovalId: "approval-1",
@@ -186,7 +254,7 @@ it("keeps history and grants through a blip without allowing offline actions", a
 it("does not claim an empty history when the load failed", async () => {
   const p = createPage({ history: vi.fn().mockRejectedValueOnce(new Error("boom")) });
   await p.waitText('[role="alert"]', "boom");
-  expect(p.text(`${historyTable} tbody`) ?? "").not.toContain("No resolved approvals");
+  expect(p.text(historyTable) ?? "").not.toContain("No resolved approvals");
 });
 
 it.each(["failure", "resolved event"])("retains history during %s", async (outcome) => {
@@ -204,9 +272,7 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   await p.waitText(historyTable, "echo retained");
   const table = p.query(historyTable)!;
   const retainedRow = () =>
-    [...table.querySelectorAll("tbody tr")].find((row) =>
-      row.textContent?.includes("echo retained"),
-    );
+    [...table.querySelectorAll("li")].find((row) => row.textContent?.includes("echo retained"));
   const row = retainedRow();
   const more = p.button(".data-table-pagination button")!;
   const expectRow = (busy: string) => {
@@ -238,7 +304,7 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   retryRead.resolve({ items: [terminal("newest", 3_000), terminal("retained", 2_000)] });
   await p.waitText(historyTable, "echo newest");
   await waitForSolid(() => expectRow("false"));
-  expect(table.querySelector("tbody tr")?.textContent).toContain("echo newest");
+  expect(table.querySelector("li")?.textContent).toContain("echo newest");
   expect(p.query(historyTable)).toBe(table);
 });
 
@@ -370,4 +436,42 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
   flush();
   expect(p.text(grantsTable)).toContain("Revoked");
   expect(p.button()).toBeNull();
+});
+
+it("discloses one entry's fields and omits missing ones", async () => {
+  const { resolver: _resolver, source: _source, ...bare } = terminal("bare", 1_000);
+  const p = createPage({
+    history: () => Promise.resolve({ items: [terminal("full", 2_000), { ...bare, source: {} }] }),
+  });
+  await p.waitText(historyTable, "echo bare");
+  const [full, sparse] = p.page.querySelectorAll<HTMLElement>(`${historyTable} li`);
+  const toggle = (row: HTMLElement) => row.querySelector("button")!;
+  expect(toggle(full!).getAttribute("aria-expanded")).toBe("false");
+  expect(p.page.querySelector("dl")).toBeNull();
+  expect(toggle(full!).textContent).not.toContain("Deny");
+
+  toggle(full!).click();
+  flush();
+  expect(toggle(full!).getAttribute("aria-expanded")).toBe("true");
+  expect(document.getElementById(toggle(full!).getAttribute("aria-controls")!)).not.toBeNull();
+  expect([...full!.querySelectorAll("dt")].map((label) => label.textContent)).toEqual([
+    "Kind",
+    "Source",
+    "Session",
+    "Resolver",
+    "Reason",
+  ]);
+  expect(full!.querySelector("dl")?.textContent).toContain("agent:main:test");
+  expect(sparse!.querySelector("dl")).toBeNull();
+
+  toggle(sparse!).click();
+  flush();
+  expect([...sparse!.querySelectorAll("dt")].map((label) => label.textContent)).toEqual([
+    "Kind",
+    "Reason",
+  ]);
+
+  toggle(full!).click();
+  flush();
+  expect(full!.querySelector("dl")).toBeNull();
 });

@@ -213,7 +213,7 @@ fs.writeFileSync(path.join(work, 'peekaboo-commit'), mode === 'wrong-source' ? '
         const script = readFileSync(scriptPath, "utf8");
         const cleanup = script.slice(
           script.indexOf("cleanup_package_build() {"),
-          script.indexOf("PNPM_CMD=()"),
+          script.indexOf("merge_framework_machos() {"),
         );
         const build = script.slice(
           script.indexOf('echo "🔨 Building $PRODUCT'),
@@ -411,7 +411,7 @@ printf '%s' "$APP_STAGE_DIR"
 APP_STAGE_DIR="$1"
 SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
 SWIFT_BUILD_PID=""
-${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
+${scriptBlock("cleanup_package_build() {", "merge_framework_machos() {")}
 `,
           [stage],
           { HOME: root, PATH: "/usr/bin:/bin" },
@@ -450,6 +450,7 @@ ${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
         "scripts/apple-release-source-check.sh",
       ),
       "scripts/lib/plistbuddy.sh": readFileSync("scripts/lib/plistbuddy.sh"),
+      "scripts/lib/mac-pnpm.sh": readFileSync("scripts/lib/mac-pnpm.sh"),
       "scripts/lib/build-metadata.sh": readFileSync("scripts/lib/build-metadata.sh"),
       "scripts/lib/mac-app-bundle.sh": readFileSync("scripts/lib/mac-app-bundle.sh"),
       "scripts/lib/mac-swift-build.sh": "",
@@ -622,6 +623,7 @@ function runPackageEntrypointHarness(
   for (const file of [
     scriptPath,
     "scripts/lib/plistbuddy.sh",
+    "scripts/lib/mac-pnpm.sh",
     "scripts/lib/swift-toolchain.sh",
     "scripts/lib/build-metadata.sh",
     "scripts/lib/mac-app-bundle.sh",
@@ -1142,7 +1144,7 @@ function runStopPackagedAppHarness(exitsAfterSignal: boolean) {
       fi
       return 0
     }
-    ${scriptBlock("running_packaged_app_pids()", 'if [[ -n "${SIGN_IDENTITY:-}" ]]')}
+    ${scriptBlock("running_packaged_app_pids()", 'echo "🔎 Verifying app native dependency closure"')}
     stop_packaged_app_if_running
   `);
   return {
@@ -1400,6 +1402,42 @@ describe("package-mac-app plist stamping", () => {
     },
   );
 
+  it.each([true, false])(
+    "embeds the resolved Sparkle artifact or fails before signing (present=%s)",
+    (present) => {
+      const root = tempDirs.make("openclaw-package-sparkle-artifact-");
+      const artifact =
+        "arm64/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework";
+      writeFiles(root, {
+        "build/arm64/out/Products/Release/OpenClaw": "app",
+        ...(present ? { [`build/${artifact}/Sparkle`]: "locked framework" } : {}),
+      });
+      symlinkSync("out/Products/Release", path.join(root, "build/arm64/release"));
+      mkdirSync(path.join(root, "app/Contents/Frameworks"), { recursive: true });
+      const result = runHelper(`
+      set -euo pipefail
+      source ${JSON.stringify(path.resolve(swiftScriptPath))}
+      BUILD_ROOT=${JSON.stringify(path.join(root, "build"))}
+      BUILD_CONFIG=release
+      PRIMARY_ARCH=arm64
+      BUILD_ARCHS=(arm64)
+      APP_ROOT=${JSON.stringify(path.join(root, "app"))}
+      ${scriptBlock("SPARKLE_FRAMEWORK_PRIMARY=", 'echo "📦 Copying Swift 6.2 compatibility libraries"')}
+      echo reached-signing
+    `);
+      if (present) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(read(root, "app/Contents/Frameworks/Sparkle.framework/Sparkle")).toBe(
+          "locked framework",
+        );
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Sparkle.framework");
+        expect(result.stdout).not.toContain("reached-signing");
+      }
+    },
+  );
+
   it("builds and locates the MLX helper with SwiftBuild without a legacy output alias", () => {
     const arch = "arm64";
     const tempRoot = tempDirs.make("openclaw-package-mlx-metal-");
@@ -1478,7 +1516,7 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-    const helperBlock = scriptBlock("PNPM_CMD=()", "merge_framework_machos()");
+    const helperBlock = readFileSync("scripts/lib/mac-pnpm.sh", "utf8");
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const outerRoot = tempDirs.make("openclaw-package-pnpm-outer-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
@@ -1519,7 +1557,10 @@ fi
       PATH=${JSON.stringify(toolsDir)}
       cd ${JSON.stringify(outerRoot)}
       ${helperBlock}
+      [[ ! -e "$OPENCLAW_TEST_LOG" ]]
       run_pnpm --version
+      run_pnpm install "argument with spaces" "" "*[literal]"
+      [[ "$PWD" == ${JSON.stringify(outerRoot)} ]]
     `);
 
     expect(result.status).toBe(0);
@@ -1527,6 +1568,7 @@ fi
     expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
       `corepack|${tempRoot}|pnpm --version`,
       `corepack|${tempRoot}|pnpm --version`,
+      `corepack|${tempRoot}|pnpm install argument with spaces  *[literal]`,
     ]);
   });
 
@@ -1633,7 +1675,7 @@ echo 2026060290
         printf '%s\n' "$*" >> ${JSON.stringify(events)}
       }
       killall() { echo unexpected-killall >&2; return 43; }
-      ${scriptBlock("running_packaged_app_pids()", 'if [[ -n "${SIGN_IDENTITY:-}" ]]')}
+      ${scriptBlock("running_packaged_app_pids()", 'echo "🔎 Verifying app native dependency closure"')}
       stop_packaged_app_if_running
     `);
     expect(result.status, result.stderr).toBe(0);
@@ -1735,6 +1777,8 @@ try {
           printf '#!/bin/sh\\n' > "$2/install-cli.sh"
         elif [[ "$*" == "--import tsx $ROOT_DIR/scripts/apple-app-i18n.ts compile-macos --output $APP_ROOT/Contents/Resources" ]]; then
           touch "$APP_ROOT/Contents/Resources/localizations-ready"
+        elif [[ "$*" == "$ROOT_DIR/scripts/lib/mac-runtime-portability.mjs $APP_ROOT" ]]; then
+          printf 'dependencies\\n' >> "$ROOT_DIR/events"
         else
           printf 'unexpected node command: %s\\n' "$*" >&2
           return 79
@@ -1771,6 +1815,7 @@ try {
       expect(result.stderr).toBe("");
       expect(readFileSync(eventsPath, "utf8").trim().split("\n")).toEqual([
         "stage-cua",
+        "dependencies",
         "sign",
         "verify",
         "worker:runtime",
@@ -2006,33 +2051,52 @@ try {
     },
   );
 
-  it("runs no SwiftPM operation before the locked lock-file resolve", () => {
-    // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
-    const root = tempDirs.make("openclaw-swift-first-resolve-");
-    for (const app of ["macos", "macos-mlx-tts"]) {
-      writeFiles(path.join(root, "apps", app), {
-        "Package.swift": "// fixture\n",
-        "Package.resolved": "locked\n",
-      });
-    }
-    const invocations = path.join(root, "swift-invocations");
-    const result = runHelper(`
+  it.each([false, true])(
+    "stages native inputs before the locked lock-file resolve (native %s)",
+    (native) => {
+      // Any earlier resolve on a reused scratch path can float pins before the lock guard snapshots.
+      const root = tempDirs.make("openclaw-swift-first-resolve-");
+      for (const app of ["macos", "macos-mlx-tts"]) {
+        writeFiles(path.join(root, "apps", app), {
+          "Package.swift": "// fixture\n",
+          "Package.resolved": "locked\n",
+        });
+      }
+      if (native) {
+        writeFiles(root, { "crates/openclaw-iroh-ffi/Package.swift": "// native fixture\n" });
+      }
+      const invocations = path.join(root, "swift-invocations");
+      const result = runHelper(`
       set -euo pipefail
+      ${native ? "export OPENCLAW_IROH_NATIVE=1" : "unset OPENCLAW_IROH_NATIVE"}
       source ${JSON.stringify(swiftScriptPath)}
       ROOT_DIR=${JSON.stringify(root)}
       BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
       SWIFT_WORK_ROOT="$ROOT_DIR/work"
       PEEKABOO_LOCKED_SOURCE_COMMIT=${JSON.stringify("b".repeat(40))}
-      swift() { printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}; }
+      swift() {
+        printf '%s\\n' "$*" >> ${JSON.stringify(invocations)}
+        ${
+          native
+            ? 'cat "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift" > "$ROOT_DIR/native-at-resolve"'
+            : 'test ! -e "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi/Package.swift"'
+        }
+      }
       create_verified_peekaboo_snapshot() { exit 0; }
       build_swift_architecture arm64
     `);
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(invocations, "utf8")).toBe(
-      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
-    );
-  });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(invocations, "utf8")).toBe(
+        `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+      );
+      if (native) {
+        expect(readFileSync(path.join(root, "native-at-resolve"), "utf8")).toBe(
+          "// native fixture\n",
+        );
+      }
+    },
+  );
 
   it("names every pin the edited Peekaboo resolution moved away from the committed lock", () => {
     const root = tempDirs.make("openclaw-snapshot-swift-lock-");

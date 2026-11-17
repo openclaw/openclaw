@@ -102,6 +102,15 @@ export async function respond(args, config) {
     }
     if (route?.startsWith("git/ref/")) {
       const ref = "refs/" + route.slice(8);
+      const failedRead = config.admissionCapturePath + ".ref-read-failed";
+      if (
+        config.options.qualificationRefReadFailure &&
+        ref.startsWith("refs/heads/release-ci/") &&
+        !existsSync(failedRead)
+      ) {
+        writeFileSync(failedRead, "failed after ref creation");
+        throw new Error("gh: Bad credentials (HTTP 401)");
+      }
       let sha = git(["rev-parse", ref]);
       const advanced = existsSync(advancedPath)
         ? readFileSync(advancedPath, "utf8").trim().split("\n").length
@@ -132,9 +141,16 @@ export async function respond(args, config) {
       const permissionActor = decodeURIComponent(route.slice(14, -11));
       const revokedCandidate =
         config.options.candidateAuthorityRevoked &&
+        (!config.options.qualificationRefReadFailure ||
+          existsSync(config.admissionCapturePath + ".recovery-inventory")) &&
         existsSync(config.admissionCapturePath) &&
         permissionActor === config.options.candidateAuthorityActor;
-      const revokedOperator = config.options.admissionRevokedActor && !active;
+      const revokedOperator =
+        config.options.admissionRevokedActor &&
+        permissionActor === actor.login &&
+        !active &&
+        (!config.options.qualificationRefReadFailure ||
+          existsSync(config.admissionCapturePath + ".recovery-inventory"));
       return JSON.stringify({
         permission: revokedCandidate
           ? "read"

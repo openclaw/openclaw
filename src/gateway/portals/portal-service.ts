@@ -123,7 +123,8 @@ export function createPortalOperations(
   };
   return {
     list,
-    async close(id: string) {
+    async close(rawId: string) {
+      const id = rawId.trim();
       if (owner && !list().portals.some((portal) => portal.id === id)) {
         throw new Error(owner.ownershipError);
       }
@@ -581,7 +582,7 @@ export function createGatewayPortalService(params: {
                 }
                 gatewayUrl.port = String(httpsPort);
                 if (params.gatewayOrigins?.includes(gatewayUrl.origin)) {
-                  throw new Error("Portal HTTPS origin conflicts with the Control UI");
+                  throw new Error("Portal HTTPS origin conflicts with the web app");
                 }
                 portal.publicOrigin = gatewayUrl.origin;
               } else {
@@ -664,12 +665,11 @@ export function createGatewayPortalService(params: {
             (resourceOwnerKey === undefined || portal.resourceOwnerKey === resourceOwnerKey),
         ),
       ),
-    close: async (id: string, assertCurrent?: () => void) => {
-      await serialize(id, () => {
+    close: (id: string, assertCurrent?: () => void) =>
+      serialize(id, () => {
         assertCurrent?.();
         return closeEntry(id);
-      });
-    },
+      }),
     closeWorkerPortals: async (environmentId: string, ownerEpoch?: number) => {
       const environmentSuffix = `-worker-${sha256HexPrefixCore(environmentId, 32)}-`;
       // Include in-flight opens so teardown fences a listener still awaiting its bind.

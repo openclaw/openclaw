@@ -2,6 +2,10 @@ import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  describeGatewayNodeVersionRepair,
+  isNodeVersionChangeIssue,
+} from "../daemon/node-version-prefix.js";
+import {
   SERVICE_AUDIT_CODES,
   type ServiceConfigAudit,
   type ServiceConfigIssue,
@@ -9,6 +13,7 @@ import {
 import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import {
   gatewayServiceCommandMatchesRoot,
+  resolveServiceEntrypoint,
   type GatewayServiceLayoutSummary,
 } from "../daemon/service-layout.js";
 import { normalizeServiceEnvKey } from "../daemon/service-managed-env.js";
@@ -70,6 +75,7 @@ export function formatGatewayServiceRepairPreview(params: {
   missingSystemNode: boolean;
   runtimeIssues: readonly ServiceConfigIssue[];
   definitionDrift: ServiceConfigAudit["definitionDrift"];
+  pinnedRuntimePath?: string;
 }): { preview: string; unresolvedFindings: HealthFinding[] } {
   const unresolvedFindings: HealthFinding[] = [];
   if (params.missingSystemNode) {
@@ -86,6 +92,27 @@ export function formatGatewayServiceRepairPreview(params: {
       fixHint: `Install system Node ${SUPPORTED_NODE_VERSIONS} and rerun Doctor to resolve the runtime finding.`,
       docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
     });
+  }
+  const nodeVersionChange = params.runtimeIssues.find(isNodeVersionChangeIssue);
+  if (nodeVersionChange) {
+    const repair = describeGatewayNodeVersionRepair({
+      code: nodeVersionChange.code,
+      entrypointPath:
+        params.plannedLayout?.entrypointReal ?? resolveServiceEntrypoint(params.command),
+      plannedNodePath: params.plan.programArguments[0],
+      recordedNodePath: params.managedDefinition.programArguments[0],
+      pinnedRuntimePath: params.pinnedRuntimePath,
+    });
+    if (!repair.resolvesSplit) {
+      unresolvedFindings.push({
+        checkId: "core/doctor/gateway-service",
+        severity: "warning",
+        category: "recommended",
+        message: repair.remains,
+        fixHint: repair.action,
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+      });
+    }
   }
   if (params.plannedLayout?.entrypointSourceCheckout) {
     unresolvedFindings.push({
@@ -181,6 +208,7 @@ export async function canRepairRuntime(
     SERVICE_AUDIT_CODES.gatewayRuntimeNode,
     SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
     SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+    SERVICE_AUDIT_CODES.gatewayNodePrefixSkew,
     SERVICE_AUDIT_CODES.gatewayPathMissing,
     SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
     SERVICE_AUDIT_CODES.gatewayPathNonMinimal,

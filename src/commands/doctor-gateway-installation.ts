@@ -2,15 +2,21 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  describeGatewayNodeVersionRepair,
+  isNodeVersionChangeIssue,
+} from "../daemon/node-version-prefix.js";
 import { SERVICE_AUDIT_CODES } from "../daemon/service-audit.js";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import { sanitizeServiceInspectionError } from "../daemon/service-inspection-error.js";
+import { resolveServiceEntrypoint } from "../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
 import type { GatewayServiceDefinitionTransactionHooks } from "../daemon/service-stage.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceEnv,
-  GatewayServiceInstallArgs,
+import {
+  hasGatewayServiceLauncherOverride,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceEnv,
+  type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
@@ -198,6 +204,8 @@ export async function assertGatewayServiceInstallationRepairAllowed(
 const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
+  SERVICE_AUDIT_CODES.gatewayNodePrefixSkew,
+  SERVICE_AUDIT_CODES.gatewayNodeVersionMissing,
 ]);
 export function isExecStartRepairIssue(issue: { code: string }): boolean {
   return EXECSTART_REPAIR_CODES.has(issue.code);
@@ -221,7 +229,8 @@ export function resolveSystemdUnitNameFromServicePath(sourcePath: string | undef
 
 export async function resolveSystemdServiceRewriteBlock(
   command: GatewayServiceCommandConfig,
-  issues: { code: string }[],
+  issues: { code: string; message?: string }[],
+  repairPlan?: { entrypointPath?: string; plannedNodePath?: string; pinnedRuntimePath?: string },
 ): Promise<string | undefined> {
   if (process.platform !== "linux" || !issues.some(isExecStartRepairIssue)) {
     return undefined;
@@ -235,6 +244,29 @@ export async function resolveSystemdServiceRewriteBlock(
   if (!active.value) {
     return undefined;
   }
-  issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
+  const nodeVersionChange = issues.find(isNodeVersionChangeIssue);
+  issues.splice(
+    0,
+    issues.length,
+    ...issues.filter((issue) => !isExecStartRepairIssue(issue) || isNodeVersionChangeIssue(issue)),
+  );
+  if (nodeVersionChange) {
+    const inspectCommand = `systemctl${scope === "user" ? " --user" : ""} cat ${unitName}`;
+    const intro = `Gateway service ${unitName} is running, and its Node version does not own the installed package. ${nodeVersionChange.message ?? "The service Node and install are split across versions."}`;
+    const repair = describeGatewayNodeVersionRepair({
+      code: nodeVersionChange.code,
+      entrypointPath: repairPlan?.entrypointPath ?? resolveServiceEntrypoint(command),
+      plannedNodePath: repairPlan?.plannedNodePath,
+      recordedNodePath: command.programArguments[0],
+      pinnedRuntimePath: repairPlan?.pinnedRuntimePath,
+    });
+    if (hasGatewayServiceLauncherOverride(command)) {
+      const kept = repair.remains ? ` ${repair.remains}` : "";
+      const select = repair.resolvesSplit ? "" : ` ${repair.action}`;
+      return `${intro} The effective ExecStart comes from an operator-owned systemd drop-in, so rewriting the managed unit does not change it. Inspect with \`${inspectCommand}\` and point that drop-in at the Node that owns this install.${kept}${select}`;
+    }
+    const kept = repair.remains ? `${repair.remains} ` : "";
+    return `${intro} OpenClaw left the running launcher unchanged. ${kept}${repair.action}`;
+  }
   return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the active launcher.`;
 }

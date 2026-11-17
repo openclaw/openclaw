@@ -1,10 +1,13 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import type { createBrokerResourceSocket } from "./resource-socket.js";
 
 const boundary = vi.hoisted(() => ({ server: vi.fn(), socket: vi.fn() }));
+const temp = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("node:net", () => ({ createServer: boundary.server }));
 vi.mock("./resource-socket.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./resource-socket.js")>()),
@@ -46,8 +49,9 @@ it("joins the same native close after transport loss instead of abandoning or du
       return { send: async () => {}, close: () => handlers.close() };
     },
   );
+  const endpoint = path.join(temp.make("broker-resource-server-"), "private", "resource.sock");
   const resource = await createBrokerNativeResourceServer({
-    endpoint: "synthetic-resource-endpoint",
+    endpoint,
     secret: "synthetic-resource-secret",
     generation: 1,
     canAdmit: () => true,
@@ -64,7 +68,7 @@ it("joins the same native close after transport loss instead of abandoning or du
       type: "resource-attach",
       attachment: {
         id: 1,
-        endpoint: "synthetic-resource-endpoint",
+        endpoint,
         secret: "synthetic-resource-secret",
         generation: 1,
         ownerPort: true,

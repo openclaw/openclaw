@@ -22,7 +22,8 @@ import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transc
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { Message } from "../../llm/types.js";
-import { readNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { readOwnNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import type { PreparedModelPromptProjection } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
@@ -132,8 +133,9 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
                   activeBranchAppend &&
                   (canonical.message.role === "assistant" ||
                     canonical.message.role === "toolResult" ||
-                    readNestedToolActivity(canonical.message) !== undefined),
+                    readOwnNestedToolActivity(canonical.message) !== undefined),
                 idempotencyLookup: options?.idempotencyLookup,
+                mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
               }
             : undefined;
         if (canonical.type === "message" && message) {
@@ -143,6 +145,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           canonical,
           activeBranchAppend ? "active-branch" : undefined,
           admission,
+          "reload",
           message,
           options?.beforeFreshMessageCommit,
           undefined,
@@ -218,7 +221,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
       (canonicalEntry.message.role === "assistant" ||
         canonicalEntry.message.role === "toolResult" ||
         // A nested send can advance the transcript before its tool activity is recorded.
-        readNestedToolActivity(canonicalEntry.message) !== undefined);
+        readOwnNestedToolActivity(canonicalEntry.message) !== undefined);
     let attemptOptions: AppendPersistenceOptions & { expectedMutationAt?: number | null } =
       persistenceOptions;
     const admittedUserId = this.persistenceTarget
@@ -398,6 +401,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     if (projection && !needsReload) {
       const previous = this.byId.get(projection.messageId);
       if (previous?.type === "message") {
+        this.pendingWritableTranscriptEntries.delete(previous);
         const rewritten = { ...previous, message: projection.message };
         this.byId.set(previous.id, rewritten);
         this.fileEntries = this.fileEntries.map((candidate) =>
@@ -493,9 +497,10 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           if (prefix.anchorIds.length) {
             return [prefix];
           }
-          return canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary"
-            ? []
-            : [{ ...prefix, anchorIds: [canonicalEntry.id] }];
+          if (canonicalEntry.type === "reset" || canonicalEntry.type === "branch_summary") {
+            return [];
+          }
+          return [{ ...prefix, anchorIds: [canonicalEntry.id] }];
         });
       }
       if (canonicalEntry.type === "label") {
@@ -555,7 +560,12 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
             ? this.boundedContextLimits.maxEvents
             : this.byId.size + this.opaqueParentsById.size
           : this.byId.size,
-        isInterruptedTail,
+        isInterruptedTail:
+          isInterruptedTail &&
+          ((entry) => {
+            this.ownTranscriptEntries([entry]);
+            return isInterruptedTail(entry);
+          }),
       },
       includeOmitted,
     );

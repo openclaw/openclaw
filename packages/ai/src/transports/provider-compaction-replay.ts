@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
@@ -19,9 +19,12 @@ export {
   stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
-export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
+export {
+  CompactionReplayRefreshRequiredError,
+  readOpenAIResponsesItemRecoveryAnchor,
+} from "./openai-responses-compaction-replay.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string; enabled?: boolean };
+type ReplayIdentity = { sessionId?: string; enabled?: boolean };
 type ReplayMessage = { role: string };
 type ReplayPressureEstimator = {
   text(value: string): number;
@@ -62,7 +65,9 @@ function resolveCompactionSource<T extends ReplayMessage>(
   const selected = (() => {
     if (OPENAI_RESPONSES_APIS.has(model.api)) {
       const responses = resolveNewestOpenAIResponsesCompactionReplay(assistants, model, identity);
-      return responses ? { family: "responses" as const, ...responses } : undefined;
+      return responses && responses.mode !== "item-recovery"
+        ? { family: "responses" as const, ...responses }
+        : undefined;
     }
     if (identity.enabled !== true) {
       return undefined;
@@ -194,6 +199,7 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   identity: ReplayIdentity,
   estimate: ReplayPressureEstimator,
   systemPrompt?: string,
+  requestContext?: Context,
 ): { messages: T[]; prefixTokens: number; measuredTokens?: number } | undefined {
   const checkpoint = resolveCompactionSource(messages, model, identity);
   if (!checkpoint) {
@@ -215,7 +221,13 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
         : estimate.text(checkpoint.item.encrypted_content);
   const measuredBoundary =
     checkpoint.family === "responses"
-      ? resolveResponsesContextUsageBoundary(messages, model, identity, systemPrompt)
+      ? resolveResponsesContextUsageBoundary(
+          messages,
+          model,
+          identity,
+          systemPrompt,
+          requestContext,
+        )
       : undefined;
   if (measuredBoundary) {
     // Async tool results can be persisted before the final usage event. The wire

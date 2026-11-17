@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import { performance, PerformanceObserver } from "node:perf_hooks";
-import { internSessionSkillSnapshot } from "../../src/config/sessions/session-skill-snapshot-intern.js";
+import { internSessionEntryField } from "../../src/config/sessions/session-skill-snapshot-intern.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 
@@ -69,7 +69,7 @@ const entries: SessionEntry[] = [];
 for (let index = 0; index < 10_000; index++) {
   const entry: SessionEntry = JSON.parse(fixtures[index % fixtures.length]!);
   if (mode === "candidate") {
-    entry.skillsSnapshot = internSessionSkillSnapshot(entry.skillsSnapshot!);
+    entry.skillsSnapshot = internSessionEntryField(entry.skillsSnapshot!);
   }
   entries[index % resident] = freezeTrustedJsonSnapshot(entry);
 }

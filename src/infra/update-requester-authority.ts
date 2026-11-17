@@ -28,11 +28,21 @@ export function resolveManagedUpdateRequester(
 }
 
 export class UpdateRequesterRevokedError extends Error {
-  readonly code = "requester-revoked";
+  readonly code: "requester-revoked" | "interrupted" = "requester-revoked";
+
+  constructor(message = "requester-revoked") {
+    super(message);
+    this.name = "UpdateRequesterRevokedError";
+  }
+}
+
+/** Forward work stops exactly as for a revocation, but the requester kept its authority. */
+export class UpdateInterruptedError extends UpdateRequesterRevokedError {
+  override readonly code = "interrupted";
 
   constructor() {
-    super("requester-revoked");
-    this.name = "UpdateRequesterRevokedError";
+    super("interrupted");
+    this.name = "UpdateInterruptedError";
   }
 }
 
@@ -132,11 +142,13 @@ async function captureManagedUpdateRequester(
         },
         { readCurrentConfigForPolicyCheck },
         { ensureCliPluginRegistryLoaded },
+        { PluginLoadFailureError },
       ] = await Promise.all([
         import("../auto-reply/command-auth.js"),
         // Keep synchronous authority checks on the reader loaded at admission.
         import("../config/io.js"),
         import("../cli/plugin-registry-loader.js"),
+        import("../plugins/loader-shared.js"),
       ]);
       const readCurrentConfig = () =>
         readCurrentConfigForPolicyCheck({
@@ -147,6 +159,12 @@ async function captureManagedUpdateRequester(
         scope: "configured-channels",
         routeLogsToStderr: true,
         config: readCurrentConfig(),
+      }).catch((error: unknown) => {
+        // Post-install Doctor runs these migrations, so their channel plugins cannot load before
+        // its authority check. Owner matching then uses bundled channel metadata (#178291).
+        if (!(error instanceof PluginLoadFailureError && error.onlyPendingStateMigrations)) {
+          throw error;
+        }
       });
       const authority =
         authorizationSource === "configured-owner"

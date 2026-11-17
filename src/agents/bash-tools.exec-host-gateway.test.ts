@@ -37,11 +37,9 @@ import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-} from "./bash-tools.exec-types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 type SendExecApprovalFollowupResult =

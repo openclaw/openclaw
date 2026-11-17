@@ -413,6 +413,16 @@ if (args[0] === "--help") {
   process.stdout.write(JSON.stringify({ plugins: [
     { id: "device-pair", enabled: true }, { id: "webhooks", enabled: false },
   ] }));
+} else if (args[0] === "config" && args[1] === "schema") {
+  assert.deepEqual(args, ["config", "schema"]);
+  const mode = { anyOf: ["off", "propose", "auto"].map(value => ({ type: "string", const: value })) };
+  process.stdout.write(JSON.stringify({
+    properties: {
+      skills: { properties: {
+        workshop: { properties: { autonomous: { properties: { mode } } } },
+      } },
+    },
+  }));
 } else if (args[0] === "config" && args[1] === "set") {
   const keys = args[2].split(".");
   let target = cfg;
@@ -488,6 +498,7 @@ if (args[0] === "--help") {
     { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
   ]);
   expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toMatchObject({
+    workshopAutonomousField: "mode",
     approvalsJsonEra: true,
     approvals: {
       agents: {
@@ -502,4 +513,7 @@ if (args[0] === "--help") {
     version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
   );
   expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
+  expect(JSON.parse(readFileSync(configPath, "utf8")).skills.workshop.autonomous).toStrictEqual({
+    mode: "off",
+  });
 });

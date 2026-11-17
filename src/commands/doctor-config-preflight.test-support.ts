@@ -8,6 +8,8 @@ import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -28,8 +30,21 @@ type DoctorFixtureObservation = {
 };
 
 const fixtureObservation = new AsyncLocalStorage<DoctorFixtureObservation>();
+const fixtureResources = new AsyncLocalStorage<AsyncDisposableStack>();
 const activeObservations = new Set<DoctorFixtureObservation>();
 let nextObservation = 0;
+
+/** Keep transferred preflight inventories alive through assertions, then retire with the home. */
+export function trackDoctorPreflightCache<T extends { pluginCache?: AsyncDisposable }>(
+  result: T,
+): T {
+  const resources = fixtureResources.getStore();
+  if (!resources) {
+    throw new Error("Doctor preflight results require a fixture lifetime");
+  }
+  resources.use(result.pluginCache);
+  return result;
+}
 
 function recordFixturePhase(
   observation: DoctorFixtureObservation,
@@ -169,17 +184,27 @@ export async function withDoctorConfigPreflightHome<T>(
         path.join(control, "managed-update-handoffs.sqlite"),
       );
       const workers = createSqliteReadOnlyWorkerScope();
+      const resources = new AsyncDisposableStack();
       const [outcome] = await Promise.allSettled([
-        workers.run(() => withEnvAsync(providerEnv, () => run(home))),
+        workers.run(() =>
+          fixtureResources.run(resources, () => withEnvAsync(providerEnv, () => run(home))),
+        ),
       ]);
       if (outcome.status === "rejected" && hasUnjoinedWork(outcome.reason)) {
         throw outcome.reason;
       }
       try {
         try {
-          await workers.run(() =>
-            cleanupSessionStateForTest({ stateDir: path.join(home, ".openclaw"), rootPath: home }),
-          );
+          await workers.run(async () => {
+            await resources.disposeAsync();
+            // Setup artifacts own worker captures until their inventory retires.
+            clearPluginMetadataLifecycleCaches();
+            expect((await waitForPluginCacheRetirement()).failures).toEqual([]);
+            await cleanupSessionStateForTest({
+              stateDir: path.join(home, ".openclaw"),
+              rootPath: home,
+            });
+          });
         } finally {
           await workers.close();
         }

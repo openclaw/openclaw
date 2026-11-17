@@ -426,6 +426,166 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expectNoServiceWrite("install", "stage");
   });
 
+  it("keeps a running service's retained Node split visible without promising doctor will move it", async () => {
+    mockProcessPlatform("linux");
+    const entrypoint =
+      "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js";
+    const nodePath = "/home/example/.nvm/versions/node/v24.22.1/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, nodePath),
+      sourcePath: "/home/example/.config/systemd/user/openclaw-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-node-prefix-skew",
+        "Gateway Node v24.22.1 (/home/example/.nvm/versions/node/v24.22.1) does not own this install (v24.16.0 at /home/example/.nvm/versions/node/v24.16.0). Removing the install's Node version stops the gateway before OpenClaw can start.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, nodePath),
+      workingDirectory: "/tmp",
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(true));
+    await runRepair();
+    configNote("does not own this install");
+    configNote("Doctor keeps this supported Node");
+    configNote(
+      "openclaw gateway install --runtime-path /home/example/.nvm/versions/node/v24.16.0/bin/node --force",
+    );
+    expectNoNoteContaining("doctor --fix` to point", "Gateway service config");
+    expectNoServiceWrite("install", "stage");
+  });
+
+  it.each([true, false])(
+    "keeps symlinked package identity in Doctor advice (active=%s)",
+    async (active) => {
+      mockProcessPlatform("linux");
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      fsMocks.realpath.mockImplementation(actualFs.realpath);
+      await withTempDir("openclaw-doctor-node-symlink-", async (root) => {
+        const nodePath = path.join(root, ".nvm/versions/node/v24.22.1/bin/node");
+        const linkedEntry = path.join(
+          root,
+          ".nvm/versions/node/v24.22.1/lib/node_modules/openclaw/dist/index.js",
+        );
+        const realEntry = path.join(
+          root,
+          ".nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js",
+        );
+        for (const file of [nodePath, realEntry]) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          await fs.writeFile(file, "");
+        }
+        await fs.mkdir(path.dirname(linkedEntry), { recursive: true });
+        await fs.symlink(realEntry, linkedEntry);
+        const command = {
+          ...createGatewayCommand(linkedEntry, nodePath),
+          sourcePath: path.join(root, ".config/systemd/user/openclaw-gateway.service"),
+        };
+        mocks.readCommand.mockResolvedValue(command);
+        mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+        mocks.auditGatewayServiceConfig.mockResolvedValue(
+          createRecommendedServiceAudit(
+            "gateway-node-prefix-skew",
+            "Gateway Node versions are split.",
+          ),
+        );
+        mocks.isSystemdUnitActive.mockResolvedValue(ok(active));
+        await runRepair();
+        const title = active ? "Gateway service config" : "Gateway service repair preview";
+        expectNoteContaining("gateway install --runtime-path", title);
+        expectNoteContaining(
+          `${root.replaceAll("\\", "/")}/.nvm/versions/node/v24.16.0/bin/node`,
+          title,
+        );
+      });
+    },
+  );
+
+  it("points a running service at doctor when the plan selects the install Node", async () => {
+    mockProcessPlatform("linux");
+    const entrypoint =
+      "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js";
+    const serviceNode = "/home/example/.nvm/versions/node/v24.22.1/bin/node";
+    const installNode = "/home/example/.nvm/versions/node/v24.16.0/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, serviceNode),
+      sourcePath: "/home/example/.config/systemd/user/openclaw-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "gateway-node-prefix-skew",
+        "Gateway Node versions are split across nvm directories.",
+      ),
+    );
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand(entrypoint, installNode),
+      workingDirectory: "/tmp",
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(ok(true));
+    await runRepair();
+    configNote("openclaw doctor --fix");
+    configNote(installNode);
+    expectNoNoteContaining("reinstalls that Node", "Gateway service config");
+    expectNoServiceWrite("install", "stage");
+  });
+
+  it.each([
+    {
+      name: "retained supported Node",
+      pin: undefined,
+      nodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      remains: "Doctor keeps this supported Node",
+    },
+    {
+      name: "explicit runtime pin",
+      pin: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      nodePath: "/home/example/.nvm/versions/node/v24.22.1/bin/node",
+      remains: "explicit runtime pin",
+    },
+  ])(
+    "reinstalls a stopped service on the $name and says the split remains",
+    async ({ pin, nodePath, remains }) => {
+      mockProcessPlatform("linux");
+      const entrypoint =
+        "/home/example/.nvm/versions/node/v24.16.0/lib/node_modules/openclaw/dist/index.js";
+      if (pin) {
+        pinSnapshotMock.mockReturnValue({
+          revision: "prior",
+          stored: true,
+          pin: { runtime: "node", path: pin },
+        });
+      }
+      const command = {
+        ...createGatewayCommand(entrypoint, nodePath),
+        sourcePath: "/home/example/.config/systemd/user/openclaw-gateway.service",
+      };
+      mocks.readCommand.mockResolvedValue(command);
+      mocks.auditGatewayServiceConfig.mockResolvedValue(
+        createRecommendedServiceAudit(
+          "gateway-node-prefix-skew",
+          "Gateway Node versions are split across nvm directories.",
+        ),
+      );
+      mocks.buildGatewayInstallPlan.mockResolvedValue({
+        ...createGatewayCommand(entrypoint, nodePath),
+        workingDirectory: "/tmp",
+      });
+      mocks.isSystemdUnitActive.mockResolvedValue(ok(false));
+      await runRepair();
+      expectNoteContaining(remains, "Gateway service repair preview");
+      expectNoteContaining(
+        "openclaw gateway install --runtime-path /home/example/.nvm/versions/node/v24.16.0/bin/node --force",
+        "Gateway service repair preview",
+      );
+      expect(mocks.install).toHaveBeenCalledWith(
+        expect.objectContaining({
+          programArguments: [nodePath, entrypoint, "gateway", "--port", "18789"],
+        }),
+      );
+    },
+  );
+
   it.each([
     ["command", { launcher: "command" as const }, "gateway-port-mismatch"],
     ["directory", { launcher: "working-directory" as const }, "gateway-entrypoint-mismatch"],

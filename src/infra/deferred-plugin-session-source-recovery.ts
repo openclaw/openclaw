@@ -13,22 +13,24 @@ import type {
   DeferredPluginSessionImport,
   SessionImportSource,
 } from "./deferred-plugin-session-import-schema.js";
-import { readDeferredPluginSessionImportReceipt } from "./deferred-plugin-session-source-read.js";
+import {
+  databaseIdentity,
+  readDeferredPluginSessionImportReceipt,
+} from "./deferred-plugin-session-source-read.js";
 import {
   resolveVerifiedSessionSource,
   sessionSourceArchives,
   type SessionSourceVerification,
 } from "./deferred-plugin-session-sources.js";
 import {
-  databaseIdentity,
   preservesRecordedIndexValue,
-  sameSourceContent,
   verifyDeferredSessionDatabase,
   verifyMissingDeferredSessionTranscript,
 } from "./deferred-plugin-session-verification.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
+  sameSourceContent,
   statMigrationPath,
 } from "./session-sqlite-migration-artifact.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { exactIdFilter } from "./rolldown-id-filter.mts";
 
 export const STATE_SCHEMA_INLINE_PLUGIN_NAME = "openclaw:inline-state-schemas";
 
@@ -52,17 +53,20 @@ export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
     }) {
       context.defineCacheKeyGenerator(cacheKeyForSchema);
     },
-    load(this: { addWatchFile(id: string): void }, id: string) {
-      const schema = schemasByModulePath.get(path.resolve(id));
-      if (!schema) {
-        return null;
-      }
-      const schemaPath = path.resolve(rootDir, schema.schemaPath);
-      this.addWatchFile(schemaPath);
-      return {
-        code: `export const ${schema.exportName} = ${JSON.stringify(fs.readFileSync(schemaPath, "utf8"))};\n`,
-        moduleType: "js" as const,
-      };
+    load: {
+      filter: exactIdFilter(...schemasByModulePath.keys()),
+      handler(this: { addWatchFile(id: string): void }, id: string) {
+        const schema = schemasByModulePath.get(path.resolve(id));
+        if (!schema) {
+          return null;
+        }
+        const schemaPath = path.resolve(rootDir, schema.schemaPath);
+        this.addWatchFile(schemaPath);
+        return {
+          code: `export const ${schema.exportName} = ${JSON.stringify(fs.readFileSync(schemaPath, "utf8"))};\n`,
+          moduleType: "js" as const,
+        };
+      },
     },
   };
 }

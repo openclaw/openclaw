@@ -252,7 +252,7 @@ describe("narrow session read owners", () => {
       await seed({ ...entry, updatedAt: 2, label: "Renamed while downloading" });
       const fetched = await fetchSessionFileDownload(reader, download.url);
       expect(fetched.response.statusCode).toBe(200);
-      expect(Buffer.from(fetched.body as Uint8Array)).toEqual(bytes);
+      expect(Buffer.from(fetched.body as Uint8Array).toString("hex")).toBe(bytes.toString("hex"));
       await seed({ ...entry, visibility: "draft", updatedAt: 3 });
       expect((await fetchSessionFileDownload(reader, download.url)).response.statusCode).toBe(404);
       respond.mockClear();

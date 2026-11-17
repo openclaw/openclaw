@@ -74,7 +74,9 @@ export async function createSystemdCommandQuery(
       env,
       scope,
       deadline: deadlineAt,
-      calls: managerUid !== undefined ? 6 : 3,
+      calls:
+        (managerUid !== undefined ? 6 : 3) +
+        (scope === "system" && opts?.inspectStateIdentity ? 2 : 0),
       boundCalls: managerUid !== undefined,
       noAutoStart: Boolean(opts?.requireLoaded),
       unitName,

@@ -6,9 +6,13 @@
   text-align: left;
 }
 
-.update-run-dialog {
-  max-height: calc(100dvh - 48px);
-  overflow-y: auto;
+.update-run-dialog__status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.update-run-dialog__status:empty {
+  display: none;
 }
 
 .update-run-view__heading h3,
@@ -170,15 +174,6 @@
   background: var(--panel);
   font-size: 12px;
   overflow-wrap: anywhere;
-}
-
-.update-run-view__report--succeeded {
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
-}
-
-.update-run-view__report--failed,
-.update-run-view__report--rolled-back {
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
 .update-run-view__report-body {

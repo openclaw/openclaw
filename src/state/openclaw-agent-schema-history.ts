@@ -1,7 +1,17 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import {
+  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
+  withoutAgentActiveEventFacts,
+} from "./openclaw-agent-active-event-facts-schema.js";
 import { withoutAgentColdArchiveChunks } from "./openclaw-agent-cold-archive-chunks-schema.js";
+import { withoutAgentColdNavigation } from "./openclaw-agent-cold-navigation-schema.js";
+import {
+  AGENT_CREATION_OPERATIONS_SCHEMA_VERSION,
+  withoutAgentCreationOperations,
+} from "./openclaw-agent-creation-operations-schema.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
+  AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
@@ -21,6 +31,10 @@ import {
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  withoutAgentToolUsage,
+} from "./openclaw-agent-tool-usage-schema.js";
 import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
@@ -305,12 +319,41 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
+const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS = withoutAgentActiveEventFacts(
+  AGENT_SCHEMA_BEFORE_TOOL_USAGE,
+);
+const AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS = withoutAgentCreationOperations(
+  AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS,
+);
+
+// Same-version schema-39 additions must not rewrite earlier admission contracts.
+const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES =
+  AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS.replace(
+    /\nCREATE INDEX IF NOT EXISTS idx_agent_(?:session_input_completions_session_key|conversation_deliveries_source_session)\b[^;]*;\n/gu,
+    "",
+  );
+
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const schemaSql =
+    targetVersion < 39
+      ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES
+      : targetVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
+        ? AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS
+        : targetVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
+          ? AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS
+          : targetVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION
+            ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
+            : OPENCLAW_AGENT_SCHEMA_SQL;
+  const navigationSchemaSql =
+    targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
+      ? withoutAgentColdNavigation(schemaSql)
+      : schemaSql;
   const coldArchiveSchemaSql =
     targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
-      ? withoutAgentColdArchiveChunks(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutAgentColdArchiveChunks(navigationSchemaSql)
+      : navigationSchemaSql;
   const revisionSchemaSql =
     targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
       ? withLegacyAgentMemoryRevisionTriggers(coldArchiveSchemaSql)
@@ -366,7 +409,9 @@ export const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
 const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = withLegacyAgentIndexes(
   withoutTrajectoryPayloadColumns(
-    withLegacyAgentMemoryRevisionTriggers(withoutAgentColdArchiveChunks(OPENCLAW_AGENT_SCHEMA_SQL)),
+    withLegacyAgentMemoryRevisionTriggers(
+      withoutAgentColdArchiveChunks(AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES),
+    ),
   ),
 ).replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "");
 

@@ -5,6 +5,10 @@
       "identities": []
     },
     {
+      "name": "agent_tool_usage",
+      "identities": []
+    },
+    {
       "name": "auth_profile_state",
       "identities": []
     },
@@ -118,6 +122,10 @@
       "identities": []
     },
     {
+      "name": "session_creation_operations",
+      "identities": []
+    },
+    {
       "name": "session_entry_snapshots",
       "identities": []
     },
@@ -169,6 +177,10 @@
     },
     {
       "name": "session_suggestions",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_active_event_facts",
       "identities": []
     },
     {
@@ -434,8 +446,8 @@
       "name": "session_conversations_route_context_invalidate_after_update",
       "table": "session_conversations",
       "range": [
-        10172,
-        10555
+        10313,
+        10696
       ]
     },
     {
@@ -466,41 +478,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32032,
-        32215
+        33439,
+        33622
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        29572,
-        29819
+        30543,
+        30790
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        29355,
-        29570
+        30326,
+        30541
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        29821,
-        30197
+        30792,
+        31168
       ]
     }
   ],
   "preData": [
     0,
-    30229
+    31300
   ],
   "postData": [
-    30229,
-    45975
+    31300,
+    47657
   ]
 }

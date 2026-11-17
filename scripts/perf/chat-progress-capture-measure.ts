@@ -2,7 +2,7 @@
 // Run: node --import ./scripts/tsx.mjs scripts/perf/chat-progress-capture-measure.ts
 // Repeat with --allocations for a separate sampled pass; its CPU is not a timing gate.
 // --events 5000 --retained-tools 16 exercises interleaved retained histories.
-// --module <absolute-path> selects a frozen baseline owner with the same dependencies.
+// --module <absolute-path> selects a frozen owner exposing the current update/read contract.
 // Use the same command on base and candidate; live load proof uses transcript-broadcast-measure.ts.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -25,12 +25,15 @@ const retainedTools = Number(values["retained-tools"]);
 assert(Number.isSafeInteger(eventCount) && eventCount > 0);
 assert(Number.isSafeInteger(retainedTools) && retainedTools > 0 && retainedTools <= 16);
 const {
+  readChatRunProgressEvents,
   updateChatRunProgressSnapshot,
 }: typeof import("../../src/gateway/server-chat-progress-snapshot.js") = await import(
   values.module
     ? pathToFileURL(values.module).href
     : "../../src/gateway/server-chat-progress-snapshot.js"
 );
+assert.equal(typeof updateChatRunProgressSnapshot, "function");
+assert.equal(typeof readChatRunProgressEvents, "function");
 const result = {
   content: Array.from({ length: 12 }, (_, index) => ({
     type: "text",
@@ -90,17 +93,17 @@ try {
       const allocation = values.allocations
         ? sum((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : undefined;
-      const events = snapshots.flatMap((snapshot) => snapshot?.events ?? []);
-      for (const snapshot of snapshots) {
-        assert.equal(snapshot?.events.length, retainedTools);
+      const events = snapshots.flatMap((snapshot) => {
+        assert.ok(snapshot);
+        const retained = readChatRunProgressEvents(snapshot);
+        assert.ok(retained);
+        assert.equal(retained.length, retainedTools);
         assert.equal(
           snapshot.byteLength,
-          snapshot.events.reduce(
-            (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
-            0,
-          ),
+          retained.reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0),
         );
-      }
+        return retained;
+      });
       console.log(
         JSON.stringify({
           mode,

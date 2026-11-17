@@ -10,6 +10,29 @@ import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js
 
 describe("browser tool schema", () => {
   const fullSchema = createBrowserToolSchema(resolveBrowserToolCapabilities({ canJudge: true }));
+  it("reuses interleaved capability variants without reordering provider enums", () => {
+    const capabilities = resolveBrowserToolCapabilities({ canJudge: true });
+    const variants = [
+      capabilities,
+      { ...capabilities, actions: capabilities.actions.toReversed() },
+      { ...capabilities, actKinds: capabilities.actKinds.toReversed() },
+      { ...capabilities, tabBound: true },
+      { ...capabilities, supportsNativeSnapshots: false },
+    ];
+    const schemas = variants.map(createBrowserToolSchema);
+    expect(new Set(schemas).size).toBe(variants.length);
+    for (const [index, variant] of variants.entries()) {
+      const schema = createBrowserToolSchema({
+        ...variant,
+        actions: [...variant.actions],
+        actKinds: [...variant.actKinds],
+      });
+      expect(schema).toBe(schemas[index]);
+      expect(schema.properties.action).toMatchObject({ enum: variant.actions });
+      expect(schema.properties.request.properties.kind).toMatchObject({ enum: variant.actKinds });
+    }
+  });
+
   it("advertises the viewport resize maximum on nested and flattened act params", () => {
     const dimension = { maximum: ACT_MAX_VIEWPORT_DIMENSION };
     const resize = { width: dimension, height: dimension };

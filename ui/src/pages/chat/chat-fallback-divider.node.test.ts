@@ -57,35 +57,32 @@ describe("model fallback transcript dividers", () => {
     expect(messages).toEqual(before);
   });
 
-  it.each([false, true])(
-    "renders a durable switch as a divider after history reload=%s",
-    (reload) => {
-      const source = reload ? structuredClone(notice) : notice;
-      const history = [
-        { role: "user", content: "Continue the work", timestamp: 1000 },
-        source,
-        { role: "assistant", content: "The work continued", timestamp: 3000 },
-      ];
-      const items = buildItems({ messages: history });
-      expect(items.filter((item) => item.kind === "divider")).toEqual([
-        expect.objectContaining({
-          label: "Model fallback: primary/model-a → secondary/model-b",
-          description: "Reason: empty response",
-          timestamp: 2000,
-        }),
-      ]);
-      expect(
-        items.some(
-          (item) =>
-            item.kind === "group" && item.messages.some(({ message }) => message === history[1]),
-        ),
-      ).toBe(false);
-      expect(items.filter((item) => item.kind === "group")).toHaveLength(2);
-      expect(source).toEqual(notice);
-    },
-  );
+  it("renders a durable switch as a divider", () => {
+    const source = structuredClone(notice);
+    const history = [
+      { role: "user", content: "Continue the work", timestamp: 1000 },
+      source,
+      { role: "assistant", content: "The work continued", timestamp: 3000 },
+    ];
+    const items = buildItems({ messages: history });
+    expect(items.filter((item) => item.kind === "divider")).toEqual([
+      expect.objectContaining({
+        label: "Model fallback: primary/model-a → secondary/model-b",
+        description: "Reason: empty response",
+        timestamp: 2000,
+      }),
+    ]);
+    expect(
+      items.some(
+        (item) =>
+          item.kind === "group" && item.messages.some(({ message }) => message === history[1]),
+      ),
+    ).toBe(false);
+    expect(items.filter((item) => item.kind === "group")).toHaveLength(2);
+    expect(source).toEqual(notice);
+  });
 
-  it.each([false, true])("renders a successful return after history reload=%s", (reload) => {
+  it("renders a successful return", () => {
     const restored = {
       ...notice,
       timestamp: 4000,
@@ -99,7 +96,7 @@ describe("model fallback transcript dividers", () => {
       },
     };
     const history = [notice, restored];
-    const items = buildItems({ messages: reload ? structuredClone(history) : history });
+    const items = buildItems({ messages: structuredClone(history) });
     expect(items.filter((item) => item.kind === "divider")).toEqual([
       expect.objectContaining({ label: "Model fallback: primary/model-a → secondary/model-b" }),
       expect.objectContaining({

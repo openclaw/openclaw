@@ -179,6 +179,81 @@ afterEach(() => {
 });
 
 describe("OpenAI embedding batch output", () => {
+  it.each([
+    ["non-array", '"poison"', "invalid"],
+    ["array-like object", '{"length":1}', "invalid"],
+    ["boolean", "false", "empty"],
+    ["string coordinate", '["poison"]', "invalid"],
+    ["null coordinate", "[null]", "invalid"],
+    ["positive overflow coordinate", "[1e309]", "invalid"],
+    ["negative overflow coordinate", "[-1e309]", "invalid"],
+    ["empty vector", "[]", "empty"],
+  ])("rejects a %s in batch output", async (_name, embedding, condition) => {
+    const fetchImpl = batchFetch({
+      output: new Response(
+        `{"custom_id":"0","response":{"status_code":200,"body":{"data":[{"embedding":${embedding}}]}}}`,
+      ),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${condition} embedding`);
+  });
+
+  it.each([
+    {
+      name: "line error before response error",
+      line: {
+        error: { message: "provider failed" },
+        response: { status_code: 500, body: { error: { message: "secondary error" } } },
+      },
+      detail: "provider failed",
+    },
+    {
+      name: "nested response error",
+      line: { response: { status_code: 500, body: { error: { message: "internal" } } } },
+      detail: "internal",
+    },
+    {
+      name: "response message fallback",
+      line: { response: { status_code: 500, message: "provider response failed", body: "" } },
+      detail: "provider response failed",
+    },
+    {
+      name: "missing embedding",
+      line: { response: { status_code: 200, body: { data: [] } } },
+      detail: "empty embedding",
+    },
+  ])("reports $name through the batch runner", async ({ line, detail }) => {
+    const fetchImpl = batchFetch({
+      output: Response.json({ custom_id: "0", ...line }),
+    });
+
+    await expect(
+      runOpenAiEmbeddingBatches(singleRequestBatchParams(fetchImpl, 1, 1_000)),
+    ).rejects.toThrow(`openai batch batch-0 failed: 0: ${detail}`);
+  });
+
+  it.each(["unsubmitted", "duplicate"])(
+    "ignores a %s ID without losing missing-response accounting",
+    async (kind) => {
+      const output = [
+        outputLine("0", [1]),
+        { custom_id: kind === "duplicate" ? "0" : "unknown", error: { message: "ignored" } },
+      ];
+      const fetchImpl = batchFetch({
+        output: new Response(output.map((line) => JSON.stringify(line)).join("\n")),
+      });
+
+      await expect(
+        runOpenAiEmbeddingBatches({
+          ...singleRequestBatchParams(fetchImpl, 1, 1_000),
+          requests: batchRequests(2),
+        }),
+      ).rejects.toThrow("openai batch batch-0 missing 1 embedding responses");
+    },
+  );
+
   it.each(["/files", "/batches", "/files/output-0/content"])(
     "refreshes and retries only the rejected %s request",
     async (expiredPath) => {

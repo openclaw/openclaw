@@ -4,7 +4,7 @@
 // this module owns the tolerant parser and inline (RichText-level) mapping,
 // while rich-blocks-html-map.ts owns block-level island mapping.
 import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
-import { decodeTelegramHtmlEntities } from "./format-html.js";
+import { decodeTelegramHtmlEntities, TELEGRAM_TIME_TAG_ATTRS_PATTERN } from "./format-html.js";
 import { MAX_RICH_BLOCK_NESTING, richTextLink, type RichText } from "./rich-block-model.js";
 
 export type HtmlNode = { start: number; end: number } & (
@@ -16,7 +16,10 @@ const VOID_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
 
 const INLINE_STYLE_TAGS: Record<
   string,
-  Exclude<Extract<RichText, { text: RichText }>["type"], "url" | "text_mention" | "anchor_link">
+  Exclude<
+    Extract<RichText, { text: RichText }>["type"],
+    "url" | "text_mention" | "anchor_link" | "date_time"
+  >
 > = {
   b: "bold",
   strong: "bold",
@@ -33,6 +36,13 @@ const INLINE_STYLE_TAGS: Record<
   sub: "subscript",
   sup: "superscript",
 };
+
+type RichTextDateTimeFormat = Extract<RichText, { type: "date_time" }>["date_time_format"];
+// The Bot API cannot parse larger values (or millisecond timestamps), so those
+// keep only their text. Telegram also rejects dates about three years ahead or
+// later with RICH_MESSAGE_DATE_INVALID; the existing rich-to-plain fallback then
+// sends the message as plain text.
+const MAX_TELEGRAM_UNIX_TIME = 2 ** 31 - 1;
 
 const HTML_ATTR_RE = /([a-zA-Z][a-zA-Z0-9-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 
@@ -126,7 +136,7 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
           kind: "text",
           start: node.start,
           end: node.end,
-          text: nodeText([node], true),
+          text: nodeText([node], { preserveMediaSources: true }),
         };
       } else {
         pending.push({ nodes: node.children, depth: frame.depth + 1 });
@@ -136,16 +146,22 @@ export function parseHtmlFragment(ir: MarkdownIR): HtmlNode[] {
   return root;
 }
 
-export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = false): string {
+export function nodeText(
+  nodes: readonly HtmlNode[],
+  {
+    preserveMediaSources = false,
+    decodeEntities = true,
+  }: { preserveMediaSources?: boolean; decodeEntities?: boolean } = {},
+): string {
   const parts: string[] = [];
   const pending = nodes.toReversed();
   while (pending.length > 0) {
     const node = pending.pop()!;
     if (node.kind === "text") {
-      parts.push(decodeTelegramHtmlEntities(node.text));
+      parts.push(decodeEntities ? decodeTelegramHtmlEntities(node.text) : node.text);
     } else {
       if (!node.closed) {
-        parts.push(decodeTelegramHtmlEntities(node.raw));
+        parts.push(decodeEntities ? decodeTelegramHtmlEntities(node.raw) : node.raw);
       }
       if (
         preserveMediaSources &&
@@ -246,6 +262,25 @@ export function htmlNodesToRichText(
         });
       }
       return atom(alternative);
+    }
+    if (node.name === "tg-time") {
+      // Legacy HTML attribute contract plus a 32-bit time; the text is the
+      // old-client fallback, so it stays plain. Invalid tags keep only their
+      // text, never the markup.
+      const match = TELEGRAM_TIME_TAG_ATTRS_PATTERN.exec(node.raw.slice(node.name.length + 1, -1));
+      const unixTime = Number(match?.[1]);
+      // MarkdownIR already decoded entities in the label's text nodes.
+      const text = nodeText(node.children, { decodeEntities: false }).replace(/\s+/g, " ");
+      if (!match || unixTime > MAX_TELEGRAM_UNIX_TIME || !text.trim()) {
+        return emit(children);
+      }
+      return atom({
+        type: "date_time",
+        text,
+        unix_time: unixTime,
+        // SAFETY: The shared pattern admits only Bot API date-time formats.
+        date_time_format: (match[2] ?? "") as RichTextDateTimeFormat,
+      });
     }
     if (node.name === "br") {
       return atom("\n");

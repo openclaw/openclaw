@@ -41,7 +41,10 @@ export function writeUnreadableNewerStateSchema(databasePath: string) {
 }
 
 /** Capture persistent artifacts without releasing the test writer's POSIX locks. */
-export function snapshotPreflightSourceManifest(stateDir: string, allowAgentReadMarks?: string) {
+export function snapshotPreflightSourceManifest(
+  stateDir: string,
+  allowAgentReadMarks?: string,
+): [string, string][] {
   // Opening/closing the main file in the writer's process releases its POSIX
   // locks. Observe in a child so SQLite still sees a live owner during inspection.
   const entries = listDirectoryTreeStrictSync(stateDir).map((entry) => entry.relativePath);
@@ -76,6 +79,33 @@ export function snapshotPreflightSourceManifest(stateDir: string, allowAgentRead
   return JSON.parse(result.stdout);
 }
 
+function expectAddedReadSidecars(databasePath: string, additions: string[]) {
+  for (const pathname of additions) {
+    expect([`${databasePath}-wal`, `${databasePath}-shm`]).toContain(pathname);
+    if (pathname.endsWith("-wal")) {
+      expect(fs.statSync(pathname).size).toBe(0);
+    }
+  }
+}
+
+/** Live SQLite reads may create coordination files, but cannot change persistent data. */
+export function expectLiveReadSourceManifest(
+  stateDir: string,
+  before: [string, string][],
+  databasePath: string,
+  allowAgentReadMarks?: string,
+) {
+  const after = snapshotPreflightSourceManifest(stateDir, allowAgentReadMarks);
+  const originalPaths = new Set(before.map(([pathname]) => pathname));
+  expectAddedReadSidecars(
+    databasePath,
+    after
+      .filter(([pathname]) => !originalPaths.has(pathname))
+      .map(([pathname]) => path.join(stateDir, pathname)),
+  );
+  expect(after.filter(([pathname]) => originalPaths.has(pathname))).toEqual(before);
+}
+
 export function snapshotSourceFamily(databasePath: string) {
   const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`].filter(fs.existsSync);
   return {
@@ -94,4 +124,22 @@ export function snapshotSourceFamily(databasePath: string) {
       };
     }),
   };
+}
+
+export function expectLiveReadSourceFamily(
+  databasePath: string,
+  before: ReturnType<typeof snapshotSourceFamily>,
+) {
+  const after = snapshotSourceFamily(databasePath);
+  const originalEntries = new Set(before.entries);
+  expectAddedReadSidecars(
+    databasePath,
+    after.entries
+      .filter((entry) => !originalEntries.has(entry))
+      .map((entry) => path.join(path.dirname(databasePath), entry)),
+  );
+  expect(after.entries.filter((entry) => originalEntries.has(entry))).toEqual(before.entries);
+  expect(after.files.filter((file) => originalEntries.has(path.basename(file.pathname)))).toEqual(
+    before.files,
+  );
 }

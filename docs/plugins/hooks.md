@@ -132,7 +132,7 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   that grant. Its bounded `ctx.endedTranscript` reader is available only when
   the effective conversation-access policy allows it; see the
   [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
-- `allowPromptInjection: false` blocks `agent_turn_prepare`,
+- `allowPromptModification: false` blocks `agent_turn_prepare`,
   `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
   injections. It defaults to allowed, but does not grant conversation access.
   The first two hooks therefore need both permissions.
@@ -141,7 +141,8 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
 Their `agent_end` hooks still receive run identity, success, and duration for
-cleanup and settlement, but receive empty `messages` and no `error` text.
+cleanup and settlement, but receive empty `messages`, no `error` text and no
+`skillsUsed` or `modelIterations`.
 Policy, provider, approval, and explicitly invoked tool hooks remain active.
 This boundary does not sandbox plugins or disable native harness telemetry.
 
@@ -233,7 +234,7 @@ hooks, which cannot protect the raw durable ingress payload.
 | Symptom                                    | Check                                                                                                                                                                                                                                                          |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; use `openclaw plugins reload <id>` after code changes. |
-| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                           |
+| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptModification` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                        |
 | Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
 | Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
 | A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |

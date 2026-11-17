@@ -13,7 +13,12 @@ async function avatarConfig(home: string): Promise<OpenClawConfig> {
   return {
     meta: {
       lastTouchedVersion: VERSION,
-      migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
+      migrations: {
+        modelPolicyAllowlist: true,
+        utilityModelSeparation: true,
+        skillWorkshopPlugin: true,
+        skillLibraryToolSplit: true,
+      },
     },
     gateway: { mode: "local" },
     agents: {
@@ -37,8 +42,8 @@ describe("agent identity persistence", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each(["cli", "gateway"] as const)(
     "%s persists a smaller avatar without changing other fields",
-    async (owner) => {
-      await withTempHome(async (home) => {
+    (owner) =>
+      withTempHome(async (home) => {
         const before = await avatarConfig(home);
         const configPath = await writeOpenClawConfig(home, before);
         const avatar = "https://example.test/avatar.png";
@@ -51,8 +56,7 @@ describe("agent identity persistence", () => {
         const expected = structuredClone(before);
         expected.agents!.entries!.avatar!.identity!.avatar = avatar;
         expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(expected);
-      });
-    },
+      }),
   );
 
   it("rejects a model-only size drop and retains the authored configuration", async () => {
