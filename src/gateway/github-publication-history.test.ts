@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   publicationPullRequestResponse,
@@ -32,6 +33,7 @@ async function historyFixture() {
   const remote = path.join(root, "remote.git");
   const remoteGit = git.bind(undefined, "-C", remote);
   await git("init", "--bare", remote);
+  await remoteGit("config", "uploadpack.allowFilter", "true");
   const fallback = mocks.runCommand.getMockImplementation()!;
   const calls: string[][] = [];
   let published = false;
@@ -53,11 +55,12 @@ async function historyFixture() {
         return gitResult("ls-remote", "--refs", remote, `refs/heads/${BRANCH}`);
       }
       if (argv.includes("fetch")) {
-        const sha = argv.at(-1)!;
-        if (sha === (await remoteHead())) {
-          return gitResult("fetch", "--no-tags", "--no-write-fetch-head", remote, sha);
-        }
-        return commandResult();
+        const remoteIndex = argv.indexOf("--") + 1;
+        return gitResult(
+          ...argv
+            .slice(1)
+            .map((arg, index) => (index + 1 === remoteIndex ? pathToFileURL(remote).href : arg)),
+        );
       }
       if (argv.includes("push")) {
         try {
@@ -206,7 +209,44 @@ describe("GitHub publication branch history", () => {
     const signedHead = await f.git("hash-object", "-t", "commit", "-w", signedCommit);
     await f.git("update-ref", "HEAD", signedHead);
     await f.git("config", "log.showSignature", "true");
+    // A newer target base needs ancestry and tree metadata, not its file contents.
+    await f.git("push", f.remote, "HEAD:refs/heads/main");
+    const remoteFile = path.join(root, "base-only.txt");
+    await fs.writeFile(remoteFile, "remote base contents\n");
+    const remoteBlob = await f.git("-C", f.remote, "hash-object", "-w", remoteFile);
+    await f.git("-C", f.remote, "read-tree", signedHead);
+    await f.git(
+      "-C",
+      f.remote,
+      "update-index",
+      "--add",
+      "--cacheinfo",
+      "100644",
+      remoteBlob,
+      "base-only.txt",
+    );
+    const remoteTree = await f.git("-C", f.remote, "write-tree");
+    const remoteBase = await f.git(
+      "-C",
+      f.remote,
+      "commit-tree",
+      remoteTree,
+      "-p",
+      signedHead,
+      "-m",
+      "Advance base",
+    );
+    await f.git("-C", f.remote, "update-ref", "refs/heads/main", remoteBase);
+    interceptCommand((args) =>
+      args.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))
+        ? commandResult(JSON.stringify({ ref: "refs/heads/main", sha: remoteBase }))
+        : undefined,
+    );
+    vi.stubEnv("GIT_NO_LAZY_FETCH", "1");
+    await expect(f.git("cat-file", "-e", remoteBase)).rejects.toThrow();
     const first = await f.published("initial");
+    expect(await f.git("rev-parse", `${remoteBase}^{tree}`)).toBe(remoteTree);
+    await expect(f.git("cat-file", "-e", remoteBlob)).rejects.toThrow();
     const firstHead = await f.remoteHead();
     expect(await f.publish("initial")).toEqual(first);
     await f.write("next accepted edit\n");
