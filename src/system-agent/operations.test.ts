@@ -92,7 +92,9 @@ vi.mock("../agents/agent-create.js", () => ({ createAgent: vi.fn() }));
 vi.mock("../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
 // mock-isolation: Never uninstall real plugins while testing executor approval.
 vi.mock("../cli/plugins-uninstall-command.js", () => ({ runPluginUninstallCommand: vi.fn() }));
-const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const installManagedPluginMock = vi.hoisted(() =>
+  vi.fn(async () => ({ plugin: { id: "openclaw-demo" } })),
+);
 const mockScheduleGatewayRestart = vi.hoisted(() =>
   vi.fn(() => ({
     ok: true,
@@ -110,8 +112,9 @@ vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStop: vi.fn(async () => {}),
   runDaemonRestart: mockDaemonRestart,
 }));
-vi.mock("../cli/plugins-install-command.js", () => ({
-  runPluginInstallCommand: runPluginInstallCommandMock,
+// mock-isolation: Executor tests own approval/audit, not package acquisition or runtime loading.
+vi.mock("../plugins/management-mutations.js", () => ({
+  installManagedPlugin: installManagedPluginMock,
 }));
 vi.mock("../infra/restart.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/restart.js")>()),
@@ -165,7 +168,7 @@ describe("system agent operations", () => {
     vi.mocked(createAgent).mockReset();
     vi.mocked(runConfigSet).mockReset().mockResolvedValue(undefined);
     vi.mocked(runPluginUninstallCommand).mockReset();
-    runPluginInstallCommandMock.mockClear();
+    installManagedPluginMock.mockClear();
     mockScheduleGatewayRestart.mockClear();
     vi.stubEnv("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-operations-"));
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -439,7 +442,7 @@ describe("system agent operations", () => {
       applied: false,
       message: "Plan: install plugin clawhub:openclaw-demo. Say yes to apply.",
     });
-    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
+    expect(installManagedPluginMock).not.toHaveBeenCalled();
 
     const result = await run(operation, {
       approved: true,
@@ -449,10 +452,9 @@ describe("system agent operations", () => {
     });
     expect(result.applied).toBe(true);
 
-    expect(runPluginInstallCommandMock).toHaveBeenCalledWith(
+    expect(installManagedPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        raw: "clawhub:openclaw-demo",
-        allowInstallPolicyWarningPrompt: false,
+        request: expect.objectContaining({ source: "clawhub", packageName: "openclaw-demo" }),
         beforePersistentApply: expect.any(Function),
         applyRuntime: applyPluginRuntime,
       }),
@@ -463,12 +465,29 @@ describe("system agent operations", () => {
     expectAudit("plugin.install", "Installed plugin clawhub:openclaw-demo", {
       rescue: true,
       spec: "clawhub:openclaw-demo",
+      pluginId: "openclaw-demo",
     });
   });
 
+  it("redacts authenticated Git audit details without losing source identity", async () => {
+    const spec =
+      "git:https://x-access-token:SYNTHETIC_AUDIT_CREDENTIAL@github.com/example/plugin.git@main";
+    expect(await run({ kind: "plugin-install", spec }, { approved: true })).toMatchObject({
+      applied: true,
+    });
+    expect(installManagedPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ source: "git", spec }),
+      }),
+    );
+    const audit = readLastAuditEntry();
+    expect(JSON.stringify(audit)).not.toContain("SYNTHETIC_AUDIT_CREDENTIAL");
+    expect(audit?.details?.spec).toContain("github.com/example/plugin.git@main");
+  });
+
   it.each([
-    [true, "https://example.test/plugin.tgz", "accepts npm or ClawHub package specs only"],
-    [false, "npm:@example/plugin", "trusted shell"],
+    [true, "https://example.test/plugin.tgz", "not local paths or archive URLs"],
+    [false, "git:file:///tmp/plugin.git", "requires a remote package source"],
   ] as const)(
     "rejects spec %s/%s without exiting, reading config, or writing",
     async (approved, spec, error) => {
@@ -480,7 +499,7 @@ describe("system agent operations", () => {
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
-      expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
+      expect(installManagedPluginMock).not.toHaveBeenCalled();
       expect(mockConfig.readConfigFileSnapshot).not.toHaveBeenCalled();
     },
   );
