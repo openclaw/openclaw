@@ -173,6 +173,11 @@ export type ChannelTurnDurableDeliveryOptions = Pick<
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
+  /**
+   * @deprecated Ignored. Core marks every durable final itself; an ordinary final text is
+   * resent once after an unconfirmed send on every channel that cannot reconcile it.
+   */
+  retryAmbiguousFinalText?: true;
 };
 
 type ChannelDeliveryAdapterBase = {
