@@ -553,11 +553,26 @@ something the source showed.
   the backup name, and publishes with the same exchange call adoption uses. The
   two names end as the moves would leave them, so rollback and retirement are
   unchanged. Without an exchange the two moves run and the step says so.
-  The journaled npm publication, which a prefix the user manages takes on a
-  normal update, still moves the old package out before the new one in. Its
-  three names rotate, so one exchange leaves a state its recovery readers
-  refuse today. Teaching the journal owner that state is a separate change in
-  progress.
+- **The journaled npm publication**, which a prefix the user manages takes on a
+  normal update, moved the old package into the journal's `previous` name and
+  later moved the candidate in. Killed at any of seven boundaries in between,
+  it left the package path empty until the recovery command ran.
+  [#200460](https://github.com/openclaw/openclaw/pull/200460) records the
+  existing `publish` intent, gives the candidate the name `previous`, and
+  exchanges that name with the package path. The result is the layout every
+  recovery reader already expects after a publication. The one new state is
+  the candidate waiting under `previous` beside the untouched installed
+  package. The publication owner returns it to its own name before it
+  classifies the layout, so a run killed there recovers to `aborted` with the
+  old package installed. The old package is the build whose updater wrote the
+  journal, which is why the candidate waits there instead of being exchanged
+  under its own name. Local overrides are captured before publication. The
+  journal's schema, version, and stored fields are unchanged. Without an
+  exchange the two moves run, the step says so, and the window is two
+  boundaries instead of seven.
+  Still open: after a kill before the exchange, the old package serves but the
+  journal stays open, and whether the next update settles it without a person
+  is being measured.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
@@ -851,7 +866,11 @@ existing handoff carries stop, publish, or rollback authority.
   installation made by `install-cli.sh`, and `osascript` under launchd.
 - The plain-swap exchange ran through a kill at every boundary on macOS arm64,
   and once in the in-place Docker cell on linux/arm64 with published
-  `2026.10.9`. pnpm and Bun ran through fixtures only. Owed steps ran through
+  `2026.10.9`. pnpm and Bun ran through fixtures only. The journaled exchange
+  ran through a kill at every boundary on macOS arm64 through `osascript`, and
+  once to completion in the published-driver launcher cell on Linux through
+  `perl`. Not run: a kill around the exchange on Linux, power loss, and an
+  older release executed against the waiting state. Owed steps ran through
   the update command with fixture services; no published-driver cell, live
   shell, launchd, systemd, or Windows service exercised them.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
