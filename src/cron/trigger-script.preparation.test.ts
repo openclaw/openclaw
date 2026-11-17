@@ -213,10 +213,7 @@ it.each(["gateway", "standalone"] as const)(
     });
     const artifact = owner === "gateway" ? "built" : "source";
     const run = (jobId: string, agentId = "main", toolsAllow = ["*"]) =>
-      runtime.executePayload({
-        ...invocation(jobId, agentId, toolsAllow),
-        timeoutSeconds: 5,
-      });
+      runtime.executePayload(invocation(jobId, agentId, toolsAllow));
     for (const [jobId, agentId] of [
       ["first", "main"],
       ["first", "main"],
