@@ -204,7 +204,14 @@ Doctor uses the same source checks and review before installing or adopting a re
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
 
-Chat installs and enablement use the same capability consent. When consent is
+You can also ask your regular agent to install a plugin in Telegram or another
+messaging channel. The `openclaw` setup tool keeps non-ClawHub source review and
+any required capability approval in that chat, then uses the Gateway's plugin
+lifecycle to install and apply the change. This does not require enabling the
+`/plugins` command. Conversation-access grants are separate config changes;
+accepting declared capabilities does not grant conversation access.
+
+The optional `/plugins` chat commands use the same capability consent. When consent is
 required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 

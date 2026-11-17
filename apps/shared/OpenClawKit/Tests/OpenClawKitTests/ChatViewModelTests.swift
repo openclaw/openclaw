@@ -2294,7 +2294,12 @@ struct ChatViewModelTests {
         let oldRequest = vm.beginHistoryRequest()
         vm.clearProgressCard()
         vm.applyProgressCard(progressCard(sessionKey: "agent:research:global", revision: 1, markdown: "Retained"))
-        _ = vm.applyHistoryPayload(history, for: oldRequest, preservingOptimisticLocalMessages: false)
+        _ = vm.applyHistoryPayload(
+            history,
+            for: oldRequest,
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+                history.messages ?? [], activity: history.activity))
         await vm.scheduleProgressCardFetch()?.value
         #expect(await capabilityReturned.current() == 1)
         #expect(await requests.current().isEmpty)
@@ -2333,7 +2338,12 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.health(ok: true))
         await historyGate.waitUntilBlocked()
         #expect(await historyCalls.current() == 1)
-        _ = vm.applyHistoryPayload(oldHistory, for: oldRequest, preservingOptimisticLocalMessages: false)
+        _ = vm.applyHistoryPayload(
+            oldHistory,
+            for: oldRequest,
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+                oldHistory.messages ?? [], activity: oldHistory.activity))
         await historyGate.release()
         await recovery?.value
         // Admitted history schedules its own progress fetch; await the card it publishes.
@@ -3494,7 +3504,8 @@ struct ChatViewModelTests {
         #expect(viewModel.applyHistoryPayload(
             historyPayload(hasActiveRun: true, activeRunIds: nil),
             for: request,
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: []))
 
         #expect(viewModel.currentSessionEntry()?.activeRunIds == nil)
         #expect(viewModel.activeSessionRunIDs.isEmpty)
@@ -3642,7 +3653,8 @@ struct ChatViewModelTests {
         _ = viewModel.applyHistoryPayload(
             activeHistory,
             for: request,
-            preservingOptimisticLocalMessages: true)
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: [])
 
         #expect(viewModel.pendingRunCount == 0)
         #expect(viewModel.streamingAssistantText == nil)
@@ -4462,8 +4474,10 @@ struct ChatViewModelTests {
             sessionRoutingContract: contract)
         try await loadAndWaitBootstrap(vm: vm)
 
+        #expect(await vm.localSendRevision == 0)
         await sendUserMessage(vm, text: "route safely")
         _ = try await waitForLastSentRunId(transport)
+        #expect(await vm.localSendRevision == 1)
 
         #expect(await transport.sentAgentIDs() == ["reviewer"])
         #expect(await transport.sentRoutingContracts() == [contract])
@@ -4616,12 +4630,14 @@ struct ChatViewModelTests {
         #expect(vm.applyHistoryPayload(
             historyPayload(inFlightRun: OpenClawChatInFlightRun(runId: "run-newer", text: "newer")),
             for: newer,
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: []))
         #expect(vm.streamingAssistantText == "newer")
         #expect(!vm.applyHistoryPayload(
             historyPayload(inFlightRun: OpenClawChatInFlightRun(runId: "run-older", text: "older")),
             for: older,
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: []))
         #expect(vm.pendingRunCount == 1)
         #expect(vm.streamingAssistantText == "newer")
     }
@@ -5511,11 +5527,13 @@ struct ChatViewModelTests {
         let older = snapshotHasOlderHistory
             ? [chatTextMessage(role: "user", text: "older question", timestamp: 1)]
             : []
+        let decoded = await OpenClawChatViewModel.decodeMessages(older)
         let applied = await MainActor.run {
             vm.applyHistoryPayload(
                 historyPayload(messages: older),
                 for: laggingRequest,
-                preservingOptimisticLocalMessages: false)
+                preservingOptimisticLocalMessages: false,
+                decodedMessages: decoded)
         }
         #expect(applied)
         #expect(await MainActor.run { vm.messages.compactMap { $0.content.first?.text } } == (
@@ -5639,7 +5657,9 @@ struct ChatViewModelTests {
             let matches = vm.messages.filter { msg in
                 msg.role == "assistant" && msg.content.first?.text == "canonical first"
             }
-            return matches.count == 1 && matches.first?.timestamp == now + 2
+            return matches.count == 1 && matches.first?.timestamp == now + 2 &&
+                matches.first?.workRunID == runId &&
+                matches.first?.transcriptMessageID == "msg-assistant-first"
         })
 
         await finalRefreshGate.waitUntilBlocked()
@@ -14495,6 +14515,72 @@ struct ChatHistoryObservationTests {
 }
 
 struct ChatStreamPresentationTests {
+    @Test @MainActor func `durable final retires a lagging stream only for its own new answer`() {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        func message(_ text: String, run: String, phase: String = "final_answer") -> OpenClawChatMessage {
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(type: "text", text: text)],
+                timestamp: 1,
+                transcriptRunID: run,
+                phase: phase)
+        }
+        let prior = message("Answer complete", run: "run")
+        let user = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "Again")], timestamp: 2)
+        vm.replaceMessages([prior, user])
+        vm.adoptRun(runId: "run", bufferedText: "Answer")
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let other = message("Answer complete", run: "other")
+        vm.replaceMessages([prior, user, other])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let commentary = message("Answer complete", run: "run", phase: "commentary")
+        vm.replaceMessages([prior, user, other, commentary])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let prepended = message("Answer complete", run: "run")
+        vm.replaceMessages([prepended, prior, user, other, commentary])
+        #expect(vm.liveAssistantTextShape == "Answer")
+        let final = message("Answer complete", run: "run")
+        vm.replaceMessages([prepended, prior, user, other, commentary, final])
+        // The display pacer has not caught up: text equality cannot retire this copy.
+        #expect(vm.streamingAssistantText == "Answer")
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Different follow-up", runID: "run")
+        if let scheduledID = vm.streamPacing.scheduledID {
+            vm.flushStreamingAssistantDisplay(scheduledID: scheduledID)
+        }
+        #expect(vm.liveAssistantTextShape == "Different follow-up")
+        vm.updateStreamingAssistantText(nil)
+        vm.updateStreamingAssistantText("Answer", runID: "run")
+        #expect(vm.liveAssistantTextShape == "Answer")
+    }
+
+    @Test @MainActor func `revised owned final retires its source once before matching delta`() {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        let user = OpenClawChatMessage(role: "user", content: [.init(type: "text", text: "Go")], timestamp: 1)
+        vm.replaceMessages([user])
+        vm.adoptRun(runId: "run", bufferedText: "Original draft")
+        let final = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "Revised answer")],
+            timestamp: 2,
+            transcriptRunID: "run",
+            phase: "final_answer")
+        vm.replaceMessages([user, final])
+        #expect(vm.streamingAssistantText == "Original draft")
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Revised answer", runID: "run")
+        if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
+        #expect(vm.liveAssistantTextShape == nil)
+        vm.updateStreamingAssistantText("Distinct follow-up", runID: "run")
+        if let id = vm.streamPacing.scheduledID { vm.flushStreamingAssistantDisplay(scheduledID: id) }
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
+        let tool = OpenClawChatMessage(role: "toolResult", content: [], timestamp: 3)
+        vm.replaceMessages([user, final, tool])
+        #expect(vm.liveAssistantTextShape == "Distinct follow-up")
+    }
+
     @Test @MainActor func `paced words do not invalidate transcript shape or timeline`() throws {
         final class Fired: @unchecked Sendable { var count = 0 }
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
@@ -14680,20 +14766,25 @@ struct ChatHistoryDeltaTests {
         return (script, model)
     }
 
-    @Test @MainActor func `prepared delta identity survives publication`() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func `prepared history identity survives publication`(isDelta: Bool) async throws {
         let (script, model) = self.fixture()
         defer { model.detachTransport() }
         #expect(await model.refreshHistoryAfterRun().applied)
         let request = model.beginHistoryRequest()
         await script.advance(to: 1)
-        let payload = try await script.read(sessionKey: "main", cursor: "0")
-        let prepared = try #require(OpenClawChatViewModel.decodeHistoryDelta(payload))
-        let message = try #require(prepared.first)
+        let payload = try await script.read(sessionKey: "main", cursor: isDelta ? "0" : nil)
+        let prepared = if isDelta {
+            try #require(await OpenClawChatViewModel.decodeHistoryDelta(payload))
+        } else {
+            await OpenClawChatViewModel.decodeMessages(payload.messages ?? [], activity: payload.activity)
+        }
+        let message = try #require(prepared.last)
         #expect(model.applyHistoryPayload(
             payload,
             for: request,
             preservingOptimisticLocalMessages: true,
-            decodedDeltaMessages: prepared))
+            decodedMessages: prepared))
         #expect(model.messages.last?.id == message.id)
         #expect(model.historyDeltaCursor == "1")
     }
@@ -14872,7 +14963,11 @@ struct ChatHistoryDeltaTests {
         await gate.waitUntilBlocked()
         await script.advance(to: 1)
         let first = try await script.read(sessionKey: "main", cursor: "0")
-        #expect(model.applyHistoryPayload(first, for: older, preservingOptimisticLocalMessages: true))
+        #expect(model.applyHistoryPayload(
+            first,
+            for: older,
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(first)))
         await script.advance(to: 2)
         await gate.release()
         #expect(await newer.value.applied)
@@ -14897,7 +14992,8 @@ struct ChatHistoryDeltaTests {
         #expect(!model.applyHistoryPayload(
             malformed,
             for: model.beginHistoryRequest(),
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(malformed)))
         #expect(model.historyDeltaCursor == "0")
         // Exercise the refresh owner too: the invalid row is not accepted by the wire-to-transcript path.
         let transport = TestChatTransport(historyResponses: [], historyCursorHook: { key, cursor in
@@ -15005,8 +15101,13 @@ struct ChatHistoryDeltaTests {
         let stale = model.beginHistoryRequest()
         await script.advance(to: 2)
         let delta = try await script.read(sessionKey: "main", cursor: "0")
+        let decoded = await OpenClawChatViewModel.decodeHistoryDelta(delta)
         model.invalidateHistoryCursor()
-        #expect(!model.applyHistoryPayload(delta, for: stale, preservingOptimisticLocalMessages: true))
+        #expect(!model.applyHistoryPayload(
+            delta,
+            for: stale,
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: decoded))
         #expect(model.historyDeltaCursor == nil)
         #expect(model.messages.count == 1)
     }
@@ -15044,11 +15145,13 @@ struct ChatHistoryDeltaTests {
         #expect(model.applyHistoryPayload(
             payload,
             for: newer,
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
         #expect(!model.applyHistoryPayload(
             payload,
             for: older,
-            preservingOptimisticLocalMessages: true))
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: await OpenClawChatViewModel.decodeHistoryDelta(payload)))
         #expect(model.messages.count == 3)
         #expect(model.historyDeltaCursor == "2")
     }
@@ -15112,7 +15215,11 @@ struct ChatHistoryCoalescingTests {
         #expect(await model.refreshHistoryAfterRun().applied)
         model.invalidateHistoryCursor(replacingCanonicalHistory: true)
         let request = model.beginHistoryRequest()
-        #expect(model.applyHistoryPayload(historyPayload(), for: request, preservingOptimisticLocalMessages: true))
+        #expect(model.applyHistoryPayload(
+            historyPayload(),
+            for: request,
+            preservingOptimisticLocalMessages: true,
+            decodedMessages: []))
         await model.pendingCacheWriteTask?.value
         #expect(model.messages.isEmpty)
         #expect(await cache.rows().isEmpty)
@@ -15375,8 +15482,9 @@ struct ChatHistoryMutationTests {
         await model.performReset()
         await gate.waitUntilBlocked()
         #expect(model.historyRequiresCanonicalReplacement)
-        await model.handleTransportEvent(.routeChanged)?.value
+        let recovery = model.handleTransportEvent(.routeChanged)
         await gate.release()
+        await recovery?.value
         await model.bootstrapTask?.value
         await model.pendingCacheWriteTask?.value
         #expect(model.messages.isEmpty)

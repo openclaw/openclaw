@@ -165,7 +165,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
-  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. This or --publish-workflow-ref is required. Fresh qualification runs Q=C.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. This or --publish-workflow-ref is required. Fresh qualification defaults to Q=C; consume an explicit independent-Q run with --full-release-validation-run-id and --skip-dispatch.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -984,20 +984,7 @@ function runFromTrustedTooling(
     }
     trustedToolingSha = workflowSha;
   }
-  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
-  const toolingRoot = join(tempRoot, "checkout");
-  let worktreeAdded = false;
-  try {
-    run("git", ["worktree", "add", "--detach", toolingRoot, trustedToolingSha], {
-      cwd: targetRoot,
-    });
-    worktreeAdded = true;
-    // The tooling worktree installs its own frozen graph: borrowing the target's
-    // node_modules would resolve workspace package links back into the target
-    // checkout and let candidate code run inside the trusted helper.
-    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
-      cwd: toolingRoot,
-    });
+  withReleaseToolingCheckout(targetRoot, trustedToolingSha, (toolingRoot) => {
     const tsxLoader = pathToFileURL(
       createRequire(join(toolingRoot, "package.json")).resolve("tsx"),
     ).href;
@@ -1020,6 +1007,29 @@ function runFromTrustedTooling(
         `trusted release candidate tooling failed with ${result.status ?? result.signal}`,
       );
     }
+  });
+}
+
+function withReleaseToolingCheckout<T>(
+  targetRoot: string,
+  toolingSha: string,
+  useCheckout: (root: string) => T,
+): T {
+  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
+  const toolingRoot = join(tempRoot, "checkout");
+  let worktreeAdded = false;
+  try {
+    run("git", ["worktree", "add", "--detach", toolingRoot, toolingSha], {
+      cwd: targetRoot,
+    });
+    worktreeAdded = true;
+    // The tooling worktree installs its own frozen graph: borrowing the target's
+    // node_modules would resolve workspace package links back into the target
+    // checkout and let candidate code run inside the trusted helper.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+      cwd: toolingRoot,
+    });
+    return useCheckout(toolingRoot);
   } finally {
     // Remove the graph first, but retain checkout/.git until Git removes its
     // worktree registration. Failed Git cleanup leaves a recoverable checkout.
@@ -1892,38 +1902,44 @@ export function candidateParallelsShellCommand(
   ].join(" ");
 }
 
-async function runParallelsIfNeeded(
+function runParallelsIfNeeded(
   options: ReturnType<typeof parseArgs>,
   tarballPath: string,
   dependencyTarballPaths: string[],
   registryPackageTarballPaths: string[],
   candidateRoot: string,
-): Promise<LocalCheckResult> {
+  candidateSha: string,
+  qualificationSha: string,
+): LocalCheckResult {
   if (options.skipParallels) {
     return { status: "skipped", reason: options.parallelsSkipReason };
   }
-  const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
-    capture: true,
-    cwd: candidateRoot,
-  }).trim();
-  const command = candidateParallelsShellCommand(
-    tarballPath,
-    timeoutBin,
-    dependencyTarballPaths,
-    registryPackageTarballPaths,
-    process.env.OPENCLAW_PARALLELS_MACOS_SNAPSHOT_HINT?.trim() ?? "",
-    candidateRoot,
-  );
-  run("bash", ["-lc", command], {
-    cwd: candidateRoot,
-    env: {
-      OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(candidateRoot, ".artifacts", "parallels"),
-    },
-  });
-  return {
-    status: "passed",
-    command,
+  const qualify = (qualificationRoot: string): LocalCheckResult => {
+    const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
+      capture: true,
+      cwd: qualificationRoot,
+    }).trim();
+    const command = candidateParallelsShellCommand(
+      tarballPath,
+      timeoutBin,
+      dependencyTarballPaths,
+      registryPackageTarballPaths,
+      process.env.OPENCLAW_PARALLELS_MACOS_SNAPSHOT_HINT?.trim() ?? "",
+      qualificationRoot,
+    );
+    run("bash", ["-lc", command], {
+      cwd: qualificationRoot,
+      env: {
+        OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(candidateRoot, ".artifacts", "parallels"),
+      },
+    });
+    return { status: "passed", command };
   };
+  // Q supplies the harness and its frozen dependencies; the supplied tarballs
+  // and persistent evidence stay bound to C, never the temporary Q checkout.
+  return qualificationSha === candidateSha
+    ? qualify(candidateRoot)
+    : withReleaseToolingCheckout(candidateRoot, qualificationSha, qualify);
 }
 
 export function buildTelegramArtifactInputs({
@@ -2008,14 +2024,16 @@ async function runTelegramIfNeeded(
     return { status: "covered-by-full-release-validation", providerMode: "mock-openai" };
   }
   const qualificationRef = fullValidationEvidence.run.headBranch;
+  const qualificationSha = fullValidationEvidence.run.headSha;
   if (
-    fullValidationEvidence.run.headSha !== sourceSha ||
+    (qualificationSha !== sourceSha &&
+      fullValidationEvidence.source !== "candidate-owned-admission-v1") ||
     typeof qualificationRef !== "string" ||
     !isShaPinnedReleaseValidationBranch(qualificationRef) ||
-    !qualificationRef.startsWith(`release-ci/${sourceSha.slice(0, 12)}-`)
+    !qualificationRef.startsWith(`release-ci/${qualificationSha.slice(0, 12)}-`)
   ) {
     throw new Error(
-      "Separate Telegram qualification requires candidate-owned Full Release Validation with a retained release-ci ref at the candidate SHA; never use main's harness. Obtain newly bound candidate evidence or use already covered package Telegram proof.",
+      "Separate Telegram qualification requires candidate-owned Full Release Validation with a retained release-ci ref at its admitted qualification SHA; never use main's harness. Obtain newly bound candidate evidence or use already covered package Telegram proof.",
     );
   }
   const refPath = `repos/${options.repo}/git/ref/heads/${qualificationRef}`;
@@ -2030,10 +2048,10 @@ async function runTelegramIfNeeded(
     transport.ref !== `refs/heads/${qualificationRef}` ||
     !isRecord(transport.object) ||
     transport.object.type !== "commit" ||
-    transport.object.sha !== sourceSha
+    transport.object.sha !== qualificationSha
   ) {
     throw new Error(
-      `Telegram qualification ref ${qualificationRef} no longer points to candidate ${sourceSha}; obtain newly bound candidate evidence without moving the original ref.`,
+      `Telegram qualification ref ${qualificationRef} no longer points to qualification ${qualificationSha}; obtain newly bound candidate evidence without moving the original ref.`,
     );
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
@@ -2048,16 +2066,16 @@ async function runTelegramIfNeeded(
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
     ...artifactInputs,
-    harness_ref: sourceSha,
+    harness_ref: qualificationSha,
     provider_mode: options.telegramProviderMode,
   });
   const { run: runLocal } = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: qualificationRef,
   });
-  if (runLocal.headSha !== sourceSha) {
+  if (runLocal.headSha !== qualificationSha) {
     throw new Error(
-      `Telegram qualification SHA mismatch: expected ${sourceSha}, got ${runLocal.headSha}`,
+      `Telegram qualification SHA mismatch: expected ${qualificationSha}, got ${runLocal.headSha}`,
     );
   }
   return {
@@ -2177,13 +2195,20 @@ async function main() {
     throw new Error("Parallels registry package artifacts must have unique package names");
   }
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
+  const savedState = existsSync(statePath)
+    ? readJson(statePath, "release candidate state")
+    : undefined;
   let candidateState = reconcileReleaseCandidateState(
-    existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
+    savedState,
     expectedState,
     hasRetainedRequest,
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  // Keep previously accepted IDs immutable, but do not persist a new npm ID
+  // until its workflow role and trusted source have passed validation below.
+  candidateState.npmPreflightRunId =
+    typeof savedState?.npmPreflightRunId === "string" ? savedState.npmPreflightRunId : "";
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
     const train = version && classifyReleaseTrain(version);
@@ -2259,7 +2284,6 @@ async function main() {
   options.npmPreflightRunId ||= options.fullReleaseRunId;
   candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
     fullReleaseRunId: options.fullReleaseRunId,
-    npmPreflightRunId: options.npmPreflightRunId,
   });
 
   // The validation run continues in GitHub while trusted local tooling computes
@@ -2313,6 +2337,9 @@ async function main() {
             workflowRef: options.workflowRef,
           }),
       });
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
+    npmPreflightRunId: options.npmPreflightRunId,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
@@ -2538,12 +2565,15 @@ async function main() {
   if (!isDeepStrictEqual(revalidatedRegistryArtifacts, options.parallelsRegistryPackageArtifacts)) {
     throw new Error("Parallels registry package artifacts changed during candidate validation");
   }
-  const parallels = await runParallelsIfNeeded(
+  const parallels = runParallelsIfNeeded(
     options,
     tarballPath,
     dependencyTarballPaths,
     revalidatedRegistryArtifacts.map((artifact) => artifact.tarballPath),
     targetRoot,
+    targetSha,
+    fullValidationEvidence.publicationAuthority?.admission.request.qualificationSha ??
+      fullValidationEvidence.run.headSha,
   );
   const npmTelegram = await runTelegramIfNeeded(
     options,

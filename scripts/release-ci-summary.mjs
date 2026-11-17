@@ -1212,7 +1212,7 @@ export function validateParentManifest(value, expected) {
       : validateQualificationCoverage(value.qualificationCoverage);
   if (
     Boolean(qualificationCoverage) !== Boolean(value.sourceAdmission?.qualificationAdmission) ||
-    (qualificationCoverage && (!value.qualificationInputs || value.targetSha !== value.workflowSha))
+    (qualificationCoverage && !value.qualificationInputs)
   ) {
     throw new Error("Candidate-owned evidence omitted its admission, inputs, or frozen coverage");
   }
@@ -2157,6 +2157,21 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
     },
+    getCandidateFileNames(sha) {
+      const exactSha = normalizeSha(sha, "candidate source SHA");
+      const path = "scripts/e2e/lib/upgrade-survivor";
+      const entries = readJson("contents/" + path + "?ref=" + exactSha);
+      if (
+        !Array.isArray(entries) ||
+        entries.length >= 1000 ||
+        entries.some(
+          (entry) => typeof entry.name !== "string" || entry.path !== path + "/" + entry.name,
+        )
+      ) {
+        throw new Error("Invalid candidate survivor directory metadata");
+      }
+      return entries.map((entry) => entry.name);
+    },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
         ![
@@ -2182,9 +2197,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           "scripts/lib/numeric-options.mjs",
           "scripts/lib/upgrade-survivor-policy.mjs",
           "scripts/lib/upgrade-survivor-scenarios.json",
-          "scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs",
-          "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs",
-          "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
           "package.json",
         ].includes(sourceWorkflowPath)
       ) {
@@ -2194,19 +2206,33 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
       const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
       const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
+      const maxBytes =
+        sourceWorkflowPath === "scripts/lib/update-compat-inventory.json"
+          ? 2 * 1024 * 1024
+          : 1024 * 1024;
       if (
         payload?.type !== "file" ||
-        payload.encoding !== "base64" ||
         payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
-        payload.size > 1024 * 1024 ||
-        typeof payload.content !== "string" ||
-        payload.content.length > 2 * 1024 * 1024
+        payload.size > maxBytes ||
+        !/^[a-f0-9]{40}$/u.test(payload.sha)
       ) {
         throw new Error("invalid immutable source-admission workflow response");
       }
-      const bytes = Buffer.from(payload.content, "base64");
+      // Contents omits bytes above 1 MiB. Read the exact indexed Git blob, not
+      // a moving download URL; retain the path, size, and blob digest checks.
+      const content = payload.encoding === "none" ? readJson("git/blobs/" + payload.sha) : payload;
+      if (
+        content.encoding !== "base64" ||
+        content.size !== payload.size ||
+        content.sha !== payload.sha ||
+        typeof content.content !== "string" ||
+        content.content.length > 2 * maxBytes
+      ) {
+        throw new Error("invalid immutable source-admission workflow content");
+      }
+      const bytes = Buffer.from(content.content, "base64");
       const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
       if (bytes.length !== payload.size || blob !== payload.sha) {
         throw new Error("source-admission workflow blob mismatch");
@@ -2539,11 +2565,12 @@ async function validateStrictChildRun({
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion });
+  const targetSha = parentEvidence.manifest.targetSha;
+  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion, targetSha });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion)
+    !terminalPolicyPass(policyChild, targetVersion, targetSha)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -2570,6 +2597,7 @@ async function validateStrictChildRun({
       jobs,
       waivedJobNames: policy.waivedJobNames,
       getSource: (path) => client.getWorkflowSource(parentEvidence.manifest.workflowSha, path),
+      getCandidateFileNames: (sha) => client.getCandidateFileNames(sha),
     });
   }
   if (child.manifestKey === "productPerformance") {
@@ -2656,12 +2684,16 @@ function qualificationReusePolicyIdentity(admission) {
   const identity = qualificationReuseIdentity(admission);
   const inputs = { ...identity.inputs };
   const envelope = JSON.parse(inputs.trusted_workflow_json);
+  // Changelog-only C descendants can advance their C-owned Q with C. An
+  // independently selected Q is policy, not product identity, and stays exact.
+  const qualificationSha =
+    identity.qualificationSha === identity.candidateSha ? "<candidate>" : identity.qualificationSha;
   inputs.ref = "<candidate>";
   inputs.expected_sha = "<candidate>";
   inputs.trusted_workflow_json = JSON.stringify(
     sortReleaseJsonValueKeys({
       ...envelope,
-      trustedWorkflow: { sha: "<candidate>" },
+      trustedWorkflow: { sha: qualificationSha },
     }),
   );
   // A main-dispatched admission always runs at the main tip, so a changelog
@@ -2674,7 +2706,7 @@ function qualificationReusePolicyIdentity(admission) {
   return {
     ...identity,
     candidateSha: "<candidate>",
-    qualificationSha: "<candidate>",
+    qualificationSha,
     publisher,
     inputs,
   };
@@ -2915,7 +2947,6 @@ export async function validateReleaseRunEvidence(
     const [path, pathRef] = String(parentRun.path).split("@", 2);
     if (
       manifest.version !== 4 ||
-      manifest.targetSha !== manifest.workflowSha ||
       manifest.targetRef !== manifest.targetSha ||
       manifest.workflowFullRef !== fullRef ||
       !SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef) ||
@@ -3345,6 +3376,13 @@ export async function validateReleaseRunEvidence(
     !isDeepStrictEqual(rootEvidence.manifestJson.waivers ?? [], sortReleaseJsonValueKeys(waivers))
   ) {
     throw new Error("release manifest waivers differ from checked-in release tooling policy");
+  }
+  // Authenticate root failures against their own candidate above, then enforce
+  // the grant's destination binding even when changelog-only reuse is valid.
+  const destinationTargetSha =
+    reuseRequest?.targetSha ?? expectedTargetSha ?? currentEvidence.manifest.targetSha;
+  if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
+    throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(

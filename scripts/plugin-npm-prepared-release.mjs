@@ -272,10 +272,9 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
-      producerSha === sourceSha &&
-        authenticated.qualification.kind !== "historical" &&
+      authenticated.qualification.kind !== "historical" &&
         authenticated.qualification.candidateSha === sourceSha &&
-        authenticated.qualification.qualificationSha === sourceSha &&
+        authenticated.qualification.qualificationSha === producerSha &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -867,10 +866,14 @@ function outputValues(file, values) {
 // Each package can run consume and authorize independently. These are enforced
 // transport ceilings, including retries, not the happy-path fixture counts.
 const PACKAGE_COMMAND_REQUEST_LIMIT = 256;
+// Carrier-backed commands replay immutable reads. A 54-request transport cap
+// keeps the 101-package release below 12,000 requests, including 1,024 headroom:
+// 101 * 2 * 54 + 1,024 = 11,932. Admission uses this same enforced cap.
+const CARRIER_COMMAND_REQUEST_LIMIT = 54;
 const PREVIEW_REQUEST_LIMIT = 1024;
 const PUBLICATION_REQUEST_HEADROOM = 1024;
 
-async function requireFanoutCapacity(packages, params) {
+async function requireFanoutCapacity(packages, params, commandLimit) {
   if (packages === 0) {
     return;
   }
@@ -892,7 +895,7 @@ async function requireFanoutCapacity(packages, params) {
       reset * 1000 > Date.now(),
     "GitHub publication request budget received invalid or stale quota.",
   );
-  const perPackage = 2 * PACKAGE_COMMAND_REQUEST_LIMIT;
+  const perPackage = 2 * commandLimit;
   const required = packages * perPackage + PUBLICATION_REQUEST_HEADROOM;
   const maximum = Math.max(0, Math.floor((remaining - PUBLICATION_REQUEST_HEADROOM) / perPackage));
   console.error(
@@ -918,7 +921,11 @@ export async function main(argv) {
     return runPreparedNpmCommand(argv);
   }
   return withGithubRequestBudget(
-    argv[0] === "load" ? PREVIEW_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+    argv[0] === "load"
+      ? PREVIEW_REQUEST_LIMIT
+      : process.env.PREPARED_NPM_EVIDENCE_ID
+        ? CARRIER_COMMAND_REQUEST_LIMIT
+        : PACKAGE_COMMAND_REQUEST_LIMIT,
     async (budget) => {
       try {
         return await runPreparedNpmCommand(argv);
@@ -1123,7 +1130,11 @@ async function runPreparedNpmCommand(argv) {
             corePluginDeferrals,
           })
         : selectedPackages;
-    await requireFanoutCapacity(matrix.length, common);
+    await requireFanoutCapacity(
+      matrix.length,
+      common,
+      options["--evidence-output"] ? CARRIER_COMMAND_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+    );
     await adoption.revalidateAuthority?.();
     capacity?.report(selectedPackages.length);
     writeEvidenceOutput?.();

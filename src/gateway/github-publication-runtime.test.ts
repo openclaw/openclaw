@@ -442,18 +442,34 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     }
   });
 
-  it("keeps fresh recovery reads for a nonempty startup snapshot", async () => {
+  it("defers publication scans under memory pressure and resumes pending work", async () => {
+    const requestId = "memory-pressure-publication";
     withEngineStoreAdmission(() =>
-      insertRepositoryGitHubPublicationFixture(repositoryRow("startup-existing"), () => {}),
+      insertRepositoryGitHubPublicationFixture(repositoryRow(requestId), () => {}),
     );
     const runtime = createRecoveryRuntime();
-    const reads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+    await runtime.ready;
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 ** 3);
+    const available = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+    const shared = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
+    const repository = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+    const transport = githubPublicationTestMocks().runCommand;
+    const readStatus = () =>
+      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture(requestId))?.status;
+    transport.mockClear();
+
     await runtime.reconcilePublications();
-    expect(reads).toHaveBeenCalledTimes(4);
-    expect(
-      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture("startup-existing"))
-        ?.status,
-    ).toBe("failed");
+    await runtime.reconcilePublications();
+    expect(shared).not.toHaveBeenCalled();
+    expect(repository).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(readStatus()).toBe("requested");
+
+    available.mockReturnValue(512 * 1024 ** 2);
+    await runtime.reconcilePublications();
+    expect(repository).toHaveBeenCalledTimes(4);
+    // The normal recovery path settles the receipt whose synthetic workspace is absent.
+    expect(readStatus()).toBe("failed");
   });
 
   it.each(["stop", "failure"] as const)(

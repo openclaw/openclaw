@@ -150,7 +150,7 @@ test.each([false, true])(
 
     expect(await compact()).toMatchObject({
       ok: true,
-      payload: { ok: true, compacted: false, reason: "no transcript" },
+      payload: { ok: true, compacted: false, reason: "No chat history to compact." },
     });
   },
 );

@@ -1533,6 +1533,7 @@ describe("release validation no-push transport", () => {
       repository: "openclaw/openclaw",
       ref: "${{ github.sha }}",
       "persist-credentials": false,
+      "sparse-checkout": "scripts",
     });
     const binder = job(workflow, "bind_full_release_candidate_evidence");
     const binderIdentity = step(binder, "Resolve exact trusted workflow identity");
@@ -1545,7 +1546,7 @@ describe("release validation no-push transport", () => {
       binder.steps!.indexOf(binderCheckout!.candidate) + 1,
     );
     expect(binder.steps!.indexOf(binderRestore)).toBeLessThan(
-      binder.steps!.indexOf(step(binder, "Setup trusted release harness")),
+      binder.steps!.indexOf(step(binder, "Create full release candidate evidence")),
     );
     const exactRevisionCheckouts = trustedCheckouts.filter(
       ({ jobName }) => jobName !== "bind_full_release_candidate_evidence",

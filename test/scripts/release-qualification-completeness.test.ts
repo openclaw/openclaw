@@ -50,6 +50,11 @@ function context(group: string) {
       }),
     },
     getSource,
+    getCandidateFileNames: () => [
+      "legacy-operator-state.mjs",
+      "custom-plugin-siblings.mjs",
+      "package-activation-recovery.mjs",
+    ],
   };
 }
 
@@ -81,6 +86,28 @@ describe("frozen qualification completeness", () => {
         }),
       ).toThrow(required);
     }
+  });
+
+  it("selects same-base beta survivors from candidate capabilities, not Q", () => {
+    const ctx = context("package");
+    ctx.inputs.run_release_soak = "false";
+    ctx.inputs.candidate_artifact_json = JSON.stringify({
+      packageVersion: "2026.11.4-beta.1",
+      packageSourceSha: "b".repeat(40),
+    });
+    const required = qualificationRequiredChildJobs({
+      ...ctx,
+      getSource: (path) => (path === "package.json" ? '{"version":"2026.11.4"}' : getSource(path)),
+      getCandidateFileNames: (sha: string) => {
+        expect(sha).toBe("b".repeat(40));
+        return ["custom-plugin-siblings.mjs"];
+      },
+    });
+    const lanes = required.filter((name) => name.includes("(published-upgrade-survivor"));
+    expect(lanes.map((name) => name.slice(name.lastIndexOf("(") + 1, -1))).toEqual([
+      "published-upgrade-survivor-2026.9.9-scenarios-1",
+      "published-upgrade-survivor-2026.9.9-scenarios-2",
+    ]);
   });
 
   it("retains independent recovery baseline names from the supported Q policy", () => {

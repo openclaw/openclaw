@@ -30,33 +30,48 @@ describe("receipt recovery production boundaries", () => {
       "scripts/lib/numeric-options.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",
       "scripts/lib/upgrade-survivor-scenarios.json",
-      "scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs",
-      "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs",
-      "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
       "package.json",
     ];
+    const blobs = new Map<string, string>();
     const client = createReleaseEvidenceClient("openclaw/openclaw", {
       immutableReads: {
         text(route: string) {
+          if (route === "contents/scripts/e2e/lib/upgrade-survivor?ref=" + "b".repeat(40)) {
+            return JSON.stringify([
+              {
+                name: "custom-plugin-siblings.mjs",
+                path: "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs",
+              },
+            ]);
+          }
+          if (blobs.has(route)) {
+            return blobs.get(route)!;
+          }
           const path = paths.find((entry) => route === "contents/" + entry + "?ref=" + q);
           if (!path) {
             throw new Error("Unexpected immutable source request: " + route);
           }
           const bytes = readFileSync(path);
-          return JSON.stringify({
-            type: "file",
+          const blob = {
             encoding: "base64",
-            path,
             size: bytes.length,
             content: bytes.toString("base64"),
             sha: createHash("sha1")
               .update("blob " + bytes.length + "\0")
               .update(bytes)
               .digest("hex"),
+          };
+          blobs.set("git/blobs/" + blob.sha, JSON.stringify(blob));
+          return JSON.stringify({
+            ...blob,
+            type: "file",
+            path,
+            ...(bytes.length > 1024 * 1024 ? { encoding: "none", content: "" } : {}),
           });
         },
       },
     });
+    expect(client.getCandidateFileNames("b".repeat(40))).toEqual(["custom-plugin-siblings.mjs"]);
     for (const path of paths) {
       expect(client.getWorkflowSource(q, path)).toBe(readFileSync(path, "utf8"));
     }

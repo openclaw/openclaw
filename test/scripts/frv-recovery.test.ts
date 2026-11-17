@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -35,7 +36,7 @@ afterEach(() => {
   }
 });
 
-function fixture() {
+function fixture(candidateSha = Q) {
   const directory = mkdtempSync(join(process.cwd(), ".openclaw/tmp/recovery-operator-"));
   directories.push(directory);
   const path = join(directory, "request.json");
@@ -85,10 +86,10 @@ function fixture() {
     runs.set(id, { ...identity, id, path: ".github/workflows/" + workflow });
   }
   artifact(10, "full-release-source-admission-parent-10-1", "publication-source-admission.json", {
-    candidateSha: Q,
+    candidateSha,
     qualificationAdmission: { runId: 9 },
   });
-  const candidate = { request: { targetSha: Q, toolingSha: Q } };
+  const candidate = { request: { targetSha: candidateSha, toolingSha: Q } };
   for (const [index, stage] of ["npm", "candidate", "docker"].entries()) {
     const id = 20 + index;
     dispatch(id, stage, "full-release-artifacts.yml");
@@ -97,7 +98,7 @@ function fixture() {
     artifact(id, "full-release-artifact-receipt-" + id + "-1", "artifact-receipt.json", {
       schema: "openclaw.full-release-artifact-receipt/v1",
       stage,
-      sourceSha: Q,
+      sourceSha: candidateSha,
       toolingSha: Q,
       workflowRef: identity.head_branch,
       repository,
@@ -115,7 +116,7 @@ function fixture() {
     });
   }
   dispatch(23, "Prepare exact plugin npm artifacts", "plugin-npm-release.yml");
-  artifact(23, "plugin-npm-prepared-" + Q + "-23-1", "plugin-npm-prepared.json", {
+  artifact(23, "plugin-npm-prepared-" + candidateSha + "-23-1", "plugin-npm-prepared.json", {
     producer: {
       repository,
       runId: 23,
@@ -131,10 +132,10 @@ function fixture() {
     dispatch(id, role, releaseChildSpec(role).workflow);
     artifact(
       id,
-      "full-release-child-evidence-" + Q + "-" + role + "-" + id + "-1",
+      "full-release-child-evidence-" + candidateSha + "-" + role + "-" + id + "-1",
       "full-release-child-evidence.json",
       {
-        targetSha: Q,
+        targetSha: candidateSha,
         workflowSha: Q,
         workflowRef: identity.head_branch,
         displayTitle: "original " + role,
@@ -168,6 +169,22 @@ function fixture() {
     listRecoveryRuns: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
     postRecovery: vi.fn(async (_wire: string) => {}),
   };
+  function observeRecovery(status = "in_progress", conclusion: string | null = null) {
+    const request = JSON.parse(readFileSync(path, "utf8")).request;
+    const run = {
+      ...parent,
+      id: 99,
+      head_sha: P,
+      head_branch: "main",
+      path: ".github/workflows/full-release-receipt-recovery.yml",
+      display_title: "Receipt Recovery " + request.requestId,
+      status,
+      conclusion,
+    };
+    runs.set(99, run);
+    client.listRecoveryRuns.mockResolvedValue([run]);
+    return { request, run };
+  }
   const verifyOriginal = vi.fn(async () => {
     expect(JSON.parse(readFileSync(path, "utf8")).phase).toBe("prepared");
   });
@@ -176,6 +193,7 @@ function fixture() {
     artifact,
     client,
     verifyOriginal,
+    observeRecovery,
     artifacts,
     jobs,
     runs,
@@ -185,11 +203,53 @@ function fixture() {
 }
 
 describe("retained receipt recovery operator", () => {
-  it("discovers missing-plan descriptors, retains before auth and POST, and never retries an uncertain POST", async () => {
+  it("prints the retained reconciliation command after an unconfirmed recovery", async () => {
     const f = fixture();
+    await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
+    const preload = join(f.path, "..", "transport.mjs");
+    writeFileSync(
+      preload,
+      'import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; import { EventEmitter } from "node:events"; ' +
+        'cp.spawn = (command, args) => { if (!args.some(arg => arg.includes("/actions/workflows/full-release-receipt-recovery.yml/runs?"))) throw new Error("Unexpected transport"); ' +
+        'const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); process.nextTick(() => { child.stdout.emit("data", Buffer.from(JSON.stringify({ workflow_runs: [] }))); child.emit("close", 0); }); return child; }; syncBuiltinESMExports();',
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        preload,
+        "scripts/frv.mjs",
+        "recover",
+        "--run",
+        "10",
+        "--workflow-sha",
+        P,
+        "--request-file",
+        f.path,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 15_000,
+        env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("recovery run: unconfirmed");
+    expect(result.stdout).toContain(
+      "next: pnpm frv recover --reconcile-request " + JSON.stringify(f.path),
+    );
+  });
+
+  it("discovers missing-plan descriptors, retains before auth and POST, and never retries an uncertain POST", async () => {
+    const f = fixture("b".repeat(40));
     f.client.postRecovery.mockImplementation(async (wire) => {
       const record = JSON.parse(readFileSync(f.path, "utf8"));
       expect(record.phase).toBe("attempted");
+      expect(f.client.verifyQualificationAdmission).toHaveBeenCalledWith(
+        expect.objectContaining({ candidateSha: "b".repeat(40), qualificationSha: Q }),
+      );
       expect(statSync(f.path).mode & 0o777).toBe(0o600);
       expect(JSON.parse(JSON.parse(wire).inputs.request)).toEqual(record.request);
       expect(Object.keys(record.request.children)).toEqual(roles);
@@ -202,20 +262,7 @@ describe("retained receipt recovery operator", () => {
     await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
     expect(f.client.postRecovery).toHaveBeenCalledTimes(1);
     expect(f.verifyOriginal).toHaveBeenCalledTimes(1);
-    const request = JSON.parse(readFileSync(f.path, "utf8")).request;
-    f.client.listRecoveryRuns.mockResolvedValue([
-      {
-        ...f.runs.get(10),
-        id: 99,
-        head_sha: P,
-        head_branch: "main",
-        path: ".github/workflows/full-release-receipt-recovery.yml",
-        display_title: "Receipt Recovery " + request.requestId,
-        status: "in_progress",
-        conclusion: null,
-      },
-    ]);
-    f.runs.set(99, (await f.client.listRecoveryRuns())[0]);
+    f.observeRecovery();
     expect(await reconcileReceiptRecovery(f.path, f.client)).toMatchObject({
       action: "recovery-unconfirmed",
       requestAuthenticated: false,
@@ -341,19 +388,7 @@ describe("retained receipt recovery operator", () => {
   it("authenticates an early exact request witness even when later recovery fails", async () => {
     const f = fixture();
     await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
-    const request = JSON.parse(readFileSync(f.path, "utf8")).request;
-    const run = {
-      ...f.runs.get(10),
-      id: 99,
-      head_sha: P,
-      head_branch: "main",
-      path: ".github/workflows/full-release-receipt-recovery.yml",
-      display_title: "Receipt Recovery " + request.requestId,
-      status: "completed",
-      conclusion: "failure",
-    };
-    f.runs.set(99, run);
-    f.client.listRecoveryRuns.mockResolvedValue([run]);
+    const { request, run } = f.observeRecovery("completed", "failure");
     const artifact = f.artifact(99, "full-release-recovery-request-99-1", "request.json", request);
     Object.assign(artifact, {
       created_at: "2026-08-28T12:00:02Z",
@@ -403,19 +438,7 @@ describe("retained receipt recovery operator", () => {
   it("rejects another request under the exact run title", async () => {
     const f = fixture();
     await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
-    const request = JSON.parse(readFileSync(f.path, "utf8")).request;
-    const run = {
-      ...f.runs.get(10),
-      id: 99,
-      head_sha: P,
-      head_branch: "main",
-      path: ".github/workflows/full-release-receipt-recovery.yml",
-      display_title: "Receipt Recovery " + request.requestId,
-      status: "in_progress",
-      conclusion: null,
-    };
-    f.runs.set(99, run);
-    f.client.listRecoveryRuns.mockResolvedValue([run]);
+    const { request } = f.observeRecovery();
     f.artifact(99, "full-release-recovery-request-99-1", "request.json", {
       ...request,
       originalParent: { runId: "11", runAttempt: 1 },
@@ -427,17 +450,7 @@ describe("retained receipt recovery operator", () => {
   it("rejects a successful aggregate carrying a different retained request", async () => {
     const f = fixture();
     await dispatchReceiptRecovery(f.options, f.client, { verifyOriginal: f.verifyOriginal });
-    const request = JSON.parse(readFileSync(f.path, "utf8")).request;
-    const run = {
-      ...f.runs.get(10),
-      id: 99,
-      head_sha: P,
-      head_branch: "main",
-      path: ".github/workflows/full-release-receipt-recovery.yml",
-      display_title: "Receipt Recovery " + request.requestId,
-    };
-    f.runs.set(99, run);
-    f.client.listRecoveryRuns.mockResolvedValue([run]);
+    const { request } = f.observeRecovery("completed", "success");
     const client = {
       ...f.client,
       loadManifest: () => ({

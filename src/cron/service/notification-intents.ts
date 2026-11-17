@@ -90,7 +90,7 @@ export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
       kind: "failure-repair";
       job: CronNotificationJob;
       text: string;
-      fallback?: CronFailureAlertNotification;
+      fallback: CronFailureAlertNotification;
     }
   | CronFailureAlertNotification
 );

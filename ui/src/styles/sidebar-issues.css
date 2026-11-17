@@ -244,6 +244,17 @@
   font-weight: 500;
 }
 
+.sidebar-issues-panel__empty-icon {
+  display: inline-flex;
+  margin-block-end: 12px;
+  color: var(--icon-decorative, var(--muted));
+}
+
+.sidebar-issues-panel__empty-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
 .sidebar-issues-panel__overflow-cue {
   position: absolute;
   z-index: 1;

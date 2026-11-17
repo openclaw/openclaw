@@ -572,7 +572,9 @@ user-backup sanitizer. Config captures include the root file and its includes.
 Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
-All destination stores are privately migrated and verified before publication.
+All destination stores are verified before publication. SQLite sources are
+privately migrated first. PostgreSQL sources already use the current schema, so a
+reverse port copies their rows, including schema metadata, without migrating them.
 Migration, checkpointing, and materialization read a private local working copy,
 not the durable recovery image. The command uses the existing private cache root;
 set `XDG_CACHE_HOME` to a local filesystem if the cache is network-backed or cannot

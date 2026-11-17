@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
@@ -188,6 +189,7 @@ it("preserves off-thread reads, queued inputs, and cancellation ownership", asyn
       awaitGateBeforeSettlement(transfer.ready, first, "Read settled before its transfer started"),
       signal,
     );
+    channel("openclaw.memory.critical").publish(true);
     now = 10;
     const command = readCommand();
     const captured = scope.run(() => runSqliteReadOnlyOperation(source, command, readOptions()));
@@ -440,6 +442,7 @@ it.skipIf(process.platform !== "linux")(
     const start = spawns.mock.calls.length;
     try {
       await Promise.all(warmers.map(begin));
+      channel("openclaw.memory.critical").publish(true);
       const queued = waiting.run(() => runRead());
       const observation = observeSettlement(queued);
       const cancelled = aborting.run(() => runRead());
@@ -499,6 +502,36 @@ it.skipIf(process.platform !== "linux")(
     }
   },
 );
+
+it("retires idle readers under memory pressure and reopens for later reads", async () => {
+  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
+  const pool = createSqliteReadOnlyWorkerPool((launch) => {
+    const session = createScopedSqliteReadOnlyWorker(launch);
+    sessions.push(session);
+    return session;
+  });
+  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  const readFromPool = () =>
+    pool.run(source, { ...readOptions(), mode: "operation", command: readCommand() }, launch);
+  try {
+    await expect(readFromPool()).resolves.toEqual({
+      operation: "agentRetirement.sessionStoreBlocker",
+      value: blocker,
+    });
+    const first = lastChild();
+    expect(first.exitCode).toBeNull();
+    channel("openclaw.memory.critical").publish(true);
+    await expect.poll(() => first.exitCode, { timeout: 5_000 }).toBe(0);
+    await sessions[0]!.closed;
+    await expect(readFromPool()).resolves.toEqual({
+      operation: "agentRetirement.sessionStoreBlocker",
+      value: blocker,
+    });
+    expect(lastChild()).not.toBe(first);
+  } finally {
+    await Promise.all(sessions.map((session) => session.close()));
+  }
+});
 
 it("releases startup metadata maintenance before admitting a Gateway", async () => {
   const root = tempDirs.make("openclaw-startup-metadata-owner-");

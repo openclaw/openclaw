@@ -835,3 +835,46 @@ it("settles a public failure before dispatching its queued successor", async () 
   expect(workers).toHaveLength(1);
   expect(worker.terminate).not.toHaveBeenCalled();
 });
+
+it("serves point reads on a reserved worker ahead of bulk work that fills the pool", async () => {
+  const pool = createPool({ maxPendingTasks: 2 });
+  const bulkGate = createDeferredCore<string>();
+  const order: string[] = [];
+  const bulk = [pool.run(() => bulkGate.promise, {}), pool.run(() => bulkGate.promise, {})];
+  const queuedBulk = bulk[1]!.then(() => order.push("queued bulk"));
+  try {
+    await nextTurn();
+    await expect(pool.run("late bulk", {})).rejects.toMatchObject({
+      code: "overloaded",
+      message: expect.stringContaining("worker task capacity reached"),
+    });
+    // The reserved worker is busy too: a later point read still runs before queued bulk work.
+    const accessGate = createDeferredCore<string>();
+    const first = pool.run(() => accessGate.promise, { pointRead: true, timeoutMs: 1_000 });
+    await nextTurn();
+    const second = pool.run("second access check", { pointRead: true, timeoutMs: 1_000 });
+    accessGate.resolve("first access check");
+    await expect(first).resolves.toBe("first access check");
+    await expect(second).resolves.toBe("second access check");
+    order.push("access checks");
+    expect(pool.getSnapshot()).toMatchObject({ maxWorkers: 1, activeTasks: 1, pendingTasks: 2 });
+    bulkGate.resolve("bulk");
+    await expect(Promise.all(bulk)).resolves.toEqual(["bulk", "bulk"]);
+    await queuedBulk;
+    expect(order).toEqual(["access checks", "queued bulk"]);
+  } finally {
+    bulkGate.resolve("bulk");
+    await Promise.allSettled([...bulk, queuedBulk]);
+  }
+});
+
+it("refuses point reads that would call back into the host", async () => {
+  const input = vi.fn(() => "private input");
+  await expect(
+    createPool().run(input, {
+      pointRead: true,
+      onRequest: async () => ({ input: null, timeoutMs: 1 }),
+    }),
+  ).rejects.toThrow("Point reads carry their facts and cannot call back into the host");
+  expect(input).not.toHaveBeenCalled();
+});

@@ -6,7 +6,8 @@ import { parse as parseYaml } from "yaml";
 import { canonicalAsciiJson, compareAscii } from "./lib/canonical-json.mjs";
 import { resolveRunnerMatrix } from "./lib/cross-os-release-checks/config.ts";
 import { isRecord } from "./lib/record-shared.mjs";
-import { compareReleaseVersions } from "./lib/release-version.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
+import { isPackageRecoveryScenario } from "./lib/upgrade-survivor-policy.mjs";
 import { createReleaseCheckSelection } from "./plan-release-workflow-matrix.mjs";
 import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups.mjs";
 
@@ -322,7 +323,7 @@ function frozenProfileRows(source, name, profile) {
 }
 
 /** Inputs are already bound to the authenticated admission and Q child receipt. */
-export function qualificationRequiredChildJobs({ role, inputs, getSource }) {
+export function qualificationRequiredChildJobs({ role, inputs, getSource, getCandidateFileNames }) {
   if (!role.startsWith("releaseChecks")) {
     return [];
   }
@@ -514,44 +515,38 @@ export function qualificationRequiredChildJobs({ role, inputs, getSource }) {
       [...aggregate.matchAll(/scenario !== "([^"]+)"/gu)].map((match) => match[1]),
     );
     const catalog = JSON.parse(getSource("scripts/lib/upgrade-survivor-scenarios.json"));
-    const version = JSON.parse(inputs.candidate_artifact_json || "{}").packageVersion;
-    const workflowVersion = JSON.parse(getSource("package.json")).version;
-    const currentLine =
-      typeof version === "string" &&
-      !String(inputs.target_context_ref).includes("extended-stable/") &&
-      compareReleaseVersions(version, workflowVersion) >= 0;
-    if (currentLine) {
-      // Current-line workflow selection probes these candidate capabilities.
-      // This source adapter supports the complete current fixture inventory;
-      // a Q without it must fail explicitly rather than inherit P's fixtures.
-      for (const file of [
-        "legacy-operator-state",
-        "custom-plugin-siblings",
-        "package-activation-recovery",
-      ]) {
-        if (!getSource("scripts/e2e/lib/upgrade-survivor/" + file + ".mjs")) {
-          throw new Error("Unsupported frozen qualification survivor capability: " + file);
-        }
-      }
+    const artifact = JSON.parse(inputs.candidate_artifact_json || "{}");
+    const candidateVersion = parseReleaseVersion(artifact.packageVersion);
+    const workflowVersion = parseReleaseVersion(JSON.parse(getSource("package.json")).version);
+    if (!candidateVersion || !workflowVersion) {
+      throw new Error("Invalid frozen qualification survivor package version");
     }
-    let scenarios =
+    const currentLine =
+      artifact.packagePublished !== true &&
+      !inputs.package_acceptance_package_spec &&
+      !String(inputs.target_context_ref)
+        .replace(/^refs\/heads\//u, "")
+        .startsWith("extended-stable/") &&
+      !String(inputs.ref)
+        .replace(/^refs\/heads\//u, "")
+        .startsWith("extended-stable/") &&
+      compareReleaseVersions(candidateVersion.baseVersion, workflowVersion.baseVersion) >= 0;
+    // Q owns the policy, but the original workflow probes capabilities at C.
+    // Missing individual fixtures deliberately retain the older scenario roster.
+    const candidateFiles = currentLine ? getCandidateFileNames(artifact.packageSourceSha) : [];
+    const supportsOperator = candidateFiles.includes("legacy-operator-state.mjs");
+    const supportsSibling = candidateFiles.includes("custom-plugin-siblings.mjs");
+    const supportsRecovery = candidateFiles.includes("package-activation-recovery.mjs");
+    const scenarios = (
       inputs.run_release_soak === "true"
         ? catalog.scenarios.filter(
             (scenario) => !exclusions.has(scenario) && scenario !== "sqlite-volume",
           )
-        : ["base", "legacy-operator-state", "custom-plugin-siblings"];
-    if (!currentLine) {
-      scenarios = scenarios.filter(
-        (scenario) =>
-          ![
-            "legacy-operator-state",
-            "custom-plugin-siblings",
-            "package-publication-recovery",
-            "package-verification-recovery",
-            "package-stranded-first-hop",
-          ].includes(scenario),
-      );
-    }
+        : ["base", "legacy-operator-state", "custom-plugin-siblings"]
+    )
+      .filter((scenario) => !isPackageRecoveryScenario(scenario) || supportsRecovery)
+      .filter((scenario) => scenario !== "legacy-operator-state" || supportsOperator)
+      .filter((scenario) => scenario !== "custom-plugin-siblings" || supportsSibling);
     for (const group of planTargetedDockerLaneGroups({
       lanes: expandedLanes.join(" "),
       upgradeSurvivorBaseline: baselines.upgradeBaseline,

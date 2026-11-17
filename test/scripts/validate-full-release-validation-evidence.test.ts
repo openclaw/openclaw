@@ -84,7 +84,15 @@ describe("authenticated publication eligibility", () => {
     // Match the retained JSON transport: omitted fields are not undefined properties.
     const manifestJson = JSON.stringify(f.manifest);
     const manifest = JSON.parse(manifestJson);
-    const client = { ...f.client, loadManifest: () => ({ artifact: f.artifact, manifest }) };
+    const client = {
+      ...f.client,
+      getJobLog: async (id: number) => f.client.getJobLog(id),
+      getParentJobs: async (id: string) => f.client.getParentJobs(id),
+      getRun: async (id: string) => f.client.getRun(id),
+      getRunView: async (id: string) => f.client.getRunView(id),
+      getRunAttemptJobs: async (id: string) => f.client.getRunAttemptJobs(id),
+      loadManifest: () => ({ artifact: f.artifact, manifest }),
+    };
     const options = {
       run: f.parentRun,
       manifest,
@@ -180,6 +188,28 @@ describe("authenticated publication eligibility", () => {
         expectedPublicationOperation: options.expectedPublicationSelection,
       }).source,
     ).toBe("candidate-owned-admission-v1");
+  });
+
+  it("allows dropping only core npm from an otherwise exact plugin publication", async () => {
+    const f = candidatePublicationFixture();
+    const options = publicationOptions(f);
+    const authenticated = await authenticateFullReleaseValidationEvidence(options, f.client);
+    const operation = { ...options.expectedPublicationSelection, publishOpenclawNpm: false };
+    const pluginOptions = {
+      ...options,
+      expectedPublicationSelection: undefined,
+      expectedPublicationOperation: operation,
+    };
+    expect(authenticated.forPublication(pluginOptions).source).toBe("candidate-owned-admission-v1");
+    for (const changed of [
+      { ...operation, route: "prepared" },
+      { ...operation, npmDistTag: "latest" },
+      { ...operation, plugins: ["@openclaw/unknown"] },
+    ]) {
+      expect(() =>
+        authenticated.forPublication({ ...pluginOptions, expectedPublicationOperation: changed }),
+      ).toThrow("covered plugin-only subset");
+    }
   });
 
   it("requires separately admitted Windows selection instead of silently expanding publication", async () => {

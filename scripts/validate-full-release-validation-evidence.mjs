@@ -113,6 +113,16 @@ function validatePublicationOperation(source, operation) {
   if (publicationSourceJson(original) === publicationSourceJson(operation)) {
     return;
   }
+  // Detached plugin publication drops only core npm. The original route,
+  // channel, plugin roster and optional Windows operands remain binding.
+  if (
+    !operation.publishOpenclawNpm &&
+    original.publishOpenclawNpm &&
+    publicationSourceJson({ ...operation, publishOpenclawNpm: true }) ===
+      publicationSourceJson(original)
+  ) {
+    return;
+  }
   if (
     original.pluginPublishScope !== "all-publishable" ||
     operation.publishOpenclawNpm ||
@@ -456,7 +466,6 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
   const qualification = evidence.qualification;
   if (
     qualification.kind === "historical" ||
-    candidateSha !== qualificationSha ||
     qualification.candidateSha !== candidateSha ||
     qualification.qualificationSha !== qualificationSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
@@ -553,9 +562,7 @@ async function main() {
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";
   const coreProjection = consumer === "core-npm" || consumer === "docker-only";
   const boundedOperation =
-    consumer === "publisher" &&
-    process.env.PLUGIN_PUBLISH_SCOPE === "selected" &&
-    manifest.sourceAdmission?.publicationSelection !== undefined;
+    consumer === "publisher" && manifest.sourceAdmission?.publicationSelection !== undefined;
   if (consumer && !["publisher", "core-npm", "docker-only"].includes(consumer)) {
     throw new Error("Unknown publication evidence consumer.");
   }

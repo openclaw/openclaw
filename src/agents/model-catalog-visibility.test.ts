@@ -332,6 +332,23 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     }
   });
 
+  it("lists unlikely-chat rows in the all view and for configured refs only", async () => {
+    const catalog = [
+      row("demo", "chat"),
+      row("demo", "maybe", { inference: { chat: true, chatEvidence: "unlikely" } }),
+      row("demo", "typed", { inference: { chat: false } }),
+    ];
+    const ids = async (view: "default" | "all", cfg: OpenClawConfig = {}) =>
+      (await visible(catalog, { cfg, view, defaultProvider: "demo" }))
+        .map(({ id }) => id)
+        .toSorted();
+    const configured = { agents: { defaults: { model: { primary: "demo/maybe" } } } };
+
+    expect(await ids("default")).toEqual(["chat"]);
+    expect(await ids("all")).toEqual(["chat", "maybe"]);
+    expect(await ids("default", configured as OpenClawConfig)).toEqual(["chat", "maybe"]);
+  });
+
   it("dedupes physical routes after selected-route projection in the default view", async () => {
     const catalog = [
       { ...platform, alias: "platform" },

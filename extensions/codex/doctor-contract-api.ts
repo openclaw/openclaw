@@ -62,6 +62,10 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
   );
 }
 
+function hasRetiredLoopDetectionRelay(value: unknown): boolean {
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "loopDetectionPreToolUseRelay");
+}
+
 export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config", "appServer", "cyberFailover"],
@@ -96,6 +100,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config", "appServer"],
     message:
+      'plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay is retired; OpenClaw no longer runs loop detection from Codex PreToolUse hooks. Run "openclaw doctor --fix" to remove it.',
+    match: hasRetiredLoopDetectionRelay,
+  },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
       'Blank plugins.entries.codex.config.appServer.networkProxy.profileName or appServer.remoteWorkspaceRoot must be removed to use the defaults with network restrictions. Run "openclaw doctor --fix".',
     match: hasBlankNetworkProxyOptionalFields,
   },
@@ -118,6 +128,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       !hasLegacyPluginDestructivePolicy(rawCodexPlugins) &&
       !hasRetiredApprovalPolicy(rawAppServer) &&
       !hasRetiredTurnIdleTimeout(rawAppServer) &&
+      !hasRetiredLoopDetectionRelay(rawAppServer) &&
       !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
       !hasBlankNetworkProxyOptionalFields(rawAppServer))
   ) {
@@ -170,6 +181,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
         );
       }
     }
+  }
+
+  if (nextAppServer && hasRetiredLoopDetectionRelay(nextAppServer)) {
+    delete nextAppServer.loopDetectionPreToolUseRelay;
+    changes.push(
+      "Removed retired plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay; the tool repeat guard runs in the OpenClaw agent loop.",
+    );
   }
 
   if (nextAppServer && hasBlankNetworkProxyOptionalFields(nextAppServer)) {

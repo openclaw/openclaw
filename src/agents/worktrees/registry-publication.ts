@@ -132,15 +132,19 @@ export function withWorktreeRegistryPublication(
   context: OpenClawStateWorkerContext,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
-    const owner = createAdmission(operation);
-    let pending: ReturnType<typeof publication.begin>;
+    const pending = publication.begin({
+      identity: context.admission.identity.key,
+      assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
+    });
+    let owner: ReturnType<SqliteWorkerAdmissionFactory>;
     try {
-      pending = publication.begin({
-        identity: context.admission.identity.key,
-        assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
-      });
+      owner = createAdmission(operation);
     } catch (error) {
-      owner.admission.finish();
+      try {
+        pending.finish(true, true);
+      } catch {
+        // The writer never started; preserve the original constructor failure.
+      }
       throw error;
     }
     observeSqliteWorkerAdmissionFinish(owner.admission, () => {

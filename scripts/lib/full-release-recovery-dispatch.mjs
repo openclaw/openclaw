@@ -237,7 +237,7 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
   const admission = await client.verifyQualificationAdmission({
     descriptor: source.qualificationAdmission,
     repository: REPOSITORY,
-    candidateSha: parent.head_sha,
+    candidateSha: source.candidateSha,
     qualificationSha: parent.head_sha,
     workflowRef: parent.head_branch,
   });
@@ -273,7 +273,7 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
       client,
       run,
       "full-release-child-evidence-" +
-        parent.head_sha +
+        source.candidateSha +
         "-" +
         role +
         "-" +

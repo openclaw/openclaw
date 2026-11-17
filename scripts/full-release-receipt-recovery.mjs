@@ -199,8 +199,8 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
   const target = binding?.request?.targetSha;
   const qualificationSha = binding?.request?.toolingSha;
   requireValue(
-    target === qualificationSha && /^[a-f0-9]{40}$/u.test(target),
-    "original candidate must retain C=Q",
+    /^[a-f0-9]{40}$/u.test(target) && /^[a-f0-9]{40}$/u.test(qualificationSha),
+    "original candidate and qualification must identify commits",
   );
   const parent = await client.getRunAttempt(
     request.originalParent.runId,
@@ -255,7 +255,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     parent.status === "completed" &&
       ["success", "failure"].includes(parent.conclusion) &&
       Number(parent.run_attempt) === request.originalParent.runAttempt &&
-      parent.head_sha === target &&
+      parent.head_sha === qualificationSha &&
       parent.head_branch === admission.request.transportRef &&
       parent.event === "workflow_dispatch" &&
       String(parent.path).split("@")[0] === ".github/workflows/full-release-validation.yml" &&
@@ -271,7 +271,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     admission.coverage.requiredParentJobs,
     "Original qualification parent",
   );
-  // Missing-plan beta recovery remains supported. If a plan exists, it is
+  // Missing-plan recovery remains supported. If a plan exists, it is
   // evidence, not an optional hint: use the original admission's sealing owner.
   const artifacts = await client.getRunArtifacts(request.originalParent.runId);
   if (
@@ -381,6 +381,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       jobs: verified.receipt.jobs,
       waivedJobNames: policy.waivedJobNames,
       getSource: (path) => client.getWorkflowSource(qualificationSha, path),
+      getCandidateFileNames: (candidateSha) => client.getCandidateFileNames(candidateSha),
     });
     if (role === "productPerformance") {
       validatePerformanceArtifactOnlyJobs(verified.receipt.jobs);
@@ -405,7 +406,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       role,
       runId: selection.runId,
       runAttempt: selection.runAttempt,
-      workflowSha: qualificationSha,
+      workflowSha: verified.selection.workflowSha,
       sourceParentRunId: selection.sourceParentRunId,
       conclusion: verified.run.conclusion,
       waivers: policy.waivers,
@@ -589,14 +590,14 @@ export async function revalidateReceiptRecoveryRuns(
     seen.add(String(tuple.runId));
     const current = await client.getRun(String(tuple.runId));
     const parent = String(tuple.runId) === request.originalParent.runId;
+    const verifiedChild = verifiedChildren?.find((child) => child.runId === String(tuple.runId));
     const conclusion =
-      parent && originalParent
-        ? originalParent.conclusion
-        : verifiedChildren?.find((child) => child.runId === String(tuple.runId))?.conclusion;
+      parent && originalParent ? originalParent.conclusion : verifiedChild?.conclusion;
     requireValue(
       String(current.id) === String(tuple.runId) &&
         Number(current.run_attempt) === Number(tuple.runAttempt) &&
-        current.head_sha === request.candidateBinding.request.toolingSha &&
+        current.head_sha ===
+          (verifiedChild?.workflowSha ?? request.candidateBinding.request.toolingSha) &&
         current.status === "completed" &&
         (conclusion
           ? current.conclusion === conclusion
@@ -983,7 +984,7 @@ async function main() {
       descriptor: request.qualificationAdmission,
       repository: request.repository,
       candidateSha: manifest.targetSha,
-      qualificationSha: manifest.targetSha,
+      qualificationSha: request.candidateBinding.request.toolingSha,
       workflowRef: verified.originalParent.head_branch,
     });
     verifyReceiptRecoveryAuthority(request.repository, producer, false);

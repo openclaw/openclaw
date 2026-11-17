@@ -217,7 +217,7 @@ export function validateQualificationAdmissionRequest(request) {
     request.kind === REQUEST_KIND &&
       request.repository === REPOSITORY &&
       SHA.test(request.candidateSha) &&
-      request.qualificationSha === request.candidateSha &&
+      SHA.test(request.qualificationSha) &&
       request.reviewed === true &&
       typeof request.requestId === "string" &&
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(request.requestId) &&
@@ -226,7 +226,7 @@ export function validateQualificationAdmissionRequest(request) {
         "^release-ci/" + request.qualificationSha.slice(0, 12) + "-[1-9][0-9]*$",
         "u",
       ).test(request.transportRef),
-    "Qualification request must attest the exact reviewed C=Q tuple and transport",
+    "Qualification request must attest the exact reviewed C/Q tuple and transport",
   );
   const inputs = semanticQualificationInputs(request.inputs);
   requireValue(
@@ -234,6 +234,15 @@ export function validateQualificationAdmissionRequest(request) {
       inputs.expected_sha === request.candidateSha &&
       isDeepStrictEqual(inputs, request.inputs),
     "Qualification request inputs are not complete canonical C inputs",
+  );
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  requireValue(
+    isDeepStrictEqual(envelope.trustedWorkflow, {
+      ref: request.transportRef,
+      fullRef: "refs/heads/" + request.transportRef,
+      sha: request.qualificationSha,
+    }),
+    "Qualification request workflow envelope differs from frozen Q",
   );
   canonical(request);
   return request;
@@ -570,6 +579,17 @@ export function produceQualificationAdmission({
     initial.run.display_title === "Qualification Admission " + request.requestId,
     "Admission request differs from its workflow dispatch title",
   );
+  // An independent Q must be reviewed repository tooling, not merely a caller SHA.
+  // The authenticated P operator request selects the frozen revision explicitly.
+  if (request.qualificationSha !== request.candidateSha) {
+    verifyReleaseToolingIdentity({
+      repository: request.repository,
+      workflowRef: "main",
+      workflowFullRef: "refs/heads/main",
+      workflowSha: request.qualificationSha,
+      runGh,
+    });
+  }
   const workflow = readSource(
     request.repository,
     request.qualificationSha,
@@ -589,13 +609,8 @@ export function produceQualificationAdmission({
   );
   const baselinePolicy = qualificationBaselinePolicy(
     request,
-    readSource(request.repository, request.qualificationSha, "package.json", runGh),
-    readSource(
-      request.repository,
-      request.qualificationSha,
-      QUALIFICATION_BASELINE_POLICY_PATH,
-      runGh,
-    ),
+    readSource(request.repository, request.candidateSha, "package.json", runGh),
+    readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
   );
   const exemptions = releaseQualificationExemptions(
     baselinePolicy.candidateVersion,
@@ -853,8 +868,8 @@ function readQualificationAdmission(
   verifySupportingEvidence,
 ) {
   requireValue(
-    repository === REPOSITORY && SHA.test(candidateSha) && candidateSha === qualificationSha,
-    "Qualification admission requires the canonical C=Q identity",
+    repository === REPOSITORY && SHA.test(candidateSha) && SHA.test(qualificationSha),
+    "Qualification admission requires canonical C/Q identities",
   );
   const producer = admissionDescriptorProducer(descriptor, repository);
   const { artifactId, artifactDigest, artifactSizeBytes } = descriptor;
@@ -902,6 +917,15 @@ function readQualificationAdmission(
       (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
   );
+  if (candidateSha !== qualificationSha) {
+    verifyReleaseToolingIdentity({
+      repository,
+      workflowRef: "main",
+      workflowFullRef: "refs/heads/main",
+      workflowSha: qualificationSha,
+      runGh,
+    });
+  }
   const finalMetadata = api(repository, "actions/artifacts/" + artifactId, runGh);
   const final = verifyProducer(producer, runGh, true);
   validateArtifact(descriptor, finalMetadata, final.run, jobs);
