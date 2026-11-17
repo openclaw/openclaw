@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -672,7 +673,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&
       client.sharedGatewaySessionGeneration &&
-      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
+      (isBrowserOperatorUiClient(client.connect.client) ||
+        isWebchatClient(client.connect.client) ||
+        isNativeAppUiClient(client.connect.client))
     ) {
       // The handshake owns the credential/generation checks, including device
       // reconnects bound to that shared credential. The profile name grants nothing.
