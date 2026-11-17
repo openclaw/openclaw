@@ -39,7 +39,7 @@ it("queues a borrowed foreground write while a cold Worker owns admission", asyn
     const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
     vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
       (params) => {
-        if (params.expectedMessageType !== "reclaimed") {
+        if (params.expectedMessageType !== "reclaimed" || writes.length > 0) {
           return originalWorker(params);
         }
         let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
