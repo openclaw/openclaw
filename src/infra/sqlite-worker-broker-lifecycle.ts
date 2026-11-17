@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
+import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
@@ -223,6 +224,8 @@ export function createSqliteWorkerLifecycle({
       ),
       exited: createDeferredCore(),
     }));
+    // Node forwards worker stderr without passing through the host logger.
+    worker.stderr.prependListener("data", clearActiveProgressLine);
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
       carrierClass: options.carrierClass,
