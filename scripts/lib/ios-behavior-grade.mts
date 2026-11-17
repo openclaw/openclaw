@@ -49,12 +49,18 @@ function userScrollWindows(events: ProbeEvent[]): Array<[number, number]> {
 }
 
 /**
- * Frames and events between `from` and `to`, minus the reader's own scrolling. The probe writes a
- * frame only when something moved, so the last frame before `from` is the layout at `from`; it
- * leads the window so a jump in the first frame inside it is measured.
+ * Frames and events between `from` and `to`, minus the reader's own scrolling unless
+ * `keepUserScroll` (cases where a gesture must not scroll at all, so any scroll is the bug). The
+ * probe writes a frame only when something moved, so the last frame before `from` is the layout at
+ * `from`; it leads the window so a jump in the first frame inside it is measured.
  */
-export function window(log: ProbeLog, from: number, to: number): ProbeLog {
-  const scrolling = userScrollWindows(log.events);
+export function window(
+  log: ProbeLog,
+  from: number,
+  to: number,
+  options: { keepUserScroll?: boolean } = {},
+): ProbeLog {
+  const scrolling = options.keepUserScroll ? [] : userScrollWindows(log.events);
   const userMoved = (t: number) => scrolling.some(([start, end]) => t >= start && t <= end);
   const inside = log.frames.filter(
     (frame) => frame.t >= from && frame.t <= to && !userMoved(frame.t),
@@ -64,6 +70,127 @@ export function window(log: ProbeLog, from: number, to: number): ProbeLog {
     frames: atStart ? [atStart, ...inside] : inside,
     events: log.events.filter((event) => event.t >= from && event.t <= to),
   };
+}
+
+/**
+ * One write to the transcript scroll view's contentOffset (`{e:"offset",k:writer,v:"old->new"}`,
+ * y only). Writers: the reading-position owner's `ReadingPosition.follow`, `.turn`, `.anchor`,
+ * `.prepend` and `.jump`, `user` (dragging or decelerating), `system:<frames>` (untagged);
+ * animated writes carry a `~anim` suffix and log the target.
+ */
+export type OffsetWrite = { t: number; writer: string; from: number; to: number };
+
+export function offsetWrites(events: ProbeEvent[], from: number, to: number): OffsetWrite[] {
+  const writes: OffsetWrite[] = [];
+  for (const event of events) {
+    if (event.e !== "offset" || event.t < from || event.t > to || !event.k || !event.v) {
+      continue;
+    }
+    const [before, after] = event.v.split("->").map(Number);
+    if (before !== undefined && after !== undefined && Number.isFinite(before + after)) {
+      writes.push({ t: event.t, writer: event.k, from: before, to: after });
+    }
+  }
+  return writes;
+}
+
+/** The scroll view's own pan: the reader dragging or decelerating. */
+export const isReaderWrite = (write: OffsetWrite) => write.writer.startsWith("user");
+
+/** Per writer: how many writes and how far they moved the offset in total (points). */
+export function offsetWriters(writes: OffsetWrite[]) {
+  const writers: Record<string, { writes: number; movedPt: number }> = {};
+  for (const write of writes) {
+    const entry = (writers[write.writer] ??= { writes: 0, movedPt: 0 });
+    entry.writes += 1;
+    entry.movedPt = round(entry.movedPt + Math.abs(write.to - write.from));
+  }
+  return writers;
+}
+
+/** Total distance every writer moved the offset, back-and-forth included. */
+export function offsetMovedPt(writes: OffsetWrite[]) {
+  return round(writes.reduce((sum, write) => sum + Math.abs(write.to - write.from), 0));
+}
+
+/**
+ * Row motion between `from` and `to` while the reader is not scrolling. Each stretch between their
+ * drags (and decelerations) is measured on its own, so a drag never reads as a one-frame step from
+ * the layout before it to the layout after it.
+ */
+export function restingMotion(log: ProbeLog, from: number, to: number) {
+  const scrolling = userScrollWindows(log.events);
+  const stretches: ProbeFrame[][] = [];
+  let current: ProbeFrame[] = [];
+  for (const frame of log.frames) {
+    if (frame.t < from || frame.t > to) {
+      continue;
+    }
+    if (scrolling.some(([start, end]) => frame.t >= start && frame.t <= end)) {
+      if (current.length > 0) {
+        stretches.push(current);
+        current = [];
+      }
+    } else {
+      current.push(frame);
+    }
+  }
+  stretches.push(current);
+  let largestStepPt = 0;
+  let teleports = 0;
+  for (const stretch of stretches) {
+    const moved = motion(stretch);
+    largestStepPt = Math.max(largestStepPt, moved.largestStepPt);
+    teleports += moved.teleports;
+  }
+  return { largestStepPt, teleports };
+}
+
+/** Times of `{e:"mark",k:name}` events. */
+export function marks(events: ProbeEvent[], name: string) {
+  return events.filter((event) => event.e === "mark" && event.k === name).map((event) => event.t);
+}
+
+/** Scroll phases the transcript reported between `from` and `to` other than idle. */
+export function scrollPhases(events: ProbeEvent[], from: number, to: number) {
+  return events.filter(
+    (event) => event.e === "phase" && event.v !== "idle" && event.t >= from && event.t <= to,
+  ).length;
+}
+
+/**
+ * How far the visible rows moved across an older-page prepend at `at` beyond what the reader's own
+ * scrolling explains: the median, over rows on screen before and after, of each row's shift plus
+ * the reader's offset change in between (a reader offset increase moves rows up by as much). Zero
+ * when the prepend kept the reading position, even mid-deceleration. Compares the layout at `at`
+ * with the one `settleMs` later, after the restore's settle passes. Undefined without rows in both.
+ */
+export function prependShift(log: ProbeLog, at: number, settleMs = 400) {
+  const before = lastFrameBefore(log.frames, at);
+  const after = lastFrameBefore(log.frames, at + settleMs);
+  if (!before || !after) {
+    return undefined;
+  }
+  if (before === after) {
+    return 0;
+  }
+  const reader = offsetWrites(log.events, before.t + 0.5, after.t)
+    .filter(isReaderWrite)
+    .reduce((sum, write) => sum + write.to - write.from, 0);
+  const visibleBottom = after.f.composer?.[0] ?? Number.POSITIVE_INFINITY;
+  const shifts: number[] = [];
+  for (const [key, edges] of Object.entries(after.f)) {
+    const earlier = before.f[key];
+    if (!isRow(key) || !earlier) {
+      continue;
+    }
+    const dy = visibleShift(earlier, edges, visibleBottom);
+    if (dy !== undefined) {
+      shifts.push(dy + reader);
+    }
+  }
+  const median = percentile(shifts, 0.5);
+  return median === undefined ? undefined : round(median);
 }
 
 const isRow = (key: string) => key !== "composer";

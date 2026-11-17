@@ -796,3 +796,14 @@ private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
             set: { self.isExpanded = $0 })
     }
 }
+
+/// RootTabs rebuilds the chat tab with fresh closures on every sidebar open and close.
+/// Equal header controls mean nothing the tab draws changed: both closures only call
+/// RootTabs methods that read its live state, so an older copy behaves the same.
+/// The tab's own model, environment, and state reads still invalidate it directly.
+extension ChatProTab: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
+            lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier
+    }
+}

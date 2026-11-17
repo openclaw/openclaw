@@ -1,7 +1,4 @@
 import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
 
 enum ChatReaderUserTransition: Equatable {
     case unchanged
@@ -82,15 +79,28 @@ enum ScrollFollowTarget: Equatable {
 @MainActor
 @Observable
 final class ChatScrollFollowState {
+    #if os(iOS)
+    /// The iOS transcript's only offset writer. It owns the mode; reads here are not observed.
+    @ObservationIgnored let readingPosition = ChatReadingPosition()
+    var followTarget: ScrollFollowTarget? {
+        get { self.readingPosition.mode }
+        set { self.readingPosition.setMode(newValue) }
+    }
+    #else
     var followTarget: ScrollFollowTarget? = .latest
+    #endif
     var isAtLiveEdge = true
     var isUserScrolling = false
     var hasNewerContentBelow = false
     #if os(iOS)
-    @ObservationIgnored weak var transcriptScroller: UIScrollView?
     var isKeyboardTransitioning = false
-    let readerAnchor = ChatReaderRunAnchor()
     #endif
+
+    init() {
+        #if os(iOS)
+        self.readingPosition.follow = self
+        #endif
+    }
 }
 
 /// Keeps the end of the transcript in view while it follows the latest content.

@@ -3,6 +3,7 @@ import OpenClawChatUI
 import Testing
 @testable import OpenClaw
 
+@MainActor
 struct CommandCenterTabSessionFilterTests {
     @Test func `cached browsing scopes remain available offline while archives require a connection`() {
         #expect(SessionStatusScope.available(isConnected: false) == [.active, .snoozed, .automations])

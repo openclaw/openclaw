@@ -66,6 +66,7 @@ struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
 
 private struct ChatInlineDisclosure: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openClawReadingPosition) private var readingPosition
     let configuration: DisclosureGroupStyleConfiguration
     let chevron: ChatInlineDisclosureStyle.Chevron
 
@@ -73,9 +74,14 @@ private struct ChatInlineDisclosure: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 // The state changes inside the transaction, so the List row resizes with it and the
-                // rows below slide instead of snapping.
-                withAnimation(self.reduceMotion ? .easeInOut(duration: 0.2) : .snappy(duration: 0.25)) {
+                // rows below slide instead of snapping. The reading position holds this header still.
+                let animation: Animation = self.reduceMotion ? .easeInOut(duration: 0.2) : .snappy(duration: 0.25)
+                let readingPosition = self.readingPosition
+                readingPosition?.disclosureWillToggle()
+                ChatScrollSignpost.disclosureToggle(animation) {
                     self.configuration.isExpanded.toggle()
+                } completion: {
+                    readingPosition?.disclosureDidSettle()
                 }
             } label: {
                 HStack(alignment: .center, spacing: 8) {
@@ -241,6 +247,69 @@ struct ChatAgentAvatar: View {
     }
 }
 
+/// The transcript's assistant avatar. It reads the identity itself, so a name or emoji that
+/// arrives from the Gateway redraws the avatars and not the rows around them.
+struct ChatAssistantAvatar: View {
+    @Environment(\.openClawAssistantIdentity) private var identity
+    var size: CGFloat = 30
+
+    var body: some View {
+        ChatAgentAvatar(
+            text: self.identity.avatarText,
+            name: self.identity.name,
+            tint: self.identity.avatarTint,
+            size: self.size)
+    }
+}
+
+/// How the transcript names and draws the assistant. Only `ChatAssistantAvatar` and the speaker
+/// label read it; rows never take it as an input.
+struct ChatAssistantIdentity: Equatable {
+    var name: String?
+    var avatarText: String?
+    var avatarTint: Color?
+}
+
+extension EnvironmentValues {
+    @Entry var openClawAssistantIdentity = ChatAssistantIdentity()
+    @Entry var openClawChatUserAccent: Color?
+    @Entry var openClawChatGateway: ChatGatewayResources?
+}
+
+/// Gateway state and loaders that only media, widget and source-favicon leaves use. Rows reach it
+/// through the environment, so a health flip or a source-context refresh updates those leaves and
+/// never changes a row's inputs. Equal per owner: the getters read observable state when a leaf
+/// calls them from its body, so each leaf observes only what it reads.
+struct ChatGatewayResources: Equatable {
+    let owner: ObjectIdentifier
+    /// Media artifacts and widget resources resolve only over a healthy connection.
+    let isResolverReady: @MainActor () -> Bool
+    /// The source context while it allows favicon fetches; favicon loads restart when it changes.
+    let faviconContext: @MainActor () -> OpenClawChatSourceContext?
+    let loadFavicon: @MainActor @Sendable (String) async -> Data?
+    let resolveWidgetResource: @MainActor @Sendable (
+        String,
+        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    let loadMedia: @MainActor @Sendable (
+        String,
+        OpenClawChatMediaKind,
+        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.owner == rhs.owner
+    }
+}
+
+/// Reads the accent itself, so a Gateway accent change repaints user bubbles without re-running them.
+private struct ChatUserBubbleSurface: View {
+    @Environment(\.openClawChatUserAccent) private var accent
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        OpenClawChatTheme.userBubbleSurface(in: self.colorScheme, accent: self.accent)
+    }
+}
+
 /// The user bubble; the onboarding style adds a sender tail on the trailing edge.
 private struct ChatBubbleShape: InsettableShape {
     let cornerRadius: CGFloat
@@ -307,9 +376,6 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View, @MainActor Equatable {
     @Environment(\.openClawChatColumn) private var column
-    #if os(iOS)
-    @Environment(\.openClawReaderAnchor) private var readerAnchor
-    #endif
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
@@ -318,31 +384,15 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     var liveToolCalls: [OpenClawChatPendingToolCall] = []
     var metadata: ChatMessageMetadata?
     var sourcePreviews: [ChatSourcePreview] = []
-    var sourceContextRevision = UUID()
-    var sourceFaviconsEnabled = false
-    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
-    let userAccent: Color?
     let displayOptions: OpenClawChatDisplayOptions
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let contextWindowTokens: Int?
     let userMessageExpanded: Bool
     let onToggleUserMessageExpanded: @MainActor () -> Void
     let inlineWidgetScope: ChatInlineWidgetScope
-    let inlineWidgetResolverReady: Bool
-    let inlineWidgetResourceResolver: @MainActor @Sendable (
-        String,
-        OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
-    let mediaArtifactResolverReady: Bool
     let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
-    let loadMediaArtifact: @MainActor @Sendable (
-        String,
-        OpenClawChatMediaKind,
-        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var canUseIOSRenderGate: Bool {
         guard self.message.role.lowercased() == "assistant" else { return false }
@@ -351,29 +401,22 @@ struct ChatMessageBubble: View, @MainActor Equatable {
         }
     }
 
+    /// Row content only. Gateway state (resolver readiness, the source context, the assistant's
+    /// identity, the user accent) reaches the leaves that draw it through the environment.
     static func == (lhs: Self, rhs: Self) -> Bool {
-        // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
+        // The iOS gate excludes media rows, so `mediaPlaybackAllowed` cannot affect its subtree.
         // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
-        // The favicon loader is covered by sourceContextRevision, which rotates on context changes.
         guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
         return lhs.message == rhs.message &&
             lhs.liveToolCalls == rhs.liveToolCalls &&
             lhs.metadata == rhs.metadata &&
             lhs.sourcePreviews == rhs.sourcePreviews &&
-            lhs.sourceContextRevision == rhs.sourceContextRevision &&
-            lhs.sourceFaviconsEnabled == rhs.sourceFaviconsEnabled &&
             lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
-            lhs.userAccent == rhs.userAccent &&
             lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
-            lhs.assistantName == rhs.assistantName &&
-            lhs.assistantAvatarText == rhs.assistantAvatarText &&
-            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.contextWindowTokens == rhs.contextWindowTokens &&
             lhs.userMessageExpanded == rhs.userMessageExpanded &&
-            lhs.inlineWidgetScope == rhs.inlineWidgetScope &&
-            lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
-            lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
+            lhs.inlineWidgetScope == rhs.inlineWidgetScope
     }
 
     private static func styleValue(_ style: OpenClawChatView.Style) -> UInt8 {
@@ -398,10 +441,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
             // Replies span the reading column; only the avatar gutter (wide panes) narrows them.
             HStack(alignment: .top, spacing: 8) {
                 if self.showsAssistantAvatar, !self.isRunContent {
-                    ChatAgentAvatar(
-                        text: self.assistantAvatarText,
-                        name: self.assistantName,
-                        tint: self.assistantAvatarTint)
+                    ChatAssistantAvatar()
                         .padding(.top, 1)
                 }
 
@@ -410,9 +450,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                     .contentShape(.accessibility, Rectangle())
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("chat-assistant-message-body")
-                    .assistantSpeakerLabel(
-                        self.assistantName,
-                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
+                    .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -468,7 +506,7 @@ extension ChatMessageBubble {
                 if self.isUser {
                     self.messageContent(text: text, textColor: textColor)
                         .padding(self.bubblePadding)
-                        .background(self.bubbleFillColor)
+                        .background { ChatUserBubbleSurface() }
                         .clipShape(self.bubbleShape)
                         .overlay {
                             if self.style == .onboarding {
@@ -514,17 +552,10 @@ extension ChatMessageBubble {
                     markdownVariant: self.markdownVariant,
                     includesThinking: self.displayOptions.contains(.reasoning),
                     textColor: textColor)
-                    #if os(iOS)
-                        .chatReaderAnchor(self.readerAnchor)
-                    #endif
             }
 
             if !self.sourcePreviews.isEmpty {
-                ChatSourcePreviewsView(
-                    sources: self.sourcePreviews,
-                    contextRevision: self.sourceContextRevision,
-                    faviconsEnabled: self.sourceFaviconsEnabled,
-                    loadFavicon: self.loadSourceFavicon)
+                ChatSourcePreviewsView(sources: self.sourcePreviews)
             }
 
             if let previewURL = self.linkPreviewURL {
@@ -537,9 +568,7 @@ extension ChatMessageBubble {
                         att: self.visibleInlineAttachments[idx],
                         isUser: self.isUser,
                         textColor: textColor,
-                        resolverReady: self.mediaArtifactResolverReady,
-                        playbackAllowed: self.mediaPlaybackAllowed,
-                        loadMedia: self.loadMediaArtifact)
+                        playbackAllowed: self.mediaPlaybackAllowed)
                 }
             }
 
@@ -552,10 +581,7 @@ extension ChatMessageBubble {
             }
 
             ForEach(self.inlineWidgets.indices, id: \.self) { idx in
-                ChatInlineWidgetView(
-                    preview: self.inlineWidgets[idx],
-                    resolverReady: self.inlineWidgetResolverReady,
-                    resolveResource: self.inlineWidgetResourceResolver)
+                ChatInlineWidgetView(preview: self.inlineWidgets[idx])
                     // A retained row must not lend its browser or callbacks to another chat owner.
                         .id(self.inlineWidgetScope)
             }
@@ -679,10 +705,6 @@ extension ChatMessageBubble {
             contextWindowTokens: self.contextWindowTokens)
     }
 
-    private var bubbleFillColor: Color {
-        OpenClawChatTheme.userBubbleSurface(in: self.colorScheme, accent: self.userAccent)
-    }
-
     /// Web user bubble geometry (ui/src/styles/chat/startup-layout.css:309-316): 16pt at
     /// desktop widths, tightened on phone columns where every point of line length counts.
     private var bubblePadding: EdgeInsets {
@@ -702,34 +724,33 @@ extension ChatMessageBubble {
     }
 }
 
+/// The media leaf: it reads resolver readiness from the Gateway resources, so a health flip
+/// updates attachments and not the row that holds them.
 private struct AttachmentRow: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawChatGateway) private var gateway
 
     let att: OpenClawChatMessageContent
     let isUser: Bool
     let textColor: Color
-    let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
-    let loadMedia: @MainActor @Sendable (
-        String,
-        OpenClawChatMediaKind,
-        OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
     var body: some View {
         if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
+            let resolverReady = self.gateway?.isResolverReady() == true
             switch kind {
             case .file:
                 ChatFileAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     fileName: self.att.fileName ?? self.attachmentLabel,
-                    resolverReady: self.resolverReady,
+                    resolverReady: resolverReady,
                     load: { try await self.loadMedia($0, .file, nil) })
             case .image:
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
-                    resolverReady: self.resolverReady,
+                    resolverReady: resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
                 // A busy Gateway inspector can omit playback metadata. Let its
@@ -738,7 +759,7 @@ private struct AttachmentRow: View {
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
-                    resolverReady: self.resolverReady,
+                    resolverReady: resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
@@ -747,13 +768,22 @@ private struct AttachmentRow: View {
                     label: self.attachmentLabel,
                     width: self.att.width,
                     height: self.att.height,
-                    resolverReady: self.resolverReady,
+                    resolverReady: resolverReady,
                     playbackAllowed: self.playbackAllowed,
                     load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
             }
         } else {
             self.fallbackRow
         }
+    }
+
+    private func loadMedia(
+        _ artifactId: String,
+        _ kind: OpenClawChatMediaKind,
+        _ playback: OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
+    {
+        guard let gateway else { return nil }
+        return try await gateway.loadMedia(artifactId, kind, playback)
     }
 
     private var fallbackRow: some View {
@@ -809,9 +839,6 @@ private struct AttachmentRow: View {
 @MainActor
 struct ChatTypingIndicatorBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let runIdentity: String
     let outputTokens: Int?
@@ -820,11 +847,7 @@ struct ChatTypingIndicatorBubble: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint,
-                    size: 28)
+                ChatAssistantAvatar(size: 28)
             }
 
             HStack(spacing: 9) {
@@ -959,10 +982,7 @@ struct ChatOutboxStatusLabel: View {
 
 extension ChatTypingIndicatorBubble: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.assistantName == rhs.assistantName &&
-            lhs.assistantAvatarText == rhs.assistantAvatarText &&
-            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
-            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+        lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.runIdentity == rhs.runIdentity &&
             lhs.outputTokens == rhs.outputTokens &&
             lhs.status == rhs.status
@@ -1002,17 +1022,11 @@ struct ChatStreamingAssistantText {
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
-    #if os(iOS)
-    @Environment(\.openClawReaderAnchor) private var readerAnchor
-    #endif
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let text: ChatStreamingAssistantText
     let markdownVariant: ChatMarkdownVariant
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
 
     var body: some View {
@@ -1020,10 +1034,7 @@ struct ChatStreamingAssistantBubble: View {
         let _ = ChatBehaviorProbe.countBody("live")
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
+                ChatAssistantAvatar()
                     .padding(.top, 1)
             }
 
@@ -1034,9 +1045,6 @@ struct ChatStreamingAssistantBubble: View {
                     textColor: self.isDesktopLayout
                         ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
                         : OpenClawChatTheme.assistantText)
-                    #if os(iOS)
-                        .chatReaderAnchor(self.readerAnchor)
-                    #endif
             }
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1044,9 +1052,7 @@ struct ChatStreamingAssistantBubble: View {
             .contentShape(.accessibility, Rectangle())
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-streaming-assistant-body")
-            .assistantSpeakerLabel(
-                self.assistantName,
-                avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
+            .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1057,9 +1063,6 @@ extension ChatStreamingAssistantBubble: @MainActor Equatable {
         lhs.text.sourceText == rhs.text.sourceText &&
             lhs.text.includesThinking == rhs.text.includesThinking &&
             lhs.markdownVariant == rhs.markdownVariant &&
-            lhs.assistantName == rhs.assistantName &&
-            lhs.assistantAvatarText == rhs.assistantAvatarText &&
-            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar
     }
 }
@@ -1271,7 +1274,17 @@ struct ChatStreamingAssistantTextBody: View {
 extension View {
     /// Without an avatar beside it, the reply's own container names the assistant for VoiceOver.
     /// The label is empty where the avatar is shown, so a size-class change keeps the view's identity.
-    func assistantSpeakerLabel(_ name: String?, avatarHidden: Bool) -> some View {
-        self.accessibilityLabel(Text(verbatim: avatarHidden ? name ?? "" : ""))
+    func assistantSpeakerLabel(avatarHidden: Bool) -> some View {
+        self.modifier(ChatAssistantSpeakerLabel(avatarHidden: avatarHidden))
+    }
+}
+
+/// Reads the assistant's name itself, so a name change relabels the container without re-running it.
+private struct ChatAssistantSpeakerLabel: ViewModifier {
+    @Environment(\.openClawAssistantIdentity) private var identity
+    let avatarHidden: Bool
+
+    func body(content: Content) -> some View {
+        content.accessibilityLabel(Text(verbatim: self.avatarHidden ? self.identity.name ?? "" : ""))
     }
 }

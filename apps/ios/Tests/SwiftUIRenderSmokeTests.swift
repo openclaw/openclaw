@@ -169,11 +169,7 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
                 contextWindowTokens: nil,
                 userMessageExpanded: false,
@@ -182,11 +178,7 @@ struct SwiftUIRenderSmokeTests {
                     modelID: ObjectIdentifier(Self.self),
                     sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
                     sessionGeneration: 0),
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
@@ -232,11 +224,7 @@ struct SwiftUIRenderSmokeTests {
             message: message,
             style: .standard,
             markdownVariant: .standard,
-            userAccent: nil,
             displayOptions: [],
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
             showsAssistantAvatar: true,
             contextWindowTokens: nil,
             userMessageExpanded: false,
@@ -245,21 +233,24 @@ struct SwiftUIRenderSmokeTests {
                 modelID: ObjectIdentifier(Self.self),
                 sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
                 sessionGeneration: 0),
-            inlineWidgetResolverReady: true,
-            inlineWidgetResourceResolver: { _, _ in nil },
-            mediaArtifactResolverReady: true,
-            mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, requestedKind, playback in
-                #expect(requested == artifactId)
-                #expect(requestedKind == kind)
-                requests.continuation.yield(playback)
-                guard kind == .image else { return nil }
-                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
-                    data: Data(base64Encoded:
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
-                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
-                    mimeType: "image/png"))
-            })
+            mediaPlaybackAllowed: { true })
+            .environment(\.openClawChatGateway, ChatGatewayResources(
+                owner: ObjectIdentifier(Self.self),
+                isResolverReady: { true },
+                faviconContext: { nil },
+                loadFavicon: { _ in nil },
+                resolveWidgetResource: { _, _ in nil },
+                loadMedia: { requested, requestedKind, playback in
+                    #expect(requested == artifactId)
+                    #expect(requestedKind == kind)
+                    requests.continuation.yield(playback)
+                    guard kind == .image else { return nil }
+                    return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                        data: Data(base64Encoded:
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                                "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                        mimeType: "image/png"))
+                }))
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
 
@@ -282,10 +273,8 @@ struct SwiftUIRenderSmokeTests {
         let root = ChatStreamingAssistantBubble(
             text: ChatStreamingAssistantText(sourceText: text, includesThinking: false),
             markdownVariant: .standard,
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
             showsAssistantAvatar: true)
+            .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(name: "OpenClaw", avatarText: "OC"))
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
     }
@@ -316,11 +305,7 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
                 contextWindowTokens: 1_000_000,
                 userMessageExpanded: false,
@@ -329,11 +314,7 @@ struct SwiftUIRenderSmokeTests {
                     modelID: ObjectIdentifier(Self.self),
                     sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
                     sessionGeneration: 0),
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))

@@ -165,9 +165,6 @@ extension ChatTranscriptRow {
 }
 
 struct ChatAssistantRunFrame<Content: View>: View {
-    let assistantName: String?
-    let assistantAvatarText: String?
-    let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     var joinsAbove = false
     var joinsBelow = false
@@ -178,19 +175,13 @@ struct ChatAssistantRunFrame<Content: View>: View {
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
                 if self.joinsAbove {
-                    ChatAgentAvatar(
-                        text: self.assistantAvatarText,
-                        name: self.assistantName,
-                        tint: self.assistantAvatarTint)
+                    ChatAssistantAvatar()
                         .hidden()
                         .frame(height: 0)
                         .clipped()
                         .accessibilityHidden(true)
                 } else {
-                    ChatAgentAvatar(
-                        text: self.assistantAvatarText,
-                        name: self.assistantName,
-                        tint: self.assistantAvatarTint)
+                    ChatAssistantAvatar()
                         .padding(.top, 5)
                 }
             }
@@ -205,14 +196,11 @@ struct ChatAssistantRunFrame<Content: View>: View {
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
         #else
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
-                ChatAgentAvatar(
-                    text: self.assistantAvatarText,
-                    name: self.assistantName,
-                    tint: self.assistantAvatarTint)
+                ChatAssistantAvatar()
                     .padding(.top, 5)
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
@@ -225,7 +213,7 @@ struct ChatAssistantRunFrame<Content: View>: View {
         .contentShape(.accessibility, Rectangle())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
-        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        .assistantSpeakerLabel(avatarHidden: !self.showsAssistantAvatar)
         #endif
     }
 }

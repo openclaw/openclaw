@@ -132,23 +132,8 @@ struct ChatMarkdownRenderer: View {
             relativeTo: inlineMath.relativeTo)
     }
 
-    #if os(iOS)
-    @Environment(\.openClawReaderAnchor) private var readerAnchor
-    #endif
     @Environment(\.openClawChatMarkdownFileLinks) private var fileLinksEnabled
     @Environment(\.openClawChatMarkdownFileLabels) private var inheritedFileLabels
-
-    /// Block position distinguishes repeated prefixes; the prefix tolerates live/final whitespace changes.
-    static func readerBlockKey(_ block: ChatMarkdownRenderedBlock, index: Int) -> String? {
-        let prose: ChatMarkdownProse
-        switch block {
-        case let .prose(value): prose = value
-        case let .heading(_, value): prose = value
-        default: return nil
-        }
-        let key = String(String(prose.attributed.characters).filter { !$0.isWhitespace }.prefix(48))
-        return key.isEmpty ? nil : "\(index):\(key)"
-    }
 
     var body: some View {
         let snapshot = self.snapshot
@@ -156,13 +141,6 @@ struct ChatMarkdownRenderer: View {
         return VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(snapshot.blocks.enumerated()), id: \.offset) { entry in
                 self.blockView(entry.element, index: entry.offset, fileLabels: fileLabels)
-                    #if os(iOS)
-                        .chatReaderBlockAnchor(
-                            self.readerAnchor,
-                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(
-                                entry.element,
-                                index: entry.offset))
-                    #endif
             }
 
             if !snapshot.images.isEmpty {

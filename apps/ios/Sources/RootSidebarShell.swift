@@ -1,30 +1,12 @@
+import OpenClawChatUI
 import SwiftUI
 
 private enum RootSidebarShellMetric {
-    static let edgeGestureWidth: CGFloat = 44
-    static let topGestureExclusion: CGFloat = 44
-    static let settleTranslation: CGFloat = 80
-    static let settlePredictedTranslation: CGFloat = 160
     static let topLeadingRadius: CGFloat = 8
     static let cornerRadius: CGFloat = 28
 }
 
 struct RootSidebarShell<Sidebar: View, Detail: View>: View {
-    enum DragDisposition: Equatable {
-        case opening
-        case closing
-        case rejected
-    }
-
-    private struct DragState: Equatable {
-        var disposition: DragDisposition?
-        var translationWidth: CGFloat = 0
-    }
-
-    private final class DragSession {
-        var disposition: DragDisposition?
-    }
-
     @Environment(\.displayScale) private var displayScale
 
     let sidebarWidth: CGFloat
@@ -39,9 +21,8 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     let detail: Detail
     let contentSafeAreaInsets: EdgeInsets
 
-    @State private var dragSession = DragSession()
-    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
-    private var dragState = DragState()
+    /// Card displacement of the pan in flight; the drawer's per-frame state lives only here.
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -58,14 +39,13 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             self.dismissalLayer
                 .zIndex(2)
         }
-        // Gesture state stays inside this stable shell. The destination tree does
-        // not own per-frame drag state, and the moving card never owns its recognizer.
-        .simultaneousGesture(
-            self.drawerGesture,
-            // Keep the recognizer attached while pushed content owns the edge.
-            // It rejects that touch once, so the same back-swipe cannot open the drawer after popping.
-            isEnabled: self.isDrawerLayout && !self.reduceMotion)
+        // One gesture owner for the drawer. Each UIKit pan is disabled whenever it cannot
+        // act (split layout, Reduce Motion, pushed content owning the edge), so a back-swipe
+        // that pops to the root cannot open the drawer with the same touch.
+        .gesture(self.drawerPan(.open))
+        .gesture(self.drawerPan(.close))
         .background(OpenClawProBackground())
+        .transaction(value: self.isPresented, ChatScrollSignpost.sidebarDrawer)
         .animation(self.animation, value: self.isPresented)
     }
 
@@ -131,93 +111,36 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
         return RootTabs.sidebarContentOffset(
             sidebarWidth: self.sidebarWidth,
             isVisible: self.isPresented,
-            dragOffset: self.dragState.translationWidth,
+            dragOffset: self.dragOffset,
             reduceMotion: self.reduceMotion)
     }
 
-    private var drawerGesture: some Gesture {
-        let isDrawerLayout = self.isDrawerLayout
-        let sidebarWidth = self.sidebarWidth
-        let isPresented = self.isPresented
-        let canOpenFromEdge = self.canOpenFromEdge
-        let onShow = self.onShow
-        let onHide = self.onHide
-        let dragSession = self.dragSession
-        return DragGesture(minimumDistance: 8)
-            .updating(self.$dragState) { value, state, _ in
-                guard isDrawerLayout else { return }
-                let disposition = Self.dragDisposition(
-                    startLocation: value.startLocation,
-                    translation: value.translation,
-                    isPresented: isPresented,
-                    canOpenFromEdge: canOpenFromEdge,
-                    latchedDisposition: state.disposition)
-                state.disposition = disposition
-                dragSession.disposition = disposition
-                switch disposition {
-                case .opening:
-                    state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
-                case .closing:
-                    state.translationWidth = max(-sidebarWidth, min(0, value.translation.width))
-                case .rejected, nil:
-                    break
-                }
-            }
-            .onEnded { value in
-                let disposition = dragSession.disposition
-                dragSession.disposition = nil
-                guard isDrawerLayout else { return }
-                switch disposition {
-                case .opening:
-                    if Self.shouldSettle(
-                        translation: value.translation.width,
-                        predictedTranslation: value.predictedEndTranslation.width)
-                    {
-                        onShow()
-                    }
-                case .closing:
-                    if Self.shouldSettle(
-                        translation: -value.translation.width,
-                        predictedTranslation: -value.predictedEndTranslation.width)
-                    {
-                        onHide()
-                    }
-                case .rejected, nil:
-                    break
-                }
-            }
+    private func drawerPan(_ intent: SidebarDrawerGesturePolicy.Intent) -> SidebarDrawerPanGesture {
+        SidebarDrawerPanGesture(
+            intent: intent,
+            policy: SidebarDrawerGesturePolicy(
+                layoutMode: self.isDrawerLayout ? .drawer : .split,
+                isPresented: self.isPresented,
+                canOpenFromEdge: self.canOpenFromEdge,
+                reduceMotion: self.reduceMotion),
+            sidebarWidth: self.sidebarWidth,
+            onChanged: { self.dragOffset = $0 },
+            onEnded: self.settleDrag)
     }
 
-    static func dragDisposition(
-        startLocation: CGPoint,
-        translation: CGSize,
-        isPresented: Bool,
-        canOpenFromEdge: Bool,
-        latchedDisposition: DragDisposition?) -> DragDisposition?
-    {
-        if let latchedDisposition { return latchedDisposition }
-        if !isPresented {
-            // Opening is an edge gesture; closing may start anywhere on the content card.
-            guard canOpenFromEdge,
-                  startLocation.x <= RootSidebarShellMetric.edgeGestureWidth,
-                  startLocation.y > RootSidebarShellMetric.topGestureExclusion
-            else { return .rejected }
+    /// Releases the card from the finger and settles it in one animated transaction.
+    private func settleDrag(_ action: SidebarDrawerGesturePolicy.Action) {
+        withAnimation(self.animation) {
+            self.dragOffset = 0
+            switch action {
+            case .open:
+                self.onShow()
+            case .close:
+                self.onHide()
+            case .ignore:
+                break
+            }
         }
-        let horizontal = isPresented ? -translation.width : translation.width
-        let vertical = abs(translation.height)
-        // Leave marginal diagonals undecided without moving the card; once vertical
-        // scrolling wins, latch rejection so a later thumb arc cannot open the drawer.
-        guard horizontal >= vertical else { return .rejected }
-        guard horizontal >= 16, horizontal > 2 * vertical else { return nil }
-        return isPresented ? .closing : .opening
-    }
-
-    private static func shouldSettle(
-        translation: CGFloat,
-        predictedTranslation: CGFloat) -> Bool
-    {
-        translation > RootSidebarShellMetric.settleTranslation ||
-            predictedTranslation > RootSidebarShellMetric.settlePredictedTranslation
     }
 }
 

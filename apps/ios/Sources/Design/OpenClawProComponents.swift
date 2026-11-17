@@ -199,9 +199,13 @@ struct OpenClawSidebarHeaderAction {
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
+    /// True while the drawer covers the destination. Only this button reads it, so
+    /// hiding the reveal control never rebuilds the destination or its toolbar.
+    @Environment(\.openClawChatIsObscured) private var isCoveredByDrawer
 
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
+            .opacity(self.isCoveredByDrawer ? 0 : 1)
     }
 
     private var button: some View {

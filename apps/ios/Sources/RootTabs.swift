@@ -291,6 +291,9 @@ struct RootTabs: View {
             ChatProTab(
                 headerSidebarAction: self.sidebarHeaderAction,
                 openSettings: { self.selectSidebarDestination(.gateway) })
+                // Sidebar open/close rebuilds this branch with fresh closures; the gate keeps
+                // that from re-running the chat tab and its transcript (see `ChatProTab ==`).
+                    .equatable()
         case .overview:
             CommandCenterTab(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -389,20 +392,21 @@ struct RootTabs: View {
         return NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt)
     }
 
-    private var sidebarHeaderAction: OpenClawSidebarHeaderAction? {
-        guard Self.shouldShowSidebarRevealInDestinationHeader(
+    /// Every destination header keeps this item; only split mode turns it into Hide.
+    /// In drawer mode it stays a constant Show item while the drawer covers the card
+    /// (the card is hit-test and accessibility hidden, and the button hides itself via
+    /// `openClawChatIsObscured`), so opening never restructures the destination toolbar.
+    private var sidebarHeaderAction: OpenClawSidebarHeaderAction {
+        let hidesSidebar = Self.sidebarHeaderControlHidesSidebar(
             isSidebarVisible: self.isSidebarVisible,
             layoutMode: self.isSidebarDrawerLayout ? .drawer : .split)
-        else {
-            return nil
-        }
         return OpenClawSidebarHeaderAction(
             systemName: "line.3.horizontal",
-            accessibilityLabel: self.isSidebarVisible ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
-            accessibilityIdentifier: self.isSidebarVisible
+            accessibilityLabel: hidesSidebar ? .localized("Hide Sidebar") : .localized("Show Sidebar"),
+            accessibilityIdentifier: hidesSidebar
                 ? Self.sidebarHideButtonAccessibilityIdentifier
                 : Self.sidebarShowButtonAccessibilityIdentifier,
-            action: self.isSidebarVisible ? { self.hideSidebar() } : { self.showSidebar() })
+            action: hidesSidebar ? { self.hideSidebar() } : { self.showSidebar() })
     }
 
     private var sidebarAnimation: Animation? {

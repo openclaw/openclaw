@@ -1,6 +1,8 @@
 import Foundation
+import Observation
 import OpenClawKit
 import OpenClawProtocol
+import Synchronization
 import Testing
 @testable import OpenClawChatUI
 
@@ -160,6 +162,23 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
 }
 
 struct ChatViewModelReconnectBurstTests {
+    @Test @MainActor func `repeated healthy polls do not notify health readers`() async {
+        let transport = ReconnectBurstTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        await vm.pollHealthIfNeeded(force: true)
+        #expect(vm.healthOK)
+
+        // Media and widget leaves read health; an unchanged poll must not wake them.
+        let notified = Mutex(false)
+        withObservationTracking { _ = vm.healthOK } onChange: { notified.withLock { $0 = true } }
+        await vm.pollHealthIfNeeded(force: true)
+        vm.handleTransportEvent(.health(ok: true))
+        let didNotify = notified.withLock { $0 }
+        #expect(vm.healthOK)
+        #expect(!didNotify)
+    }
+
     @Test @MainActor func `flapping reconnects recover history before one catalog refresh`() async {
         let transport = ReconnectBurstTransport()
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
