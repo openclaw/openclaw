@@ -35,6 +35,7 @@ const enCommandPalette = {
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
     archivedSessionsExcluded: "Archived sessions are not included in message search.",
+    archived: "Archived",
     clearSearch: "Clear search",
     escapeKey: "esc",
     filterLabel: "Filter search results",
@@ -49,6 +50,7 @@ const enCommandPalette = {
       navigation: en.palette.categories.navigation,
       skills: "Skills",
       messages: "In messages",
+      more: "More results",
     },
     items: {
       apps: "Apps",
