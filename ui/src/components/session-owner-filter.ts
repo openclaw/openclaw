@@ -64,7 +64,11 @@ export class SessionOwnerFilter {
 
   hasMultipleOwners(agentId: string): boolean {
     this.read();
-    return this.ownerFacet?.agentId === agentId && this.ownerFacet.multiple;
+    // An all-agent facet belongs to the personal list, not the open conversation.
+    return (
+      (this.ownerFacet?.agentId === "*" || this.ownerFacet?.agentId === agentId) &&
+      this.ownerFacet.multiple
+    );
   }
 
   observeOwnerFacet(agentId: string, owners: SessionsListResult["owners"]): void {
@@ -108,6 +112,7 @@ export function createSessionOwnerFilterQuery(
   getHost: () => {
     isConnected: boolean;
     sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+    sidebarSessionsAcrossAgents?(): boolean;
     sessionData: {
       resetSessionList(): void;
       refreshSidebarSessions(): Promise<void>;
@@ -122,7 +127,13 @@ export function createSessionOwnerFilterQuery(
       const query = host.sidebarSessionOwnerFilter();
       return {
         host,
-        current: JSON.stringify([query.ownerId, query.involvingMe, filter.read().scope]),
+        // Solo fallback can keep the owner null while roster arrival changes query scope.
+        current: JSON.stringify([
+          query.ownerId,
+          query.involvingMe,
+          filter.read().scope,
+          Boolean(host.sidebarSessionsAcrossAgents?.()),
+        ]),
       };
     },
     ({ host, current }) => {

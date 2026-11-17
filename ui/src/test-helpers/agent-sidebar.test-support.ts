@@ -43,7 +43,11 @@ export async function withOwnerSidebar(
     requests: Record<string, unknown>[];
     settle: () => Promise<void>;
   }) => Promise<void>,
-  options: { savedOwnerId?: string } = {},
+  options: {
+    savedOwnerId?: string;
+    singleUser?: boolean;
+    ownersByAgent?: Record<string, NonNullable<SessionsListResult["owners"]>>;
+  } = {},
 ) {
   const requests: Record<string, unknown>[] = [];
   const overflow = createDeferred<SessionsListResult>();
@@ -75,7 +79,9 @@ export async function withOwnerSidebar(
           (!params?.agentId || row.agentId === params.agentId) &&
           (!params?.ownerId || row.owner?.actor.id === params.ownerId),
       );
-      return { ...sessionsResult(selected, 1), owners };
+      const scopedOwners =
+        typeof params?.agentId === "string" ? options.ownersByAgent?.[params.agentId] : undefined;
+      return { ...sessionsResult(selected, 1), owners: scopedOwners ?? owners };
     }),
   );
   if (options.savedOwnerId) {
@@ -85,7 +91,7 @@ export async function withOwnerSidebar(
     });
   }
   gateway.publish({ selfUser: { id: viewer.id, name: viewer.label } });
-  if (mode === "query") {
+  if (mode === "query" || options.singleUser) {
     const hello = gateway.gateway.snapshot.hello!;
     gateway.publish({
       hello: { ...hello, policy: { ...hello.policy, hasMultipleSessionSharingIdentities: false } },

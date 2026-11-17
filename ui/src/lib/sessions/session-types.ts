@@ -68,6 +68,8 @@ export type SessionListOptions = SchemaContract<
 };
 
 export type SessionRefreshOptions = SessionListOptions & {
+  /** Refresh an independently observed membership window, even for an unfiltered query. */
+  independent?: boolean;
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
   backgroundHydrate?: boolean;

@@ -558,7 +558,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     refreshList(this: void, options: SessionRefreshOptions = {}): Promise<void> {
-      if (isPrimarySessionListQuery(options)) {
+      if (!options.independent && isPrimarySessionListQuery(options)) {
         return refresh(options);
       }
       return refreshManagedList(managedList(options), {
