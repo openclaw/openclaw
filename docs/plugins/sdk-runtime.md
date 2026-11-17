@@ -338,6 +338,10 @@ an unreadable schema can be quarantined without invoking the tool.
 Callable tools and Proxy-backed objects retain their admitted callable and live
 property contracts, including execution methods supplied by `get` traps.
 
+Realtime voice bridge requests likewise keep configuration, provider options,
+audio formats, and tools as plain data. Their callbacks retain the originating
+transport plugin's invocation scope.
+
 `before_tool_call` inputs and approval parameters retain detached snapshots so
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
