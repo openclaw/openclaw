@@ -20,6 +20,7 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
+import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 
 /**
  * A new release directory. The worktree is built at `buildDir`, outside
@@ -77,10 +78,12 @@ export async function publishGitRelease(params: {
     await syncDirectoryIfSupported(globalRoot);
   }
   if (params.trial && previous) {
+    const buildId = await readBuiltGatewayBuildId(params.releaseRoot);
     const record: GitReleaseTrial = {
       target,
       previous,
       version: (await readPackageVersion(params.releaseRoot)) ?? "unknown",
+      ...(buildId ? { buildId } : {}),
       createdAt: Date.now(),
       attempts: 0,
     };

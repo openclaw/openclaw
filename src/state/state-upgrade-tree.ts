@@ -23,6 +23,7 @@ export type UpgradeOp = {
   kind: "replace" | "add" | "remove";
 };
 
+/** `appVersion` names the generation: the writing build's ID, or its version before build IDs. */
 export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";

@@ -4,7 +4,7 @@
 // inputs are copied into a private shadow. The shipped migration chain (this
 // build's Doctor) runs on the shadow only. The result is validated, written to a
 // durable plan, and renamed into place; every replaced or retired live file stays
-// as `<name>.pre-<version>`. The live files are never written before the plan is
+// as `<name>.pre-<generation>`. The live files are never written before the plan is
 // durable. If the chain fails, the generic name-matched rebuild produces the
 // databases instead and the previous generation is pinned. Data never blocks the
 // upgrade; only machine failures (disk full, I/O, crash) stop it, and a crash
@@ -24,7 +24,7 @@ import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
-import { VERSION } from "../version.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
@@ -67,6 +67,11 @@ import {
 const UPGRADE_REPORT_SCOPE = "upgrade.report";
 const UPGRADE_PIN_SCOPE = "upgrade.pin";
 const WORK_PREFIX = ".upgrade-";
+// Previous files are kept as `<name>.pre-<generation>`, named after the build that replaced
+// them: commits of one version can each upgrade, and a failed Git release trial restores
+// exactly what its build replaced. A build without a build ID names them by version, as
+// every build did before; those files stay readable and prunable by the same rules.
+const GENERATION = resolveRuntimeServiceBuildId() ?? VERSION;
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
 
@@ -257,10 +262,15 @@ function recordDiagnostics(
     );
     insert.run(UPGRADE_REPORT_SCOPE, `${VERSION}:${now}`, JSON.stringify(report), now, now);
     if (pinned) {
-      insert.run(UPGRADE_PIN_SCOPE, VERSION, JSON.stringify({ version: VERSION }), now, now);
+      insert.run(UPGRADE_PIN_SCOPE, GENERATION, JSON.stringify({ version: VERSION }), now, now);
     }
     for (const entry of setAside) {
-      insertSetAsideRows(db, { ...entry.report, previousFile: `.pre-${VERSION}` }, entry.rows, now);
+      insertSetAsideRows(
+        db,
+        { ...entry.report, previousFile: `.pre-${GENERATION}` },
+        entry.rows,
+        now,
+      );
     }
   } finally {
     db.close();
@@ -294,7 +304,7 @@ function finish(
 ): void {
   pruneGenerations(
     stateDir,
-    VERSION,
+    GENERATION,
     readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
     ownedFiles,
   );
@@ -392,7 +402,7 @@ export async function upgradeStateDirectory(params: {
     return resumed ? { status: "resumed" } : { status: "current" };
   }
   // A per-attempt name keeps a shadow Doctor orphaned by a crash out of the next attempt.
-  const workDir = path.join(stateDir, `${WORK_PREFIX}${VERSION}-${process.pid}-${Date.now()}`);
+  const workDir = path.join(stateDir, `${WORK_PREFIX}${GENERATION}-${process.pid}-${Date.now()}`);
   const shadowRoot = path.join(workDir, "state");
   const configInside = !path.relative(stateDir, configPath).startsWith("..");
   const shadowConfig = configInside
@@ -586,7 +596,7 @@ export async function upgradeStateDirectory(params: {
         setAside: setAsideCount,
         warnings,
         retiredBackups: retired,
-        preserved: `.pre-${VERSION}`,
+        preserved: `.pre-${GENERATION}`,
         pinned,
       },
       setAside,
@@ -610,16 +620,16 @@ export async function upgradeStateDirectory(params: {
       fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
-    writePlan(workDir, { appVersion: VERSION, ops });
+    writePlan(workDir, { appVersion: GENERATION, ops });
     planWritten = true;
-    applyPlan({ appVersion: VERSION, ops });
+    applyPlan({ appVersion: GENERATION, ops });
     if (fs.existsSync(chainLog)) {
       // The chain's own output stays next to the other logs for diagnosis.
       fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
       fs.copyFileSync(chainLog, path.join(stateDir, "logs", `state-upgrade-${VERSION}.log`));
     }
     finish(stateDir, workDir, new Set(ops.map((op) => op.live).filter((file) => !skip(file))));
-    const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${VERSION}.`;
+    const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${GENERATION}.`;
     if (pinned) {
       params.log.warn(
         `${summary} ${failedStep ? `Chain step ${failedStep} failed. ` : ""}${setAsideCount} row(s) set aside in diagnostic_events (${UPGRADE_SET_ASIDE_SCOPE}); conservation: ${mismatches.join("; ") || "ok"}. The previous generation is pinned; run openclaw doctor to review.`,

@@ -7,8 +7,10 @@ export type GitReleaseTrial = {
   target: string;
   /** Link text to switch back to after two failed starts. */
   previous: string;
-  /** The trial release's version; state it upgraded keeps `<file>.pre-<version>`. */
+  /** The trial release's version; state upgraded by builds without a build ID keeps `<file>.pre-<version>`. */
   version: string;
+  /** The trial release's build ID; state its upgrade replaced keeps `<file>.pre-<buildId>`. */
+  buildId?: string;
   createdAt: number;
   attempts: number;
 };
@@ -27,7 +29,7 @@ const slot = path.join(prefix, "lib", "node_modules", "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 const counts = process.argv.slice(2).includes("gateway");
 
-// Upgraded state keeps each replaced file as "<file>.pre-<version>". Restore them
+// Upgraded state keeps each replaced file as "<file>.pre-<generation>". Restore them
 // together: a trial's WAL, journal, SHM or seal must never pair with a restored
 // database, so a companion with no preserved predecessor is removed.
 function collectPreserved(dir, suffix, since, depth, found) {
@@ -64,12 +66,12 @@ function restoreState(files, suffix) {
   }
 }
 
-// A trial that crashed mid-upgrade leaves its durable plan ("<stateDir>/.upgrade-<version>-*",
+// A trial that crashed mid-upgrade leaves its durable plan ("<stateDir>/.upgrade-<generation>-*",
 // owned by src/state/state-upgrade.ts). Retire it before restoring, or the previous release
 // would finish it on start: undo the files it added, and the suffix restore covers the rest.
-function retirePlans(stateDir, version) {
+function retirePlans(stateDir, generation) {
   for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(".upgrade-" + version + "-")) {
+    if (!entry.startsWith(".upgrade-" + generation + "-")) {
       continue;
     }
     const dir = path.join(stateDir, entry);
@@ -95,14 +97,17 @@ if (trial && counts) {
     fs.rmSync(trialFile, { force: true });
   } else if (trial.attempts >= 2) {
     // State first, link last: until the link moves, an interrupted rollback reruns here.
-    retirePlans(path.dirname(prefix), trial.version);
-    const suffix = ".pre-" + trial.version;
-    const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
-    const config = process.env.OPENCLAW_CONFIG_PATH;
-    if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
-      files.push(config);
+    // The trial's build names what it replaced; an older trial build used its version.
+    for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
+      retirePlans(path.dirname(prefix), generation);
+      const suffix = ".pre-" + generation;
+      const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
+      const config = process.env.OPENCLAW_CONFIG_PATH;
+      if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
+        files.push(config);
+      }
+      restoreState(files, suffix);
     }
-    restoreState(files, suffix);
     const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
     fs.symlinkSync(trial.previous, temporary);
     fs.renameSync(temporary, slot);
