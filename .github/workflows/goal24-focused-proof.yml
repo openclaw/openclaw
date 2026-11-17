@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/goal24-focused-proof.yml
       - scripts/goal24-*-proof.*
+      - scripts/goal24-matrix-live.test.ts
 
 permissions:
   contents: read
@@ -165,6 +166,50 @@ jobs:
         with:
           name: goal24-matrix-${{ github.run_id }}
           path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
+
+  matrix-live:
+    name: matrix-live-synapse
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout reviewed live proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout immutable Matrix candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bf8ee2c6152a18386a175ad329013bc20a4a8051
+          path: source
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Run real Synapse and three live contracts
+        run: node tooling/scripts/goal24-matrix-live-proof.mjs
+      - name: Preserve only bounded synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-matrix-live-${{ github.run_id }}
+          path: |
+            proof-output/summary.json
+            proof-output/observations.json
+            proof-output/live.json
+            proof-output/synapse-pull.log
+            proof-output/synapse-generate.log
+            proof-output/synapse-start.log
           if-no-files-found: error
           retention-days: 7
 
