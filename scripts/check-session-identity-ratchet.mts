@@ -6,7 +6,8 @@ import { runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 // lifecycle revision, run id, generation or leaf id names one attempt and lives only in a
 // TranscriptLease or a view precondition inside the session store. Outside it, no file may
 // compare those values, name a pin, or refuse with a "something changed" message. Existing hits
-// are listed in the allowlist, which may only shrink.
+// are listed in the allowlist, which may only shrink. Checking whether an ID is absent
+// does not pin an identity; null/undefined presence checks are not comparisons between IDs.
 const BASELINE_PATH = "config/session-identity-allowlist.txt";
 const BASELINE_HEADER = [
   "# Identity class A: per-file counts of id compares, pin names and inference refusals.",
@@ -47,7 +48,13 @@ const EXCLUDE = [
 
 /** Counts each pin name, id compare and inference refusal on one line. */
 export function countSessionIdentityPins(line: string) {
-  return PATTERNS.reduce((sum, pattern) => sum + (line.match(pattern)?.length ?? 0), 0);
+  // Remove only the operator next to a standalone absent value, not the ID or
+  // the rest of the line: an adjacent real comparison and pin names still count.
+  const comparisons = line.replace(
+    /(?<![\w$.])(?:undefined|null)\s*[!=]==|[!=]==\s*(?:undefined|null)(?=\s*(?:$|[),;:?]|&&|\|\|))/gu,
+    " ",
+  );
+  return PATTERNS.reduce((sum, pattern) => sum + (comparisons.match(pattern)?.length ?? 0), 0);
 }
 
 function countSource(source: string) {
