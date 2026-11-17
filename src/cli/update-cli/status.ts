@@ -115,22 +115,6 @@ async function readChannelStatusIssues(
   }
 }
 
-/** An earlier run can still owe a step after a later one replaced it as the last run. */
-async function readUpdateRunStatusWithOwedSteps(): Promise<
-  Awaited<ReturnType<typeof readUpdateRunStatus>> & { owedSteps?: UpdateOwedStep[] }
-> {
-  const status = await readUpdateRunStatus();
-  if (!("lastRun" in status) || !status.lastRun) {
-    return status;
-  }
-  // The run report stays readable when this wider history read fails.
-  const owedSteps = await listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
-    selectUpdateOwedSteps,
-    () => [],
-  );
-  return owedSteps.length ? { ...status, owedSteps } : status;
-}
-
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
   // --timeout bounds update checks; a short network budget must not discard local history.
@@ -163,6 +147,25 @@ async function inspectUpdateStatus(
   checkTimeoutMs: number | undefined,
 ): Promise<void> {
   const inspectionErrors: { section: string; message: string }[] = [];
+  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatus>> & {
+    owedSteps?: UpdateOwedStep[];
+  };
+  let retainedRunStatus: RunStatus | undefined;
+  const readUpdateRunStatusWithOwedSteps = async (): Promise<RunStatus> => {
+    const status = await readUpdateRunStatus();
+    // Keep completed history if optional enrichment outlives either enclosing deadline race.
+    retainedRunStatus = status;
+    if (!("lastRun" in status) || !status.lastRun) {
+      return status;
+    }
+    // An earlier run can still owe a step after a later one replaced it as the last run.
+    const owedSteps = await listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
+      selectUpdateOwedSteps,
+      () => [],
+    );
+    retainedRunStatus = owedSteps.length ? { ...status, owedSteps } : status;
+    return retainedRunStatus;
+  };
   const deadline = performance.now() + timeoutMs;
   const remainingMs = () => Math.max(1, deadline - performance.now());
   const inspect = async <T>(
@@ -335,7 +338,8 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [runStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const runStatus = retainedRunStatus ?? inspectedRunStatus;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
