@@ -219,7 +219,11 @@ it.for(scenarios)(
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
+                  // The runtime may append its repeat-call note after the tool’s JSON text.
+                  ...(JSON.parse((output.output ?? "{}").split("\n[System note:")[0]!) as Pick<
+                    Step,
+                    "plugin" | "generation"
+                  >),
                 });
                 // The bundled tool is fast; slow its steps so the reload lands mid-turn.
                 if (bundled) {
