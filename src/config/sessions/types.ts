@@ -728,6 +728,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: {
     queuedInputIds: string[];
+    /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
+    operatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
     /** Original per-input limits, restored only after current source revalidation. */
     queuedInputSources?: Record<
       string,

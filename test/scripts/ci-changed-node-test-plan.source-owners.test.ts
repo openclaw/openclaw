@@ -303,6 +303,7 @@ describe("CI changed Node test plan", () => {
         "src/gateway/operator-run-recovery.channel.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
+        "src/gateway/session-restart-resume.admission.test.ts",
       ],
       areas: ["src/channels"],
     },
