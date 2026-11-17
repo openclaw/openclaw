@@ -1,17 +1,51 @@
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import type { Health } from "./connect.js";
 
 const HEALTH_TIMEOUT_MS = 3000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * One request to GBrain's own server, which is local or on the Compose network: only that
+ * exact origin is allowed, no redirects, and no capture (bodies carry owner and API keys).
+ */
+async function requestGbrain<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init,
+    timeoutMs,
+    maxRedirects: 0,
+    capture: false,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(url),
+    auditContext: "gbrain",
+  });
+  try {
+    return await read(response);
+  } finally {
+    await release();
+  }
+}
+
 /** GBrain's `/health`: 200 `{status:"ok",version,engine}`, or 503 status-only with a `user_message` and `fix`. */
 export async function readGbrainHealth(baseUrl: string): Promise<Health> {
-  let response: Response;
+  let response: { ok: boolean; status: number; body: unknown };
   try {
-    response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+    response = await requestGbrain(`${baseUrl}/health`, {}, HEALTH_TIMEOUT_MS, async (res) => ({
+      ok: res.ok,
+      status: res.status,
+      body: await res.json().catch(() => undefined),
+    }));
   } catch {
     return { kind: "down" };
   }
-  const body = (await response.json().catch(() => undefined)) as
+  const body = response.body as
     | { status?: unknown; version?: unknown; user_message?: unknown; fix?: { command?: unknown } }
     | undefined;
   if (response.ok && body?.status === "ok" && typeof body.version === "string") {
@@ -32,27 +66,32 @@ export async function readGbrainHealth(baseUrl: string): Promise<Health> {
 /** True when GBrain's `/mcp` accepts the bearer for an MCP initialize request. */
 export async function gbrainAcceptsToken(mcpUrl: string, token: string): Promise<boolean> {
   try {
-    const response = await fetch(mcpUrl, {
-      method: "POST",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "openclaw-gbrain-check", version: "1" },
+    return await requestGbrain(
+      mcpUrl,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
         },
-      }),
-    });
-    await response.body?.cancel();
-    return response.ok;
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "openclaw-gbrain-check", version: "1" },
+          },
+        }),
+      },
+      REQUEST_TIMEOUT_MS,
+      async (response) => {
+        await response.body?.cancel();
+        return response.ok;
+      },
+    );
   } catch {
     return false;
   }
@@ -68,29 +107,40 @@ export async function mintGbrainKey(
   adminToken: string,
   name: string,
 ): Promise<string> {
-  const login = await fetch(`${baseUrl}/admin/login`, {
-    method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token: adminToken }),
-  });
-  await login.body?.cancel();
-  const cookie = login.headers
-    .getSetCookie()
-    .map((value) => value.split(";")[0])
-    .join("; ");
+  const login = await requestGbrain(
+    `${baseUrl}/admin/login`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: adminToken }),
+    },
+    REQUEST_TIMEOUT_MS,
+    async (response) => {
+      await response.body?.cancel();
+      return { ok: response.ok, status: response.status, cookies: response.headers.getSetCookie() };
+    },
+  );
+  const cookie = login.cookies.map((value) => value.split(";")[0]).join("; ");
   if (!login.ok || !cookie) {
     throw new Error(`GBrain owner login failed (HTTP ${login.status}).`);
   }
-  const mint = await fetch(`${baseUrl}/admin/api/api-keys`, {
-    method: "POST",
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { "Content-Type": "application/json", Cookie: cookie },
-    body: JSON.stringify({ name, scopes: ["read", "write"] }),
-  });
-  const body = (await mint.json().catch(() => undefined)) as
-    | { token?: unknown; message?: unknown }
-    | undefined;
+  const mint = await requestGbrain(
+    `${baseUrl}/admin/api/api-keys`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ name, scopes: ["read", "write"] }),
+    },
+    REQUEST_TIMEOUT_MS,
+    async (response) => ({
+      ok: response.ok,
+      status: response.status,
+      body: (await response.json().catch(() => undefined)) as
+        | { token?: unknown; message?: unknown }
+        | undefined,
+    }),
+  );
+  const body = mint.body;
   if (!mint.ok || typeof body?.token !== "string") {
     const detail = typeof body?.message === "string" ? `: ${body.message}` : "";
     throw new Error(`GBrain refused to create an OpenClaw key (HTTP ${mint.status})${detail}`);
