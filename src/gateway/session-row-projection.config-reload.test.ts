@@ -44,6 +44,7 @@ it.for(["logging.level", "models.providers.other.baseUrl"] as const)(
   async (changedPath, { signal }) => {
     const { mocks } = fixture;
     mocks.configuredAgentIds = ["main"];
+    await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "main");
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} }, defaults: { model: "fixture-provider/reasoner" } },
       models: { providers: { other: { baseUrl: "https://before.example/v1", models: [] } } },

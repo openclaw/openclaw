@@ -44,6 +44,9 @@ it.each(["admitted", "inherited", "managed"] as const)(
           : {}),
     };
     mocks.configuredAgentIds = ["default", "work"];
+    for (const agentId of mocks.configuredAgentIds) {
+      await state.writeAuthProfiles({ version: 1, profiles: {} }, agentId);
+    }
     mocks.configuredWorkspaces.set("work", workspaceDir);
     const config = {
       agents: { entries: { default: {}, work: { workspace: state.path("configured-workspace") } } },

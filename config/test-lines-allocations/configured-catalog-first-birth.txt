@@ -1,5 +1,6 @@
-# 556 net test lines: 94 for the request race, 437 for real startup, 25 for consumer setup.
-# The extra 156 lines preserve read-first admission, existing session/transcript/settings,
-# and a model-backed chat across deferred startup; mocked publication missed this refusal.
-# Qualified custom-store case: Node 27.271s, pinned Bun 23.183s; CI seconds pending.
-156
+# 700 net test lines: 94 request race, 449 startup, 112 scope lifetime, 45 consumer setup.
+# The extra 300 lines cover distinct read-first admission, retained session/settings/history,
+# model-backed chat, deferred SQL scope lifetime and real storage preconditions for consumers.
+# Custom-store case: Node 27.271s, pinned Bun 23.183s. Five-fixture wrappers: 77.142s/43.167s.
+# These are local validation costs, not CI seconds or isolated performance measurements.
+300

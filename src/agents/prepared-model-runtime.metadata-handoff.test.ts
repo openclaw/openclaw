@@ -40,6 +40,9 @@ describe("prepared model runtime metadata handoff", () => {
       agents: { defaults: { model: "fixture/raw" }, entries: { pro: {} } },
     };
     mocks.configuredAgentIds = ["pro"];
+    for (const agentId of ["pro", "new-agent"]) {
+      await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, agentId);
+    }
     mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) => ({
       id: modelId,
       name: modelId,
