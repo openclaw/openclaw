@@ -13884,7 +13884,9 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions pinned Bun for Node-hosted code generation and retained imports", () => {
+  it("provisions pinned Bun for Node-hosted code generation, retained imports, and native filesystem copies", () => {
+    const nativeFilesystem = "src/agents/worktrees/filesystem-native.test.ts";
+    const agentsSupport = "test/vitest/vitest.agents-support.config.ts";
     const retainedImports = "src/infra/update-retained-runtime-imports.process.test.ts";
     const infra = "test/vitest/vitest.infra.config.ts";
     const codegen = "test/scripts/bun-standalone-codegen.test.ts";
@@ -13909,6 +13911,21 @@ describe("ci workflow guards", () => {
         ],
       },
       { configs: [infra] },
+      { configs: [agentsSupport], targets: [nativeFilesystem] },
+      { configs: [agentsSupport], includePatterns: [nativeFilesystem] },
+      { configs: [agentsSupport], includePatterns: ["src/agents/worktrees/*.test.ts"] },
+      { groups: [{ configs: [agentsSupport], includePatterns: [nativeFilesystem] }] },
+      { configs: [agentsSupport] },
+      { groups: [{ configs: [agentsSupport], shard_name: "agentic-agents-support" }] },
+      { configs: [agentsSupport], targets: ["src/agents/worktrees/filesystem-refs.test.ts"] },
+      {
+        groups: [
+          {
+            configs: [agentsSupport],
+            includePatterns: ["src/agents/worktrees/filesystem-refs.test.ts"],
+          },
+        ],
+      },
       { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
       {
         groups: [
@@ -13939,7 +13956,7 @@ describe("ci workflow guards", () => {
     const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
     expect(rows).toHaveLength(selections.length);
     for (let index = 0; index < selections.length; index += 1) {
-      expect(Boolean(rows[index].requires_bun), JSON.stringify(selections[index])).toBe(index < 10);
+      expect(Boolean(rows[index].requires_bun), JSON.stringify(selections[index])).toBe(index < 16);
       expect(rows[index].test_runtime_policy).toBe("node");
     }
   });

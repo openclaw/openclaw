@@ -1512,7 +1512,7 @@ const nodeTestShards = targetNodeTestShards
       !shard.requiresDist && splitRuntimeJobs
         ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
         : null;
-    // Node-hosted packaging and retained-import proofs launch pinned Bun children.
+    // Node-hosted packaging, retained-import, and native filesystem proofs launch pinned Bun children.
     const needsBunChild =
       !shard.requiresDist &&
       shardRequiresTests(
@@ -1520,10 +1520,15 @@ const nodeTestShards = targetNodeTestShards
         [
           "test/scripts/bun-standalone-codegen.test.ts",
           "src/infra/update-retained-runtime-imports.process.test.ts",
+          "src/agents/worktrees/filesystem-native.test.ts",
         ],
         (plan) =>
           plan.configs?.some((config) =>
-            [goToolingConfig, "test/vitest/vitest.infra.config.ts"].includes(config),
+            [
+              goToolingConfig,
+              "test/vitest/vitest.infra.config.ts",
+              "test/vitest/vitest.agents-support.config.ts",
+            ].includes(config),
           ),
       );
     const minTotalMemoryBytes = Math.max(
