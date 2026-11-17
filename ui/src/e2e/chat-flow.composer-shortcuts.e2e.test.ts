@@ -304,7 +304,10 @@ suite.define(() => {
     await menu.waitFor({ state: "visible" });
     // The menu installs its document keyboard listener on the next frame.
     await page.evaluate(
-      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        }),
     );
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "hidden" });
