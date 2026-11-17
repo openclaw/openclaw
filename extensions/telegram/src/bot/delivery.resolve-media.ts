@@ -138,7 +138,7 @@ async function resolveTelegramFileWithRetry(
     }
     const status = err instanceof GrammyError ? err.error_code : undefined;
     // Keep getFile failures on the same typed path as download failures so the
-    // handler can warn the user and durably retry transient spooled updates.
+    // handler delivers the message without the attachment and warns the user.
     throw new MediaFetchError(
       status ? "http_error" : "fetch_failed",
       `Telegram getFile failed after retries: ${formatErrorMessage(err)}`,
