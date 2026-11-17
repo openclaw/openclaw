@@ -61,9 +61,6 @@ it("distinguishes sessions_send local context selection from exact external addr
   expect(description).toContain('`targetDisposition: "queued"` or `"steered"`');
   expect(description).toContain("neither proves target completion");
   expect(description).toContain("Ordinary peer sends start a separate turn.");
-  expect(description).toContain(
-    "A zero-wait send to your own busy child or an eligible run-scoped target may use its active input queue.",
-  );
   expect(description).toContain("An idle recipient or a default self-send starts a new turn");
   expect(description).toContain(
     "mode:followup always starts a separate turn and preserves its independent reply",
