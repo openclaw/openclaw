@@ -220,7 +220,18 @@ export class ComposerDictationSession {
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
-    return transcript;
+    const text = await transcript;
+    // An empty drain is otherwise silent; a reported provider error already named its cause.
+    if (!text && !this.discarded && !this.failed) {
+      this.reportFailure(
+        t(
+          this.gatewayDisconnected
+            ? "chat.composer.dictationDisconnected"
+            : "chat.composer.dictationFailed",
+        ),
+      );
+    }
+    return text;
   }
 
   async cancel(): Promise<void> {
