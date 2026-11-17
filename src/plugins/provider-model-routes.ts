@@ -30,6 +30,7 @@ type ProviderModelRouteObservation = {
   modelId?: string;
   observedRoutes?: readonly ProviderModelRouteSource[];
   routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
+  requestTransportOverrides?: ProviderRouteOverridePresence;
 };
 
 type ProviderModelRoutesResolver = (
@@ -179,9 +180,12 @@ export function createProviderModelRoutesResolver(params: {
         : configuredRuntimeId && !isDefaultAgentRuntimeId(configuredRuntimeId)
           ? { runtimeId: configuredRuntimeId, source: "explicit" as const }
           : preparedIntent;
-    const requestTransportOverrides = modelId
-      ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
-      : providerRouteOverridePresence;
+    const requestTransportOverrides =
+      observed?.requestTransportOverrides === "present"
+        ? "present"
+        : modelId
+          ? (routeOverridePresenceByModel.get(modelId) ?? providerRouteOverridePresence)
+          : providerRouteOverridePresence;
     const observedRoutes = observed?.observedRoutes?.filter(
       (route) => route.api != null || (route.baseUrl !== undefined && route.baseUrl !== null),
     );

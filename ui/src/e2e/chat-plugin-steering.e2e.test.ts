@@ -88,14 +88,10 @@ suite.define(() => {
       ).not.toHaveLength(0);
 
       expect(await pane.locator("details.chat-system-events").count()).toBe(0);
-      const notice = pane
-        .locator("details.chat-notice-inline")
-        .filter({ hasText: "Advisor guidance" });
+      const notice = pane.locator("details.chat-notice-inline").filter({ hasText: "Advisor" });
       await notice.waitFor();
       expect(await notice.count()).toBe(1);
-      expect(await notice.locator(".chat-notice-inline__label").textContent()).toBe(
-        "Advisor guidance",
-      );
+      expect(await notice.locator(".chat-notice-inline__label").textContent()).toBe("Advisor");
       expect(await notice.locator(".chat-notice-inline__time").textContent()).toMatch(
         /^2:05\s*PM$/u,
       );

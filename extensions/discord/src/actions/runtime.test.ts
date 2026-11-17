@@ -1763,9 +1763,9 @@ describe("handleDiscordGuildAction - channel management", () => {
     ["categoryDelete", { categoryId: "CAT1" }, deleteChannelDiscord, ["CAT1"]],
     [
       "channelEdit",
-      { channelId: "C1", clearParent: true },
+      { channelId: "C1", clearParent: true, appliedTags: [] },
       editChannelDiscord,
-      [editPayload({ parentId: null })],
+      [editPayload({ parentId: null, appliedTags: [] })],
     ],
     [
       "channelMove",

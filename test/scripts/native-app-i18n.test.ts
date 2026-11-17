@@ -705,7 +705,7 @@ describe("native app i18n inventory", () => {
         "Some channel status checks did not complete.",
         "Use the credential for this destination. Leave both fields empty only if this route already has device pairing or does not require a shared credential. Changing the destination clears this form's saved credentials.",
         "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
-        "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. Enable only while actively debugging.",
+        "Local rotating log: ~/Library/Logs/OpenClaw/. Enable only for debugging.",
         "A setup code supplies the address and available certificate information automatically. For token or password authentication, enter the ordinary Gateway credential below.",
         "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
         "The Gateway can capture your screen and interact with apps on this Mac, including clicking and typing, subject to macOS permissions.",
@@ -881,7 +881,7 @@ describe("native app i18n inventory", () => {
         [
           "Use the credential for this destination. Leave both fields empty only if this route ",
           "Cron changes require operator.admin. Setup codes intentionally do not grant it. ",
-          "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. ",
+          "Local rotating log: ~/Library/Logs/OpenClaw/. ",
           "A setup code supplies the address and available certificate information automatically. ",
         ].includes(entry.source),
       ),

@@ -147,6 +147,11 @@ For each accepted input, retain identity and custody through these boundaries:
 3. Confirmed consumed, deliberately dropped, cancelled, interrupted, or
    retained with an explicitly uncertain commitment.
 
+A failed authority assertion refuses that operation without ending queued-input
+custody. Revocation ends custody only when the authority owner records it by
+aborting its signal; Stop, lifecycle cancellation, deliberate drop, and confirmed
+consumption retain their own recorded causes.
+
 An input's `phase`, payload readiness, and retained custody are independent.
 Retirement can be requested while an admitted injection, turn claim, or
 withdrawal hold still owns work. Native acceptance releases input ordering;

@@ -217,11 +217,16 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
-          }),
+          // A fork runs under its own key but keeps its source conversation's history window.
+          getHistoryLimitFromSessionKey(
+            attempt.sandboxSessionKey ?? attempt.sessionKey,
+            attempt.config,
+            {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+          ),
           {
             groupConsecutiveUserTurns:
               transcriptPolicy.validateAnthropicTurns &&
@@ -231,7 +236,6 @@ export async function prepareEmbeddedAttemptHistory(
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );
@@ -272,9 +276,12 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Transcript admission already seals retained replies; restored or replaced replies still need it.
+  // Seal restored model history once; transcript admission already seals retained messages.
   for (const message of messages) {
-    if (message.role === "assistant" && !isOwnedTranscriptPayload(message)) {
+    if (
+      (message.role === "assistant" || message.role === "user" || message.role === "toolResult") &&
+      !isOwnedTranscriptPayload(message)
+    ) {
       freezeJsonSnapshot(message);
     }
   }

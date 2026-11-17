@@ -1,9 +1,10 @@
+import { isSettingsTakeover, pageTitleForRoute } from "../app-navigation.ts";
 import {
-  isSettingsNavigationRoute,
-  isSettingsTakeover,
-  pageTitleForRoute,
-} from "../app-navigation.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+  isSessionRouteId,
+  pluginTabForLocation,
+  pluginTabKey,
+  pluginTabRefFromSearch,
+} from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
@@ -13,7 +14,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
+import { pluginPageLabel } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
@@ -34,6 +35,7 @@ import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
   NAVIGATION_RAIL_WIDTH,
+  type NavDrawerCloseOptions,
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
@@ -60,17 +62,17 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
+  readonly initialConnectionPending: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsSearchQuery: string;
+  settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   readonly workspaceChromeVisible: boolean;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
   readonly handleNativeNewSession: () => void;
-  handleSettingsSearchQueryChange(query: string): Promise<void>;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   refreshControlUi: () => Promise<boolean>;
@@ -142,20 +144,21 @@ export function readShellView(host: ShellViewHost) {
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
-  const initialGatewayConnection =
-    !nativeEmbed &&
-    !runtime.warmBoot &&
-    !presentationScope.readyOnce &&
-    !gatewayConnected &&
-    host.routeState.routeId === undefined;
+  const initialGatewayConnection = host.initialConnectionPending;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
+  const settingsRoute = isSettingsTakeover(
+    activeRoute,
+    context.gateway.snapshot.hello?.controlUiTabs,
+    host.routeState.location,
+    context.basePath,
+  );
   const embedSettings =
     nativeEmbed &&
     (activeRoute === "settings" ||
-      isSettingsNavigationRoute(activeRoute) ||
+      settingsRoute ||
       activeRoute === "skills" ||
       activeRoute === "cron");
-  const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";
   // Drawer motion invalidates only the bindings that read its presentation.
@@ -198,9 +201,9 @@ export function readShellView(host: ShellViewHost) {
     !host.desktopNavigationExpanded &&
     !navDrawerOpen() &&
     !settingsTakeover;
-  const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
+  const railAvailable = !nativeEmbed && !onboarding && (!settingsTakeover || !mobileNavLayout);
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  // Settings replaces the adjacent sidebar without moving the desktop reading surface.
   const expandedNavWidth =
     navigationSnapshot.navWidth +
     (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
@@ -285,6 +288,12 @@ export function readShellView(host: ShellViewHost) {
     onOpenPalette: host.openPalette,
     onRetryConnect: callbacks.retryGateway,
     onToggleSidebar: callbacks.toggleSidebar,
+    onExitSettings: settingsTakeover
+      ? () => {
+          context.navigation.update({ navCollapsed: false });
+          host.shellNavigation.exitSettings();
+        }
+      : undefined,
     onOpenNewSession: callbacks.requestOpenNewSession,
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
@@ -328,6 +337,15 @@ export function readShellView(host: ShellViewHost) {
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
     activeRouteId: activeRoute,
+    pluginTabs: gatewaySnapshot.hello?.controlUiTabs?.filter((tab) => tab.placement === "settings"),
+    activePluginTab:
+      activeRoute === "plugin"
+        ? pluginTabForLocation(
+            context.gateway.snapshot.hello?.controlUiTabs,
+            host.routeState.location,
+            context.basePath,
+          )
+        : undefined,
     connectionStatus,
     onExit: () => {
       if (!nativeEmbed) {
@@ -390,7 +408,9 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
+            pluginPageLabel(context, host.routeState.location),
+          );
     },
     get navCollapsed() {
       return navCollapsed();

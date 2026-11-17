@@ -112,9 +112,7 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Ada"),
     );
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
-      "Online · Active",
-    );
+    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Active");
     expect(personButton.getAttribute("aria-expanded")).toBe("true");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     card.querySelector<HTMLAnchorElement>("a")!.focus();
@@ -144,14 +142,13 @@ describe("AppSidebar viewer presence", () => {
     await activityReady;
     await settleLitElement(sidebar);
     const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(
-      offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
-    ).toBe("Offline");
-    expect(offlineCard.querySelector("dl")).toBeNull();
+    expect(offlineCard.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
+      "Offline",
+    );
     const recent = offlineCard.querySelector("section")!;
     expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
     expect(recent.querySelector("a")?.getAttribute("href")).toBe(`/chat/main/${ownerId}`);
-    expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
+    expect(offlineCard.querySelector(".person-activity-card__activity")?.getAttribute("href")).toBe(
       `/activity/${ownerId}`,
     );
     bobButton.click();
@@ -319,7 +316,7 @@ describe("AppSidebar viewer presence", () => {
     const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
     await vi.waitFor(() =>
       expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
-        "Online for 1m · Active",
+        "Active",
       ),
     );
     const sessionLink = card.querySelector<HTMLAnchorElement>(".person-activity-card__session")!;
@@ -334,8 +331,8 @@ describe("AppSidebar viewer presence", () => {
     ).toBe("bob");
     expect(card.querySelector("h2")?.textContent).toBe("Alice");
     expect(document.activeElement).toBe(sessionLink);
-    expect(card.querySelector("time")?.getAttribute("datetime")).toBe(
-      new Date(alice.onlineSince).toISOString(),
+    expect(card.querySelector(".person-activity-card__status time")?.getAttribute("datetime")).toBe(
+      new Date(now - 600_000).toISOString(),
     );
     gateway.publishEvent("presence", { presence: [{ ...alice, watchedSessions: [] }, bob] });
     await settleLitElement(sidebar);
@@ -412,8 +409,7 @@ describe("AppSidebar viewer presence", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await settleLitElement(sidebar);
     expect(row.dataset.presenceActivity).toBe("idle");
-    expect(card.querySelector(".person-activity-card__status")?.textContent).toContain("Idle");
-    expect(card.textContent).toContain("Online for");
+    expect(card.querySelector(".person-activity-card__status")?.textContent).toContain("Idle for");
     gateway.publishEvent("presence", { presence: [{ ...person, lastActivityAt: Date.now() }] });
     await settleLitElement(sidebar);
     expect(row.dataset.presenceActivity).toBe("active");
@@ -435,7 +431,8 @@ describe("AppSidebar viewer presence", () => {
       const person = {
         ts: Date.now(),
         user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
-        onlineSince: Date.now() - 90_000,
+        // Idle presence keeps a ticking duration in the open card.
+        lastActivityAt: Date.now() - 600_000,
       };
       gateway.publishEvent("presence", {
         presence: [person],
@@ -491,7 +488,7 @@ describe("AppSidebar viewer presence", () => {
       expect(document.querySelector(".person-activity-hovercard")).toBeNull();
       if (reason === "remove") {
         expect(sidebar.querySelector(".sidebar-online__person")).toBeNull();
-        const returned = { ...person, ts: Date.now(), onlineSince: Date.now() };
+        const returned = { ...person, ts: Date.now(), lastActivityAt: Date.now() - 300_000 };
         gateway.publishEvent("presence", {
           presence: [{ ...person, reason: "disconnect" }, returned],
         });
@@ -502,7 +499,7 @@ describe("AppSidebar viewer presence", () => {
         await vi.waitFor(() =>
           expect(
             document.querySelector(".person-activity-hovercard time")?.getAttribute("datetime"),
-          ).toBe(new Date(returned.onlineSince).toISOString()),
+          ).toBe(new Date(returned.lastActivityAt).toISOString()),
         );
         expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Alice");
       }

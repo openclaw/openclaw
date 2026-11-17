@@ -1,0 +1,2 @@
+# Media-only diagnostic projection skips unused credential discriminator reads.
+22

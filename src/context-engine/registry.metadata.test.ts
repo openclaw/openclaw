@@ -13,8 +13,7 @@ it("releases the completed factory context while retaining its closed resource o
   const output = execNodeEvalSync(
     `import assert from "node:assert/strict";
      import { AsyncLocalStorage } from "node:async_hooks";
-     import { setImmediate as nextTurn } from "node:timers/promises";
-     import { queryObjects } from "node:v8";
+     import { expectCollected, expectLiveObjects } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
      import { AsyncWorkScope } from ${JSON.stringify(new URL("../shared/async-work-scope.ts", import.meta.url).href)};
      import { ContextEngineFactoryResources, disposeContextEngineSources } from ${JSON.stringify(new URL("./registry.resources.ts", import.meta.url).href)};
 
@@ -23,9 +22,15 @@ it("releases the completed factory context while retaining its closed resource o
      for (const fails of [false, true]) {
        const parent = new AsyncWorkScope();
        const failure = new Error("claim release failed");
-       const source = carrier.run(new RunState(), () => parent.run(() =>
-         new ContextEngineFactoryResources([{ release: async () => { if (fails) throw failure; } }]),
-       ));
+       const { source, state } = (() => {
+         const state = new RunState();
+         return {
+           source: carrier.run(state, () => parent.run(() =>
+             new ContextEngineFactoryResources([{ release: async () => { if (fails) throw failure; } }]),
+           )),
+           state: new WeakRef(state),
+         };
+       })();
        const finish = Promise.withResolvers();
        const started = Promise.withResolvers();
        const disposal = disposeContextEngineSources(undefined, [source], async () => {
@@ -35,16 +40,11 @@ it("releases the completed factory context while retaining its closed resource o
        });
        const outcome = disposal.catch(error => error);
        await started.promise;
-       await nextTurn();
-       assert.equal(queryObjects(RunState), 1, "pending disposal retains its origin");
+       await expectLiveObjects([state], 1);
        finish.resolve();
        assert.equal(await outcome, fails ? failure : undefined);
        await parent.drain();
-       await nextTurn();
-       const control = new WeakRef({});
-       await nextTurn();
-       assert.equal(queryObjects(RunState), 0, "settled owner releases captured context");
-       assert.equal(control.deref(), undefined, "GC control");
+       await expectCollected(state);
        let invoked = false;
        await assert.rejects(source.run(() => { invoked = true; }), /Async work scope is closed/);
        assert.throws(() => source.runCleanup(() => { invoked = true; }), /Async work scope is closed/);
@@ -52,7 +52,7 @@ it("releases the completed factory context while retaining its closed resource o
      }
      carrier.disable();
      console.log("factory contexts released");`,
-    { imports: ["./scripts/tsx.mjs"], timeout: 10_000 },
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
   );
   expect(output.trim()).toBe("factory contexts released");
 });

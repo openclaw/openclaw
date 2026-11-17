@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SqliteWorkerError, wrapSqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectCollected } from "../test-utils/retention.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as ChangedAdmission,
   AgentDatabaseSchemaAdmissionInvalidError as InvalidAdmission,
@@ -17,6 +18,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import type { AgentDatabaseStartupActivation } from "./agent-database-startup.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 
@@ -40,8 +42,16 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
     ),
     failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>(
       (refusal, cause, options) => {
+        const previous = actual.listAgentDatabaseAdmissionRefusals(options);
         actual.failPendingAgentDatabase(refusal, cause, options);
-        admissionState.failed.push(refusal.agentId);
+        // Observe recorded verdicts; repeating an already-recorded refusal is idempotent.
+        if (
+          actual
+            .listAgentDatabaseAdmissionRefusals(options)
+            .some((entry) => !previous.includes(entry))
+        ) {
+          admissionState.failed.push(refusal.agentId);
+        }
       },
     ),
   };
@@ -77,9 +87,10 @@ async function prepareAgents(
   options: {
     isCurrent?: () => boolean;
     openAgent?: () => Promise<AsyncDisposable | void>;
-    migrateAgent?: () => Promise<void>;
-    publishAgent?: () => Promise<void>;
+    migrateAgent?: AgentDatabaseStartupActivation["migrateAgent"];
+    publishAgent?: AgentDatabaseStartupActivation["publishAgent"];
     afterActivation?: () => Promise<void>;
+    afterPreparation?: () => Promise<void>;
     inspection?: OpenClawDatabaseSchemaPreflight;
   } = {},
 ) {
@@ -110,6 +121,7 @@ async function prepareAgents(
       // Four attempts, including jitter, finish before the progress interval fires.
       await vi.advanceTimersByTimeAsync(10_000);
       await admission.pendingPreparation;
+      await options.afterPreparation?.();
       for (const agentId of admissionState.prepared) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
       }
@@ -119,6 +131,41 @@ async function prepareAgents(
   });
   return agentIds;
 }
+
+it.each([false, true])(
+  "releases completed restart inputs while published admission stays alive (failure: %s)",
+  async (failure) => {
+    const retainedAdmissions: Array<() => void> = [];
+    const payloads: WeakRef<object>[] = [];
+    let recovered = 0;
+    await prepareAgents(1, {
+      migrateAgent: async () => {
+        const payload = { entries: ["prepared restart session"] };
+        payloads.push(new WeakRef(payload));
+        return {
+          recoverInputs: {
+            sessions: new Map(),
+            run: async () => {
+              recovered += payload.entries.length;
+              if (failure) {
+                throw new Error("restart recovery fixture failure");
+              }
+            },
+          },
+        };
+      },
+      publishAgent: async ({ assertCurrent }) => {
+        retainedAdmissions.push(assertCurrent);
+      },
+      afterPreparation: async () => {
+        expect(recovered).toBe(1);
+        await expectCollected(...payloads);
+        expect(retainedAdmissions).toHaveLength(1);
+        expect(retainedAdmissions[0]).toBeTypeOf("function");
+      },
+    });
+  },
+);
 
 it.each([undefined, "migration", "publication"] as const)(
   "retains the prepared resource until startup settles (%s)",
@@ -295,6 +342,12 @@ it.each([
   }
   await prepareAgents(1);
   expectAdmission([], ["agent-0"], attempts);
+  if (typeof outcome === "string") {
+    const options = vi.mocked(failPendingAgentDatabase).mock.lastCall![2];
+    const refusal = readAgentDatabaseAdmissionRefusal("agent-0", options);
+    expect(refusal?.repairHint).toContain("retry agents.delete");
+    expect(refusal?.repairHint).not.toContain("doctor --fix");
+  }
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

@@ -64,4 +64,35 @@ describe("claude-auth-status.sh", () => {
     expect(result.stdout).toContain("Claude Code Auth Status");
     expect(result.stdout.match(/Expires:/g)).toHaveLength(2);
   });
+
+  it
+    .skipIf(spawnSync("jq", ["--version"]).status !== 0)
+    .each(["anthropic:work", "anthropic:default"])(
+    "reports the expiry of %s in fallback JSON",
+    (profileId) => {
+      const root = harness.createTempDir("openclaw-auth-json-");
+      const bin = path.join(root, "bin");
+      const auth = path.join(root, ".openclaw/agents/main/agent");
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(auth, { recursive: true });
+      const openclaw = path.join(bin, "openclaw");
+      writeFileSync(openclaw, "#!/bin/sh\nexit 1\n");
+      chmodSync(openclaw, 0o755);
+      const expires = Date.now() + 2 * 60 * 60 * 1000;
+      writeFileSync(
+        path.join(auth, "auth-profiles.json"),
+        JSON.stringify({ profiles: { [profileId]: { provider: "anthropic", expires } } }),
+      );
+      const result = spawnSync("bash", [SCRIPT, "json"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, HOME: root, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).openclaw).toEqual({
+        status: expect.stringMatching(/^OK:/),
+        expires_at_ms: expires,
+      });
+    },
+  );
 });

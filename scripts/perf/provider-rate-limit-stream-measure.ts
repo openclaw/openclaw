@@ -1,7 +1,7 @@
 // Measure native rate-limit stream admission, including 25% synthetic 429 responses.
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/provider-rate-limit-stream-measure.ts \
 //   --scenario unkeyed --mode timing --turns 3000 --chunks 64
-// Scenarios: unkeyed, inherited, active, delegated. Modes: timing, allocation (separate passes).
+// Scenarios: unkeyed, inherited, active, delegated, long-reset. Modes: timing, allocation (separate passes).
 // --error-percent 0 or 25 compares successful traffic with injected 429s.
 // Run unchanged on both revisions in AB/BA order. Allocation includes collected objects;
 // timing uses main-thread CPU. This is owner proof, not whole-Gateway throughput.
@@ -29,7 +29,7 @@ const errorPercent = Number(values["error-percent"]);
 assert(errorPercent === 0 || errorPercent === 25);
 assert(Number.isSafeInteger(turns) && turns > 0);
 assert(Number.isSafeInteger(chunks) && chunks > 0);
-assert(["unkeyed", "inherited", "active", "delegated"].includes(values.scenario));
+assert(["unkeyed", "inherited", "active", "delegated", "long-reset"].includes(values.scenario));
 assert(["timing", "allocation"].includes(values.mode));
 const model: Model = {
   id: "synthetic",
@@ -62,6 +62,49 @@ const message: AssistantMessage = {
 };
 let sequence = 0;
 async function run(count: number) {
+  if (values.scenario === "long-reset") {
+    let providerRequests = 0;
+    let localRefusals = 0;
+    // A shared route/account with thousands of distinct sessions and a 10k-token prompt.
+    const apiKey = `synthetic-cohort-${sequence++}`;
+    const context = { messages: [{ role: "user", content: "synthetic input ".repeat(4000) }] };
+    for (let turn = 0; turn < count; turn++) {
+      try {
+        const stream = await admitProviderRateLimitStream(
+          model,
+          {
+            apiKey,
+            sessionId: `synthetic-session-${turn}`,
+            maxRetryDelayMs: 60_000,
+          },
+          () => {
+            providerRequests++;
+            // Model transports serialize the prepared context only after admission.
+            JSON.stringify(context);
+            const source = createAssistantMessageEventStream();
+            source.push({
+              type: "error",
+              reason: "error",
+              error: {
+                ...message,
+                stopReason: "error",
+                retryAfterMs: 3 * 86_400_000,
+                errorMessage: "429 Too Many Requests",
+              },
+            });
+            source.end();
+            return source;
+          },
+        );
+        await stream.result();
+      } catch (error) {
+        assert.equal((error as { status?: number }).status, 429);
+        localRefusals++;
+      }
+    }
+    return { providerRequests, localRefusals };
+  }
+
   let events = 0;
   let failures = 0;
   for (let turn = 0; turn < count; turn++) {

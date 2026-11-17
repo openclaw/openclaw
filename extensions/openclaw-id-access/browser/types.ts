@@ -1,8 +1,20 @@
 // Response shapes of the Gateway's openclawId.* methods that the members page reads.
-import type { MemberRole } from "@openclaw/openclaw-id-protocol";
+import type {
+  IrohEndpointKey,
+  KeyFingerprint,
+  MemberDeviceApprover,
+  MemberRole,
+  NodeDescription,
+} from "@openclaw/openclaw-id-protocol";
 
 /** An active owner device as `openclawId.status` lists it. */
-export type OwnerDevice = { devicePub: string; label: string; peerKeys: string[]; cert: unknown };
+export type OwnerDevice = {
+  devicePub: string;
+  label: string;
+  peerKeys: string[];
+  cert: unknown;
+  deviceFp?: string;
+};
 
 /** One active run a member's device started, read from the Gateway's run registry. */
 type MemberRun = { runId: string; sessionKey: string };
@@ -10,6 +22,11 @@ type MemberRun = { runId: string; sessionKey: string };
 /** One of a member's device keys with its live activity on this Gateway. */
 export type MemberDevice = {
   peerKey: string;
+  deviceFp: KeyFingerprint | null;
+  label: string;
+  approvedBy: MemberDeviceApprover | null;
+  /** Persisted last seen, seconds since the epoch. */
+  lastSeen: number | null;
   /** Open relayed Gateway connections for this key. */
   connections: number;
   /** Last activity this Gateway saw, ms since the epoch; null when not seen since it started. */
@@ -21,6 +38,8 @@ export type MemberDevice = {
 export type Member = {
   accountId: string;
   role: string;
+  roleDefined?: boolean;
+  recoveryKit?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -32,6 +51,21 @@ export type Member = {
 /** What an accepted removal cut (`openclawId.authority` submit result `removal`). */
 export type RemovalSummary = { devices: number; connectionsClosed: number; runsCancelled: number };
 
+/** A local personal profile with no OpenClaw ID linked yet. */
+export type ExistingProfile = { id: string; displayName: string | null };
+
+/** Owner-only accepted recovery-kit use, independent of current member/device membership. */
+export type MemberRecoveryUse = {
+  seq: number;
+  accountId: string;
+  memberName: string;
+  deviceLabel: string;
+  peerKey: string;
+  peerFp: string;
+  /** Gateway-observed admission time, Unix seconds. */
+  usedAt: number;
+};
+
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
   inviteId: string;
@@ -41,6 +75,8 @@ export type Invite = {
   createdAt: number;
   expiresAt: number;
   status: "open" | "pending" | "approved" | "denied" | "expired";
+  /** Local invite selection and its approval outcome; never part of the signed cap. */
+  existingProfile?: ExistingProfile & { fallbackReason?: string };
   pending?: {
     accountId: string;
     devicePub: string;
@@ -49,8 +85,20 @@ export type Invite = {
     decideBy: number;
     /** Reported by OpenClaw ID; display only. */
     reported: { email: string | null; displayName: string | null; locationHint: string | null };
+    /** The requesting app's device name and platform, when it reports them. */
+    device?: { label: string; platform: string };
   };
 };
+
+/** Small public role summary, not the full permission definition. */
+export type Role = { name: string; requiresSandbox: boolean } & (
+  | { defined: false }
+  | {
+      defined: true;
+      sessions: "none" | "view" | "suggest" | "write";
+      admin: boolean;
+    }
+);
 
 /**
  * The claw's link state: `openclawId.status` returns only linked, clawId, hostname and
@@ -64,7 +112,14 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
+  roles?: Role[];
+  recoveryUses?: MemberRecoveryUse[];
+  /** Default engine liveness; null means this backend is not probed here. */
+  sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
+  existingProfiles?: ExistingProfile[];
+  nodes?: NodeRecord[];
+  nodeInvites?: NodeInvite[];
   publication?:
     | { state: "published"; ownerAccountId: string | null; snapshotSeq: number }
     | { state: "needs_enrollment_code" }
@@ -73,9 +128,40 @@ export type Link = {
 
 /** The `openclawId.status` result. */
 export type StatusResult = {
-  status: { state: "off" | "unconfigured" | "on" | "failed" };
+  status: {
+    state: "off" | "unconfigured" | "on" | "failed";
+    tunnel?: { state: string; relayUrl?: string };
+  };
   link: Link;
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
+  connection?: { kind: "member"; role: MemberRole } | { kind: "owner" | "local" | "none" };
+};
+
+/** Owner-only public node projection; never contains the invitation proof key. */
+export type NodeRecord = {
+  peerKey: IrohEndpointKey;
+  label: string;
+  description: NodeDescription;
+  addedBy: string;
+  lastSeen: number;
+  /** Set when an invitation added the node; absent for a node bound to an owner device. */
+  inviteId?: string;
+  /** Fingerprint of the owner device whose approval carried this node key. */
+  ownerDevice?: string;
+};
+export type NodeInvite = {
+  inviteId: string;
+  label: string;
+  createdAt: number;
+  expiresAt: number;
+  status: "open" | "pending" | "approved" | "denied" | "expired";
+  pending?: {
+    peerKey: IrohEndpointKey;
+    requestedAt: number;
+    decideBy: number;
+    description: NodeDescription;
+    verificationCode: string;
+  };
 };

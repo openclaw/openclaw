@@ -110,7 +110,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-setup-check");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();

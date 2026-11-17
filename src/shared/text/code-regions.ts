@@ -12,6 +12,48 @@ import { isInsideCode } from "./code-ranges.js";
 export { findCodeRegions };
 export type { CodeRegion } from "./code-ranges.js";
 
+/** Per-stream ownership: retain the parser's mutable tail instead of reparsing settled blocks. */
+export function createCodeRegionResolver() {
+  // Pending candidates and cumulative snapshots interleave; neither should evict the other's tail.
+  const scans: Array<{
+    text: string;
+    retainStart: number;
+    regions: ReturnType<typeof findCodeRegions>;
+  }> = [];
+  return (text: string): ReturnType<typeof findCodeRegions> => {
+    if (!/[`~\t]| {4}/u.test(text)) {
+      return [];
+    }
+    const index = scans.findIndex((scan) => text.startsWith(scan.text));
+    const previous = index < 0 ? undefined : scans.splice(index, 1)[0];
+    if (previous?.text === text) {
+      scans.unshift(previous);
+      return previous.regions;
+    }
+    const offset = previous?.retainStart ?? 0;
+    const tail = text.slice(offset);
+    const ownership = findCodeOwnership(tail);
+    // Definitions can affect later images; retain their enclosing containers too, since
+    // a definition's indented line alone can become code without its earlier list marker.
+    const retain = ownership.definitions.length ? 0 : ownership.retainStart;
+    const lineStart =
+      retain === 0
+        ? 0
+        : Math.max(tail.lastIndexOf("\n", retain - 1), tail.lastIndexOf("\r", retain - 1)) + 1;
+    for (const region of ownership.regions) {
+      region.start += offset;
+      region.end += offset;
+    }
+    const regions = [
+      ...(previous?.regions.filter((region) => region.end <= offset) ?? []),
+      ...ownership.regions,
+    ];
+    scans.unshift({ text, retainStart: offset + lineStart, regions });
+    scans.length = Math.min(scans.length, 2);
+    return regions;
+  };
+}
+
 export {
   createTextPartCodeRegionResolver,
   isInsideCode,
@@ -101,12 +143,25 @@ export function findTextCheckpoint(
     const inFence = Boolean(state.fenceChar);
     advanceProtectionScanState(state, line);
     // References, image descriptions, and setext headings can need earlier paragraph context.
-    if (
-      state.paragraphAmbiguous ||
-      state.structuralUnknown ||
-      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
-    ) {
-      const ownership = resolveOwnership(text);
+    const bracketLine = !inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line);
+    const needsParagraphContext =
+      state.paragraphAmbiguous || state.structuralUnknown || bracketLine;
+    let ownership: ReturnType<typeof resolveOwnership> | undefined;
+    if (needsParagraphContext) {
+      ownership = resolveOwnership(text);
+    }
+    // A completed `[TOOL_CALL]`/`[TOOL_RESULT]` tag cannot grow a new label on this line. Only
+    // such tag lines (with no other open bracket or link) may settle immediately; anything else
+    // still needs the whole paragraph context (open labels, definitions, inline code, etc.).
+    const completedLegacyToolTag =
+      bracketLine &&
+      line.includes("[") &&
+      !state.paragraphAmbiguous &&
+      !state.structuralUnknown &&
+      !/[[(]/.test(line.replace(/\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/gi, "")) &&
+      !ownership?.continuation &&
+      ownership?.definitions.length === 0;
+    if (needsParagraphContext && !completedLegacyToolTag && ownership) {
       if (ownership.continuation) {
         return { ...ownership.continuation, definitions: ownership.definitions };
       }

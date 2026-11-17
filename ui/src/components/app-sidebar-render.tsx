@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
+import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -18,7 +18,6 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { pluginTabKey } from "../pages/plugin/route.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -164,7 +163,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
               ]}
             >
               <Show
-                when={!host.connectionPending && Boolean(avatar() || avatarText())}
+                when={!host.connectionPending}
                 fallback={<GatewayIdentityPlaceholder kind="agent" />}
               >
                 <AgentIdentityAvatar
@@ -504,7 +503,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
         >
           <span class="sidebar-identity-card__avatar">
             <Show
-              when={!host.connectionPending && Boolean(displayUser()?.avatarUrl)}
+              when={!host.connectionPending}
               fallback={<GatewayIdentityPlaceholder kind="user" />}
             >
               <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />

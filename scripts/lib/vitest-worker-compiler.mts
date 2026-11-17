@@ -19,6 +19,7 @@ import {
 } from "./runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
+import { isCiLikeEnv } from "./vitest-local-scheduling.mts";
 import {
   hashVitestWorkerArtifact,
   verifyVitestWorkerArtifacts,
@@ -61,10 +62,14 @@ async function compileVitestWorkerArtifacts(
     );
   }
   if (restored) {
-    await writeVitestWorkerManifest(directory, restored.inputs, restored.outputs, started, {
-      restored: true,
-      cacheSignature: restored.cacheSignature,
-    });
+    const manifest = await prepareVitestWorkerManifest(
+      directory,
+      restored.inputs,
+      restored.outputs,
+      started,
+      { restored: true, cacheSignature: restored.cacheSignature },
+    );
+    fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
     console.error("[vitest-workers] reused local compiler outputs");
     return;
   }
@@ -119,12 +124,35 @@ async function compileVitestWorkerArtifacts(
   ]) {
     recordInput(path.resolve(root, name));
   }
-  const entry =
-    preset === "runtime"
-      ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
-      : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
-  const preservedSources = preset === "runtime" ? [] : preservedModuleBuildSources;
-  const preservedAssets = preset === "runtime" ? [] : preservedModuleBuildAssets;
+  const entry: Record<string, string> =
+    preset === "tooling"
+      ? {
+          "infra/runtime-process-entrypoints":
+            runtimeProcessDeclarationEntries["infra/runtime-process-entrypoints"],
+          "scripts/script-module-runtime.test-support":
+            vitestWorkerDeclarationEntries["scripts/script-module-runtime.test-support"],
+          "test/scripts/tooling-probe-runtime.test-support":
+            vitestWorkerDeclarationEntries["test/scripts/tooling-probe-runtime.test-support"],
+        }
+      : preset === "runtime"
+        ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
+        : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
+  const preservedSources =
+    preset === "tooling"
+      ? [
+          "scripts/lib/vitest-batch-runner.mts",
+          "scripts/test-projects.mts",
+          "scripts/ci-refit-test-timings.mts",
+        ]
+      : preset === "runtime"
+        ? []
+        : preservedModuleBuildSources;
+  const preservedAssets =
+    preset === "tooling"
+      ? ["scripts/lib/vitest-worker-bootstrap.mts", "scripts/lib/vitest-worker-descriptor.mts"]
+      : preset === "runtime"
+        ? []
+        : preservedModuleBuildAssets;
   const outDir = path.join(directory, "dist");
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
@@ -144,7 +172,7 @@ async function compileVitestWorkerArtifacts(
         load(id) {
           recordInput(id);
           // Keep schema loading in this callback instead of crossing into JS twice per input.
-          return schemaPlugin.load.call(
+          return schemaPlugin.load.handler.call(
             {
               addWatchFile: (file) => {
                 recordInput(file);
@@ -157,11 +185,12 @@ async function compileVitestWorkerArtifacts(
         generateBundle(_options, bundle) {
           for (const input of Object.keys(inputs)) {
             let packageDirectory = path.dirname(input);
-            if (packageDirectories.has(packageDirectory)) {
-              continue;
-            }
-            packageDirectories.add(packageDirectory);
             while (packageDirectory.startsWith(root)) {
+              // A visited ancestor already contributed its nearest package manifest.
+              if (packageDirectories.has(packageDirectory)) {
+                break;
+              }
+              packageDirectories.add(packageDirectory);
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {
                 recordInput(manifest);
@@ -260,7 +289,7 @@ async function compileVitestWorkerArtifacts(
             },
           ],
           handler(id, importer) {
-            if (preset === "runtime") {
+            if (preset !== "full") {
               return null;
             }
             // Preserve the broadcast fixture's exact native command substitution.
@@ -307,7 +336,7 @@ async function compileVitestWorkerArtifacts(
             },
           ],
           handler(id, importer) {
-            if (preset === "runtime" || !importer || !id.startsWith(".")) {
+            if (preset !== "full" || !importer || !id.startsWith(".")) {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
@@ -372,6 +401,9 @@ async function compileVitestWorkerArtifacts(
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
+    if (preset === "tooling") {
+      return;
+    }
     for (const [name, source] of Object.entries(entry)) {
       if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
         continue;
@@ -449,7 +481,13 @@ async function compileVitestWorkerArtifacts(
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (preset === "runtime") {
     await compileShared();
-  } else if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  } else if (
+    preset === "full" &&
+    cache &&
+    !isCiLikeEnv(process.env) &&
+    process.availableMemory() >= 8 * 1024 ** 3
+  ) {
+    // CI cache opt-in must not also enable the larger overlapping compiler graphs.
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
@@ -482,17 +520,19 @@ async function compileVitestWorkerArtifacts(
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
+  const manifest = await prepareVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
     reportPhase("compiler cache inputs sealed");
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
+    flag: "wx",
+  });
 }
 
-async function writeVitestWorkerManifest(
+async function prepareVitestWorkerManifest(
   directory: string,
   inputs: Record<string, string>,
   outputs: Record<string, string>,
@@ -524,21 +564,21 @@ async function writeVitestWorkerManifest(
     await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(
-    path.join(directory, "manifest.json"),
-    `${JSON.stringify(manifest)}\n`,
-    restored ? {} : { flag: "wx" },
-  );
   return manifest;
 }
 
 if (import.meta.main) {
   try {
-    const preset = process.argv[3] === "--preset=runtime" ? "runtime" : "full";
+    const preset =
+      process.argv[3] === "--preset=tooling"
+        ? "tooling"
+        : process.argv[3] === "--preset=runtime"
+          ? "runtime"
+          : "full";
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
-      process.argv.length !== (preset === "runtime" ? 4 : 3) ||
+      process.argv.length !== (preset === "full" ? 3 : 4) ||
       path.dirname(directory) !== parent ||
       !path.basename(directory).startsWith("run-") ||
       fs.readdirSync(directory).some((name) => name !== "package.json")

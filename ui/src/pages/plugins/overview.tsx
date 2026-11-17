@@ -175,47 +175,38 @@ export function renderPluginPublisher(
   });
 }
 
-export function renderPluginMetadata(
-  result: PluginDiscoveryDetailResult | undefined,
-  installedVersion?: string,
-  local?: PluginsInspectResult["overview"],
-  loading = false,
-): JSX.Element {
-  const detail = result?.detail;
-  const catalog = result?.plugin.catalog;
-  const repository = pluginRepository(
-    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
-  );
-  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+/** The detail rail shared by plugin and Template pages: audit, release facts, then categories. */
+export function renderPackageMetadata(options: {
+  loading?: boolean;
+  security?: { verdict?: string; auditUrl?: string };
+  version?: string;
+  installed?: boolean;
+  updatedAt?: number;
+  createdAt?: number;
+  downloads?: number;
+  categories?: readonly string[];
+}): JSX.Element {
+  const date = (value: number | undefined) =>
+    value === undefined ? undefined : formatDateMs(value, { dateStyle: "medium" });
   const values: Array<[string, string | undefined]> = [
     [
-      t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
-      installedVersion ?? catalog?.latestVersion,
+      t(options.installed ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
+      options.version,
     ],
-    [
-      t("pluginsPage.detailUpdated"),
-      detail?.updatedAt === undefined
-        ? undefined
-        : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
-    ],
-    [
-      t("pluginsPage.detailPublished"),
-      detail?.createdAt === undefined
-        ? undefined
-        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
-    ],
+    [t("pluginsPage.detailUpdated"), date(options.updatedAt)],
+    [t("pluginsPage.detailPublished"), date(options.createdAt)],
     [
       t("pluginsPage.catalogDownloadsColumn"),
-      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
+      options.downloads === undefined ? undefined : formatCompactCount(options.downloads),
     ],
   ];
-  const categories = catalog?.categories ?? [];
+  const categories = options.categories ?? [];
   const placeholder = () => (
     <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
   );
   return (
     <>
-      {loading ? (
+      {options.loading ? (
         <section
           class="plugin-metadata__loading"
           role="status"
@@ -225,12 +216,15 @@ export function renderPluginMetadata(
           {placeholder()}
         </section>
       ) : undefined}
-      {detail?.security
-        ? renderPluginSecurityAudit(detail.security.verdict ?? "unknown", detail.security.auditUrl)
+      {options.security
+        ? renderPluginSecurityAudit(
+            options.security.verdict ?? "unknown",
+            options.security.auditUrl,
+          )
         : undefined}
-      {loading || values.some(([, value]) => value !== undefined) ? (
+      {options.loading || values.some(([, value]) => value !== undefined) ? (
         <dl class="plugin-metadata__facts">
-          <For each={values.filter(([, value]) => loading || value !== undefined)}>
+          <For each={values.filter(([, value]) => options.loading || value !== undefined)}>
             {([label, value]) => (
               <div>
                 <dt>{label}</dt>
@@ -250,6 +244,34 @@ export function renderPluginMetadata(
           </div>
         </section>
       ) : undefined}
+    </>
+  );
+}
+
+export function renderPluginMetadata(
+  result: PluginDiscoveryDetailResult | undefined,
+  installedVersion?: string,
+  local?: PluginsInspectResult["overview"],
+  loading = false,
+): JSX.Element {
+  const detail = result?.detail;
+  const catalog = result?.plugin.catalog;
+  const repository = pluginRepository(
+    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
+  );
+  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+  return (
+    <>
+      {renderPackageMetadata({
+        loading,
+        security: detail?.security,
+        version: installedVersion ?? catalog?.latestVersion,
+        installed: Boolean(installedVersion),
+        updatedAt: detail?.updatedAt,
+        createdAt: detail?.createdAt,
+        downloads: catalog?.downloads,
+        categories: catalog?.categories,
+      })}
       {repository || documentation ? (
         <ul class="plugin-metadata__links">
           {repository ? (

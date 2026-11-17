@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
-import { frames, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
-import { cronLoadedJobCount, interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { frames, navigation, openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
+import {
+  cronLoadedJobCount,
+  interactionScenarios,
+  type InteractionEvidence,
+} from "./control-ui-interaction-scenarios.ts";
 import { createNoopOwnerScenarios } from "./control-ui-noop-owner-scenarios.ts";
 import { createNoopPushScenarios } from "./control-ui-noop-push-scenarios.ts";
 
@@ -73,26 +77,58 @@ async function waitForProviderArtwork(page: Page, isFiltered: boolean) {
   );
 }
 
-function createProviderArtworkScenario(): EngineScenario {
+function createProviderArtworkScenario(
+  modelCount = 1_000,
+  phase: "cycles" | "open" | "reopen" = "cycles",
+): EngineScenario {
   const source = interactionScenarios.find(({ id }) => id === "provider-model-picker-first-open");
   const search = interactionScenarios.find(({ id }) => id === "provider-model-picker-search");
   if (!source || !search) {
     throw new Error("Missing shared provider picker scenarios");
   }
+  const close = async (page: Page) => {
+    const picker = page.locator(providerPicker).first();
+    const input = picker.locator(".picker-select__search");
+    if (await input.isVisible()) {
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+    }
+    if (
+      (await picker.locator(".picker-select__trigger").getAttribute("aria-expanded")) === "true"
+    ) {
+      await page.keyboard.press("Escape");
+    }
+    await page.waitForFunction((selector) => {
+      const element = document.querySelector(selector);
+      const button = element?.querySelector(".picker-select__trigger");
+      return (
+        button?.getAttribute("aria-expanded") === "false" &&
+        button === document.activeElement &&
+        element?.querySelectorAll('[role="option"]').length === 0
+      );
+    }, providerPicker);
+  };
   return {
     ...source,
-    id: "provider-model-picker-artwork-cycles",
+    id: `provider-model-picker-artwork-${phase}${modelCount === 1_000 ? "" : `-${modelCount}`}`,
     explicitOnly: true,
-    diagnostic: "Counts provider artwork HTTP reads, blob reads and object URLs; not timing proof.",
-    expected:
-      "The 1,000-model picker loads shared synthetic provider artwork, filters and reopens without saving or changing selection.",
-    initScript: `;(() => { const __name = (fn) => fn; (${installProviderArtworkProbe.toString()})(${JSON.stringify(providerArtworkPath)}); })();`,
+    diagnostic:
+      phase === "cycles"
+        ? "Counts provider artwork HTTP reads, blob reads and object URLs; not timing proof."
+        : undefined,
+    expected: `The ${modelCount}-model picker loads shared synthetic provider artwork without saving or changing selection.`,
+    initScript:
+      phase === "cycles"
+        ? `;(() => { const __name = (fn) => fn; (${installProviderArtworkProbe.toString()})(${JSON.stringify(providerArtworkPath)}); })();`
+        : undefined,
     fixtureOverrides: (_sandbox, base) => {
       const presentation = {
         providerName: "Synthetic Workstation",
         providerIcon: { source: "asset" as const, url: `${providerArtworkPath}?v=census` },
       };
-      const models = base.models.map((model) => ({ ...model, ...presentation }));
+      const models = base.models
+        .slice(-modelCount)
+        .map((model) => Object.assign({}, model, presentation));
       return {
         models,
         methodResponses: {
@@ -111,11 +147,26 @@ function createProviderArtworkScenario(): EngineScenario {
         });
       });
     },
-    run: async (page, gateway) => {
+    prepare: async (page, gateway) => {
+      await source.prepare?.(page, gateway);
+      if (phase === "reopen") {
+        await source.run(page, gateway);
+        await waitForProviderArtwork(page, false);
+        await close(page);
+      }
+    },
+    run: async (page, gateway): Promise<InteractionEvidence> => {
       const picker = page.locator(providerPicker).first();
       const trigger = picker.locator(".picker-select__trigger");
       const selected = await trigger.getAttribute("aria-label");
       const saves = (await gateway.getRequests("config.patch")).length;
+      if (phase !== "cycles") {
+        await source.run(page, gateway);
+        await waitForProviderArtwork(page, false);
+        assert.equal(await trigger.getAttribute("aria-label"), selected);
+        assert.equal((await gateway.getRequests("config.patch")).length, saves);
+        return { modelCount, uniqueImages: 1, renderedImages: await picker.locator("img").count() };
+      }
       const before = await providerArtworkCounts(page);
       await source.run(page, gateway);
       await waitForProviderArtwork(page, false);
@@ -127,36 +178,18 @@ function createProviderArtworkScenario(): EngineScenario {
         "example/model-999",
       );
       const filtered = await providerArtworkCounts(page);
-      const close = async () => {
-        const input = picker.locator(".picker-select__search");
-        if (await input.isVisible()) {
-          await input.press("Escape");
-          await input.waitFor({ state: "hidden" });
-        }
-        if ((await trigger.getAttribute("aria-expanded")) === "true") {
-          await page.keyboard.press("Escape");
-        }
-        await page.waitForFunction((selector) => {
-          const element = document.querySelector(selector);
-          const button = element?.querySelector(".picker-select__trigger");
-          return (
-            button?.getAttribute("aria-expanded") === "false" &&
-            button === document.activeElement &&
-            element?.querySelectorAll('[role="option"]').length === 0
-          );
-        }, providerPicker);
-      };
-      await close();
+      await close(page);
       await source.run(page, gateway);
       await waitForProviderArtwork(page, false);
       const reopened = await providerArtworkCounts(page);
-      await close();
+      await close(page);
       await frames(page);
       const closed = await providerArtworkCounts(page);
       assert.equal(await trigger.getAttribute("aria-label"), selected);
       assert.equal((await gateway.getRequests("config.patch")).length, saves);
       return {
-        modelCount: 1_000,
+        modelCount,
+        uniqueImages: 1,
         openRequests: opened.requests - before.requests,
         filterRequests: filtered.requests - opened.requests,
         reopenRequests: reopened.requests - filtered.requests,
@@ -195,9 +228,10 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   }
   const cycles = 8;
   const chatPicker = interactionScenarios.find(({ id }) => id === "model-picker-first-open-search");
+  const chatSearch = interactionScenarios.find(({ id }) => id === "model-picker-search");
   const sessions = interactionScenarios.find(({ id }) => id === "sessions-sort");
   const sidebar = interactionScenarios.find(({ id }) => id === "sidebar-toggle");
-  if (!chatPicker || !sessions || !sidebar) {
+  if (!chatPicker || !chatSearch || !sessions || !sidebar) {
     throw new Error("Missing shared chat picker or Sessions scenario");
   }
   const repeated = (
@@ -238,19 +272,80 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
   });
   return [
     createProviderArtworkScenario(),
+    createProviderArtworkScenario(12),
+    createProviderArtworkScenario(12, "open"),
+    createProviderArtworkScenario(12, "reopen"),
+    createProviderArtworkScenario(1_000, "open"),
+    createProviderArtworkScenario(1_000, "reopen"),
     ...createNoopPushScenarios(),
     ...createNoopOwnerScenarios(),
+    ...(["first-open", "open"] as const).map((phase): EngineScenario =>
+      Object.assign({}, chatPicker, {
+        id: `model-picker-${phase}`,
+        explicitOnly: true,
+        expected: "One activation opens the model picker with visible choices and focused search.",
+        prepare: async (page, gateway) => {
+          await chatPicker.prepare(page, gateway);
+          if (phase === "open") {
+            await page.locator(".chat-pane-cache__pane--active [data-chat-model-select]").click();
+            await page.locator("[data-chat-model-search]").waitFor();
+            await page.keyboard.press("Escape");
+          }
+        },
+        run: async (page) => {
+          const trigger = page.locator(".chat-pane-cache__pane--active [data-chat-model-select]");
+          if ((page.viewportSize()?.width ?? 1440) < 600) {
+            await trigger.tap();
+          } else {
+            await trigger.click();
+          }
+          await page.waitForFunction(() => {
+            const input = document.querySelector("[data-chat-model-search]");
+            return (
+              input &&
+              input === document.activeElement &&
+              document.querySelector("[data-chat-model-option]")
+            );
+          });
+          return page.locator(".chat-controls__model-menu").evaluate((menu) => ({
+            elements: menu.querySelectorAll("*").length,
+            mountedRows: menu.querySelectorAll(".chat-controls__model-virtual-row").length,
+            mountedOptions: menu.querySelectorAll("[data-chat-model-option]").length,
+          }));
+        },
+      } satisfies Partial<EngineScenario>),
+    ),
+    {
+      ...chatSearch,
+      id: "model-picker-search-paste",
+      explicitOnly: true,
+      expected: "One native edit filters the already-open picker without typing round trips.",
+      run: async (page) => {
+        await page.locator("[data-chat-model-search]").fill("Warm model 0999");
+        await page.waitForFunction(() => {
+          const rows = [
+            ...document.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
+          ].filter((row) => row.checkVisibility());
+          return rows.length === 1 && rows[0]?.dataset.chatModelOption === "example/model-999";
+        });
+        return { nativeEdits: 1 };
+      },
+    },
     ...(["open", "close"] as const).map((direction): EngineScenario =>
       Object.assign({}, sidebar, {
         id: `sidebar-${direction}`,
         explicitOnly: true,
-        viewports: ["mobile"],
         expected: `One native activation ${direction}s the populated drawer and preserves the conversation.`,
         prepare: async (page, gateway) => {
           await sidebar.prepare(page, gateway);
           if (direction === "open") {
-            await page.keyboard.press("Escape");
-            await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            if (await page.locator(".shell--mobile-nav").count()) {
+              await page.keyboard.press("Escape");
+              await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+            } else {
+              await page.locator(".sidebar-session-toolbar__collapse").first().click();
+              await page.locator(".shell--nav-collapsed").waitFor();
+            }
             await page
               .locator(".shell-nav")
               .evaluate((drawer) =>
@@ -259,6 +354,37 @@ export function createEngineActionScenarios(): readonly EngineScenario[] {
           }
         },
         run: async (page) => {
+          if (!(await page.locator(".shell--mobile-nav").count())) {
+            if (direction === "open") {
+              await navigation(page, "sessions");
+              await page.locator(".shell--nav-collapsed").waitFor({ state: "detached" });
+            } else {
+              await page.locator(".sidebar-session-toolbar__collapse").first().click();
+              await page.locator(".shell--nav-collapsed").waitFor();
+            }
+            await page
+              .locator(".shell, .shell-nav")
+              .evaluateAll((elements) =>
+                Promise.all(
+                  elements
+                    .flatMap((element) => element.getAnimations())
+                    .map((animation) => animation.finished),
+                ),
+              );
+            if (direction === "close") {
+              await page.locator(".sidebar-shell").evaluate((panel) => {
+                if (
+                  panel.checkVisibility({ visibilityProperty: true, checkOpacity: true }) ||
+                  panel.contains(document.activeElement)
+                ) {
+                  throw new Error("Collapsed sidebar content must be hidden and release focus");
+                }
+              });
+            } else {
+              await page.locator(".sidebar-recent-session").first().waitFor({ state: "visible" });
+            }
+            return { nativeActivations: 1 };
+          }
           if (direction === "open") {
             await openNavigationDrawer(page);
             if (!(await page.locator(".shell-nav :focus").first().isVisible())) {

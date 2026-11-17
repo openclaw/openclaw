@@ -15,10 +15,13 @@ vi.mock("../skills/discovery/status.js", async (importActual) => ({
   ...(await importActual<typeof import("../skills/discovery/status.js")>()),
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
 }));
-vi.mock("node:fs", async (importActual) => ({
-  ...(await importActual<typeof import("node:fs")>()),
-  existsSync: mocks.fileExists,
-}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: mocks.fileExists };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {

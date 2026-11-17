@@ -48,9 +48,9 @@ prefer TypeScript." It writes the note to the appropriate file.
 ## What goes where
 
 `USER.md` is the compact user-model layer. Write stable preferences and profile
-facts as imperative directives with observed-date and active/superseded
-metadata. When a preference changes, supersede it in place instead of appending
-a contradictory active directive. See [User model](/concepts/user-model).
+facts as current imperative directives without date/status metadata. When a
+preference changes, replace it in place instead of keeping contradictory
+directives. Preserve useful dated history in daily memory, not `USER.md`. See [User model](/concepts/user-model).
 
 `MEMORY.md` is the compact, curated layer for durable non-profile facts,
 standing decisions, and short summaries that should be available at the start
