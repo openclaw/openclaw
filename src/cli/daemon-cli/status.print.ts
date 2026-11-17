@@ -42,7 +42,6 @@ import {
   formatRuntimeStatus,
   projectDaemonServiceForJson,
   resolveDaemonInstallBlockMessage,
-  resolveDaemonServiceInstallGuidance,
   resolveLaunchdInspectionWarnings,
   resolveRuntimeStatusColor,
   safeDaemonEnv,
@@ -52,6 +51,7 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
+import { printDaemonStatusVersions } from "./status.print.versions.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -245,57 +245,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  const gatewayVersion = status.rpc?.server?.version?.trim() || status.gateway?.version?.trim();
-  const cliVersionLine = status.cli
-    ? status.cli.entrypoint
-      ? terminalText`${status.cli.version} (${displayPath(status.cli.entrypoint)})`
-      : terminalText`${status.cli.version}`
-    : null;
-  // The installed service is readable without a Gateway handshake, so its facts stay
-  // available for the failed-probe path below.
-  const serviceInstallVersion = status.service.layout?.packageVersion?.trim();
-  const serviceInstallLine = serviceInstallVersion
-    ? status.service.layout?.packageRoot
-      ? terminalText`${serviceInstallVersion} (${displayPath(status.service.layout.packageRoot)})`
-      : terminalText`${serviceInstallVersion}`
-    : null;
-  if (gatewayVersion || serviceInstallLine) {
-    if (cliVersionLine) {
-      printInfo("CLI version:", cliVersionLine);
-    }
-    if (gatewayVersion) {
-      printInfo("Gateway version:", terminalText`${gatewayVersion}`);
-      if (status.cli?.version && status.cli.version !== gatewayVersion) {
-        printWarning(
-          terminalText`Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
-        );
-        printWarning(
-          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; use the CLI matching the running Gateway before repairing shared config or plugins.",
-        );
-      }
-    } else if (serviceInstallLine) {
-      // No Gateway version came back (failed or skipped probe). Report the install the
-      // service points at so a stale service behind a bare connect error stays visible.
-      printInfo("Gateway service version:", serviceInstallLine);
-      defaultRuntime.log(infoText("The Gateway did not report its own version."));
-      if (
-        !status.service.installationDrift &&
-        status.service.targetRole !== "diagnostic-only" &&
-        status.cli?.version &&
-        serviceInstallVersion &&
-        status.cli.version !== serviceInstallVersion
-      ) {
-        printWarning(
-          terminalText`Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
-        );
-        const guidance = resolveDaemonServiceInstallGuidance(undefined, process.env, service);
-        if (guidance) {
-          printWarning(guidance);
-        }
-      }
-    }
-    spacer();
-  }
+  printDaemonStatusVersions(status, { printInfo, printWarning, infoText, spacer });
 
   const runtimeLine = formatRuntimeStatus(
     service.inspectionReason ? { ...service.runtime, detail: undefined } : service.runtime,

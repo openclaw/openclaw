@@ -54,6 +54,7 @@ import {
   type GatewayCrashHistory,
 } from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
+import { resolveGatewayIdentityReport } from "./status.gateway-identity.js";
 import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
 import { readDaemonServiceStatus } from "./status.service.js";
@@ -416,11 +417,26 @@ async function gatherDaemonStatusImpl(
           )
           .catch(() => undefined)
       : undefined;
-  const gatewayVersion = opts.probe
-    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
-      (rpc && "version" in rpc ? rpc.version : undefined) ??
-      null)
+  // Only the registered service's own install says which build a restart would load.
+  // A URL override, an explicit --port, or a separate-process context reaches a Gateway
+  // this service does not own, so comparing its build would name the wrong install; a
+  // stopped service, or one whose runtime PID is not among the port's listeners, leaves
+  // the answering Gateway to some other install. The service's own build id stays
+  // available as a diagnostic under service.layout.
+  const runtimePid = runtime?.pid;
+  const serviceOwnsListener =
+    serviceTargetsProbe &&
+    loaded &&
+    runtime?.status === "running" &&
+    (runtimePid === undefined ||
+      !portStatus?.listeners.length ||
+      portStatus.listeners.some((listener) => listener.pid === runtimePid));
+  const gatewayIdentity = opts.probe
+    ? resolveGatewayIdentityReport(rpc, {
+        installedBuildId: serviceOwnsListener ? serviceLayout?.packageBuildId : undefined,
+      })
     : undefined;
+  const gatewayVersion = gatewayIdentity?.version;
 
   let lastError: string | undefined;
   if (
@@ -576,11 +592,7 @@ async function gatherDaemonStatusImpl(
       ...(lastShutdown ? { lastShutdown } : {}),
       ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
-      ...(opts.probe
-        ? {
-            version: gatewayVersion,
-          }
-        : {}),
+      ...gatewayIdentity,
     },
     hostDesktop: hostDesktop.status,
     port: portStatus,
