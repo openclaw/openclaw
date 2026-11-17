@@ -711,11 +711,11 @@ export async function verifyDockerReleaseProducer(
       sealJob.head_sha === toolingSha,
     "Exact Docker preparation job has not completed successfully.",
   );
-  // Historical producers keep their ancestry contract. Candidate publication
+  // Standalone refresh and focused-beta keep their workflow/ancestry contract. Candidate publication
   // must carry the authenticated owner callback, never reconstruct it from JSON.
   /** @type {() => void} */
   let revalidateAuthority;
-  if (fullReleaseManifest?.sourceAdmission?.qualificationAdmission) {
+  if (fullReleaseManifest) {
     const { authenticateCandidateOwnedArtifact } =
       await import("./validate-full-release-validation-evidence.mjs");
     const authenticated = await authenticateCandidateOwnedArtifact({

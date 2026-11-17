@@ -251,7 +251,7 @@ if (process.argv[1] === root + '/bin/gh') {
 
 describe("npm final publication authority", () => {
   it.each([true, false])(
-    "publishes through trusted tooling with candidate admission: %s",
+    "publishes only through trusted tooling with candidate admission: %s",
     async (candidate) => {
       const f = await fixture();
       if (!candidate) {
@@ -260,6 +260,13 @@ describe("npm final publication authority", () => {
         f.env.PREFLIGHT_WORKFLOW_SHA = f.env.WORKFLOW_SHA;
       }
       const result = f.publish();
+      expect(result.stderr).not.toContain("CANDIDATE_");
+      if (!candidate) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Publication requires authenticated P admission");
+        expect(f.state().writes).toEqual([]);
+        return;
+      }
       expect(result.status, result.stderr).toBe(0);
       expect(f.state().writes.map((args) => args[1])).toEqual(
         [0, 1, 2, 3].map((i) => "./preflight-tarball/package-" + i + ".tgz"),
@@ -267,7 +274,6 @@ describe("npm final publication authority", () => {
       for (const args of f.state().writes) {
         expect(args.slice(2)).toEqual(["--access", "public", "--tag", "beta", "--provenance"]);
       }
-      expect(result.stderr).not.toContain("CANDIDATE_");
       const publications: { package_name: string; source_commit: string }[] = readFileSync(
         f.env.GITHUB_OUTPUT,
         "utf8",

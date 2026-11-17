@@ -200,9 +200,8 @@ function validatePublicationEvidence(options, evidence) {
   if (current.conclusion !== "success") {
     throw new Error("Required release validation evidence did not pass.");
   }
-  // v2 remains readable by diagnostics, but was never a publication contract.
-  if (manifest.version !== 3 && manifest.version !== 4) {
-    throw new Error("Publication requires a version 3 or 4 release manifest.");
+  if (manifest.version !== 4) {
+    throw new Error("Publication requires an admitted version 4 release manifest.");
   }
   resolveReleasePublishInputs(manifest);
   const sourceAdmission = manifest.sourceAdmission;
@@ -225,7 +224,6 @@ function validatePublicationEvidence(options, evidence) {
     );
   }
   if (sourceAdmission) {
-    // Historical recovery must not acquire a new publication-selection contract.
     const selected =
       typeof expectedPublicationSelection === "function"
         ? expectedPublicationSelection()
@@ -292,23 +290,12 @@ function validatePublicationEvidence(options, evidence) {
         : expectedPublicationOperation,
     );
   }
-  const proof = current.workflowRefProof;
-  const source =
-    evidence.qualification.kind === "direct"
-      ? "candidate-owned-admission-v1"
-      : proof === "manifest-v3-protected-tag-tooling-lineage"
-        ? "sha-pinned-protected-tag-main-ancestor"
-        : proof === "manifest-v3-protected-tag-exact-sha"
-          ? "sha-pinned-protected-tag"
-          : isShaPinnedReleaseValidationBranch(current.workflowRef)
-            ? "sha-pinned-main"
-            : "direct";
+  const source = "candidate-owned-admission-v1";
   return { run, source, coveragePolicy };
 }
 
 /**
  * Authenticate once, then adapt that same current manifest to the real consumer.
- * Historical producers retain their exact-source validation without a registry sweep.
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
@@ -370,7 +357,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   if (options.npmPreflightLineage) {
     // Retain this owner's authenticated evidence across the consumer handoff.
     // Serialized or caller-supplied evidence never replaces this traversal.
-    const { validateNpmPreflightQualification, verifyNpmPreflightPublicationLineage } =
+    const { validateNpmPreflightQualification } =
       await import("./npm-preflight-tooling-identity.mjs");
     const lineage = {
       manifest,
@@ -382,17 +369,13 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
       producerRunId: options.npmPreflightLineage.producerRunId,
       producerRunAttempt: options.npmPreflightLineage.producerRunAttempt,
     };
-    if (evidence.qualification.kind !== "historical") {
-      validateCandidateOwnedArtifactBinding(
-        manifest,
-        lineage.sourceSha,
-        lineage.toolingSha,
-        evidence,
-      );
-      validateNpmPreflightQualification(lineage);
-    } else {
-      await verifyNpmPreflightPublicationLineage(lineage);
-    }
+    validateCandidateOwnedArtifactBinding(
+      manifest,
+      lineage.sourceSha,
+      lineage.toolingSha,
+      evidence,
+    );
+    validateNpmPreflightQualification(lineage);
     // Imports and lineage checks can wait. Refresh live admission at the final
     // handoff, not just before the original full artifact authentication.
     revalidateAuthority?.();
@@ -410,9 +393,6 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
 
 function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
   const authority = candidateArtifactAuthorityRecord(manifest, evidence);
-  if (!authority) {
-    return undefined;
-  }
   const revalidate = () => revalidateCandidateArtifactAuthority(authority, evidenceClient);
   revalidate();
   return revalidate;
@@ -420,10 +400,7 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
 
 function candidateArtifactAuthorityRecord(manifest, evidence) {
   const descriptor = manifest?.sourceAdmission?.qualificationAdmission;
-  if (!descriptor) {
-    return undefined;
-  }
-  if (!evidence.qualification.admission) {
+  if (!descriptor || !evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
   // Retain authenticated identities, not live permission or ref verdicts.
@@ -444,7 +421,6 @@ export function revalidateCandidateArtifactAuthority(authority, evidenceClient) 
 function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
   const qualification = evidence.qualification;
   if (
-    qualification.kind === "historical" ||
     qualification.candidateSha !== candidateSha ||
     qualification.qualificationSha !== qualificationSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
@@ -473,7 +449,9 @@ export async function authenticateCandidateOwnedArtifact({
   client,
 }) {
   if (!manifest?.sourceAdmission?.qualificationAdmission) {
-    return null;
+    throw new Error(
+      "Publication requires authenticated P admission; obtain new admitted qualification",
+    );
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
   const evidence = await validateReleaseRunEvidence(

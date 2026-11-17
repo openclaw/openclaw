@@ -42,6 +42,8 @@ export function candidatePublicationFixture(
     candidateSha?: string;
     qualificationSha?: string;
     candidateVersion?: string;
+    targetContextRef?: string;
+    qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
@@ -88,12 +90,14 @@ export function candidatePublicationFixture(
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = {
-    qualification_baselines_json: extended
-      ? JSON.stringify({
-          upgradeBaseline: "openclaw@2026.7.33",
-          upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.28"],
-        })
-      : qualificationBaselinesJson,
+    qualification_baselines_json: options.qualificationBaselines
+      ? JSON.stringify(options.qualificationBaselines)
+      : extended
+        ? JSON.stringify({
+            upgradeBaseline: "openclaw@2026.7.33",
+            upgradeSurvivorBaselines: ["openclaw@2026.7.33", "openclaw@2026.8.28"],
+          })
+        : qualificationBaselinesJson,
   };
   const selection: PublicationSelection = {
     route: options.publicationRoute ?? (extended ? "extended-stable" : "normal"),
@@ -109,7 +113,9 @@ export function candidatePublicationFixture(
   Object.assign(inputs, {
     ref: c,
     expected_sha: c,
-    target_context_ref: (extended ? "extended-stable/" : "release/") + version.split("-")[0],
+    target_context_ref:
+      options.targetContextRef ??
+      (extended ? "extended-stable/" : "release/") + version.split("-")[0],
     release_profile: profile,
     rerun_group: "all",
     mode: "both",
