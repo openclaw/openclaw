@@ -302,6 +302,20 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          # Keep admission imports, workspace manifests and patches; omit unrelated trees.
+          sparse-checkout: |
+            /*
+            !/*/
+            /.github/
+            /scripts/
+            /src/
+            /packages/
+            /patches/
+            /extensions/*/package.json
+            /examples/*/package.json
+            /ui/package.json
+            /tools/solid-lint/package.json
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
