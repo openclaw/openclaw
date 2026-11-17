@@ -13,7 +13,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { isGatewayExternallySupervised } from "./gateway-supervision.js";
-import { isConstrainedProcessLowOnMemory } from "./host-memory.js";
+import { isMemoryPressureHigh } from "./host-memory.js";
 import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import type { resolveStartupInstallStatus } from "./update-install-status.js";
 import { getUpdateSchedule } from "./update-status-state.js";
@@ -39,7 +39,7 @@ export function createGatewayUpdateCheck(params: {
   const updatePolicy = () => JSON.stringify(params.getConfig().update ?? {});
   let policy = updatePolicy();
   const check = async () => {
-    if (isConstrainedProcessLowOnMemory()) {
+    if (isMemoryPressureHigh()) {
       return 60_000;
     }
     let updateRuntime: typeof import("./update-startup.js") | undefined;
@@ -108,8 +108,8 @@ export function createGatewayUpdateCheck(params: {
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
       lifecycle.schedule("update.remote-model-catalog", async () => {
-        // Leave scarce cgroup memory to requests before allocating a new catalog generation.
-        if (isConstrainedProcessLowOnMemory()) {
+        // Leave scarce memory to requests before allocating a new catalog generation.
+        if (isMemoryPressureHigh()) {
           return 60_000;
         }
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
