@@ -382,15 +382,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     }
   }
 
-  resetVisibleSessionLimit(sectionId: string): void {
-    // Show less also drops rows kept from when the section stood alone.
-    this.sessionProjection.resetMembership(sectionId);
-    this.setVisibleSessionLimit(
-      sectionId,
-      sidebarSessionPagination(this.effectiveSessionsGrouping(), sectionId).initialLimit,
-    );
-  }
-
   async loadMoreSidebarSessions(): Promise<void> {
     if (this.sessionData.sessionsLoading) {
       return;

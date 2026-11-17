@@ -138,9 +138,9 @@ describe("AppSidebar session pagination", () => {
     const button = (label: string) =>
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
     const click = async (label: string) => {
-      const target = button(label);
-      expect(target).not.toBeNull();
-      target!.click();
+      // Show more/Collapse render once their lazy module loads.
+      await vi.waitFor(() => expect(button(label)).not.toBeNull());
+      button(label)!.click();
       await settleLitElement(sidebar);
     };
 

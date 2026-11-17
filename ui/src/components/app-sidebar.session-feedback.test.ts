@@ -322,7 +322,11 @@ describe("sidebar session feedback", () => {
       SIDEBAR_SESSION_PAGE_SIZE + 1,
     );
     expect(button().textContent).toContain("Loading");
-    const localMore = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!;
+    const localMore = await vi.waitFor(() => {
+      const more = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
+      expect(more).not.toBeNull();
+      return more!;
+    });
     expect(localMore.disabled).toBe(false);
     localMore.click();
     await settleLitElement(sidebar);

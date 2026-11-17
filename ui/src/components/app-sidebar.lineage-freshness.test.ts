@@ -25,6 +25,8 @@ import {
 } from "./app-sidebar-freshness.test-support.ts";
 import { setSessionsStatusFilter } from "./session-organizer-menu.runtime.ts";
 import "./app-sidebar.tsx";
+// Load the lazy Show more module up front so paging loops see its buttons.
+import "./app-sidebar-session-pagination.tsx";
 
 const mainAgents: AgentsListResult = makeBootRoster();
 const ada = human("ada", "Ada");

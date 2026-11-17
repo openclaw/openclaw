@@ -424,7 +424,7 @@ export class SidebarSessionProjection {
   private readonly stickySections = new Map<string, Set<string>>();
   // Rows a lone section showed, kept after a peer arrives until collapse or
   // Show less (resetMembership) so the list does not shrink under the reader.
-  private readonly revealedRowCounts = new Map<string, number>();
+  private readonly revealed = new Map<string, number>();
   readonly children = new SidebarChildExpansion(() => {
     this.revision += 1;
   });
@@ -615,7 +615,7 @@ export class SidebarSessionProjection {
     // row. With several, each pages so none buries the others (1700+ sessions
     // on a team server) or changes paging on reorder. Roster cards
     // (input.sections) keep their own paging.
-    const soleSectionId = !input.sections && sections.length === 1 ? sections[0]!.id : undefined;
+    const sole = !input.sections && sections.length === 1;
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -632,9 +632,8 @@ export class SidebarSessionProjection {
       const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
       const visibleLimit = Math.max(
         input.visibleSessionLimits.get(key) ?? pageLimit,
-        this.revealedRowCounts.get(section.id) ?? 0,
+        this.revealed.get(section.id) ?? 0,
       );
-      const sole = section.id === soleSectionId;
       const initialLimit = sole ? totalRowCount : pageLimit;
       const rowLimit = sole ? totalRowCount : visibleLimit;
       const requiredRowCount = section.rows.reduce(
@@ -667,7 +666,7 @@ export class SidebarSessionProjection {
           return true;
         });
         if (sole) {
-          this.revealedRowCounts.set(section.id, section.rows.length);
+          this.revealed.set(section.id, section.rows.length);
         }
         this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
@@ -690,10 +689,10 @@ export class SidebarSessionProjection {
     this.revision += 1;
     if (sectionId === undefined) {
       this.stickySections.clear();
-      this.revealedRowCounts.clear();
+      this.revealed.clear();
     } else {
       this.stickySections.delete(sectionId);
-      this.revealedRowCounts.delete(sectionId);
+      this.revealed.delete(sectionId);
     }
   }
 

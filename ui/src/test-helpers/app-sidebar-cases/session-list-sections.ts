@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
@@ -28,22 +28,24 @@ describe("AppSidebar session section visibility", () => {
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
     const category = sidebar.querySelector('[data-session-section="category:Alpha"]');
     const threads = sidebar.querySelector('[data-session-section="ungrouped"]');
-    const expectSection = (section: Element | null, rows: number, paged: boolean) => {
-      expect(section?.querySelectorAll(".sidebar-recent-session")).toHaveLength(rows);
-      expect(section?.querySelector('[aria-label="Show more"]') !== null).toBe(paged);
-    };
+    // Show more renders once its lazy module loads.
+    const expectSection = (section: Element | null, rows: number, paged: boolean) =>
+      vi.waitFor(() => {
+        expect(section?.querySelectorAll(".sidebar-recent-session")).toHaveLength(rows);
+        expect(section?.querySelector('[aria-label="Show more"]') !== null).toBe(paged);
+      });
 
     expect(threads?.querySelector(".sidebar-recent-sessions__label-text")?.textContent).toBe(
       "Other",
     );
-    expectSection(category, 15, true);
-    expectSection(threads, 15, true);
+    await expectSection(category, 15, true);
+    await expectSection(threads, 15, true);
 
     threads?.querySelector<HTMLButtonElement>('[aria-label="Show more"]')?.click();
     await settleLitElement(sidebar);
 
-    expectSection(category, 15, true);
-    expectSection(threads, 17, false);
+    await expectSection(category, 15, true);
+    await expectSection(threads, 17, false);
   });
 
   it("keeps the rows a lone Other showed when a group arrives below it", async () => {
@@ -68,10 +70,15 @@ describe("AppSidebar session section visibility", () => {
 
     expect(sidebar.querySelector('[data-session-section="groups"]')).not.toBeNull();
     expect(rows()).toHaveLength(40);
-    sidebar.querySelector<HTMLButtonElement>('button[aria-label="Collapse"]')!.click();
+    const collapse = () =>
+      sidebar.querySelector<HTMLButtonElement>('button[aria-label="Collapse"]');
+    await vi.waitFor(() => expect(collapse()).not.toBeNull());
+    collapse()!.click();
     await settleLitElement(sidebar);
     expect(rows()).toHaveLength(15);
-    expect(sidebar.querySelector('button[aria-label="Show more"]')).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector('button[aria-label="Show more"]')).not.toBeNull(),
+    );
   });
 
   it("counts a rendered empty Other heading as a second section", async () => {
@@ -92,7 +99,7 @@ describe("AppSidebar session section visibility", () => {
 
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
     expect(alpha?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    expect(alpha?.querySelector('[aria-label="Show more"]')).not.toBeNull();
+    await vi.waitFor(() => expect(alpha?.querySelector('[aria-label="Show more"]')).not.toBeNull());
   });
 
   it("keeps global session actions when every unpinned thread has a custom group", async () => {
