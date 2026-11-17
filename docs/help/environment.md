@@ -145,22 +145,22 @@ Installed third-party plugins may declare additional credential variables in the
 
 ### Feature and runtime toggles
 
-| Variable                             | Purpose                                                                                      |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `OPENCLAW_CONFIG_READONLY`           | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config). |
-| `OPENCLAW_CONFIG_READONLY_NOTICE`    | Customize the read-only configuration banner in the [Control UI](/web/control-ui).           |
+| Variable                                | Purpose                                                                                         |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `OPENCLAW_CONFIG_READONLY`              | Set to `1` for [externally managed immutable config](/cli/config#externally-managed-config).    |
+| `OPENCLAW_CONFIG_READONLY_NOTICE`       | Customize the read-only configuration banner in the [Control UI](/web/control-ui).              |
 | `OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE` | Resume interrupted work only after a [restart](/gateway/restart-recovery) under the same scope. |
-| `OPENCLAW_LOAD_SHELL_ENV`            | Import missing expected variables from the login shell.                                      |
-| `OPENCLAW_SHELL_ENV_TIMEOUT_MS`      | Set the login-shell import timeout.                                                          |
-| `OPENCLAW_EXEC_SHELL_SNAPSHOT`       | Disable exec shell snapshots with `0`.                                                       |
-| `OPENCLAW_OFFLINE`                   | Prevent downloads of pinned agent helper binaries.                                           |
-| `OPENCLAW_BROWSER_HEADLESS`          | Force managed browser launches headed (`0`) or headless (`1`).                               |
-| `OPENCLAW_DISABLE_BONJOUR`           | Force Bonjour advertising on (`0`) or off (`1`).                                             |
-| `OPENCLAW_NO_AUTO_UPDATE`            | Disable automatic update applies.                                                            |
-| `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS` | Allow trusted private-DNS `ws://` connections as a break-glass override.                     |
-| `OPENCLAW_ALLOW_MULTI_GATEWAY`       | Allow multiple Gateway processes while preserving per-state ownership locks.                 |
-| `OPENCLAW_SKIP_CHANNELS`             | Start the Gateway without channel transports for troubleshooting.                            |
-| `OPENCLAW_THEME`                     | Force the TUI palette to `light` or `dark`.                                                  |
+| `OPENCLAW_LOAD_SHELL_ENV`               | Import missing expected variables from the login shell.                                         |
+| `OPENCLAW_SHELL_ENV_TIMEOUT_MS`         | Set the login-shell import timeout.                                                             |
+| `OPENCLAW_EXEC_SHELL_SNAPSHOT`          | Disable exec shell snapshots with `0`.                                                          |
+| `OPENCLAW_OFFLINE`                      | Prevent downloads of pinned agent helper binaries.                                              |
+| `OPENCLAW_BROWSER_HEADLESS`             | Force managed browser launches headed (`0`) or headless (`1`).                                  |
+| `OPENCLAW_DISABLE_BONJOUR`              | Force Bonjour advertising on (`0`) or off (`1`).                                                |
+| `OPENCLAW_NO_AUTO_UPDATE`               | Disable automatic update applies.                                                               |
+| `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS`    | Allow trusted private-DNS `ws://` connections as a break-glass override.                        |
+| `OPENCLAW_ALLOW_MULTI_GATEWAY`          | Allow multiple Gateway processes while preserving per-state ownership locks.                    |
+| `OPENCLAW_SKIP_CHANNELS`                | Start the Gateway without channel transports for troubleshooting.                               |
+| `OPENCLAW_THEME`                        | Force the TUI palette to `light` or `dark`.                                                     |
 
 For bundled plugin development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets
 `openclaw plugins reload` load edited bundled plugin code without restarting the

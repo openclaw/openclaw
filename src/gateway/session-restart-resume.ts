@@ -20,14 +20,14 @@ import {
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
-  derivePersistedSessionLifecyclePatch,
-  restartResumeSkipReason,
-} from "../config/sessions/session-run-lifecycle-projection.js";
-import {
   createRestartResumeMarker,
   isRestartResumeMarkerInScope,
   resolveRestartResumeScope,
 } from "../config/sessions/session-restart-resume-scope.js";
+import {
+  derivePersistedSessionLifecyclePatch,
+  restartResumeSkipReason,
+} from "../config/sessions/session-run-lifecycle-projection.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";

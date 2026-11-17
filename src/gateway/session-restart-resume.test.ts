@@ -925,6 +925,9 @@ it.for([
         .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
         .mockRejectedValue(new Error("Stop after observing restart admission"));
       const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+      const dispatch = vi
+        .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
+        .mockResolvedValue({});
       try {
         setScope(written);
         await persistRunningSessionsForRestart({ cfg });
@@ -941,6 +944,11 @@ it.for([
         await turn?.operation.ownerSettlement;
         queued.finish("interrupted");
         await queued.settled?.();
+        openOpenClawAgentDatabase({ agentId: "main" })
+          .db.prepare(
+            "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+          )
+          .run(queued.inputId);
 
         setScope(startup);
         await resumeMarkedSessions({
@@ -952,6 +960,7 @@ it.for([
         expect(resume).not.toHaveBeenCalled();
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
         if (!resumes) {
+          expect(dispatch).not.toHaveBeenCalled();
           expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
             state: "cancelled",
             message: { content: "Sent while the turn was running" },
@@ -961,6 +970,7 @@ it.for([
         setScope(previousScope);
         admission.mockRestore();
         resume.mockRestore();
+        dispatch.mockRestore();
         queued.finish("interrupted");
         await queued.settled?.();
       }
