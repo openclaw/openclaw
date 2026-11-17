@@ -323,6 +323,26 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
+it("uses the displayed model for trigger metadata and distinguishes an unset override from an empty one", () => {
+  const params = pickerProps({
+    modelOptions: [
+      option("fixture", "default", { isDefault: true, supportsTools: false }),
+      option("fixture", "other", { supportsTools: true }),
+    ],
+    selectedModelValue: "",
+  });
+  const { container, update } = mountPicker(params);
+  const trigger = control(container, "select")!;
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+  update({ ...params, triggerModelValue: "fixture/other" });
+  expect(control(container, "select")).toBe(trigger);
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
+  update({ ...params, triggerModelValue: "" });
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
+  update(params);
+  expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+});
+
 it("shows a context badge only for a known non-default selection", () => {
   const params = pickerProps({ modelOptions: [option("fixture", "current")] });
   const { container, update } = mountPicker(params);
@@ -367,6 +387,12 @@ it("opens setup directly for a settled empty catalog and restores the picker whe
   expect(onModelSetup).not.toHaveBeenCalled();
   view.update(params);
   setup!.click();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+  const replacementSetup = vi.fn();
+  view.update({ ...params, onModelSetup: replacementSetup });
+  expect(control(view.container, "setup")).toBe(setup);
+  setup!.click();
+  expect(replacementSetup).toHaveBeenCalledOnce();
   expect(onModelSetup).toHaveBeenCalledOnce();
   view.update({ ...params, modelOptions: [option("fixture", "current")], open: true });
   await waitForMenu(view.container);
