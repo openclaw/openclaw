@@ -1,0 +1,4 @@
+# Pinned-series regression for continuation-skip turns: production-framed prompts keep withheld
+# workspace context without a removal update, explicit removals are still announced, and a
+# session saved by an older skipped turn redelivers its files once. Exact net growth for PR #196404.
+44
