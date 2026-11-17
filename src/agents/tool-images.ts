@@ -35,7 +35,7 @@ type ToolImageSanitizationOptions = ImageSanitizationLimits & {
 // conservative limit well below demonstrated OOM thresholds, leaving headroom
 // for canonicalization, decode, and image-processing allocations while still
 // permitting legitimate tool-output images.
-const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 // Replay re-sanitizes persisted images every attempt without rewriting them. A decoded
 // outcome depends only on the bytes and limits, so content-addressed entries never go
