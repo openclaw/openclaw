@@ -2,6 +2,7 @@ import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -227,6 +228,19 @@ it("preserves committed Boards and admits followers after publication cleanup is
   }
 });
 
+it("serves committed dashboard metadata while an unrelated writer holds admission", async ({
+  signal,
+}) => {
+  const { options, store, target, putHtml } = fixture();
+  await putHtml("initial");
+  await store.getSnapshotWithHtmlViewMetadata(target);
+  await using writer = await holdWriter(options);
+  const read = writer.track(store.getSnapshotWithHtmlViewMetadata(target));
+  expect(await withinTest(read, signal)).toMatchObject({
+    snapshot: { revision: 1, widgets: [{ name: "initial", revision: 1 }] },
+  });
+});
+
 it("reads the committed MCP document after an earlier queued write", async () => {
   const { options, store, target } = fixture();
   const put = (toolCallId: string) =>
@@ -343,9 +357,14 @@ it.each(["mutation", "document"] as const)(
   },
 );
 
-it.each(["target", "database"] as const)(
-  "refuses disclosure after %s revocation during an aliased read",
-  async (revoked) => {
+it.each([
+  { revoked: "target", metadata: false },
+  { revoked: "database", metadata: false },
+  { revoked: "target", metadata: true },
+  { revoked: "database", metadata: true },
+])(
+  "refuses disclosure after $revoked revocation during an aliased read (metadata: $metadata)",
+  async ({ revoked, metadata }) => {
     const { database, options, target, putHtml } = fixture();
     await putHtml("status", "private");
     const authority = new AbortController();
@@ -386,7 +405,10 @@ it.each(["target", "database"] as const)(
       }
     });
     const consume = vi.fn();
-    await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
+    const read = metadata
+      ? reader.getSnapshotWithHtmlViewMetadata(target).then(consume)
+      : reader.useSnapshot(target, consume);
+    await expect(read).rejects.toThrow(
       revoked === "target"
         ? "board session changed; retry"
         : "Session history database read was revoked",
