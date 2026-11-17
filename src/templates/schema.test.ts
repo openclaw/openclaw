@@ -128,7 +128,30 @@ describe("parseTemplateManifest", () => {
     });
   });
 
-  it.each(["model", "provider", "skills", "runtime", "bindings", "auth"])(
+  it.each(["anthropic/claude-sonnet-4-5", "openrouter/anthropic/claude-sonnet-4.5"])(
+    "accepts the portable model preference %s",
+    (model) => {
+      expect(parseTemplateManifest({ ...minimalManifest, agent: { id: "triage", model } }).ok).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each([
+    "",
+    "sonnet",
+    "claude-sonnet-4-5",
+    "anthropic/model@work",
+    " anthropic/model",
+    "anthropic/",
+    "a/" + "m".repeat(199),
+  ])("rejects the non-portable model preference %s", (model) => {
+    expect(parseTemplateManifest({ ...minimalManifest, agent: { id: "triage", model } }).ok).toBe(
+      false,
+    );
+  });
+
+  it.each(["provider", "skills", "runtime", "bindings", "auth"])(
     "rejects operator-controlled agent field %s",
     (field) => {
       const result = parseTemplateManifest({

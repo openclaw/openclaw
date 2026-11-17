@@ -6,7 +6,10 @@ import type { createPackageReleasePrefixFixture } from "./package-release-slot.t
 import { createNpmTarget } from "./package-update-steps.test-support.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
 
-type ReleaseFixture = ReturnType<typeof createPackageReleasePrefixFixture>;
+type ReleaseFixture = Pick<
+  ReturnType<typeof createPackageReleasePrefixFixture>,
+  "prefix" | "globalRoot" | "slot"
+>;
 
 /** A verified candidate installed into its own release prefix, as npm leaves it. */
 export async function stagePackageRelease(

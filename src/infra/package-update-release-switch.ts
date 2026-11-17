@@ -91,6 +91,7 @@ async function switchStagedPackageRelease(
   let adoptionPrefix: string | undefined;
   let previous: PackageReleaseIdentity | undefined;
   let selectedLink: { identity: string; target: string } | undefined;
+  let adoption = "";
   let activated = false;
   let retained = false;
   let mutationStarted = false;
@@ -181,6 +182,11 @@ async function switchStagedPackageRelease(
       adoptionPrefix = undefined;
       previous = { ...previous!, path: adopted.releaseRoot };
       selectedLink = adopted;
+      adoption = `; the package directory became that release by ${
+        adopted.exchange.status === "exchanged"
+          ? `an atomic exchange (${adopted.exchange.route})`
+          : `two renames (atomic exchange unavailable: ${adopted.exchange.reason})`
+      }`;
     } else {
       selectedLink = captured;
     }
@@ -210,7 +216,7 @@ async function switchStagedPackageRelease(
       activePackageRoot: slot,
       step: step(
         0,
-        `switched ${params.packageName} to release ${path.basename(params.stage.prefix)}; previous release retained at ${previousRoot}`,
+        `switched ${params.packageName} to release ${path.basename(params.stage.prefix)}; previous release retained at ${previousRoot}${adoption}`,
         null,
       ),
       postVerifyStep,
