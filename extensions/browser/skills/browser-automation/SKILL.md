@@ -42,6 +42,9 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 ## Route-local access recovery
 
+Incident: [#200327](https://github.com/openclaw/openclaw/pull/200327) — a running
+host profile failed to attach while an authorized paired-node route remained usable.
+
 An attach error (including macOS `EPERM` reading `DevToolsActivePort`), timeout,
 or login/permission dialog is evidence about one route, not every browser.
 Before claiming browser access is unavailable or asking the user to log in,
