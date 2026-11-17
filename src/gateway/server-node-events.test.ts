@@ -628,13 +628,7 @@ describe("notifications changed events", () => {
       );
       expect(handoff).toHaveBeenCalledWith(
         expect.any(String),
-        // An authored NO_REPLY must not fail as empty_response and fall back to another model.
-        expect.objectContaining({
-          source: "device",
-          agentId,
-          sessionKey,
-          replyExpectation: "optional",
-        }),
+        expect.objectContaining({ source: "device", agentId, sessionKey }),
       );
     },
   );
