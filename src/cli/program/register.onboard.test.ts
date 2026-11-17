@@ -205,11 +205,19 @@ describe("setup routing", () => {
   }
   beforeEach(() => configSnapshot({}, false));
 
-  it.skipIf(process.platform === "win32")(
-    "exposes the verified desktop CLI without reading config or running setup",
-    async () => {
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "exposes the verified desktop CLI without reading config or running setup (custom home=%s)",
+    async (customHome) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-path-"));
       try {
+        const operatorHome = path.join(home, "operator-home");
+        const stateDir = path.join(operatorHome, "state");
+        const configFile = path.join(stateDir, "openclaw.json");
+        const configBytes = Buffer.from(' {"gateway":{"mode":"remote"}}\n');
+        if (customHome) {
+          await fs.mkdir(stateDir, { recursive: true });
+          await fs.writeFile(configFile, configBytes);
+        }
         const launcher = path.join(home, ".openclaw/bin/openclaw");
         await fs.mkdir(path.dirname(launcher), { recursive: true });
         const marker = {
@@ -219,7 +227,7 @@ describe("setup routing", () => {
         };
         await fs.writeFile(
           launcher,
-          `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
+          `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf '%s\\n' "$HOME" "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH"\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
           { mode: 0o755 },
         );
         await fs.writeFile(
@@ -229,10 +237,10 @@ describe("setup routing", () => {
         );
         const env = {
           HOME: home,
-          OPENCLAW_HOME: undefined,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_HOME: customHome ? operatorHome : undefined,
+          OPENCLAW_PROFILE: customHome ? "operator" : undefined,
+          OPENCLAW_STATE_DIR: customHome ? stateDir : undefined,
+          OPENCLAW_CONFIG_PATH: customHome ? configFile : undefined,
           SHELL: "/bin/bash",
           PATH: "/usr/bin:/bin",
         };
@@ -254,18 +262,37 @@ describe("setup routing", () => {
           for (let attempt = 0; attempt < 2; attempt++) {
             await runSetup(["--terminal-path", launcher]);
             expectNoCalls(config, setup, wizard, systemAgent, runtime.error, runtime.exit);
+            for (const [key, value] of Object.entries(env)) {
+              expect(process.env[key]).toBe(value);
+            }
           }
         });
         const output = execFileSync("/bin/bash", ["-ic", "openclaw qr 'literal argument'"], {
-          env: { HOME: home, PATH: "/usr/bin:/bin", OPENCLAW_PROFILE: "operator" },
+          env: { ...env, OPENCLAW_PROFILE: "operator" },
           encoding: "utf8",
         });
-        expect(output.trim()).toBe("desktop:operator:qr literal argument");
+        expect(output.trimEnd().split("\n")).toEqual([
+          home,
+          env.OPENCLAW_HOME ?? "",
+          env.OPENCLAW_STATE_DIR ?? "",
+          env.OPENCLAW_CONFIG_PATH ?? "",
+          "desktop:operator:qr literal argument",
+        ]);
+        if (customHome) {
+          expect(await fs.readFile(configFile)).toEqual(configBytes);
+          expect(await fs.readdir(operatorHome)).toEqual(["state"]);
+          expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        }
         expect((await fs.stat(path.join(home, ".bashrc"))).mode & 0o777).toBe(0o600);
         expect(
           (await fs.readFile(path.join(home, ".bashrc"), "utf8")).match(/if ! command/g),
         ).toHaveLength(1);
-        expect((await fs.readdir(home)).toSorted()).toEqual([".bashrc", ".openclaw", ".profile"]);
+        expect((await fs.readdir(home)).toSorted()).toEqual([
+          ".bashrc",
+          ".openclaw",
+          ".profile",
+          ...(customHome ? ["operator-home"] : []),
+        ]);
         expect(await fs.readdir(path.join(home, ".openclaw"))).toEqual(["bin"]);
       } finally {
         await fs.rm(home, { recursive: true, force: true });

@@ -224,8 +224,15 @@ export async function installDesktopTerminalPath(
   launcher: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string> {
-  const home = resolveRequiredHomeDir(env);
   const windows = process.platform === "win32";
+  // Match the Tauri owner: nonempty HOME, with USERPROFILE fallback only on Windows.
+  // The shared OS-home normalizer also trims and falls back to other host sources.
+  const home =
+    resolveEnvironmentValue(env, "HOME") ||
+    (windows ? resolveEnvironmentValue(env, "USERPROFILE") : undefined);
+  if (!home) {
+    throw new Error("HOME is not set");
+  }
   const expected = path.join(home, ".openclaw/bin", windows ? "openclaw.cmd" : "openclaw");
   const metadata = await lstatIfExists(launcher);
   if (
@@ -262,11 +269,12 @@ export async function installDesktopTerminalPath(
   if (selected && (await fs.realpath(selected)) !== (await fs.realpath(launcher))) {
     return "Terminal default unchanged; keeping the existing selected CLI: " + selected;
   }
-  if (!(await lstatIfExists(path.join(home, ".openclaw/openclaw.json")))) {
-    for (const directory of await fs.readdir(home)) {
+  const profileHome = resolveRequiredHomeDir(env);
+  if (!(await lstatIfExists(path.join(profileHome, ".openclaw/openclaw.json")))) {
+    for (const directory of await fs.readdir(profileHome)) {
       if (
         directory.startsWith(".openclaw-") &&
-        (await lstatIfExists(path.join(home, directory, "openclaw.json")))
+        (await lstatIfExists(path.join(profileHome, directory, "openclaw.json")))
       ) {
         return "Terminal default unchanged; another profile is configured.";
       }

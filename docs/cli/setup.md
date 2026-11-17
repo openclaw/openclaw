@@ -34,7 +34,7 @@ Creating the first config, or overriding a value inherited from an included
 config file, still needs the Gateway stopped: stop it through its service
 owner, wait for it to exit, then rerun the command.
 
-`--terminal-path <launcher>` runs only desktop terminal integration and rejects
+`--terminal-path <launcher>` runs only Tauri desktop terminal integration and rejects
 all other setup options. Otherwise, routing order is:
 
 1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
@@ -146,7 +146,7 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 
 ### Desktop terminal PATH integration
 
-The desktop app automatically runs `setup --terminal-path <launcher>` after
+The Tauri desktop app automatically runs `setup --terminal-path <launcher>` after
 qualifying its app-managed local CLI, before baseline or Gateway service setup.
 This path-only operation exposes that existing launcher in new terminals; it
 does not create config, workspace, sessions, credentials, or a Gateway service,
