@@ -54,7 +54,7 @@ export function setGatewayCredentialEnvKeys(owner: string, keys: Iterable<string
   }
 }
 
-function isGatewayCredentialEnvVarName(key: string): boolean {
+export function isGatewayCredentialEnvVarName(key: string): boolean {
   const upper = key.toUpperCase();
   for (const keys of gatewayCredentialEnvKeysByOwner.values()) {
     if (keys.has(upper)) {
