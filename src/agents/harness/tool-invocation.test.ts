@@ -7,6 +7,7 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
@@ -86,16 +87,27 @@ it("snapshots executed arguments before result middleware can mutate them", asyn
   expect(telemetry.successfulCronAdds).toBe(1);
 });
 
-it("coerces quoted scalars for validated tools as direct calls do", async () => {
+it.each([
+  [
+    "coerces quoted scalars for a validated OpenClaw tool",
+    undefined,
+    { limit: 3, recursive: true },
+  ],
+  ["forwards MCP arguments unchanged", "bundle-mcp", { limit: "3", recursive: "true" }],
+])("%s", async (_name, pluginId, expected) => {
   const execute = vi.fn(async () => textToolResult("ok", {}));
+  const tool = {
+    name: "exec",
+    label: "exec",
+    description: "Execute a tool.",
+    parameters: Type.Object({ limit: Type.Integer(), recursive: Type.Boolean() }),
+    execute,
+  };
+  if (pluginId) {
+    setPluginToolMeta(tool, { pluginId, optional: false });
+  }
   await runAgentHarnessToolInvocation({
-    tool: {
-      name: "exec",
-      label: "exec",
-      description: "Execute a tool.",
-      parameters: Type.Object({ limit: Type.Integer(), recursive: Type.Boolean() }),
-      execute,
-    },
+    tool,
     call: { ...call, arguments: { limit: "3", recursive: "true" } },
     validateArguments: () => {},
     signal: new AbortController().signal,
@@ -106,7 +118,7 @@ it("coerces quoted scalars for validated tools as direct calls do", async () => 
       throw error;
     },
   });
-  expect(execute.mock.calls[0]?.at(1)).toEqual({ limit: 3, recursive: true });
+  expect(execute.mock.calls[0]?.at(1)).toEqual(expected);
 });
 
 it.each([false, true])(

@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
+import { classifyAgentToolSource } from "../../plugins/tool-metadata.js";
 import {
   coerceToolExecutionArguments,
   runWithToolExecutionValidation,
@@ -63,7 +64,8 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
     }
-    if (params.validateArguments) {
+    // MCP servers own their schemas; forward their arguments as the model sent them.
+    if (params.validateArguments && classifyAgentToolSource(tool).source === "openclaw") {
       preparedArgs = coerceToolExecutionArguments(tool, tool.parameters, preparedArgs);
     }
     const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
