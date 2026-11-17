@@ -135,61 +135,12 @@ ClawHub work and its owner/run/attempt as a separate follow-up.
 
 ## Audit without per-commit fetches
 
-A `blob:none` checkout has commit/tree metadata, not necessarily patch contents.
-[RRI691](https://github.com/openclaw/tideclaw/blob/main/release/retrospectives/2026.11.1.md#L875-L882)
-recorded a 35-minute audit and 42 promisor packs from per-commit lazy reads.
-Separate metadata inventory, explicit object acquisition, and content review:
-
-1. Refresh the two refs once through the existing source-acquisition owner, then
-   record `main_sha` and `release_sha` with `git --no-lazy-fetch rev-parse --verify
-   "<ref>^{commit}"`. Use those full SHAs throughout the audit, not moving refs.
-   If commits or ancestry are missing, follow
-   [history recovery](../../../../docs/reference/scripts/pr-tooling.md#reuse-the-base-and-fetch-only-needed-history);
-   do not remove the clone filter or deepen a managed shared store manually.
-2. In a task-owned scratch directory (`audit_dir`), inventory release-only
-   commits and every parent delta without reading blobs. Run in Bash with
-   `set -euo pipefail`; stop on a failed command:
-
-   ```bash
-   git --no-lazy-fetch rev-list --reverse --topo-order \
-     "$main_sha..$release_sha" >"$audit_dir/commits"
-   git --no-lazy-fetch diff-tree --stdin --root -m -r --no-renames \
-     --no-commit-id --no-ext-diff --no-textconv --name-status -z \
-     <"$audit_dir/commits" >"$audit_dir/paths.z"
-   git --no-lazy-fetch diff-tree --stdin --root -m -r --no-renames \
-     --no-commit-id --no-ext-diff --no-textconv --raw --no-abbrev -z \
-     <"$audit_dir/commits" >"$audit_dir/objects.z"
-   ```
-
-   Parse NUL-delimited records, not whitespace-split filenames. Keep deletions;
-   renames appear as delete/add pairs. From the raw records collect distinct
-   nonzero blob OIDs from **both** sides (exclude mode `160000` gitlinks). This
-   includes deleted files and intermediate versions absent from either tip.
-
-3. Probe those OIDs with `git --no-lazy-fetch cat-file --batch-check`; collect
-   only records marked `missing`. Acquire them in bounded batches (at most
-   1,024 OIDs), through the existing Git source-acquisition owner. For an
-   ordinary task-owned clone with its configured promisor `origin`, each
-   nonempty newline-delimited batch can use native Git:
-
-   ```bash
-   git fetch --stdin --refetch --no-auto-maintenance --no-tags \
-     --no-write-fetch-head --refmap= origin <"$audit_dir/missing-batch"
-   ```
-
-   Keep the existing promisor/filter configuration; do not source internal
-   `scripts/pr-lib` helpers or create another fetch/cache owner. If acquisition
-   fails, stop and report the missing OIDs and remote error, not a lazy retry.
-
-4. Read patches and files with `git --no-lazy-fetch show ...` (disable external
-   diff/textconv for patch reads). Missing content is a visible incomplete
-   audit: acquire the additional required objects explicitly, then resume.
-   The inventory is **not** a semantic review or proof that main lacks a fix.
-   Compare implementations at the pinned main SHA, including any additional
-   main-side blobs and surrounding code needed to recognize equivalent fixes;
-   review merge resolutions too. A tip-to-tip diff alone misses reverted or
-   intermediate release changes. Record the pinned range, reviewed scope, and
-   any remaining content gaps before choosing forward-ports.
+Pin main and release SHAs, then explicitly fetch missing audit blobs in batches of
+at most 1,024 through the existing source-acquisition owner
+([RRI691](https://github.com/openclaw/tideclaw/blob/main/release/retrospectives/2026.11.1.md#L875-L882)).
+Semantically compare release changes—including intermediate changes and merge
+resolutions—against pinned main with `git --no-lazy-fetch`; report missing content
+as an incomplete audit.
 
 ## Recover a failed publication parent
 
