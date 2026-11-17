@@ -1,5 +1,6 @@
-# +600 net LF test lines against f1d7daedced8b1d34e6f368bd481e66884d1c297.
-# Preserve the existing generic retired-claim final-write regression alongside
-# native admission, stored-source continuation and provider-review final effects.
-# The ordinary allowance covers 400; allocate only the remaining verified 200.
-200
+# +612 net LF test lines against bb45ba99390c80784ca50d1b07f150b72cd57b7d.
+# Preserve every generic retired-claim final-write regression byte-for-byte.
+# Native admission/recovery cases reuse the shared fixture in their own owner
+# so current-main generic coverage stays below the canonical file-size limit.
+# The ordinary allowance covers 400; allocate only the verified excess.
+212
