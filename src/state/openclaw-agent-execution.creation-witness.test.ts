@@ -558,6 +558,33 @@ it.each([
   },
 );
 
+it("allows the first session after a released missing-store reader", async () => {
+  const options = fixture();
+  {
+    const reader = capture(options);
+    await using _ = onExit(() => reader.release());
+    await expect(reader.runExisting(source(), async () => "unexpected")).resolves.toBeUndefined();
+    expect(fs.existsSync(options.path)).toBe(false);
+    await reader.release();
+  }
+
+  const sessionKey = "agent:main:after-missing-read";
+  const entry = { sessionId: "first-session", updatedAt: 1 };
+  const written = await upsertSessionEntryCore(
+    { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+    entry,
+  );
+  expect(written).toMatchObject({ sessionId: entry.sessionId });
+  {
+    const following = capture(options);
+    await using _ = onExit(() => following.release());
+    const read = await following.runExisting(source(), (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+    );
+    expect(read).toMatchObject({ entries: [{ sessionKey, entry: written }] });
+  }
+});
+
 it.each(["unused", "refused"] as const)(
   "releases the %s creation reservation while a sibling remains",
   async (state) => {

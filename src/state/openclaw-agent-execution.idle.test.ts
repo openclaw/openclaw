@@ -39,21 +39,46 @@ beforeEach(() => {
   env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-idle-")) };
   opened.length = 0;
   // Exercise the real borrow/release owner without booting native workers for timer tests.
-  vi.spyOn(native, "createAgentDatabaseNativeGeneration").mockImplementation((agentId) => {
-    const close = vi.fn(async () => {});
-    opened.push({ agentId, close });
-    return {
-      close,
-      run: async () => undefined,
-      failure: () => undefined,
-      isPrepared: () => false,
-      getPendingNativeOpen: () => undefined,
-      getPendingPreparation: () => undefined,
-      captureClaim: () => {
-        throw new Error("Unused native claim");
-      },
-    };
-  });
+  vi.spyOn(native, "createAgentDatabaseNativeGeneration").mockImplementation(
+    (
+      agentId,
+      pathname,
+      _context,
+      _logicalLifetime,
+      _assertLogicalCurrent,
+      _assertCleanupOwned,
+      _expectedIdentity,
+      acceptFileIdentity,
+    ) => {
+      const close = vi.fn(async () => {});
+      let prepared = false;
+      opened.push({ agentId, close });
+      return {
+        close,
+        run: async () => {
+          fs.mkdirSync(path.dirname(pathname), { recursive: true });
+          fs.writeFileSync(pathname, "", { flag: "a" });
+          const identity = readDatabasePathIdentitySync(pathname);
+          assert(identity.birthtime);
+          acceptFileIdentity({
+            kind: "file",
+            physicalIdentity: identity.key.slice("file:".length),
+            nativeLocation: identity.canonicalPath,
+            birthtime: identity.birthtime,
+          });
+          prepared = true;
+          return undefined;
+        },
+        failure: () => undefined,
+        isPrepared: () => prepared,
+        getPendingNativeOpen: () => undefined,
+        getPendingPreparation: () => undefined,
+        captureClaim: () => {
+          throw new Error("Unused native claim");
+        },
+      };
+    },
+  );
 });
 
 const source: AgentDatabaseRequestExecutionSource = {
@@ -83,7 +108,7 @@ function closedAgents() {
 
 const fillIdlePool = () => use("first", "second", "third", "fourth");
 
-it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
+it("keeps a shared owner out of idle eviction until its last borrower releases", async () => {
   const options = {
     agentId: "creating",
     env,
@@ -101,7 +126,8 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
     expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
     const ordinary = captureOpenClawAgentDatabaseExecution(options);
     try {
-      await expect(ordinary.prepare(source)).rejects.toThrow(/captured creating reference/);
+      await expect(ordinary.prepare(source)).resolves.toBeUndefined();
+      expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
     } finally {
       await ordinary.release();
     }
