@@ -41,7 +41,14 @@ suite.define(() => {
           await button.click();
           await sidebar.waitFor({ state: "visible" });
           await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe(view);
-          await button.click();
+          // While its panel is open the Sessions avatar opens the agent menu instead.
+          await (
+            view === "sessions"
+              ? page
+                  .locator("openclaw-app-sidebar")
+                  .getByRole("button", { name: "Collapse sidebar", exact: true })
+              : button
+          ).click();
           await sidebar.waitFor({ state: "hidden" });
           await expect.poll(() => selected.count()).toBe(0);
           await expect

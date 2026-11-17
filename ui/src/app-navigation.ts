@@ -60,8 +60,9 @@ export type SidebarZoneEntry =
   | { type: "session"; key: string; rail?: true }
   | { type: "person"; profileId: string };
 
-// The rail starts clean; only user-added shortcuts occupy the pins region.
-export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
+// Below the fixed Users item, the rail starts with Automations, Customize and
+// Usage; every other page waits in the "more" menu until it is pinned.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = ["route:cron", "route:plugins", "route:usage"];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -124,6 +125,14 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   return entry.type === "plugin"
     ? `plugin:${entry.key}`
     : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/**
+ * Native section pins lead the rail, above the Pages control and its separator;
+ * plugin, session and person pins always follow it, bundled plugins included.
+ */
+export function isRailSectionPin(entry: string): boolean {
+  return entry.startsWith("route:");
 }
 
 /** Personal session pins render in the Sessions list's Pinned section, not the rail. */

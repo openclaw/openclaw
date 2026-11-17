@@ -189,9 +189,13 @@ suite.define(() => {
         await sessions.click();
       }
       await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+      const collapse = page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Collapse sidebar", exact: true });
       const toggleSidebar = async () => {
         for (const pressed of ["false", "true"]) {
-          await sessions.click();
+          // Sessions reopens a collapsed panel; while open it would open the agent menu.
+          await (pressed === "false" ? collapse : sessions).click();
           await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
           await page.locator(".shell").evaluate(async (shell) => {
             await new Promise<void>((resolve) => {
