@@ -101,6 +101,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.template": "workspace.manifest",
   "workspace.manifest.reference": "workspace.manifest",
   "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.paths": "workspace.manifest",
   "workspace.manifest.serialize": "workspace.manifest",
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",

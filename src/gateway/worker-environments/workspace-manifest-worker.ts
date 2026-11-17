@@ -55,6 +55,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     return [command.input.payload.buffer];
   }
   switch (command.type) {
+    case "workspace.manifest.paths":
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
     case "workspace.manifest.base-refresh":
@@ -325,6 +326,25 @@ export async function decodeWorkspaceManifest(
   const bytes = new TextEncoder().encode(raw);
   return await computeWorkspaceManifest(
     { type: "workspace.manifest.parse", input: { raw: bytes, expectedRef } },
+    signal,
+  );
+}
+
+export async function workspaceManifestPaths(
+  document: { rawManifest: string; manifestRef: string },
+  buildCacheInputs: string[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  return await computeWorkspaceManifest(
+    {
+      type: "workspace.manifest.paths",
+      input: {
+        raw: new TextEncoder().encode(document.rawManifest),
+        expectedRef: document.manifestRef,
+        buildCacheInputs,
+      },
+    },
     signal,
   );
 }

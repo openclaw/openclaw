@@ -15,7 +15,8 @@
  * unmeasured messages; known payload bytes are not complete wire-byte totals.
  * --traffic separately measures V8-serializable main-boundary envelopes (shared
  * memory and message ports counted as handles); exclude it from timing/allocation.
- * cgroupCpuMs includes subprocesses; use a task-isolated Linux cgroup for comparison.
+ * cgroupCpuMs includes subprocesses; use an isolated cgroup v2 mount rooted at the
+ * benchmark's cgroup. Other cgroup layouts report null.
  * The unchanged tree has 62k files/1.1 GB. Its upstream adds 512 MiB of unique
  * historical objects then replaces them with small current files. This local Git
  * server declines filtering, so the real fetch downloads history while the final
@@ -270,8 +271,11 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const guestCpu = async () => nativeImage && nativeEngine === "docker"
     ? Number((await docker(["exec", nativeName, "cat", "/sys/fs/cgroup/cpu.stat"])).stdout.match(/^usage_usec (\d+)$/m)?.[1])
     : null;
+  const cgroupRootOwnsProcess = process.platform === "linux" &&
+    (await fs.readFile("/sys/fs/cgroup/cgroup.procs", "utf8").catch(() => ""))
+      .split("\n").includes(String(process.pid));
   const cgroupCpu = async () => {
-    const usage = process.platform === "linux"
+    const usage = cgroupRootOwnsProcess
       ? (await fs.readFile("/sys/fs/cgroup/cpu.stat", "utf8").catch(() => "")).match(/^usage_usec (\d+)$/m)?.[1]
       : undefined;
     return usage === undefined ? null : Number(usage);

@@ -67,13 +67,13 @@ function prepareTreePacks(
   }
 }
 
-it.each(["materialize", "paths"] as const)("reads %s after database close", async (kind) => {
+it("materializes a manifest snapshot after its database closes", async () => {
   const database = new DatabaseSync(":memory:");
   const worktreeId = randomUUID();
   const records = createLocalWorkspaceManifestTree([
     { path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) },
   ]);
-  const action = kind === "paths" ? { kind, buildCacheInputs: [] } : { kind };
+  const action = { kind: "materialize" as const };
   const paths = prepareLocalWorkspaceSourcePathSet(JSON.stringify(["src/retained.ts"]));
   const snapshot = (() => {
     try {
@@ -141,15 +141,11 @@ it.each(["materialize", "paths"] as const)("reads %s after database close", asyn
     baseCommit: "a".repeat(40),
     entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 1, sha256: "a".repeat(64) }],
   });
-  expect(value).toEqual(
-    kind === "paths"
-      ? { kind, paths: new Set(["entry.txt"]) }
-      : {
-          kind: "materialize",
-          rawManifest: expected,
-          manifestRef: `sha256:${createHash("sha256").update(expected).digest("hex")}`,
-        },
-  );
+  expect(value).toEqual({
+    kind: "materialize",
+    rawManifest: expected,
+    manifestRef: `sha256:${createHash("sha256").update(expected).digest("hex")}`,
+  });
 });
 
 it.each(["inline", "CAS"] as const)(

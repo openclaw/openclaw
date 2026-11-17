@@ -21,6 +21,7 @@ import {
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
   prepareWorkspaceBaseRefresh,
+  workspaceManifestPaths,
   workspaceSnapshotsEqual,
 } from "./workspace-manifest-worker.js";
 import type { WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
@@ -470,6 +471,9 @@ it("compares pristine workspace contents with the admitted build-cache policy", 
     buildCacheInputs: new Set([input]),
   };
   const canonicalDocument = await captureWorkspaceManifestDocument(canonical);
+  expect(await workspaceManifestPaths(canonicalDocument, [input])).toEqual(
+    new Set([".artifacts", ".artifacts/build-cache-inputs", input, "file.txt"]),
+  );
   const compare = async () =>
     workspaceSnapshotsEqual(canonicalDocument, await captureWorkspaceManifestDocument(projection), [
       input,
