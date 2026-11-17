@@ -19,25 +19,110 @@ struct IOSConversationAdapterTests {
         try #require(root.host == "127.0.0.1" && root.scheme == "http")
         let token = try #require(environment["OPENCLAW_IOS_PRODUCTION_CONVERSATION_TOKEN"])
         let entry = try #require(NativeConversationRoute.documentURL(
-            sessionKey: "agent:main:main", agentID: "main", draft: nil, baseURL: root))
-        let fixture = try await ConversationFixture.startProduction(root: root, entry: entry, token: token)
-        defer { fixture.stop() }
-        // No injected ready/state messages or document binding: the shipped app
-        // must perform its protected-entry bootstrap and native handshake itself.
-        #expect(fixture.webView.url?.path == root.appendingPathComponent("chat/main").path)
-        var failed = false
-        fixture.bridge.onFailure = { failed = true }
-        try await fixture.wait { fixture.bridge.ready && fixture.bridge.state?.connection == .connected || failed }
-        try #require(fixture.bridge.ready, "Production ready was rejected after protected entry restored /chat")
-        #expect(!failed)
-        #expect(fixture.bridge.state?.context.sessionKey == "agent:main:main")
-        #expect(fixture.bridge.state?.connection == .connected)
-        try await TestWait.state("production composer mount") {
-            try await fixture.webView.evaluateJavaScript(
-                "Array.from(document.querySelectorAll('openclaw-chat-pane')).some(p => p.active && p.composerReady)")
-                as? Bool == true
+            sessionKey: "agent:main:main", agentID: "main", draft: "Appearance fixture draft", baseURL: root))
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1180, height: 820)
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKeyAndVisible()
         }
-        #expect(await fixture.bridge.request(.focusComposer))
+        let store = WKWebsiteDataStore.nonPersistent()
+        var previousDocument: String?
+        for remount in [false, true] {
+            let fixture = try await ConversationFixture.startProduction(
+                root: root, entry: entry, token: token, store: store)
+            { webView in
+                webView.overrideUserInterfaceStyle = .light
+                controller.view = webView
+                controller.view.layoutIfNeeded()
+            }
+            defer { fixture.stop() }
+            #expect(fixture.webView.window === window)
+            // Shipped auth/bootstrap must restore /chat and perform its own handshake.
+            #expect(fixture.webView.url?.path == root.appendingPathComponent("chat/main").path)
+            var failed = false
+            fixture.bridge.onFailure = { failed = true }
+            try await fixture.wait { fixture.bridge.ready && fixture.bridge.state?.connection == .connected || failed }
+            try #require(fixture.bridge.ready, "Production ready was rejected after protected entry restored /chat")
+            #expect(!failed)
+            #expect(fixture.bridge.state?.context.sessionKey == "agent:main:main")
+            #expect(fixture.bridge.state?.connection == .connected)
+            let document = try #require(fixture.bridge.documentID)
+            #expect(document != previousDocument)
+            previousDocument = document
+            for (mode, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark), ("light", .light)] {
+                fixture.webView.overrideUserInterfaceStyle = style
+                let palette = try #require(OpenClawSidebarPalette.conversationTheme[mode])
+                let primary = try #require(palette["primary"])
+                try await TestWait.state("production composer and native mode \(mode), remount=\(remount)") {
+                    guard fixture.webView.traitCollection.userInterfaceStyle == style else { return false }
+                    return try await fixture.webView.callAsyncJavaScript(
+                        """
+                        const pane = [...document.querySelectorAll('openclaw-chat-pane')].find(p => p.active);
+                        const editor = [...(pane?.querySelectorAll('.cm-content, textarea') ?? [])]
+                          .some(el => el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().width > 0);
+                        const send = pane?.querySelector('.chat-send-btn--send');
+                        const fill = 'rgb(' + [1,3,5].map(i => parseInt(primary.slice(i,i+2),16)).join(', ') + ')';
+                        return pane?.composerReady && editor && document.documentElement.dataset.themeMode === mode &&
+                          matchMedia('(prefers-color-scheme: light)').matches === (mode === 'light') &&
+                          send && !send.disabled && getComputedStyle(send).backgroundColor === fill;
+                        """,
+                        arguments: ["mode": mode, "primary": primary],
+                        in: nil,
+                        contentWorld: .page) as? Bool == true
+                }
+                let rendered = try #require(try await fixture.webView.callAsyncJavaScript(
+                    """
+                    const pane = [...document.querySelectorAll('openclaw-chat-pane')].find(p => p.active);
+                    const composer = pane.querySelector('.agent-chat__input');
+                    const visible = el => el && el.getBoundingClientRect().width > 0 &&
+                      el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility === 'visible';
+                    const editor = [...pane.querySelectorAll('.cm-content, textarea')].find(visible);
+                    const background = pane.querySelector('openclaw-session-background');
+                    const send = pane.querySelector('.chat-send-btn--send');
+                    if (![composer, editor, send].every(visible) || !background) return null;
+                    const css = el => getComputedStyle(el);
+                    const rgb = hex => 'rgb(' + [1,3,5].map(i => parseInt(hex.slice(i,i+2),16)).join(', ') + ')';
+                    const root = document.documentElement;
+                    const sans = el => {
+                      const family = css(el).fontFamily.toLowerCase();
+                      return family.includes('sans-serif') &&
+                        !family.split(',').some(f =>
+                          /^(serif|lora|fraunces|georgia|times.*)$/.test(f.trim().replace(/['"]/g,'')));
+                    };
+                    return {
+                      canvas: root.dataset.themeId === 'custom' &&
+                        css(document.body).backgroundColor === rgb(palette.background),
+                      composer: css(composer).backgroundColor === rgb(palette.background) &&
+                        css(composer).backgroundImage === 'linear-gradient(' + rgb(palette.popover) + ', ' +
+                          rgb(palette.popover) + '), none',
+                      accent: css(root).getPropertyValue('--accent').trim() === palette.accent &&
+                        !send.disabled && css(send).backgroundColor === rgb(palette.primary),
+                      sans: sans(document.body) && sans(editor),
+                      noArtwork: background.hidden && css(background).display === 'none' &&
+                        !background.hasAttribute('data-painted') &&
+                        !background.querySelector('.session-background__image') &&
+                        css(root).getPropertyValue('--app-background-image').trim() === 'none'
+                    };
+                    """,
+                    arguments: ["palette": palette],
+                    in: nil,
+                    contentWorld: .page) as? [String: Bool])
+                #expect(rendered["canvas"] == true)
+                #expect(rendered["composer"] == true)
+                #expect(rendered["accent"] == true)
+                #expect(rendered["sans"] == true)
+                #expect(rendered["noArtwork"] == true)
+            }
+            #expect(await fixture.bridge.request(.focusComposer))
+        }
     }
 
     @Test(.timeLimit(.minutes(1)), arguments: ["/control/chat/main", "/chat/main", "/control-other/chat/main"])
@@ -55,6 +140,23 @@ struct IOSConversationAdapterTests {
     func `embedded palette comes from native sidebar and follows app appearance`() async throws {
         let fixture = try await ConversationFixture.start()
         defer { fixture.stop() }
+        // Detached WKWebViews do not propagate UIKit appearance changes to web media queries.
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 1180, height: 820)
+        let controller = UIViewController()
+        controller.view = fixture.webView
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKeyAndVisible()
+        }
+        controller.view.layoutIfNeeded()
+        #expect(fixture.webView.window === window)
         let palette = try #require(try await fixture.webView.evaluateJavaScript(
             "window.__OPENCLAW_NATIVE_EMBED__.appearance") as? [String: [String: String]])
         #expect(palette == OpenClawSidebarPalette.conversationTheme)
@@ -65,7 +167,8 @@ struct IOSConversationAdapterTests {
             #expect(values["accent"] == (style == .dark ? "#ff6b66ff" : "#b73833ff"))
             fixture.webView.overrideUserInterfaceStyle = style
             try await TestWait.state("embedded appearance follows native interface style") {
-                try await fixture.webView.evaluateJavaScript(
+                guard fixture.webView.traitCollection.userInterfaceStyle == style else { return false }
+                return try await fixture.webView.evaluateJavaScript(
                     "matchMedia('(prefers-color-scheme: light)').matches") as? Bool == (style == .light)
             }
         }
@@ -409,7 +512,13 @@ private final class ConversationFixture: NSObject, WKNavigationDelegate {
         return try await fixture.load(url)
     }
 
-    static func startProduction(root: URL, entry: URL, token: String) async throws -> ConversationFixture {
+    static func startProduction(
+        root: URL,
+        entry: URL,
+        token: String,
+        store: WKWebsiteDataStore,
+        configure: (WKWebView) -> Void) async throws -> ConversationFixture
+    {
         let config = GatewayConnectConfig(
             url: root,
             stableID: "production-boot-" + UUID().uuidString,
@@ -430,10 +539,11 @@ private final class ConversationFixture: NSObject, WKNavigationDelegate {
         let script = AuthenticatedControlUI.authUserScript(
             config: config, pageURL: entry, storedOperatorToken: nil, usesNativeNavigationChrome: true)
         let fixture = ConversationFixture(
-            server: nil, url: entry, gatewayURL: root, store: .nonPersistent(), cookie: nil, authScript: script)
+            server: nil, url: entry, gatewayURL: root, store: store, cookie: nil, authScript: script)
         // The real chat pane defers its composer until it has a viewport.
         // Protocol-only fixtures use zero bounds; production boot must not.
         fixture.webView.frame = CGRect(x: 0, y: 0, width: 1180, height: 820)
+        configure(fixture.webView)
         return try await fixture.load(entry, seedDocument: false)
     }
 
