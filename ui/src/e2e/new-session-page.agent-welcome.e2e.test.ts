@@ -39,8 +39,7 @@ suite.define(() => {
                 id: "main",
                 name: "Project briefing",
                 identity: { emoji: "📋" },
-                description,
-                ...(scenario === "default" ? {} : { recommendedPrompts }),
+                ...(scenario === "default" ? {} : { description, recommendedPrompts }),
               },
             ],
           },
@@ -117,7 +116,13 @@ suite.define(() => {
           annotated,
         );
       }
-      expect(await welcome.textContent()).toContain(description);
+      const genericHint = welcome.getByText("Pick where this session works.", { exact: true });
+      if (scenario === "default") {
+        await genericHint.waitFor();
+      } else {
+        expect(await welcome.textContent()).toContain(description);
+        expect(await genericHint.count()).toBe(0);
+      }
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       if (scenario === "recent") {

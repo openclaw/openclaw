@@ -480,14 +480,14 @@ export class NewSessionPageOwner {
     };
   }
 
-  welcomeHint(): string {
-    return t(
-      catalog.isTarget(this.data)
-        ? "newSession.nativeTerminalHint"
-        : this.place.requiredPlacement
-          ? "newSession.requiredWorkerHint"
-          : "newSession.hint",
-    );
+  welcomeHint(): string | undefined {
+    if (catalog.isTarget(this.data)) {
+      return t("newSession.nativeTerminalHint");
+    }
+    if (this.place.requiredPlacement) {
+      return t("newSession.requiredWorkerHint");
+    }
+    return this.place.selectedAgent()?.description ? undefined : t("newSession.hint");
   }
 
   welcomeOptions(): DraftWelcomeOptions {
@@ -502,7 +502,6 @@ export class NewSessionPageOwner {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: this.welcomeHint(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
