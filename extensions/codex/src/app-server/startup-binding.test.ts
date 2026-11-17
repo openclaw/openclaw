@@ -70,11 +70,6 @@ async function rotateBinding(overrides: Parameters<typeof resolveBinding>[0] = {
   return (await resolveBinding(overrides)).binding;
 }
 
-async function expectRotated(overrides: Parameters<typeof resolveBinding>[0] = {}) {
-  expect(await rotateBinding(overrides)).toBeUndefined();
-  await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-}
-
 async function expectPredecessorRetained(overrides: Parameters<typeof resolveBinding>[0] = {}) {
   const resolution = await resolveBinding(overrides);
   expect(resolution.binding).toBeUndefined();
@@ -131,8 +126,9 @@ it.each(["expected", "ordinary", "revoked"])(
       );
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
     } else {
+      // The pressure path hands the saved binding to the replacement owner (#172232).
       await expect(operation).resolves.toBeUndefined();
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
     }
   },
 );
@@ -299,7 +295,7 @@ it("honors custom Codex home rollout files for native token pressure", async () 
     tokenRecord(120_000, 128_000),
   );
 
-  await expectRotated({ codexHome, config: byteLimitConfig(1_000) });
+  await expectPredecessorRetained({ codexHome, config: byteLimitConfig(1_000) });
 });
 
 it("includes projected turn tokens in the native rollout pressure check", async () => {
