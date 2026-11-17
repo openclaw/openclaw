@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../plugins/contracts/inventory/bundled-capability-metadata.js";
 import {
+  CORE_TOOL_DEFINITIONS,
   CORE_WORKER_LAUNCH_TOOL_NAMES,
   isKnownCoreToolId,
+  isPluginBuiltCoreToolId,
   resolveCoreToolExecutionLocation,
   resolveCoreToolFacts,
 } from "./core-tool-facts.js";
@@ -138,5 +141,22 @@ describe("tool-catalog", () => {
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {
     expect(resolveCoreToolProfilePolicy("full")?.allow).toEqual(["*"]);
+  });
+
+  it("marks exactly the catalog ids bundled plugins build as plugin-built", () => {
+    // A manifest may claim only plugin-built ids, so an unmarked id here would break that
+    // plugin's fork grant, and a marked id that core builds would be claimable by any plugin.
+    const claimed = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) => entry.toolNames).filter(
+        isKnownCoreToolId,
+      ),
+    );
+    const marked = CORE_TOOL_DEFINITIONS.filter((tool) => isPluginBuiltCoreToolId(tool.id)).map(
+      (tool) => tool.id,
+    );
+    expect(marked.toSorted()).toEqual([...claimed].toSorted());
+    for (const id of ["exec", "read", "sessions_create", "skills_search", "skills_read"]) {
+      expect(isPluginBuiltCoreToolId(id), id).toBe(false);
+    }
   });
 });

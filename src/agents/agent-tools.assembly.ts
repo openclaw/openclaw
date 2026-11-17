@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -291,7 +292,10 @@ export function* assembleOpenClawCodingTools(
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
               approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-              nonInteractiveApproval: options?.swarmCollector,
+              // A hidden fork has nobody to ask; a command that needs approval is denied.
+              nonInteractiveApproval:
+                options?.swarmCollector ||
+                readSessionForkSource(options?.inputProvenance) !== undefined,
               backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
