@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
+import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
@@ -70,6 +71,7 @@ export function createVitestReportFixture(
   observation: { receipts: FixtureReceiptChannel; signal: AbortSignal },
   evidence = path.join(root, "reports"),
   compileCache = path.join(root, "node-compile-cache"),
+  workers?: VitestWorkerRun,
 ) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(evidence, { recursive: true });
@@ -554,6 +556,18 @@ await import(${JSON.stringify(pathToFileURL(sourceEntry).href)});`,
     // Keep orchestration and compilation on Node; Vitest uses the selected runtime.
     const nodeExecutable = resolveTestNodeExecPath();
     let executable = nodeExecutable;
+    if (realHomeReplay && workers) {
+      // Node loader flags precede the bootstrap; the batch entry remains its CLI.
+      command.splice(
+        2,
+        0,
+        path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+        workers.descriptor.directory,
+        ...(workers.descriptor.preset && workers.descriptor.preset !== "full"
+          ? [`--worker-preset=${workers.descriptor.preset}`]
+          : []),
+      );
+    }
     if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
       // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
       const hasZeroHardCoreLimit = /^Max core file size\s+\S+\s+0\s/mu.test(
@@ -566,12 +580,21 @@ await import(${JSON.stringify(pathToFileURL(sourceEntry).href)});`,
         command = ["--core=1:1", "--", nodeExecutable, ...command];
       }
     }
-    const { child, completion } = spawnOwnedVitestProcess({
+    const { child, completion: childCompletion } = spawnOwnedVitestProcess({
       command: executable,
       args: command,
       homeMode: realHomeReplay ? "live-aware" : undefined,
-      options: { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
+      options: {
+        cwd: root,
+        env: childEnv,
+        stdio:
+          realHomeReplay && workers
+            ? ["ignore", "pipe", "pipe", "ipc"]
+            : ["ignore", "pipe", "pipe"],
+      },
     });
+    const completion =
+      realHomeReplay && workers ? workers.borrow(child, childCompletion) : childCompletion;
     let stdout = "",
       stderr = "";
     child.stdout!.on("data", (chunk) => {
