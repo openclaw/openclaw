@@ -134,17 +134,35 @@ it("reads credential readiness from the session's selected runtime route", () =>
   expect(banner(true, false, "claude-cli")).toBeDefined();
 });
 
+it.each(["auth-failed", "cooldown"] as const)(
+  "preserves a configured route during %s despite an empty auth inventory",
+  (unavailableReason) => {
+    const route = { available: false, unavailableReason };
+    const model = { id: "model", name: "Model", provider: "example", ...route };
+    for (const entry of [
+      model,
+      {
+        ...model,
+        unavailableReason: "missing-auth" as const,
+        runtimeChoices: [{ ...route, agentRuntime: { id: "openclaw", source: "model" as const } }],
+      },
+    ]) {
+      expect(
+        requiresChatModelSetup({
+          ...loaded,
+          agentModel: "example/model",
+          chatModelCatalog: [entry],
+          modelAuthStatusResult: { ts: 1, providers: [] },
+        }),
+      ).toBe(false);
+    }
+  },
+);
+
 it.each([
-  ["empty catalog", {}, true],
-  [
-    "unavailable built-in default",
-    {
-      chatModelCatalog: [
-        { id: "gpt-6-astra", name: "GPT-6-Astra", provider: "openai", available: false },
-      ],
-    },
-    true,
-  ],
+  ["empty catalog with a configured model", { chatModelCatalog: [] }, false],
+  ["empty catalog with no model configured", { chatModelCatalog: [], agentModel: "" }, true],
+  ["unavailable built-in default", {}, true],
   ["auth still loading", { modelAuthStatusResult: null }, false],
   ["auth read failed", { modelAuthStatusResult: { ts: 0, providers: [] } }, false],
   [
@@ -234,7 +252,9 @@ it.each([
       requiresChatModelSetup({
         ...loaded,
         agentModel: "openai/gpt-6-astra",
-        chatModelCatalog: [],
+        chatModelCatalog: [
+          { id: "gpt-6-astra", name: "GPT-6-Astra", provider: "openai", available: false },
+        ],
         modelAuthStatusResult: { ts: 1, providers: [] },
         ...overrides,
       }),

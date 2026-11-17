@@ -237,12 +237,24 @@ export function hasChatModelCatalogSelection(
   );
 }
 
-/** Absence must come from a completed auth read, not a built-in model name or a failed read. */
+function hasConfiguredChatModelRoute(
+  entry: Pick<ModelCatalogEntry, "available" | "unavailableReason">,
+): boolean {
+  // Failed credentials and cooldowns still describe a configured route.
+  return (
+    entry.available !== false ||
+    entry.unavailableReason === "auth-failed" ||
+    entry.unavailableReason === "cooldown"
+  );
+}
+
+/** An empty catalog alone cannot establish that a configured model needs initial setup. */
 export function hasNoConnectedChatModel(
   catalog: readonly ModelCatalogEntry[],
   auth: ModelAuthStatusResult | null | undefined,
 ): boolean {
   return Boolean(
+    catalog.length > 0 &&
     auth &&
     auth.ts > 0 &&
     !auth.unavailable &&
@@ -255,8 +267,8 @@ export function hasNoConnectedChatModel(
     ) &&
     !catalog.some(
       (entry) =>
-        entry.available !== false ||
-        entry.runtimeChoices?.some((route) => route.available !== false),
+        hasConfiguredChatModelRoute(entry) ||
+        entry.runtimeChoices?.some(hasConfiguredChatModelRoute),
     ),
   );
 }
