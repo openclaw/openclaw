@@ -545,3 +545,56 @@ it("keeps expanded historical launches readable when a new launch refreshes acti
     }
   }
 });
+
+it("groups child-chat openings with file activity while keeping autonomous launches separate", async () => {
+  const childKey = "agent:main:dashboard:child";
+  const launch = (id: string, visible: boolean) =>
+    createMessageEntry(
+      id,
+      createAssistantMessage([
+        createToolCall(id, "sessions_spawn", { label: id, task: "Read the sources.", visible }),
+        createToolResultBlock(
+          id,
+          "sessions_spawn",
+          JSON.stringify({
+            status: "accepted",
+            childSessionKey: visible ? childKey : "agent:main:subagent:worker",
+          }),
+          { isError: false },
+        ),
+      ]),
+    );
+  const group = createToolGroup("mixed-work", [
+    createMessageEntry("read", createAssistantMessage([read("source")])),
+    launch("Child", true),
+    createMessageEntry(
+      "write",
+      createAssistantMessage([
+        createToolCall("write", "write", { path: "/repo/result.ts", content: "done" }),
+      ]),
+    ),
+    launch("Worker", false),
+  ]);
+  const onOpenSession = vi.fn();
+  const draw = async (expanded: boolean) => {
+    activityRoot.render(prepareHistoryGroups([group]), {
+      ...visibleTools,
+      isToolMessageExpanded: () => expanded,
+      subagents: { onOpenSession },
+    });
+    await settleToolBridges(summaryContainer);
+  };
+  await draw(false);
+  expect(summaryContainer.querySelectorAll(".chat-activity-group__summary")).toHaveLength(1);
+  expect(summaryContainer.textContent).not.toContain("Opened child chat");
+  expect(summaryContainer.textContent).toContain("Launched Worker");
+  await draw(true);
+  expect(summaryContainer.textContent).toContain("Opened child chat");
+  expect(summaryContainer.textContent).toContain("source.ts");
+  expect(summaryContainer.textContent).toContain("result.ts");
+  const childLink = [
+    ...summaryContainer.querySelectorAll<HTMLButtonElement>(".chat-tool-row__subagent-link"),
+  ].find((link) => link.textContent === "Child")!;
+  childLink.click();
+  expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(childKey);
+});

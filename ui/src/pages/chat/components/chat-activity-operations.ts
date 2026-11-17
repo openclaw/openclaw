@@ -27,7 +27,7 @@ export function isStandaloneActivity(card: ToolCard): boolean {
     name === "ask_user" ||
     name === "agents_wait" ||
     readSubagentCancellation(card) !== null ||
-    resolveSessionLaunchPresentation(card) !== null ||
+    resolveSessionLaunchPresentation(card)?.kind === "subagent" ||
     Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
   );
 }
