@@ -194,6 +194,9 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
+    /// Set for a drawer's reveal control: it stays mounted and dims while the drawer
+    /// is presented, so a toggle does not have to rebuild the destination to restyle it.
+    var drawerPresentation: RootSidebarPresentation?
     let action: () -> Void
 }
 
@@ -201,7 +204,12 @@ struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {
+        // The open drawer leaves this corner of the card on screen, so the control
+        // recedes instead of leaving a gap.
+        let isDimmed = self.action.drawerPresentation?.isPresented == true
         self.identified(self.button.buttonStyle(.plain))
+            .opacity(isDimmed ? 0.35 : 1)
+            .animation(.easeOut(duration: 0.2), value: isDimmed)
     }
 
     private var button: some View {
