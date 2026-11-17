@@ -329,20 +329,6 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
 
 let nextPreviewRevision = 0;
 
-function isToolCallContentBlock(item: {
-  type?: unknown;
-  name?: unknown;
-  arguments?: unknown;
-  args?: unknown;
-  input?: unknown;
-}): boolean {
-  return (
-    isToolCallContentType(item.type) ||
-    (typeof item.name === "string" &&
-      (item.arguments != null || item.args != null || item.input != null))
-  );
-}
-
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const catalogMetadata = asNullableRecord(m["__openclaw"]);
@@ -409,7 +395,10 @@ function extractToolCards(message: unknown): ToolCard[] {
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const isCall = isToolCallContentBlock(item);
+    const isCall =
+      isToolCallContentType(item.type) ||
+      (typeof item.name === "string" &&
+        (item.arguments != null || item.args != null || item.input != null));
     if (!isCall && !isToolResultContentType(item.type)) {
       continue;
     }
