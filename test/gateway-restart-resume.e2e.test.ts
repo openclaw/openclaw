@@ -98,7 +98,7 @@ async function providerFixture(signal: AbortSignal) {
     resumeInput: boolean;
     ordinal: number;
   }> = [];
-  const summaries: Array<{ cycle: number; ordinal: number }> = [];
+  const summaries: Array<{ cycle: number; name: Case; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   let finalizer: ServerResponse | undefined;
@@ -152,11 +152,14 @@ async function providerFixture(signal: AbortSignal) {
           };
           const tools = restartToolNames(body);
           if (JSON.stringify(body).includes("You are a context summarization assistant.")) {
-            const cycle = Number(/RESTART_CASE_(\d+)_compact/.exec(input)?.[1]);
+            const match = /RESTART_CASE_(\d+)_(\w+)/.exec(input);
+            const name = CASES.find((candidate) => candidate === match?.[2]);
+            assert(name, `Unexpected synthetic summary input: ${input}`);
+            const cycle = Number(match?.[1]);
             expect(Number.isFinite(cycle)).toBe(true);
-            summaries.push({ cycle, ordinal: requestOrdinal });
+            summaries.push({ cycle, name, ordinal: requestOrdinal });
             text(
-              `## Goal\nContinue ${marker(cycle, "compact")}.\n## Progress\nThe warmup finished. Check current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
+              `## Goal\nContinue ${marker(cycle, name)}.\n## Progress\nCheck current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
             );
             return;
           }
@@ -1347,7 +1350,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
           expect(children.sessions[0]?.hasActiveRun).toBe(false);
           expect(["queued", "running", "interrupted"]).not.toContain(children.sessions[0]?.status);
           if (cycle === 1) {
-            const summary = provider.summaries.find((request) => request.cycle === cycle);
+            const summary = provider.summaries.find(
+              (request) => request.cycle === cycle && request.name === "compact",
+            );
             const resume = provider.calls.find(
               (request) =>
                 request.cycle === cycle && request.name === "compact" && request.resumeInput,

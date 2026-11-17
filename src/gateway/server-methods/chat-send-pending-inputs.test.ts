@@ -474,13 +474,12 @@ describe("ordinary chat input admission", () => {
     const stage = pendingInputs.stageSessionPendingInput;
     // Keep production admission, its source authority, and SQLite real. Only fail
     // the next authority check after staging has returned its committed receipt.
-    using staging = vi
-      .spyOn(pendingInputs, "stageSessionPendingInput")
-      .mockImplementationOnce(async (...args) => {
-        receipt = await stage(...args);
-        unavailable = true;
-        return receipt;
-      });
+    using staging = vi.spyOn(pendingInputs, "stageSessionPendingInput");
+    staging.mockImplementationOnce(async (...args) => {
+      receipt = await stage(...args);
+      unavailable = true;
+      return receipt;
+    });
     const rejected = await fixture.send(vi.fn(), binding);
     expect(rejected).toHaveBeenCalledOnce();
     expect(rejected).toHaveBeenCalledWith(
@@ -510,9 +509,14 @@ describe("ordinary chat input admission", () => {
     expect(
       listLiveSessionPendingInputs(resolved.path, resolved.sessionKey, fixture.scope.sessionId),
     ).toEqual([]);
-    expect((await readSessionQueuedInputPage(fixture.scope)).rows).toMatchObject([
-      { input_id: receipt.inputId, state: "cancelled", end_cause: "failed" },
-    ]);
+    expect(
+      await sessionAccessor.readSessionSubmittedInput(
+        fixture.scope,
+        `${fixture.params.idempotencyKey}:user`,
+        { includeSource: true },
+      ),
+    ).toMatchObject({ source: "pending", state: "cancelled", endCause: "failed" });
+    expect((await readSessionQueuedInputPage(fixture.scope)).rows).toEqual([]);
     expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
 
     unavailable = false;
