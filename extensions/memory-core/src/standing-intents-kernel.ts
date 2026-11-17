@@ -12,12 +12,16 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   INTENT_INJECTION_MAX_COUNT,
+  decideLocationFire,
   needsLiteralIntentCandidates,
+  parseStoredLocationTrigger,
   parseStoredTriggerKeywords,
   readKnownCreatorSender,
   rowToIntent,
   standingIntentsFitContext,
   triggerKeywordMatchesPrompt,
+  type LocationFireInput,
+  type LocationFireResult,
   type StandingIntent,
   type StandingIntentMatchInput,
   type StandingIntentOperations,
@@ -329,4 +333,82 @@ export function matchStandingIntentsInDatabase(
     }
   }
   return fired;
+}
+
+export function fireLocationStandingIntentsInDatabase(
+  db: EngineConnection,
+  params: LocationFireInput,
+): LocationFireResult {
+  const nowMs = params.nowMs ?? Date.now();
+  invalidateStandingIntentLifecycle(db);
+  if (isPostgresSqlConnection(db)) {
+    // Location intents are v1 SQLite-agent storage; Postgres agents match on turns instead.
+    return { fired: [], evaluated: 0 };
+  }
+  const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  const candidates = executeSqliteQuerySync(
+    db,
+    kysely
+      .selectFrom("standing_intents")
+      .selectAll()
+      .where("status", "=", "armed")
+      .where("trigger_kind", "=", "location")
+      .where("expires_at", ">", nowMs)
+      .whereRef("fire_count", "<", "max_fires"),
+  ).rows;
+  const fired: StandingIntent[] = [];
+  let evaluated = 0;
+  for (const current of candidates) {
+    const trigger = parseStoredLocationTrigger(current.location_trigger);
+    if (!trigger || trigger.nodeId !== params.nodeId) {
+      continue;
+    }
+    evaluated += 1;
+    const decision = decideLocationFire({
+      trigger,
+      previousInside: current.last_inside,
+      lat: params.lat,
+      lon: params.lon,
+      accuracyMeters: params.accuracyMeters,
+    });
+    if (decision.inside === current.last_inside && !decision.shouldFire) {
+      // No state change; nothing to persist.
+      continue;
+    }
+    const firedState = decision.shouldFire
+      ? {
+          fire_count: current.fire_count + 1,
+          last_fired_at: nowMs,
+          status:
+            current.fire_count + 1 >= current.max_fires ? ("done" as const) : ("fired" as const),
+          last_inside: decision.inside,
+        }
+      : { last_inside: decision.inside };
+    // One conditional write per intent: concurrent duplicate fixes and
+    // retries see the committed state and cannot fire twice. One-shot rows
+    // move straight to done; a failed consumer wake never re-arms them.
+    const updated = executeSqliteQuerySync(
+      db,
+      (() => {
+        let query = kysely
+          .updateTable("standing_intents")
+          .set(firedState)
+          .where("id", "=", current.id)
+          .where("status", "=", "armed")
+          .whereRef("fire_count", "<", "max_fires");
+        if (current.last_inside !== null && decision.inside !== null) {
+          query = query.where("last_inside", "=", current.last_inside);
+        }
+        return query;
+      })(),
+    );
+    if ((updated.numAffectedRows ?? 0n) === 0n) {
+      continue;
+    }
+    invalidateStandingIntentLifecycle(db);
+    if (decision.shouldFire) {
+      fired.push(rowToIntent({ ...current, ...firedState }));
+    }
+  }
+  return { fired, evaluated };
 }

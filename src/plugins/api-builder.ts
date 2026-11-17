@@ -25,6 +25,7 @@ export const pluginApiDefaultHandlers = {
   registerSessionCatalog: () => {},
   registerReload: () => {},
   registerNodeHostCommand: () => {},
+  registerNodeEventConsumer: () => {},
   registerNodeInvokePolicy: () => {},
   registerSecurityAuditCollector: () => {},
   registerService: () => {},

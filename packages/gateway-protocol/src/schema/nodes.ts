@@ -33,6 +33,25 @@ export const NodePresenceAliveReasonSchema = Type.Enum(NODE_PRESENCE_ALIVE_REASO
   type: "string",
 });
 
+/** Sender-identified source label for a node-reported location fix. */
+export const NodeLocationSourceSchema = NonEmptyString;
+
+/**
+ * Location fix pushed by a node host, currently emitted by the iOS
+ * significant-location-change monitor. Coordinates are untrusted client
+ * data: the gateway validates bounds but never logs or persists the raw
+ * payload. The envelope carries no GPS-fix acquisition timestamp; receive
+ * time is the only freshness signal available to consumers.
+ */
+export const NodeLocationUpdatePayloadSchema = closedObject({
+  lat: Type.Number({ minimum: -90, maximum: 90 }),
+  lon: Type.Number({ minimum: -180, maximum: 180 }),
+  accuracyMeters: Type.Number({ minimum: 0 }),
+  source: NodeLocationSourceSchema,
+});
+
+export type NodeLocationUpdatePayload = Static<typeof NodeLocationUpdatePayloadSchema>;
+
 /** Presence heartbeat payload sent by remote nodes to refresh gateway state. */
 export const NodePresenceAlivePayloadSchema = closedObject({
   trigger: NodePresenceAliveReasonSchema,

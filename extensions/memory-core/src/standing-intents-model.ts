@@ -6,11 +6,28 @@ export const INTENT_INJECTION_MAX_CHARS = 1_200;
 
 export type StandingIntentStatus = "pending" | "armed" | "fired" | "done" | "cancelled" | "expired";
 
+/** Structured location condition for a location-triggered standing intent. */
+export type StandingIntentLocationTrigger = {
+  /** Exact paired-node id whose location updates are evaluated. */
+  nodeId: string;
+  /** `enter` fires when the node first moves inside; `exit` when it leaves. */
+  direction: "enter" | "exit";
+  centerLat: number;
+  centerLon: number;
+  radiusMeters: number;
+};
+
+export type StandingIntentTrigger =
+  | { kind: "keywords" }
+  | { kind: "location"; location: StandingIntentLocationTrigger };
+
 export type StandingIntent = {
   id: string;
   description: string;
   triggerKeywords: string[];
   triggerEmbedding: string | null;
+  trigger: StandingIntentTrigger;
+  deliveryTarget: string | null;
   scope: IntentScope;
   channelScope: string | null;
   senderScope: string | null;
@@ -30,6 +47,10 @@ export type StandingIntentRow = {
   description: string;
   trigger_keywords: string;
   trigger_embedding: string | null;
+  trigger_kind: "keywords" | "location" | null;
+  location_trigger: string | null;
+  delivery_target: string | null;
+  last_inside: number | null;
   channel_scope: string | null;
   sender_scope: string | null;
   creator_sender: string | null;
@@ -137,13 +158,136 @@ function parseStoredChannelScope(value: string | null): {
   return { scope: "anywhere", identity: null };
 }
 
+export function parseStoredLocationTrigger(
+  value: string | null,
+): StandingIntentLocationTrigger | null {
+  if (value === null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as Record<string, unknown>).nodeId === "string" &&
+      ((parsed as Record<string, unknown>).nodeId as string).trim() &&
+      ((parsed as Record<string, unknown>).direction === "enter" ||
+        (parsed as Record<string, unknown>).direction === "exit") &&
+      typeof (parsed as Record<string, unknown>).centerLat === "number" &&
+      Number.isFinite((parsed as Record<string, unknown>).centerLat) &&
+      typeof (parsed as Record<string, unknown>).centerLon === "number" &&
+      Number.isFinite((parsed as Record<string, unknown>).centerLon) &&
+      typeof (parsed as Record<string, unknown>).radiusMeters === "number" &&
+      Number.isFinite((parsed as Record<string, unknown>).radiusMeters) &&
+      ((parsed as Record<string, unknown>).radiusMeters as number) > 0
+    ) {
+      return {
+        nodeId: ((parsed as Record<string, unknown>).nodeId as string).trim(),
+        direction: (parsed as Record<string, unknown>).direction as "enter" | "exit",
+        centerLat: (parsed as Record<string, unknown>).centerLat as number,
+        centerLon: (parsed as Record<string, unknown>).centerLon as number,
+        radiusMeters: (parsed as Record<string, unknown>).radiusMeters as number,
+      };
+    }
+  } catch {}
+  return null;
+}
+
+export function encodeStoredLocationTrigger(trigger: StandingIntentLocationTrigger): string {
+  return JSON.stringify({
+    v: 1,
+    nodeId: trigger.nodeId,
+    direction: trigger.direction,
+    centerLat: trigger.centerLat,
+    centerLon: trigger.centerLon,
+    radiusMeters: trigger.radiusMeters,
+  });
+}
+
+/** Great-circle distance in meters between two WGS84 points. */
+export function haversineMeters(
+  a: { lat: number; lon: number },
+  b: { lat: number; lon: number },
+): number {
+  const radius = 6_371_000;
+  const phi1 = (a.lat * Math.PI) / 180;
+  const phi2 = (b.lat * Math.PI) / 180;
+  const dPhi = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLambda = ((b.lon - a.lon) * Math.PI) / 180;
+  const h = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  return 2 * radius * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+export type LocationFireDecision = {
+  /** Observed inside-state after this fix (null stays the previous value when ambiguous). */
+  inside: 0 | 1 | null;
+  /** True only on a definite enter/exit transition against the previous state. */
+  shouldFire: boolean;
+};
+
+/**
+ * Deterministic fence decision for one fix. The accuracy circle must
+ * resolve the boundary unambiguously: `distance + accuracy` fully inside or
+ * `distance - accuracy` fully outside; ambiguous fixes hold the previous
+ * state. The first fix only establishes the baseline — a transition is
+ * required before any fire, so arming inside (or outside) an exit (or
+ * enter) fence cannot fire on its own before a real crossing.
+ */
+export function decideLocationFire(params: {
+  trigger: StandingIntentLocationTrigger;
+  previousInside: number | null;
+  lat: number;
+  lon: number;
+  accuracyMeters: number;
+}): LocationFireDecision {
+  const distance = haversineMeters(
+    { lat: params.trigger.centerLat, lon: params.trigger.centerLon },
+    { lat: params.lat, lon: params.lon },
+  );
+  const definitelyInside = distance + params.accuracyMeters <= params.trigger.radiusMeters;
+  const definitelyOutside = distance - params.accuracyMeters >= params.trigger.radiusMeters;
+  const previous = params.previousInside === 1 ? 1 : params.previousInside === 0 ? 0 : null;
+  if (definitelyInside) {
+    // Direction-gated crossings: an enter fence fires on the 0→1 transition
+    // — including the first inside fix when armed from afar (previousInside =
+    // null), since an arrival fence exists to notify on arrival. An exit
+    // fence NEVER fires on an inside fix: an arrival after an outside
+    // baseline (previous = 0) only establishes the inside baseline that a
+    // later real exit fires on. Without this gate an exit fence armed from
+    // outside fires "leaving" on the user's arrival (verified live
+    // 2026-11-16: two "left home" notifications fired while arriving home).
+    return {
+      inside: 1,
+      shouldFire: params.trigger.direction === "enter" && (previous === 0 || previous === null),
+    };
+  }
+  if (definitelyOutside) {
+    // Mirror of the inside gate: only an exit fence fires on the 1→0
+    // transition. An enter fence baselined inside never fires on leaving —
+    // "notify on arrival" does not mean "notify when I go away again"
+    // (verified live 2026-11-13: a Göteborg arrival fence fired at 06:33 on
+    // the user's morning departure).
+    return {
+      inside: 0,
+      shouldFire: params.trigger.direction === "exit" && previous === 1,
+    };
+  }
+  return { inside: previous, shouldFire: false };
+}
+
 export function rowToIntent(row: StandingIntentRow): StandingIntent {
   const channelScope = parseStoredChannelScope(row.channel_scope);
+  const locationTrigger =
+    row.trigger_kind === "location" ? parseStoredLocationTrigger(row.location_trigger) : null;
   return {
     id: row.id,
     description: row.description,
     triggerKeywords: parseStoredTriggerKeywords(row.trigger_keywords),
     triggerEmbedding: row.trigger_embedding,
+    trigger: locationTrigger
+      ? { kind: "location", location: locationTrigger }
+      : { kind: "keywords" },
+    deliveryTarget: row.delivery_target,
     scope: channelScope.scope,
     channelScope: channelScope.identity,
     senderScope: parseStoredScope(row.sender_scope, 4)?.[3] ?? null,
@@ -262,6 +406,25 @@ export type StandingIntentOperations = {
   sweep: { input: { nowMs?: number }; output: void };
   cancel: { input: { id: string }; output: StandingIntent | null };
   match: { input: StandingIntentMatchInput; output: StandingIntent[] };
+  locationFire: {
+    input: LocationFireInput;
+    output: LocationFireResult;
+  };
+};
+
+/** Validated location fix evaluated against armed location intents. */
+export type LocationFireInput = {
+  nodeId: string;
+  lat: number;
+  lon: number;
+  accuracyMeters: number;
+  nowMs?: number;
+};
+
+export type LocationFireResult = {
+  fired: StandingIntent[];
+  /** Armed location intents evaluated for this fix (matches before any state change). */
+  evaluated: number;
 };
 
 export type StandingIntentWorkerOperations = {

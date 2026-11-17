@@ -78,6 +78,11 @@ export type {
   OpenClawPluginNodeHostCommandIo,
 } from "./types.node-host.js";
 export type {
+  OpenClawPluginNodeEventConsumer,
+  OpenClawPluginNodeEventConsumerParams,
+  OpenClawPluginNodeEventSubscription,
+} from "./types.node-events.js";
+export type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
