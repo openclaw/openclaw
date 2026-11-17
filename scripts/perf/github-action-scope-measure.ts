@@ -37,6 +37,11 @@ const { values } = parseArgs({
     "large-fixture": { type: "string" },
     "team-fixture": { type: "string" },
     "compare-role-selection": { type: "boolean" },
+    "actions-only": { type: "boolean" },
+    "compare-runtime-config": { type: "boolean" },
+    "body-bytes": { type: "string", default: "0" },
+    "edit-body": { type: "boolean" },
+    "assignment-miss": { type: "boolean" },
     sessions: { type: "string", default: "2000" },
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
@@ -215,6 +220,20 @@ const counters: [string, string, string][] = [
   [query, "): LatestSubagentRunReadIndex<T> {", "runs.index"],
   ["src/gateway/operator-role-policy.ts", "Object.keys(assignments)", "role.enumerations"],
 ];
+const immutableConsumers = [
+  "src/agents/agent-roster.ts",
+  "src/agents/prepared-model-catalog-fingerprints.ts",
+  "src/agents/model-runtime-policy.ts",
+  "src/agents/operator-model-policy.ts",
+  "src/plugins/config-state.ts",
+  "src/plugins/runtime/load-context.ts",
+  "src/plugins/activation-context.ts",
+  "src/config/runtime-config-snapshot-match.ts",
+  "src/config/runtime-snapshot-value-fact.ts",
+  "src/config/sessions/combined-store-paths.ts",
+  "src/secrets/provider-env-vars.ts",
+  "src/gateway/session-store-key.ts",
+];
 const rewritten = new Set(variants.map(([relative]) => relative).concat(query));
 for (const [relative] of counters) {
   if (!rewritten.has(relative)) {
@@ -240,6 +259,49 @@ if (values.counts) {
               : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
       ),
     );
+  }
+}
+
+if (values["compare-runtime-config"]) {
+  for (const relative of immutableConsumers) {
+    let source = readSource(relative);
+    if (values.counts) {
+      source = source.replace(
+        "isDeeplyFrozenPlainData",
+        "isDeeplyFrozenPlainData as inspectFrozenData",
+      );
+      assert(source.includes("as inspectFrozenData"), relative);
+      source += `\nfunction isDeeplyFrozenPlainData(value: unknown): boolean {
+        const frozen = inspectFrozenData(value);
+        ${key}?.count?.(${JSON.stringify(relative + ":frozen=")} + frozen);
+        return frozen;
+      }\n`;
+      if (
+        [
+          "src/config/runtime-snapshot-value-fact.ts",
+          "src/plugins/runtime/load-context.ts",
+          "src/agents/prepared-model-catalog-fingerprints.ts",
+        ].includes(relative)
+      ) {
+        source = source.replace(
+          "  if (cached !== undefined) {",
+          `  if (cached !== undefined) {\n    ${key}?.count?.(${JSON.stringify(relative + ":cache-hit")});`,
+        );
+      }
+      if (relative.endsWith("/runtime-config-snapshot-match.ts")) {
+        source = source.replace(
+          "  if (text === undefined) {",
+          `  ${key}?.count?.(${JSON.stringify(relative + ":cache-")} + (text === undefined ? "miss" : "hit"));\n  if (text === undefined) {`,
+        );
+      }
+      if (relative.endsWith("/agent-roster.ts")) {
+        source = source.replace(
+          "  return cached.facts;",
+          `  ${key}?.count?.(publication ? "roster.publication" : "roster.frozen");\n  return cached.facts;`,
+        );
+      }
+    }
+    fs.writeFileSync(path.join(capsule, relative), source);
   }
 }
 
@@ -272,9 +334,36 @@ if (values["large-fixture"]) {
   );
 }
 
+if (values["compare-runtime-config"]) {
+  assert(values.lineage && values["compare-role-selection"] && values["actions-only"]);
+  const relative = "src/secrets/runtime-state.ts";
+  const candidate = fs.readFileSync(path.join(root, relative), "utf8");
+  const baseline = execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  hashes[relative] = { baseline: hash(baseline), candidate: hash(candidate) };
+  assert(candidate.includes("  freezeJsonSnapshot(next.config);"));
+  fs.writeFileSync(
+    path.join(capsule, relative),
+    candidate.replace(
+      "  freezeJsonSnapshot(next.config);",
+      `  if (${key}?.arm === "candidate") freezeJsonSnapshot(next.config);`,
+    ),
+  );
+  const support = "src/gateway/github-publication-requester.test-support.ts";
+  fs.writeFileSync(
+    path.join(capsule, support),
+    readSource(support).replaceAll(
+      "  setRuntimeConfigSnapshot(config);",
+      `  setRuntimeConfigSnapshot(config);\n  ${key}?.activate?.(config);`,
+    ),
+  );
+}
+
 const fixtureTest = `// oxfmt-ignore
 import { createPublicationActionFixture, publicationCheckpoint } from "./github-publication-actions.test-support.js";
-import { it, expect } from "vitest";
+import { it, expect, vi } from "vitest";
 import fs from "node:fs/promises";
 import { loadavg } from "node:os";
 import { Session } from "node:inspector/promises";
@@ -286,18 +375,42 @@ import { installGitHubPublicationTestHarness } from "./github-publication.test-s
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { readRuntimeConfig, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import { configSnapshotsMatch } from "../config/runtime-config-snapshot-match.js";
+import { activationConfigFingerprint } from "../plugins/runtime/load-context.js";
+import { readAgentRosterFacts } from "../agents/agent-roster.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision, getRuntimeAuthProfileStoreSnapshotsRevision, listOwnedRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSystemAgentRunAdmission, resolveAdmittedRunActiveAssertion, bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import { SESSION_KEY } from "./github-publication.test-support.js";
+import { SESSION_KEY, githubPublicationTestMocks, commandResult } from "./github-publication.test-support.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 installGitHubPublicationTestHarness({creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true});
 it("measures actions at the registered boundary with a large authority inventory", async () => {
  const publication=process.env.LANE2450_PUBLICATION==="1";
  const lineage=process.env.LANE2458_LINEAGE==="1";
+ const state = {arm:"baseline",count:undefined,currency:undefined,activate:undefined};
+ globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
+ const secrets = ${Boolean(values["compare-runtime-config"])} ? await vi.importActual<typeof import("../secrets/runtime-state.js")>("../secrets/runtime-state.js") : undefined;
+ if(secrets) {
+  state.activate = (config) => secrets.activateSecretsRuntimeSnapshotState({snapshot:{config,sourceConfig:config,
+   authStores:listOwnedRuntimeAuthProfileStoreSnapshots(),authStoreCredentialsRevision:getRuntimeAuthProfileStoreCredentialsRevision(),authStoreSnapshotsRevision:getRuntimeAuthProfileStoreSnapshotsRevision(),
+   warnings:[],webTools:{search:{providerSource:"none",diagnostics:[]},fetch:{providerSource:"none",diagnostics:[]},diagnostics:[]}},refreshContext:null,refreshHandler:null});
+  githubPublicationTestMocks().getConfigSnapshot.mockImplementation(secrets.getActiveSecretsRuntimeConfigSnapshot);
+ }
  const f = publication ? await createRequesterPublicationFixture(publicationCheckpoint,"local") : await createPublicationActionFixture();
+ if (${Number(values["body-bytes"])} > 0) {
+  f.state.body = "Synthetic publication evidence and implementation notes.\\n".repeat(Math.ceil(${Number(values["body-bytes"])}/55)).slice(0,${Number(values["body-bytes"])}) + f.state.body;
+  const transport=githubPublicationTestMocks().runCommand;
+  const original=transport.getMockImplementation();
+  transport.mockImplementation(async (...args)=>{
+   const result=await original(...args);
+   return args[0].includes("PATCH") && result.code===0 ? commandResult(JSON.stringify(f.state)) : result;
+  });
+ }
  ${values["large-fixture"] ? `if(process.platform==="darwin") (await import("node:child_process")).execFileSync("cp",["-cR",${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture"]); else await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
  await syncCanonicalGitHubIdentity({identity:{accountId:101,login:"contributor"},authenticationAlias:{kind:"email",email:"publication-guest@example.test"}});
  const sessions=Number(process.env.LANE2450_SESSIONS ?? 2000);
@@ -308,20 +421,31 @@ it("measures actions at the registered boundary with a large authority inventory
  await using visitors = await startVisitorPublicationFixture(f);
  const current=currentGitHubPublicationConfig();
  const team=${values["team-fixture"] ? `JSON.parse(await fs.readFile(${JSON.stringify(path.join(path.resolve(values["team-fixture"]), "openclaw.json"))},"utf8"))` : "undefined"};
- const config={...current,agents:{...current.agents,entries:{...team?.agents?.entries,...current.agents?.entries},defaults:{...team?.agents?.defaults,...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
+ let config={...current,agents:{...current.agents,entries:{...team?.agents?.entries,...current.agents?.entries},defaults:{...team?.agents?.defaults,...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),[${JSON.stringify(values["assignment-miss"] ? "unrelated-contributor" : "contributor")},"guest"]])}}}};
  setRuntimeConfigSnapshot(config);
+ state.activate?.(config);
+ config=readRuntimeConfig();
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
  const cpuProfile=process.env.LANE2458_CPU_PROFILE==="1";
  const heap=process.env.LANE2450_ALLOC==="1" || cpuProfile ? new Session():undefined;heap?.connect();
  if(cpuProfile)await heap.post("Profiler.enable");
- const state = {arm:"baseline",count:undefined,currency:undefined};
  const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
  const compare=${Boolean(values["compare-role-selection"])} || !lineage;
  const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})) : [])];
  let i=0;
  for(const depth of lineage ? ${JSON.stringify(values.depths.split(",").map(Number))} : [0]) {
+ for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) {
+ state.arm=arm;
+ if(state.activate){state.activate({...config,ui:{...config.ui,seamColor:"#"+(depth*100+pair*2+slot).toString(16).padStart(6,"0")}});config=readRuntimeConfig();expect(isDeeplyFrozenPlainData(config)).toBe(arm==="candidate");prepareGatewayConnectOperatorAccess(f.guestSource.client);}
+ const consumerCounts={};
+ if(${Boolean(values["compare-runtime-config"])}) {
+  if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>consumerCounts[key]=(consumerCounts[key]??0)+1;
+  const equivalent=structuredClone(config);
+  for(let read=0;read<10;read++){readAgentRosterFacts(config);hashRuntimeConfigValue(config);activationConfigFingerprint(config);expect(configSnapshotsMatch(config,equivalent)).toBe(true);}
+  state.count=undefined;
+ }
  const releases=[];
  let parent;
  let principal;
@@ -340,10 +464,10 @@ it("measures actions at the registered boundary with a large authority inventory
  }
  const model=lineage ? bindOperatorModelExecution(principal.authority,{provider:"fixture",model:"model"}):undefined;
  if(model)releases.push(model.release);
- const invocation=lineage ? {client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
+ const invocation=lineage ? {raw:${Boolean(values["actions-only"])},client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
  try {
  if(cpuProfile)await heap.post("Profiler.start");
- for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) for(const action of publication ? ["publish"] : lineage ? ["assert", "model", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
+ for(const action of publication ? ["publish"] : ${Boolean(values["actions-only"])} ? ["edit_read","edit"] : lineage ? ["assert", "model", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
   // Expire the synthetic request window outside measurement; normal RPC admission still runs.
   pruneStaleControlPlaneBuckets(Date.now()+360000);
   i++;state.arm=arm;
@@ -365,13 +489,13 @@ it("measures actions at the registered boundary with a large authority inventory
   for(let iteration=0;iteration<iterations;iteration++){
   currencySteps.clear();
   const callStarted=performance.now();
-  result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
+  result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?(${Boolean(values["edit-body"])}?{body:String(i).padStart(8,"0")+f.state.body.slice(8),expectedBody:f.state.body}:{title:\`Fixture \${i}\`,expectedTitle:f.state.title}):{})},SESSION_KEY,invocation);
   if(synchronous)maxSegment=Math.max(maxSegment,performance.now()-callStarted);
   }
   const wallMs=performance.now()-started;const usage=process.threadCpuUsage(cpu);
   if(timer){maxSegment=Math.max(maxSegment,performance.now()-last);clearInterval(timer);}
   let allocatedBytes;
-  if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
+  if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);await fs.writeFile(process.env.LANE2450_OUTPUT!+".allocation-"+i+".json",JSON.stringify(profile));}
   state.count=undefined;
   state.currency=undefined;
   if(synchronous)expect(result).toBeUndefined();
@@ -379,12 +503,13 @@ it("measures actions at the registered boundary with a large authority inventory
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
   else expect(result.details).toHaveProperty("headCommit",f.publication.headCommit);
   for(const name of Object.keys(counts))counts[name]/=iterations;
-  const row={i,pair,slot,depth,iterations,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
+  const row={i,pair,slot,depth,iterations,consumerCounts,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
  }
- if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".cpuprofile",JSON.stringify(profile));}
+ if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".pair"+pair+".slot"+slot+".cpuprofile",JSON.stringify(profile));}
  } finally {for(const release of releases.toReversed())release();}
  }
- heap?.disconnect();censusHook?.disable();subagentRuns.clear();
+ }
+ heap?.disconnect();censusHook?.disable();subagentRuns.clear();secrets?.clearSecretsRuntimeSnapshotState();
  delete globalThis[Symbol.for("openclaw.benchmark.githubActionScope")];
  await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,agents:Object.keys(config.agents.entries).length,rows},null,2));
 },600000);
@@ -407,8 +532,13 @@ fs.writeFileSync(
       largeFixture: values["large-fixture"],
       teamFixture: values["team-fixture"],
       compareRoleSelection: Boolean(values["compare-role-selection"]),
+      actionsOnly: Boolean(values["actions-only"]),
+      compareRuntimeConfig: Boolean(values["compare-runtime-config"]),
+      bodyBytes: Number(values["body-bytes"]),
+      editBody: Boolean(values["edit-body"]),
+      assignmentMiss: Boolean(values["assignment-miss"]),
       acceptance: values["compare-role-selection"]
-        ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero on exact hits; authority assertions remain unchanged."
+        ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero after immutable-index preparation, including misses; authority assertions remain unchanged."
         : values.lineage
           ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
           : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
