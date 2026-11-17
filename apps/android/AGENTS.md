@@ -1,5 +1,7 @@
 # Android app
 
+Visual PR evidence: follow the shared [PR visual-proof standard](../../.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof); it does not apply to Google Play/store-release screenshots.
+
 ## Google Play Releases
 
 - Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The **Android Store Release** GitHub Action calls this owner to plan, generate notes, and upload the selected clean source commit without preparation commits or finalization PRs. Its default `release` operation and Monday 11:00 AM Pacific schedule stage the store listing; `internal` and daily 7:00 AM Pacific runs use `--destination internal`, skip screenshots and listing updates, and publish to `internal` and `wear:internal` before distributing the same signed AABs through Firebase App Distribution (Wear first, then Phone).

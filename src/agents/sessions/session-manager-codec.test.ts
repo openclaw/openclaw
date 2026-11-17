@@ -12,6 +12,7 @@ import {
   isIndexedSessionEntry,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
+  prepareSessionManagerEntries,
 } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
@@ -44,6 +45,42 @@ it("shares checkpoint prefixes and releases prepared transcript history", async 
 });
 
 describe("session manager codec compatibility", () => {
+  it.each([true, false])(
+    "probes a frozen history root once, not once per entry (owner-sealed=%s)",
+    (owned) => {
+      const events = [
+        sessionHeader("frozen-root"),
+        ...Array.from({ length: 64 }, (_, index) =>
+          messageEntry(
+            userMessage(`turn ${index}`),
+            `entry-${index}`,
+            index === 0 ? null : `entry-${index - 1}`,
+          ),
+        ),
+        { type: "foreign-row", payload: { kept: true } },
+      ];
+      const snapshot = {
+        events,
+        version: { generation: "frozen-root", rawSeq: events.length, updatedAt: 1 },
+      };
+      if (owned) {
+        freezeTranscriptSnapshot(snapshot);
+      } else {
+        Object.freeze(snapshot.events);
+      }
+      const probe = vi.spyOn(Object, "isFrozen");
+      try {
+        const prepared = prepareSessionManagerEntries(snapshot.events);
+        expect(prepared.fileEntries).toHaveLength(65);
+        // Bun's JavaScriptCore scans every index per call: a per-entry probe of a
+        // 36K-event root blocked the Gateway's main thread for about five minutes.
+        expect(probe.mock.calls.filter(([value]) => value === snapshot.events)).toHaveLength(1);
+      } finally {
+        probe.mockRestore();
+      }
+    },
+  );
+
   it.each([true, false])("loads history after freezer memo rotation (owner-sealed=%s)", (owned) => {
     const entry = messageEntry(makeToolResult("retained"));
     const snapshot = {

@@ -3,18 +3,193 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "./openclaw-schema-versions.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
 import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("startup reader replacement", () => {
+  it("reopens shared-state workers after the copy-and-swap upgrade", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-readers-"));
+    dirs.push(stateDir);
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    {
+      using state = new DatabaseSync(statePath);
+      state.exec("PRAGMA journal_mode = WAL");
+      state.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+    }
+    // The upgrade's file-only lock itself inspects the old database through a read worker.
+    const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    try {
+      await expect(
+        upgradeStateDirectory({
+          env,
+          log: { info() {}, warn() {} },
+          runChain: async ({ stateDir: shadow }) => {
+            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+            state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+            state.exec(
+              `INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1)`,
+            );
+            return { warnings: [] };
+          },
+          admitConfig: async ({ stateDir: shadow }) => {
+            await executeExistingOpenClawStateRead(
+              { env: { ...env, OPENCLAW_STATE_DIR: shadow } },
+              { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
+            );
+            return undefined;
+          },
+          beforeSwap: async () => {
+            await closeOpenClawStateDatabaseByPathAsync(statePath);
+          },
+        }),
+      ).resolves.toMatchObject({ status: "upgraded", mode: "chain" });
+    } finally {
+      await lock?.release();
+    }
+    // Startup's first writer switches the renamed rollback-journal database back to WAL.
+    using state = new DatabaseSync(statePath);
+    state.exec(`PRAGMA journal_mode = WAL;
+      UPDATE config_machine_state SET value_json = '"allowlist"'
+      WHERE state_key = 'plugins.bundledDiscovery'`);
+    await expect(
+      executeExistingOpenClawStateRead(
+        { env },
+        { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
+      ),
+    ).resolves.toMatchObject({
+      type: "plugins.metadata.read",
+      rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
+    });
+    expect(isStateUpgradePending(env)).toBe(false);
+  });
+});
+
+describe("startup retained deletion", () => {
+  it.each([
+    { cleanupCompleted: true, upgradeShared: false },
+    { cleanupCompleted: true, upgradeShared: true },
+    { cleanupCompleted: false, upgradeShared: false },
+  ])(
+    "preserves deletion ownership ($cleanupCompleted, shared upgrade=$upgradeShared)",
+    async ({ cleanupCompleted, upgradeShared }) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-retained-"));
+      dirs.push(stateDir);
+      const env = {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+      const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const retainedDir = path.join(stateDir, "agents", "retired", "agent");
+      const retainedPath = path.join(retainedDir, "openclaw-agent.sqlite");
+      const activePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      for (const file of [statePath, retainedPath, activePath]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+      }
+      {
+        using state = new DatabaseSync(statePath);
+        state.exec(OPENCLAW_STATE_SCHEMA_SQL);
+        // Only the shared version stamp is behind in the copy-scope control.
+        state.exec(
+          `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - Number(upgradeShared)}`,
+        );
+        state
+          .prepare(`INSERT INTO agent_deletion_journal
+        (agent_id, operation_id, phase, agent_dir, workspace_dir, sessions_dir,
+         database_paths_json, created_at, cleanup_completed, delete_files)
+        VALUES ('retired', 'delete-retired', 'retiring', ?, ?, ?, ?, 1, ?, 0)`)
+          .run(
+            retainedDir,
+            path.join(stateDir, "workspace-retired"),
+            path.join(stateDir, "agents", "retired", "sessions"),
+            JSON.stringify([retainedPath]),
+            Number(cleanupCompleted),
+          );
+      }
+      {
+        using active = new DatabaseSync(activePath);
+        active.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+      }
+      {
+        using retained = new DatabaseSync(retainedPath, { allowExtension: true });
+        retained.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        retained.exec(`PRAGMA user_version = 26;
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 26, 'retired', '2026.9.9', 1, 1);
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:retired:main', 'archived-session', '{"sessionId":"archived-session"}', 1);`);
+        loadSqliteVec(retained);
+        retained.exec(`CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(embedding float[3]);
+        INSERT INTO memory_index_chunks_vec(rowid, embedding) VALUES (1, '[1, 0, 0]');`);
+      }
+      const bytes = fs.readFileSync(retainedPath);
+      const activeBytes = fs.readFileSync(activePath);
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const upgrade = upgradeStateDirectory({
+        env,
+        log,
+        runChain: async ({ stateDir: shadow }) => {
+          if (upgradeShared) {
+            expect(fs.existsSync(path.join(shadow, "agents", "retired"))).toBe(false);
+            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+            state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+          }
+          // Doctor leaves deleted agents to the deletion owner, including their old schemas.
+          return { warnings: [] };
+        },
+      });
+      if (cleanupCompleted) {
+        await expect(upgrade).resolves.toMatchObject(
+          upgradeShared ? { status: "upgraded", mode: "chain" } : { status: "current" },
+        );
+        expect(isStateUpgradePending(env)).toBe(false);
+      } else {
+        await expect(upgrade).rejects.toThrow("no such module: vec0");
+        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("failed at agent-schema"));
+        expect(isStateUpgradePending(env)).toBe(true);
+      }
+      expect(fs.readFileSync(retainedPath)).toEqual(bytes);
+      expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
+      expect(fs.readFileSync(activePath)).toEqual(activeBytes);
+    },
+  );
 });
 
 describe("upgradeStateDirectory version zero", () => {
@@ -106,6 +281,32 @@ describe("upgradeStateDirectory external config", () => {
     } finally {
       renames.mockRestore();
     }
+  });
+});
+
+describe("upgradeStateDirectory code roots", () => {
+  it("leaves Git release installations out of the private copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-code-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    const corpus = fileURLToPath(
+      new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
+    );
+    fs.cpSync(corpus, stateDir, { recursive: true });
+    const release = path.join(stateDir, "git-install", "releases", "r1", "package.json");
+    fs.mkdirSync(path.dirname(release), { recursive: true });
+    fs.writeFileSync(release, "{}");
+    const copied: boolean[] = [];
+    await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      log: { info: () => {}, warn: () => {} },
+      runChain: async (chain) => {
+        copied.push(fs.existsSync(path.join(chain.stateDir, "git-install")));
+        throw new ChainStepError("injected", "stop after the copy");
+      },
+    });
+    expect(copied).toEqual([false]);
+    expect(fs.readFileSync(release, "utf8")).toBe("{}");
   });
 });
 
@@ -265,6 +466,8 @@ describe("startup copy ownership", () => {
       "openclaw.sqlite.pre-1",
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-release-blue",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",
@@ -272,13 +475,16 @@ describe("startup copy ownership", () => {
       fs.writeFileSync(path.join(root, name), "kept");
     }
     const reads = vi.spyOn(fs, "readdirSync");
-    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned]))).toEqual([
+    // A custom build ID names a generation as well as a version does.
+    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned])).toSorted()).toEqual([
       "openclaw.sqlite.pre-1",
+      "openclaw.sqlite.pre-release-blue",
     ]);
     expect(reads.mock.calls.map(([file]) => file)).toEqual([root]);
     for (const name of [
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",

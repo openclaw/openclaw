@@ -1,4 +1,4 @@
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";

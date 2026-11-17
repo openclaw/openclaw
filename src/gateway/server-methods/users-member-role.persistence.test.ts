@@ -2,12 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
-import { readUserProfileSnapshot } from "../../state/user-profile-list.js";
+import {
+  prepareUserProfileCatalog,
+  readUserProfileSnapshot,
+} from "../../state/user-profile-list.js";
 import * as profileWrites from "../../state/user-profile-writes.js";
 import { readStoredClaw, writeStoredClaw } from "../openclaw-id/claw-store.js";
 import { createOpenClawIdConnectionAccess } from "../openclaw-id/connection-identity.js";
 import { linkedClaw, serviceFor, TEST_K_SRV } from "../openclaw-id/openclaw-id.test-support.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
   createContext,
@@ -157,6 +165,64 @@ it("allows current nonmember role writes and clearing a member's stored profile 
       expect(persisted.role ?? null).toBe(role);
     }
   } finally {
+    await service.stop();
+  }
+});
+
+it("uses member administrator authority without changing named-role callers", async ({ state }) => {
+  state.applyEnv();
+  const { member, other, service, context } = await memberFixture();
+  const config = context.getRuntimeConfig();
+  config.gateway!.roles!.definitions.admin = {
+    scopes: ["operator.admin"],
+    agents: "*",
+    sessions: { others: "write" },
+  };
+  context.getRuntimeConfig = () => config;
+  setRuntimeConfigSnapshot(config);
+  const principal = {
+    kind: "member" as const,
+    peerKey: `iroh:${"ab".repeat(32)}`,
+    accountId: "acct-member",
+    role: "admin",
+  };
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  const namedAdmin = await profileWrites.ensureCanonicalUserProfileForEmail("admin@example.test");
+  await profileWrites.setCanonicalUserProfileRole(namedAdmin.id, "admin");
+  const catalog = await prepareUserProfileCatalog();
+  try {
+    for (const [profileId, membership, allowed] of [
+      [member.id, "admin", true],
+      [member.id, "reader", false],
+      [namedAdmin.id, null, true],
+      [member.id, null, false],
+      [GATEWAY_OWNER_PROFILE_ID, null, true],
+    ] as const) {
+      principal.role = membership ?? "admin";
+      const client = createOperatorClient({ profileId, scopes: ["operator.admin"] });
+      if (membership) {
+        client.internal = { openclawIdPrincipal: principal };
+      }
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "member-admin",
+          method: "users.setRole",
+          params: { profileId: other.id, role: "reader" },
+        },
+        context,
+        respond,
+        client,
+        isWebchatConnect: () => false,
+        extraHandlers: usersHandlers,
+      });
+      expect(respond.mock.calls[0]?.[0], `${profileId}:${membership}`).toBe(allowed);
+    }
+  } finally {
+    catalog.release();
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    clearRuntimeConfigSnapshot();
     await service.stop();
   }
 });

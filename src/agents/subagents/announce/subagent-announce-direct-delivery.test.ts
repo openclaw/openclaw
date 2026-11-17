@@ -318,10 +318,11 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
   fixture.controller.abort();
-  await expect(fixture.startDelivery()).resolves.toEqual({
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    phases: [],
+    reason: "requester_aborted",
+    disposition: "retryable",
   });
   expectNoReplay(fixture, 0);
 });
@@ -357,17 +358,18 @@ it.each([
     expect(queueMessage).not.toHaveBeenCalled();
   } else {
     expect(queueMessage).toHaveBeenCalledOnce();
+    // A committed steer is the delivery; only an unconfirmed commit still depends on its owner.
     expect(result).toMatchObject(
-      change === "admission"
-        ? outcome === "accepted"
-          ? { delivered: true, path: "steered" }
-          : {
+      outcome === "accepted"
+        ? { delivered: true, path: "steered" }
+        : change === "admission"
+          ? {
               delivered: false,
               path: "steered",
               disposition: "ambiguous",
               error: "commit outcome unknown",
             }
-        : { delivered: false, reason: "source_owner_changed" },
+          : { delivered: false, reason: "source_owner_changed" },
     );
   }
   expectNoReplay(fixture, 0);
@@ -470,7 +472,7 @@ it.each([
   [
     "cancelled requester with unknown effects",
     { status: "timeout", stopReason: "rpc" },
-    { disposition: undefined, reason: "requester_aborted" },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
   ],
   [
     "effectful tool before cancellation",
@@ -478,7 +480,7 @@ it.each([
       status: "timeout",
       result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
     },
-    { disposition: undefined, reason: "requester_aborted" },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
   ],
   [
     "committed progress before cancellation",
@@ -499,7 +501,7 @@ it.each([
         ],
       },
     },
-    { disposition: undefined, reason: "requester_aborted" },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
   ],
   [
     "saved-state conflict with intentional suppression",

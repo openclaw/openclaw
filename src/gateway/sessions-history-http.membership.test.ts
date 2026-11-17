@@ -52,6 +52,8 @@ beforeAll(async () => {
   state = await createOpenClawTestState({
     scenario: "minimal",
     label: "http-history-membership",
+    // CI nests temporary roots; leave room for the Unix socket path below.
+    prefix: "hist-",
     prepareProfileCatalog: true,
   });
   cfg = {

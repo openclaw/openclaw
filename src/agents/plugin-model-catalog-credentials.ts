@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { resolveIdentityPathViaExistingAncestor } from "../infra/boundary-path.js";
 import { ignoreMissingPath } from "../infra/errno.js";
+import { resolveIdentityPathViaExistingAncestor } from "../infra/path-existence.js";
 import { runOpenClawAgentWriteAdmissions } from "../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
