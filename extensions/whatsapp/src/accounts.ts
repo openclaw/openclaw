@@ -24,6 +24,7 @@ export type ResolvedWhatsAppAccount = {
   name?: string;
   enabled: boolean;
   sendReadReceipts: boolean;
+  debounceMedia: boolean;
   messagePrefix?: string;
   defaultTo?: string;
   authDir: string;
@@ -105,6 +106,7 @@ export function resolveWhatsAppAccount(params: {
     name: normalizeOptionalString(merged.name),
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
+    debounceMedia: merged.debounceMedia ?? false,
     messagePrefix: merged.responsePrefix,
     defaultTo: merged.defaultTo,
     authDir,

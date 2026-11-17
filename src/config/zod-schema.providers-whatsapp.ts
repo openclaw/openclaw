@@ -30,6 +30,8 @@ const WhatsAppCommonShape = {
   ...accountShape,
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
+  /** Batch direct-chat media into the inbound debounce window instead of flushing it immediately. */
+  debounceMedia: z.boolean().optional(),
   groups: z.record(z.string(), WhatsAppGroupEntrySchema).optional(),
   direct: z.record(z.string(), WhatsAppDirectEntrySchema).optional(),
   ...buildChannelReactionShape({

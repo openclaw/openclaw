@@ -84,6 +84,9 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                 mentioned.size > 0
                   ? { ...last.group?.mentions, jids: Array.from(mentioned) }
                   : last.group?.mentions;
+              // Each attachment stays paired with its own caption and native media
+              // context; a batch never promotes one entry's media to represent the others.
+              const hasMedia = orderedEntries.some((entry) => entry.payload.media);
               message = {
                 ...last,
                 turnAdoptionLifecycle: admissionLifecycle,
@@ -97,6 +100,18 @@ export function createWhatsAppInboundMessageDebouncer(options: {
                     .map((entry) => entry.payload.commandBody ?? entry.payload.body)
                     .filter(Boolean)
                     .join("\n"),
+                  ...(hasMedia
+                    ? {
+                        media: undefined,
+                        batchedParts: orderedEntries.map((entry) => ({
+                          body: entry.payload.body,
+                          ...(entry.payload.media ? { media: entry.payload.media } : {}),
+                        })),
+                        channelStructuredContext: orderedEntries.flatMap(
+                          (entry) => entry.payload.channelStructuredContext ?? [],
+                        ),
+                      }
+                    : {}),
                 },
                 group:
                   last.group || combinedMentions

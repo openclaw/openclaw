@@ -22,6 +22,7 @@ const account = {
   enabled: true,
   name: "Default",
   sendReadReceipts: true,
+  debounceMedia: false,
   isLegacyAuthDir: false,
 };
 const accountParams = { account: account as never, cfg: {} };

@@ -54,6 +54,19 @@ export type WhatsAppStructuredContactContext = {
   }>;
 };
 
+export type WhatsAppInboundMedia = {
+  path?: string;
+  type?: string;
+  fileName?: string;
+  url?: string;
+  kind?: ChannelInboundMediaInput["kind"];
+};
+
+export type WhatsAppInboundBatchedPart = {
+  body: string;
+  media?: WhatsAppInboundMedia;
+};
+
 export type WebInboundCallbackMessage = {
   admission: WhatsAppInboundAdmission;
   event: {
@@ -64,13 +77,12 @@ export type WebInboundCallbackMessage = {
   payload: {
     body: string;
     commandBody?: string;
-    media?: {
-      path?: string;
-      type?: string;
-      fileName?: string;
-      url?: string;
-      kind?: ChannelInboundMediaInput["kind"];
-    };
+    media?: WhatsAppInboundMedia;
+    /**
+     * Ordered source messages of a debounced batch that held media. When set, `media` is unset and
+     * `body` joins only the source captions, so consumers read attachments from these parts.
+     */
+    batchedParts?: WhatsAppInboundBatchedPart[];
     location?: NormalizedLocation;
     channelStructuredContext?: {
       label: string;

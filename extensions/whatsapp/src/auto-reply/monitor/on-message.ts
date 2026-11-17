@@ -46,7 +46,11 @@ import { jidToE164 } from "../../targets-runtime.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { buildMentionConfig, isBotMentioned, resolveOwnerList } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import { hasWhatsAppAudioBody, transcribeWhatsAppAudioMessage } from "./audio-preflight.js";
+import {
+  hasWhatsAppAudioBody,
+  listWhatsAppInboundMedia,
+  transcribeWhatsAppAudioMessage,
+} from "./audio-preflight.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -313,6 +317,7 @@ export function createWebOnMessageHandler(params: {
               senderIdentity.e164 ??
               getPrimaryIdentityId(senderIdentity) ??
               "Unknown");
+        const historyMedia = listWhatsAppInboundMedia(msg);
         createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
           historyKey: groupHistoryKey,
           limit: params.groupHistoryLimit,
@@ -322,16 +327,14 @@ export function createWebOnMessageHandler(params: {
             timestamp: msg.event.timestamp,
             id: msg.event.id,
             senderJid: senderIdentity.jid ?? msg.platform.senderJid,
-            ...(msg.payload.media
+            ...(historyMedia.length > 0
               ? {
-                  media: [
-                    {
-                      path: msg.payload.media.path,
-                      url: msg.payload.media.url ?? msg.payload.media.path,
-                      contentType: msg.payload.media.type,
-                      kind: msg.payload.media.kind ?? undefined,
-                    },
-                  ],
+                  media: historyMedia.map((media) => ({
+                    path: media.path,
+                    url: media.url ?? media.path,
+                    contentType: media.type,
+                    kind: media.kind ?? undefined,
+                  })),
                 }
               : {}),
           },

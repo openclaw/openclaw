@@ -189,3 +189,55 @@ it("keeps a sender switch behind an active admission without blocking another co
     await listener.close();
   }
 });
+
+it("batches direct-chat text and media in arrival order without detaching captions", async () => {
+  const onMessage = vi.fn<InboxOnMessage>(async () => {});
+  // Media enrichment is async; wait until the last entry reaches the debouncer.
+  const voicePrepared = createDeferred<void>();
+  const { listener, sock } = await startInboxMonitor(onMessage, {
+    debounceMs: 60_000,
+    shouldDebounce: (message) => {
+      if (message.event.id === "burst-voice") {
+        voicePrepared.resolve();
+      }
+      return true;
+    },
+  });
+  const direct = (id: string, n: number, message: Record<string, unknown>) => ({
+    key: { id, fromMe: false, remoteJid: "999@s.whatsapp.net" },
+    message,
+    messageTimestamp: 1_700_000_000 + n,
+  });
+  try {
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        direct("burst-text", 0, { conversation: "look at these" }),
+        direct("burst-photo", 1, {
+          imageMessage: { mimetype: "image/jpeg", caption: "the receipt" },
+        }),
+        direct("burst-voice", 2, {
+          audioMessage: { mimetype: "audio/ogg; codecs=opus", ptt: true },
+        }),
+      ],
+    });
+    await voicePrepared.promise;
+    await settleInboundWork();
+    expect(onMessage).not.toHaveBeenCalled();
+  } finally {
+    await listener.close();
+  }
+  expect(onMessage).toHaveBeenCalledTimes(1);
+  const [batched] = onMessage.mock.calls[0]!;
+  expect(batched.event.isBatched).toBe(true);
+  expect(batched.payload.body).toBe("look at these\nthe receipt");
+  expect(batched.payload.media).toBeUndefined();
+  expect(
+    batched.payload.batchedParts?.map((part) => ({ body: part.body, type: part.media?.type })),
+  ).toEqual([
+    { body: "look at these", type: undefined },
+    { body: "the receipt", type: "image/jpeg" },
+    { body: "", type: "audio/ogg; codecs=opus" },
+  ]);
+  expect(sock.readMessages).toHaveBeenCalledTimes(3);
+});

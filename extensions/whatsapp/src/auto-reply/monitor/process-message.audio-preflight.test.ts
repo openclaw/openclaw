@@ -82,9 +82,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
           BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
           CommandAuthorized: params.command?.authorized === true,
           CommandBody: params.command?.body ?? params.msg.payload.body,
-          MediaPath: params.msg.payload.media?.path,
-          MediaType: params.msg.payload.media?.type,
-          MediaTranscribedIndexes: params.mediaTranscribedIndexes,
+          media: prepared.ctxPayload.media,
           RawBody: params.rawBody ?? params.msg.payload.body,
           Transcript: params.transcript,
         },
@@ -211,5 +209,54 @@ describe("processMessage audio preflight transcription", () => {
     if (assertEmptyBody) {
       expectContextFields(firstDispatchContext(), { Body: envelope });
     }
+  });
+
+  it("transcribes every voice note of a media batch in arrival order", async () => {
+    const photo = { path: "/tmp/receipt.jpg", type: "image/jpeg", kind: "image" as const };
+    const voice = (path: string) => ({
+      path,
+      type: "audio/ogg; codecs=opus",
+      kind: "audio" as const,
+    });
+    transcribeFirstAudioMock
+      .mockImplementationOnce(async () => "first note")
+      .mockImplementationOnce(async () => "second note");
+
+    await processMessage(
+      makeParams({
+        event: { timestamp: 1735689600000, isBatched: true },
+        payload: {
+          body: "look at these\nthe receipt",
+          media: undefined,
+          batchedParts: [
+            { body: "look at these" },
+            { body: "the receipt", media: photo },
+            { body: "", media: voice("/tmp/one.ogg") },
+            { body: "", media: voice("/tmp/two.ogg") },
+          ],
+        },
+      }),
+    );
+
+    expect(transcribeFirstAudioMock.mock.calls.map(([params]) => params.ctx.media[0].path)).toEqual(
+      ["/tmp/one.ogg", "/tmp/two.ogg"],
+    );
+    const framed = (text: string) =>
+      `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(text)}`;
+    expectContextFields(firstDispatchContext(), {
+      BodyForAgent: [
+        "look at these",
+        "the receipt",
+        framed("first note"),
+        framed("second note"),
+      ].join("\n"),
+      CommandBody: "look at these\nthe receipt",
+      Transcript: "first note\nsecond note",
+      media: [
+        expect.objectContaining({ path: photo.path, transcribed: false }),
+        expect.objectContaining({ path: "/tmp/one.ogg", transcribed: true }),
+        expect.objectContaining({ path: "/tmp/two.ogg", transcribed: true }),
+      ],
+    });
   });
 });

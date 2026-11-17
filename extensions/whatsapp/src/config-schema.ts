@@ -21,6 +21,10 @@ const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Self-Phone Mode",
     help: "Same-phone setup (bot uses your personal WhatsApp number).",
   },
+  debounceMedia: {
+    label: "WhatsApp Batch Media With Text",
+    help: "In direct chats, hold photos, voice notes, videos, documents, and stickers in the inbound debounce window (messages.inbound.byChannel.whatsapp) so a burst of text and media becomes one agent turn. Groups, quoted replies, locations, and control commands still dispatch immediately. Default: false.",
+  },
   direct: {
     label: "WhatsApp Direct Chat Overrides",
     help: 'Per-conversation overrides keyed by WhatsApp DM id. Applied after a DM is already admitted by dmPolicy; "*" supplies a default without admitting anyone.',
