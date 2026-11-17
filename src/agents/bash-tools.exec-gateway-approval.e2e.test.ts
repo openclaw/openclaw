@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -190,6 +191,96 @@ describe("gateway-hosted exec approvals", () => {
     const { client: operator } = await connect("approval operator");
     return { config, configPath, operator, connect, port: claim.port, workspaceDir };
   }
+
+  it.skipIf(process.platform === "win32" || !existsSync("/usr/bin/printf"))(
+    "gates dynamic predicates through real gateway approval and process owners",
+    async () => {
+      const { operator, workspaceDir } = await startApprovalGateway(() => ({
+        tools: { exec: { host: "gateway", security: "allowlist", ask: "on-miss" } },
+      }));
+      await fs.writeFile(path.join(workspaceDir, "proof.txt"), "fixture");
+      const command = "test -e *.txt && /usr/bin/printf 'approved\\n'";
+      const setPolicy = async (security: "allowlist" | "deny", ask: "on-miss" | "off") => {
+        const previous = await operator.request<{ hash: string }>("exec.approvals.get", {});
+        await operator.request("exec.approvals.set", {
+          baseHash: previous.hash,
+          file: {
+            version: 1,
+            defaults: { security, ask, askFallback: "deny" },
+            agents: { main: { allowlist: [{ pattern: "/usr/bin/printf" }] } },
+          },
+        });
+        const current = await operator.request<{
+          file: { defaults: { security: string; ask: string } };
+        }>("exec.approvals.get", {});
+        expect(current.file.defaults).toMatchObject({ security, ask });
+      };
+      const tool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      const pendingApprovalId = async () => {
+        let id: string | undefined;
+        await vi.waitFor(
+          async () => {
+            const pending = await operator.request<
+              Array<{ id: string; request: { command?: string } }>
+            >("exec.approval.list", {});
+            id = pending.find((entry) => entry.request.command === command)?.id;
+            expect(id).toBeDefined();
+          },
+          { timeout: 15_000, interval: 100 },
+        );
+        return expectDefined(id, "pending dynamic predicate approval");
+      };
+
+      await setPolicy("allowlist", "off");
+      const deniedTool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "off",
+        safeBins: [],
+        cwd: workspaceDir,
+        agentId: "main",
+      });
+      await expect(
+        deniedTool.execute("dynamic-predicate-denied", { command, workdir: workspaceDir }),
+      ).rejects.toThrow("exec denied: allowlist miss");
+
+      await setPolicy("allowlist", "on-miss");
+      const approved = tool.execute("dynamic-predicate-approved", {
+        command,
+        workdir: workspaceDir,
+      });
+      const approvedId = await pendingApprovalId();
+      await operator.request("exec.approval.resolve", {
+        id: approvedId,
+        decision: "allow-once",
+      });
+      expect((await approved).details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: "approved",
+      });
+
+      const revoked = tool.execute("dynamic-predicate-revoked", {
+        command,
+        workdir: workspaceDir,
+      });
+      const revokedId = await pendingApprovalId();
+      await setPolicy("deny", "off");
+      await operator.request("exec.approval.resolve", {
+        id: revokedId,
+        decision: "allow-once",
+      });
+      await expect(revoked).rejects.toThrow("Exec approval changed before execution");
+    },
+    EXEC_APPROVAL_E2E_TIMEOUT_MS,
+  );
 
   it(
     "keeps a scheduled approval floor in a reused full-permission session",
