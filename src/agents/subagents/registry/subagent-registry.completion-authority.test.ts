@@ -13,7 +13,9 @@ import { resolvePhysicalSessionStorePath } from "../../../config/sessions/sessio
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
+import * as accessPolicy from "../../../gateway/operator-access-policy.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import { TurnWithheldError } from "../../../gateway/operator-run-recovery.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
@@ -43,6 +45,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
+import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import * as announce from "../announce/subagent-announce.js";
 import {
   runWithCompletionBatchOrigin,
@@ -693,6 +696,8 @@ describe("registered completion source custody", () => {
     "cancelled-with-origin",
     "mixed-principals",
     "legacy-row",
+    "policy-outage",
+    "policy-refusal",
   ] as const)("restores completion authority from saved origin facts (%s)", async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       config.setRuntimeConfigSnapshot({});
@@ -753,6 +758,30 @@ describe("registered completion source custody", () => {
               async () => "wrong caller",
             ),
           ).rejects.toThrow(/incompatible operator authority/);
+        } else if (scenario === "policy-outage" || scenario === "policy-refusal") {
+          const resume = vi
+            .spyOn(accessPolicy, "resumeGatewayOperatorAccessGrant")
+            .mockImplementationOnce(() => {
+              throw scenario === "policy-outage"
+                ? new accessPolicy.GatewayOperatorAccessUnavailableError()
+                : new accessPolicy.GatewayOperatorAccessDeniedError();
+            });
+          onTestFinished(() => resume.mockRestore());
+          if (scenario === "policy-outage") {
+            // An outage is not a revocation: the result stays owed, then delivers on recovery.
+            const outage = await runWithCompletionOrigin(entry, readProfile).catch(
+              (error: unknown) => error,
+            );
+            expect(outage).toBeInstanceOf(SubagentAnnouncePreparationConflictError);
+            expect(outage).not.toBeInstanceOf(TurnWithheldError);
+            await expect(runWithCompletionOrigin(entry, readProfile)).resolves.toBe(
+              requesterProfile,
+            );
+          } else {
+            await expect(runWithCompletionOrigin(entry, readProfile)).rejects.toBeInstanceOf(
+              TurnWithheldError,
+            );
+          }
         } else {
           // A row written before origin facts never widens to the requester session owner.
           await updateRun(entry.runId, (draft) => {

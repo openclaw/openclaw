@@ -10,7 +10,10 @@ import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-iden
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -628,9 +631,11 @@ export class TurnWithheldError extends Error {
   }
 }
 
-/** A detached result that cannot be authorized is withheld with the reason, never retried. */
+/** A refusal withholds detached work; a policy or dispatch outage is not one and passes through. */
 export function toTurnWithheld(error: unknown) {
-  return error instanceof TurnWithheldError
+  return error instanceof TurnWithheldError ||
+    isOperatorAuthorityUnavailable(error) ||
+    (error instanceof GatewayDispatchUnavailableError && error.retryable)
     ? error
     : new TurnWithheldError(formatErrorMessage(error), { cause: error });
 }

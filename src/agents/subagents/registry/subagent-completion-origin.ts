@@ -16,6 +16,7 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -65,7 +66,11 @@ async function runWithSubagentOrigin<T>(
         ? restoreSessionPrincipal(entry, facts.profileId, context)
         : authorizeTurn({ facts, context })
   ).catch((error: unknown) => {
-    throw toTurnWithheld(error);
+    const refused = toTurnWithheld(error);
+    // An outage is not a revocation: the result stays owed for the preparation retry.
+    throw refused instanceof TurnWithheldError
+      ? refused
+      : new SubagentAnnouncePreparationConflictError(String(error), { cause: error });
   });
   try {
     // Delivery never inherits the ambient caller's request scope or client.
