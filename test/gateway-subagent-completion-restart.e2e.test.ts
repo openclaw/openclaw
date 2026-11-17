@@ -71,162 +71,166 @@ it
       offsets: [0],
       signal,
       createListener: () =>
-        restartProviderServer(failed, async (_request, response, body) => {
-          const input = Array.isArray(body.input) ? body.input : [];
-          const text = JSON.stringify(input);
-          const tools = restartToolNames(body);
-          const ordinal = ++sequence;
-          const reply = (value: string) =>
-            body.stream === false
-              ? writeRestartJsonText(response, value, String(ordinal))
-              : writeOpenAiResponsesText(response, {
-                  text: value,
-                  messageId: `msg_custody_${ordinal}`,
-                  responseId: `resp_custody_${ordinal}`,
-                });
-          const call = (name: string, args: object) => {
-            const wireName = tools.includes(name) ? name : "dispatch_action";
-            expect(tools).toContain(wireName);
-            writeRestartToolCall(
-              response,
-              "custody",
-              wireName,
-              wireName === name ? args : { id: name, args },
-              ordinal,
-            );
-          };
-          if (!tools.length) {
-            reply("Synthetic restart custody session");
-            return;
-          }
-          if (text.includes("CUSTODY_ROOT_TASK")) {
-            rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
-            const receipts = input.flatMap((item) =>
-              isRecord(item) && item.type === "function_call_output"
-                ? findSubagentRecords(
-                    item.output,
-                    (value) =>
-                      value.status === "accepted" &&
-                      typeof value.runId === "string" &&
-                      typeof value.sessionKey === "string",
-                  )
-                : [],
-            );
-            const childReceipt = receipts.find((value) => value.sessionKey === childKey);
-            const siblingReceipt = receipts.find((value) => value.sessionKey === siblingKey);
-            if (typeof childReceipt?.runId === "string") {
-              childRunId ??= childReceipt.runId;
-            }
-            if (typeof siblingReceipt?.runId === "string") {
-              capturedRunId ??= siblingReceipt.runId;
-            }
-            if (
-              text.includes("CAPTURED_CUSTODY_RESULT") &&
-              (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
-            ) {
-              if (retryingRequester && !restarted) {
-                response.writeHead(400, { "content-type": "application/json" });
-                response.end(
-                  JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
-                );
-                return;
-              }
-              if (interruptAnnounce && !restarted) {
-                announcing = true;
-                return;
-              }
-              completedReplies++;
-              reply("HUB_RECEIVED_RESTART_COMPLETION");
-            } else if (!childRunId) {
-              call("sessions_send", {
-                sessionKey: childKey,
-                message: "CUSTODY_CHILD_TASK",
-                timeoutSeconds: 0,
-              });
-            } else if (!capturedRunId) {
-              call("sessions_send", {
-                sessionKey: siblingKey,
-                message: "CUSTODY_SIBLING_TASK",
-                timeoutSeconds: 0,
-              });
-            } else if (busyRequester || retryingRequester) {
-              if (restarted || retryingRequester) {
-                reply("HUB_WAITING_FOR_OWNED_RESULTS");
-              }
-            } else if (
-              privateContinuation ||
-              text.includes("already_pending") ||
-              text.includes("nothing_pending")
-            ) {
-              reply("HUB_WAITING_FOR_OWNED_RESULTS");
-            } else {
-              call("sessions_yield", {});
-            }
-            return;
-          }
-          if (text.includes("CUSTODY_SETUP_TASK")) {
-            initialized = input.flatMap((item) => {
-              if (!isRecord(item) || item.type !== "function_call_output") {
-                return [];
-              }
-              const receipt = findSubagentSpawnReceipt(item.output);
-              return receipt ? [receipt] : [];
-            });
-            childKey = initialized[0]?.childSessionKey;
-            siblingKey = initialized[1]?.childSessionKey;
-            if (initialized.length < 2) {
-              call("sessions_spawn", {
-                task: "INITIALIZE_CUSTODY_SESSION",
-                context: "isolated",
-                visible: true,
-                expectsCompletionMessage: false,
-              });
-            } else {
-              reply("CUSTODY_SETUP_COMPLETE");
-            }
-            return;
-          }
-          if (text.includes("CUSTODY_CHILD_TASK")) {
-            childStarted = true;
-            if (restarted) {
-              resumedChildRequests++;
-              reply("NESTED_CHILD_RECONCILED");
+        restartProviderServer(
+          failed,
+          async (_request, response, body) => {
+            const input = Array.isArray(body.input) ? body.input : [];
+            const text = JSON.stringify(input);
+            const tools = restartToolNames(body);
+            const ordinal = ++sequence;
+            const reply = (value: string) =>
+              body.stream === false
+                ? writeRestartJsonText(response, value, String(ordinal))
+                : writeOpenAiResponsesText(response, {
+                    text: value,
+                    messageId: `msg_custody_${ordinal}`,
+                    responseId: `resp_custody_${ordinal}`,
+                  });
+            const call = (name: string, args: object) => {
+              const wireName = tools.includes(name) ? name : "dispatch_action";
+              expect(tools).toContain(wireName);
+              writeRestartToolCall(
+                response,
+                "custody",
+                wireName,
+                wireName === name ? args : { id: name, args },
+                ordinal,
+              );
+            };
+            if (!tools.length) {
+              reply("Synthetic restart custody session");
               return;
             }
-            if (kind !== "nested") {
-              finishChild = () => reply("NESTED_CHILD_RECONCILED");
-              return;
-            }
-            leaf ??= input.flatMap((item) => {
-              const receipt =
+            if (text.includes("CUSTODY_ROOT_TASK")) {
+              rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
+              const receipts = input.flatMap((item) =>
                 isRecord(item) && item.type === "function_call_output"
-                  ? findSubagentSpawnReceipt(item.output)
-                  : undefined;
-              return receipt ? [receipt] : [];
-            })[0];
-            call(
-              leaf ? "sessions_yield" : "sessions_spawn",
-              leaf
-                ? {}
-                : {
-                    task: "CUSTODY_LEAF_TASK",
-                    context: "isolated",
-                    expectsCompletionMessage: true,
-                  },
-            );
-            return;
-          }
-          if (text.includes("CUSTODY_SIBLING_TASK")) {
-            finishCaptured = () => reply("CAPTURED_CUSTODY_RESULT");
-            return;
-          }
-          if (text.includes("INITIALIZE_CUSTODY_SESSION")) {
-            reply("SESSION_READY");
-            return;
-          }
-          assert(text.includes("CUSTODY_LEAF_TASK"), "Unexpected synthetic request");
-          leafStarted = true;
-        }),
+                  ? findSubagentRecords(
+                      item.output,
+                      (value) =>
+                        value.status === "accepted" &&
+                        typeof value.runId === "string" &&
+                        typeof value.sessionKey === "string",
+                    )
+                  : [],
+              );
+              const childReceipt = receipts.find((value) => value.sessionKey === childKey);
+              const siblingReceipt = receipts.find((value) => value.sessionKey === siblingKey);
+              if (typeof childReceipt?.runId === "string") {
+                childRunId ??= childReceipt.runId;
+              }
+              if (typeof siblingReceipt?.runId === "string") {
+                capturedRunId ??= siblingReceipt.runId;
+              }
+              if (
+                text.includes("CAPTURED_CUSTODY_RESULT") &&
+                (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
+              ) {
+                if (retryingRequester && !restarted) {
+                  response.writeHead(400, { "content-type": "application/json" });
+                  response.end(
+                    JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
+                  );
+                  return;
+                }
+                if (interruptAnnounce && !restarted) {
+                  announcing = true;
+                  return;
+                }
+                completedReplies++;
+                reply("HUB_RECEIVED_RESTART_COMPLETION");
+              } else if (!childRunId) {
+                call("sessions_send", {
+                  sessionKey: childKey,
+                  message: "CUSTODY_CHILD_TASK",
+                  timeoutSeconds: 0,
+                });
+              } else if (!capturedRunId) {
+                call("sessions_send", {
+                  sessionKey: siblingKey,
+                  message: "CUSTODY_SIBLING_TASK",
+                  timeoutSeconds: 0,
+                });
+              } else if (busyRequester || retryingRequester) {
+                if (restarted || retryingRequester) {
+                  reply("HUB_WAITING_FOR_OWNED_RESULTS");
+                }
+              } else if (
+                privateContinuation ||
+                text.includes("already_pending") ||
+                text.includes("nothing_pending")
+              ) {
+                reply("HUB_WAITING_FOR_OWNED_RESULTS");
+              } else {
+                call("sessions_yield", {});
+              }
+              return;
+            }
+            if (text.includes("CUSTODY_SETUP_TASK")) {
+              initialized = input.flatMap((item) => {
+                if (!isRecord(item) || item.type !== "function_call_output") {
+                  return [];
+                }
+                const receipt = findSubagentSpawnReceipt(item.output);
+                return receipt ? [receipt] : [];
+              });
+              childKey = initialized[0]?.childSessionKey;
+              siblingKey = initialized[1]?.childSessionKey;
+              if (initialized.length < 2) {
+                call("sessions_spawn", {
+                  task: "INITIALIZE_CUSTODY_SESSION",
+                  context: "isolated",
+                  visible: true,
+                  expectsCompletionMessage: false,
+                });
+              } else {
+                reply("CUSTODY_SETUP_COMPLETE");
+              }
+              return;
+            }
+            if (text.includes("CUSTODY_CHILD_TASK")) {
+              childStarted = true;
+              if (restarted) {
+                resumedChildRequests++;
+                reply("NESTED_CHILD_RECONCILED");
+                return;
+              }
+              if (kind !== "nested") {
+                finishChild = () => reply("NESTED_CHILD_RECONCILED");
+                return;
+              }
+              leaf ??= input.flatMap((item) => {
+                const receipt =
+                  isRecord(item) && item.type === "function_call_output"
+                    ? findSubagentSpawnReceipt(item.output)
+                    : undefined;
+                return receipt ? [receipt] : [];
+              })[0];
+              call(
+                leaf ? "sessions_yield" : "sessions_spawn",
+                leaf
+                  ? {}
+                  : {
+                      task: "CUSTODY_LEAF_TASK",
+                      context: "isolated",
+                      expectsCompletionMessage: true,
+                    },
+              );
+              return;
+            }
+            if (text.includes("CUSTODY_SIBLING_TASK")) {
+              finishCaptured = () => reply("CAPTURED_CUSTODY_RESULT");
+              return;
+            }
+            if (text.includes("INITIALIZE_CUSTODY_SESSION")) {
+              reply("SESSION_READY");
+              return;
+            }
+            assert(text.includes("CUSTODY_LEAF_TASK"), "Unexpected synthetic request");
+            leafStarted = true;
+          },
+          { ignoreAborted: true },
+        ),
     });
     const model = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${reservation.claim.port}/v1`);
     const base = restartResumeConfig(model);

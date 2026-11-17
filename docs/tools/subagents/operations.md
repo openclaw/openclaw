@@ -97,6 +97,13 @@ work, then can send a fresh instruction to a retained child or spawn a replaceme
 Check whether files or external actions already changed before repeating work.
 New execution uses current authority and the session's current tool policy.
 
+Finished results route to the current requester agent and session key, even if the
+recorded session store path changed. Delivery retains live same-source operator
+custody when available; missing, revoked, or mixed custody uses the System
+write-only baseline instead of refusing the result. A temporary Gateway
+access-policy outage still leaves delivery owed for retry. Explicit Stop and
+requester deletion still retire the selected completion obligations.
+
 If a requester wake is refused because the child's completion owner changed,
 that attempt yields to the current owner. The completion stays owed and the registry
 re-evaluates its retained wake. The same requester and wake generation can still
