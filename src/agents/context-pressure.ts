@@ -86,7 +86,7 @@ export function declineBoundaryMaintenance(runId: string): void {
   declinedRuns.add(runId);
 }
 
-export function isBoundaryMaintenanceDeclined(runId: string): boolean {
+function isBoundaryMaintenanceDeclined(runId: string): boolean {
   return declinedRuns.has(runId);
 }
 
