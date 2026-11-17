@@ -80,4 +80,37 @@ describe("session capability summary", () => {
       ].join("\n"),
     );
   });
+
+  it("names the profile's config path and the alsoAllow fix for profile exclusions", async () => {
+    const profileReason = {
+      kind: "profile",
+      label: "messaging profile",
+      source: "agents.entries.assistant.tools.profile",
+      profile: "messaging",
+    } as const;
+    const inventory = {
+      agentId: "assistant",
+      profile: "messaging",
+      groups: [],
+      toolAccess: {
+        checked: "live-session",
+        profiles: [],
+        tools: ["exec", "read"].map((id) => ({
+          id,
+          status: "excluded" as const,
+          reasons: [profileReason],
+          alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
+        })),
+      },
+    } satisfies EffectiveToolInventoryResult;
+
+    const summary = await resolveSessionCapabilities({
+      callGateway: vi.fn().mockResolvedValue(inventory),
+      agentId: "assistant",
+      sessionKey: "agent:assistant:main",
+    });
+    expect(formatSessionCapabilities(summary)).toContain(
+      "- messaging profile (agents.entries.assistant.tools.profile); to allow one, add it to agents.entries.assistant.tools.alsoAllow: exec, read",
+    );
+  });
 });
