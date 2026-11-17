@@ -70,6 +70,12 @@ const custodyFault = useSqliteWorkerFault([
     sql: `CREATE TEMP TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON main.session_pending_inputs
       WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END`,
   },
+  {
+    name: "reject_pending_finish",
+    match: /^update session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_pending_finish BEFORE UPDATE OF state ON main.session_pending_inputs
+      BEGIN SELECT RAISE(ABORT, 'finish failed'); END`,
+  },
 ]);
 
 const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -724,6 +730,19 @@ it.each(["cancelled", "interrupted"] as const)(
     expect(await promote(await stage("new-authorized-run"))).toMatchObject({ appended: true });
   },
 );
+
+it("does not let a fresh send reattach queued input after terminal settlement failed", async () => {
+  const receipt = await stage("failed-settlement");
+  custodyFault.enable(2);
+  receipt.finish("cancelled", "revoked");
+  await expect(receipt.settled?.()).rejects.toThrow("finish failed");
+  custodyFault.disable();
+
+  expect(await readPending(receipt.inputId)).toMatchObject({ state: "queued" });
+  expect(() => promote(receipt)).toThrow("ownership ended");
+  await expect(stage("failed-settlement")).rejects.toThrow("Pending input ownership ended");
+  expect(await readTranscript()).toEqual([]);
+});
 
 it("fences authority loss after an await without overriding the owner's terminal disposition", async () => {
   let current = true;

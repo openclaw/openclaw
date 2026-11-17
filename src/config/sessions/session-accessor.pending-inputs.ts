@@ -241,6 +241,8 @@ type PendingInputStageOptions = PendingInputRequest & {
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
+  /** Only the original recorder may reattach after its confirmed relinquishment. */
+  retryRelinquished?: boolean;
   /**
    * Durable channel redelivery mints a new run for the same source turn. It may
    * reopen only its own byte-identical attempt that was cancelled before consumption.
@@ -424,14 +426,14 @@ async function stagePreparedPendingInput(
         };
       }
       assertUnowned();
-      // Exact accepted identity and absence of a live owner were proved above.
-      // Queued input remains owed after this process relinquishes an attempt.
+      // A queued row alone does not prove relinquishment: terminal settlement may
+      // have failed after authority ended. Only its original recorder can retry it.
+      const canRetry =
+        options.trackCompletion || (existing.state === "queued" && options.retryRelinquished);
       if (
-        existing.state !== "queued" &&
-        ((!options.requestFingerprint &&
-          !options.trackCompletion &&
-          !reclaimsCancelledSourceTurn) ||
-          !reopensCancelled)
+        (!options.requestFingerprint && !canRetry && !reclaimsCancelledSourceTurn) ||
+        (existing.state !== "queued" && !reopensCancelled) ||
+        (existing.lifecycle_generation === lifecycleGeneration && !canRetry && !reopensCancelled)
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
@@ -713,7 +715,6 @@ async function stagePreparedPendingInput(
             "Pending input did not publish its committed owner",
           );
         }
-        retained = true;
         return Object.assign(ownerReceipt(owner), completionMethods);
       },
       // Committed input now belongs to the receiver; the original source can retire.

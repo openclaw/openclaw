@@ -564,6 +564,8 @@ export function createUserTurnTranscriptRecorder(
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
             runId,
+            // A retained run ID without a receipt means this recorder confirmed relinquishment.
+            retryRelinquished: acceptedPendingInputRunId !== undefined,
             requestFingerprint: params.pendingInputRequestFingerprint,
             reclaimCancelledSourceTurn: params.reclaimCancelledSourceTurn,
             trackCompletion: params.trackInputCompletion,

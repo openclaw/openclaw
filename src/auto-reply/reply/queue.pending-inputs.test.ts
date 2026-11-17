@@ -299,6 +299,7 @@ describe("followup queue durable input consumption", () => {
           .stageSessionPendingInput(scope(), {
             runId: "native-different",
             message,
+            retryRelinquished: true,
             assertCurrent() {},
           })
           .then((receipt) => {
@@ -327,7 +328,7 @@ describe("followup queue durable input consumption", () => {
     }
   });
 
-  it("admits one native owner when independent callers race to reattach a relinquished queued input", async () => {
+  it("admits one native owner when authorized retries race to reattach a relinquished queued input", async () => {
     const runId = "native-reattach-race";
     const message = {
       role: "user",
@@ -348,7 +349,12 @@ describe("followup queue durable input consumption", () => {
       await original.settled?.();
       const attempts = await Promise.allSettled(
         [scope(), scope()].map((target) =>
-          pendingInputs.stageSessionPendingInput(target, { runId, message, assertCurrent() {} }),
+          pendingInputs.stageSessionPendingInput(target, {
+            runId,
+            message,
+            retryRelinquished: true,
+            assertCurrent() {},
+          }),
         ),
       );
       const admitted = attempts.flatMap((result) =>

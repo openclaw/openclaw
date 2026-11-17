@@ -12,4 +12,5 @@
 # existing drain once, explicit terminal-cause priority, and original Stop signals.
 # Settlement observation stays outside owner joins and verifies post-outage execution once.
 # Native-owner guards preserve accepted run identity and single execution during reattachment races.
-1478
+# Failed terminal settlement cannot authorize a fresh same-key send to reattach queued input.
+1503
