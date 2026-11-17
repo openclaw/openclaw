@@ -224,6 +224,7 @@ describe("candidate-owned publish consumer chain", () => {
       candidateVersion: version,
       policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
       workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+      baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
     });
     envelope.qualificationAdmission = current.descriptor;
     inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -336,6 +337,7 @@ describe("candidate-owned publish consumer chain", () => {
         candidateVersion: "2026.8.28-beta.1",
         policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
         workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+        baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
         publisherSha: newerP,
       });
       envelope.qualificationAdmission = current.descriptor;
@@ -557,9 +559,6 @@ describe("candidate-owned publish consumer chain", () => {
       },
       {
         ...f.client,
-        verifyRetainedPublicationArtifacts() {
-          throw new Error("Qualification fixture does not recover publication artifacts");
-        },
         downloadArtifactArchive() {
           throw new Error("Qualification fixture does not download artifact archives");
         },
@@ -634,9 +633,6 @@ describe("candidate-owned publish consumer chain", () => {
         },
         {
           ...f.client,
-          verifyRetainedPublicationArtifacts() {
-            throw new Error("Qualification fixture does not recover publication artifacts");
-          },
           downloadArtifactArchive() {
             throw new Error("Qualification fixture does not download artifact archives");
           },

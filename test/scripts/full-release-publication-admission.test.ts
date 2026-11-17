@@ -1473,7 +1473,7 @@ describe("FRV required registry admission", () => {
     "binds actual post-upload admission without rewriting uploaded observations: %s",
     withCase(async (uploadFault, processFixture, check) => {
       const result = await fixture(processFixture, check, { registry: "healthy", uploadFault });
-      check(result.uploadedObservations).toBe(result.observationText);
+      check(result.uploadedObservations, result.stderr).toBe(result.observationText);
       check(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
         result.effects.indexOf("Finalize publication admission"),
       );

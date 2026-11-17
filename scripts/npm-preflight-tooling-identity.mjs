@@ -207,8 +207,7 @@ export function validateFullReleaseNpmPreflight({
     String(manifest.runId) !== String(runId) ||
     String(manifest.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
-    (manifest.workflowSha !== toolingSha &&
-      !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
+    manifest.workflowSha !== toolingSha ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
@@ -391,7 +390,7 @@ export async function verifyNpmPreflightPublicationLineage({
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
-  if (manifest?.sourceAdmission?.qualificationAdmission || manifest?.receiptRecovery) {
+  if (manifest?.sourceAdmission?.qualificationAdmission) {
     const { authenticateCandidateOwnedArtifact } =
       await import("./validate-full-release-validation-evidence.mjs");
     const authenticated = await authenticateCandidateOwnedArtifact({
@@ -559,7 +558,6 @@ async function main() {
       // a bypass for admitted candidate-owned qualification.
       if (
         !fullManifest?.sourceAdmission?.qualificationAdmission &&
-        !fullManifest?.receiptRecovery &&
         env.OPENCLAW_NPM_PUBLISH_TAG === "extended-stable" &&
         env.PREFLIGHT_WORKFLOW_BRANCH &&
         env.PREFLIGHT_WORKFLOW_BRANCH === env.EXPECTED_EXTENDED_STABLE_BRANCH &&

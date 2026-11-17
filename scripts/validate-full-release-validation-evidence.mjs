@@ -11,7 +11,6 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -55,7 +54,6 @@ function scalarString(value) {
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
  * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {unknown} [qualificationCoverage]
- * @property {unknown} [receiptRecovery]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -296,17 +294,15 @@ function validatePublicationEvidence(options, evidence) {
   }
   const proof = current.workflowRefProof;
   const source =
-    evidence.qualification.kind === "recovery"
-      ? "receipt-backed-recovery-v1"
-      : evidence.qualification.kind === "direct"
-        ? "candidate-owned-admission-v1"
-        : proof === "manifest-v3-protected-tag-tooling-lineage"
-          ? "sha-pinned-protected-tag-main-ancestor"
-          : proof === "manifest-v3-protected-tag-exact-sha"
-            ? "sha-pinned-protected-tag"
-            : isShaPinnedReleaseValidationBranch(current.workflowRef)
-              ? "sha-pinned-main"
-              : "direct";
+    evidence.qualification.kind === "direct"
+      ? "candidate-owned-admission-v1"
+      : proof === "manifest-v3-protected-tag-tooling-lineage"
+        ? "sha-pinned-protected-tag-main-ancestor"
+        : proof === "manifest-v3-protected-tag-exact-sha"
+          ? "sha-pinned-protected-tag"
+          : isShaPinnedReleaseValidationBranch(current.workflowRef)
+            ? "sha-pinned-main"
+            : "direct";
   return { run, source, coveragePolicy };
 }
 
@@ -423,9 +419,7 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
 }
 
 function candidateArtifactAuthorityRecord(manifest, evidence) {
-  const descriptor =
-    manifest?.sourceAdmission?.qualificationAdmission ??
-    manifest?.receiptRecovery?.qualificationAdmission;
+  const descriptor = manifest?.sourceAdmission?.qualificationAdmission;
   if (!descriptor) {
     return undefined;
   }
@@ -436,14 +430,6 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   return structuredClone({
     descriptor,
     admission: evidence.qualification.admission,
-    recoveryProducer: manifest.receiptRecovery
-      ? {
-          runId: String(manifest.runId),
-          runAttempt: Number(manifest.runAttempt),
-          fullRef: manifest.workflowFullRef,
-          sha: manifest.workflowSha,
-        }
-      : null,
   });
 }
 
@@ -452,13 +438,6 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
 export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
   if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
-    if (authority.recoveryProducer) {
-      if (evidenceClient.verifyReceiptRecoveryAuthority) {
-        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
-      } else {
-        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
-      }
-    }
   }
 }
 
@@ -493,8 +472,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherFullRef = "refs/heads/main",
   client,
 }) {
-  const recovery = manifest?.receiptRecovery;
-  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
+  if (!manifest?.sourceAdmission?.qualificationAdmission) {
     return null;
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);

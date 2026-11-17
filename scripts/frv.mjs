@@ -138,6 +138,11 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 
 function parseArgs(argv) {
   const command = argv[0];
+  if (command === "recover") {
+    throw new Error(
+      "recover is retired; receipt-backed recovery is no longer supported. Run fresh qualification with pnpm ci:full-release for the same immutable candidate.",
+    );
+  }
   const options = {
     command,
     dryRun: false,

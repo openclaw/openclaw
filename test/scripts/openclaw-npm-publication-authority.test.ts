@@ -185,7 +185,7 @@ if (process.argv[1] === root + '/bin/gh') {
   write("bin/npm", "#!/usr/bin/env node\n", true);
   write(
     "bin/git",
-    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.q + "'\n",
+    "#!/bin/sh\n[ \"$*\" = 'rev-parse HEAD' ] || exit 90\nprintf '%s\\n' '" + f.c + "'\n",
     true,
   );
   const env = {
@@ -204,7 +204,7 @@ if (process.argv[1] === root + '/bin/gh') {
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,
     WORKFLOW_FULL_REF: f.publisherFullRef,
-    EXPECTED_RELEASE_SHA: f.q,
+    EXPECTED_RELEASE_SHA: f.c,
     PREFLIGHT_WORKFLOW_SHA: f.q,
     PREFLIGHT_WORKFLOW_BRANCH: f.branch,
     PREFLIGHT_WORKFLOW_PATH: ".github/workflows/full-release-validation.yml",
@@ -237,7 +237,7 @@ if (process.argv[1] === root + '/bin/gh') {
       ...Object.entries({
         "full-release-manifest": "full-release-validation/full-release-validation-manifest.json",
         repository: f.repository,
-        "source-sha": f.q,
+        "source-sha": f.c,
         "workflow-sha": f.q,
         "publisher-sha": f.p,
         "publisher-full-ref": f.publisherFullRef,

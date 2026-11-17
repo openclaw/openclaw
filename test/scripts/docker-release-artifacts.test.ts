@@ -395,9 +395,6 @@ async function createCandidateDockerPublication(recovered = false) {
     fullReleaseManifest: fixture.manifest,
     evidenceClient: {
       ...fixture.client,
-      verifyRetainedPublicationArtifacts() {
-        throw new Error("Docker producer fixture does not recover publication artifacts");
-      },
       downloadArtifactArchive() {
         throw new Error("Docker producer fixture does not download artifact archives");
       },
