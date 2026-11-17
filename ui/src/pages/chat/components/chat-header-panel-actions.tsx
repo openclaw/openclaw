@@ -232,7 +232,12 @@ export type ChatPanelMenuContentProps = {
 };
 
 /** Keep registered content and initial focus owned by the same panel menu. */
-function createPanelMenu() {
+function createPanelMenu(
+  menuProps: ChatPanelMenuContentProps["menuProps"],
+  Content: (props: ChatPanelMenuContentProps) => Element,
+  id: string,
+) {
+  const controls = createMenuControls();
   const [handlers, setHandlers] = createSignal<ChatPanelMenuHandlers>();
   let menu: MenuHandle | undefined;
   let openingFocus: globalThis.Element | null | undefined;
@@ -258,19 +263,48 @@ function createPanelMenu() {
       menu.focusFirst();
     }
   };
-  return {
-    items: (): readonly MenuEntry[] =>
-      handlers()?.items() ?? [{ id: "loading", label: t("common.loading"), disabled: true }],
-    onReady: (next: ChatPanelMenuHandlers | undefined) => {
-      setHandlers(next);
-      if (next) {
-        onSettled(focusReady);
-      }
+  const items = (): readonly MenuEntry[] =>
+    handlers()?.items() ?? [{ id: "loading", label: t("common.loading"), disabled: true }];
+  const entries: MenuEntry[] = [
+    {
+      kind: "group",
+      id,
+      get items() {
+        return items();
+      },
+      render: (renderItems) => (
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusReady);
+            return (
+              <LazyViewError error={error()} onRetry={reset} retryRef={controls.ref()} inline />
+            );
+          }}
+        >
+          <Loading fallback={renderItems(items)}>
+            <Content
+              menuProps={menuProps}
+              controls={controls}
+              readMenu={() => menu}
+              onReady={(next) => {
+                setHandlers(next);
+                if (next) {
+                  onSettled(focusReady);
+                }
+              }}
+            />
+            {renderItems(items)}
+          </Loading>
+        </Errored>
+      ),
     },
+  ];
+  return {
+    controls,
+    items: entries,
     get onSelect() {
       return handlers()?.select;
     },
-    read: () => menu,
     bind(this: void, handle: MenuHandle) {
       menu = handle;
       stopKeyboard?.();
@@ -297,28 +331,7 @@ function createPanelMenu() {
         focusLast = false;
       }
     },
-    focusReady,
   };
-}
-
-function ChatPanelMenuBoundary(props: {
-  controls: MenuControls;
-  focusReady: () => void;
-  fallback: Element;
-  children: Element;
-}) {
-  return (
-    <Errored
-      fallback={(error, reset) => {
-        onSettled(props.focusReady);
-        return (
-          <LazyViewError error={error()} onRetry={reset} retryRef={props.controls.ref()} inline />
-        );
-      }}
-    >
-      <Loading fallback={props.fallback}>{props.children}</Loading>
-    </Errored>
-  );
 }
 
 /** External Dashboard controls reuse the layout and page-widget owners. */
@@ -328,11 +341,10 @@ export function ChatDashboardMenu(
   },
 ) {
   const id = createUniqueId();
-  const controls = createMenuControls();
-  const menu = createPanelMenu();
+  const menu = createPanelMenu(props, DashboardContent, "dashboard-content");
   return (
     <Menu
-      controls={controls}
+      controls={menu.controls}
       lazy="while-open"
       id={`chat-dashboard-${id}`}
       label={t("chat.sidePanel.dashboardOptions")}
@@ -347,30 +359,7 @@ export function ChatDashboardMenu(
           <Icon name="chevronDown" class="chat-dashboard-menu__chevron" />
         </>
       }
-      items={[
-        {
-          kind: "group",
-          id: "dashboard-content",
-          get items() {
-            return menu.items();
-          },
-          render: (renderItems) => (
-            <ChatPanelMenuBoundary
-              controls={controls}
-              focusReady={menu.focusReady}
-              fallback={renderItems(menu.items)}
-            >
-              <DashboardContent
-                menuProps={props}
-                controls={controls}
-                readMenu={menu.read}
-                onReady={menu.onReady}
-              />
-              {renderItems(menu.items)}
-            </ChatPanelMenuBoundary>
-          ),
-        },
-      ]}
+      items={menu.items}
       ref={menu.bind}
       onBeforeShow={menu.beforeShow}
       onOpenChange={menu.openChange}
@@ -410,8 +399,7 @@ let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
-  const controls = createMenuControls();
-  const menu = createPanelMenu();
+  const menu = createPanelMenu(props, LayoutContent, "layout-content");
   const model = createMemo(() => chatPaneLayoutModel(props));
 
   return (
@@ -419,7 +407,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
       when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
     >
       <Menu
-        controls={controls}
+        controls={menu.controls}
         lazy
         id={id}
         class={[
@@ -437,30 +425,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
             <Show when={!props.mobile}>{t("chat.sessionHeader.layout")}</Show>
           </>
         }
-        items={[
-          {
-            kind: "group",
-            id: "layout-content",
-            get items() {
-              return menu.items();
-            },
-            render: (renderItems) => (
-              <ChatPanelMenuBoundary
-                controls={controls}
-                focusReady={menu.focusReady}
-                fallback={renderItems(menu.items)}
-              >
-                <LayoutContent
-                  menuProps={props}
-                  controls={controls}
-                  readMenu={menu.read}
-                  onReady={menu.onReady}
-                />
-                {renderItems(menu.items)}
-              </ChatPanelMenuBoundary>
-            ),
-          },
-        ]}
+        items={menu.items}
         ref={menu.bind}
         onBeforeShow={menu.beforeShow}
         onOpenChange={menu.openChange}
