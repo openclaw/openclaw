@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   createSessionManagementE2eSuite,
@@ -37,13 +34,6 @@ suite.define(() => {
         expect(await collapsed.count()).toBe(1);
         expect(new URL(page.url()).pathname).toBe("/new");
         expect(await contentLeft()).toBe(left);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [page.locator("openclaw-app-sidebar .sidebar-online")],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "peek-users.png"), frame.png);
 
         // Leaving the sidebar hides the peek.
         await page.mouse.move(900, 400);
