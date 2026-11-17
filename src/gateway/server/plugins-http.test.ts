@@ -38,7 +38,7 @@ import {
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
+import { isApprovalRecordVisibleToClient } from "../server-methods/approval-record-lookup.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";

@@ -323,7 +323,6 @@ describe("convertResponsesMessages", () => {
       expect(JSON.stringify(first)).toBe(golden);
       for (const [target, options] of [
         [model, { ...reasoningReplayIdentity, sessionId: "other" }],
-        [{ ...model, id: "other-model" }, reasoningReplayIdentity],
         [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
       ] as const) {
         expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");

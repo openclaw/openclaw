@@ -21,6 +21,8 @@ type SubagentAnnounceDeliveryFailureReason =
   | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_aborted"
+  | "requester_timed_out"
+  | "requester_preparation_changed"
   | "requester_state_conflict"
   | "requester_transcript_conflict"
   | "requester_turn_pending"

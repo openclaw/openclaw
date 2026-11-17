@@ -5,7 +5,10 @@ import {
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
-import { prepareSessionGenerationFacts } from "../config/sessions/session-delivery-generation.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../config/sessions/transcript-lease.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   bindGatewayContextResolver,
@@ -16,6 +19,7 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -107,17 +111,13 @@ async function recoverRequesterCompletionCustody(params: {
     preserveRecordedSource: true,
     assertCurrent,
   });
-  let target: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let target: TranscriptLease | undefined;
   try {
-    target = await prepareSessionGenerationFacts({
-      agentId,
-      sessionKey,
-      storePath,
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision ?? null,
-      env: params.env,
-      exactTranscript: true,
-    });
+    target = await acquireTranscriptLease(
+      chatRef({ agentId, sessionKey, storePath }),
+      { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+      { env: params.env },
+    );
     const requester = target;
     await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
       withOperatorToolGatewayAuthority(
