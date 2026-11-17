@@ -242,6 +242,12 @@ it.each(["parent", "child", "authorized", "revoked", "revoked-before-admission"]
             code: "INVALID_REQUEST",
           },
         });
+        expect(result.details).toHaveProperty(
+          "error",
+          expect.stringContaining(
+            "Ask an authorized operator to check continuation access for both conversations.",
+          ),
+        );
         const serialized = JSON.stringify(result);
         for (const hidden of [
           hiddenIdentity,

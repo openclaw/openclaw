@@ -26,7 +26,10 @@ export class SessionFollowupAccessError extends SessionMutationAuthorizationChan
       denial.phase === "admission"
         ? `Followup ${denial.endpoint} session admission was denied (${denial.code}).`
         : `Followup ${denial.endpoint} session access was revoked (${denial.code}).`;
-    super({ code: denial.code, message });
+    super({
+      code: denial.code,
+      message: `${message} Ask an authorized operator to check continuation access for both conversations.`,
+    });
     this.denial = denial;
   }
 }
