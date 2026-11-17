@@ -19,6 +19,8 @@ export type SessionPendingInputReceipt = {
   ) => void;
   /** Release consumed input custody without a terminal write. */
   release: () => void;
+  /** Relinquish process custody while preserving the accepted input for retry or replay. */
+  relinquish: () => void;
   completion?: AgentRunTerminalOutcome;
   /** @deprecated Await completeAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;

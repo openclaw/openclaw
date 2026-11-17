@@ -31,8 +31,10 @@ export type SessionPendingInputOwner = Omit<
     disposition: Exclude<SessionPendingInputState, "queued">,
     endCause: SessionPendingInputEndCause,
   ) => void;
-  /** Release process custody without changing the durable input disposition. */
+  /** Release consumed input custody without a terminal write. */
   release: () => void;
+  /** Relinquish process custody without changing the accepted input's durable state. */
+  relinquish: () => void;
   /** Host-only staged retry custody; inbound dedupe spends it once. */
   dedupeRetryAvailable?: true;
   /** Graceful shutdown leaves this accepted input for the session's ordinary FIFO. */

@@ -165,6 +165,7 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
   owner.release = () => {};
+  owner.relinquish = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
 }

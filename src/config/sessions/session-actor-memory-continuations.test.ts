@@ -79,6 +79,7 @@ const makePendingOwner = (
   assertReadCurrent() {},
   finish() {},
   release() {},
+  relinquish() {},
 });
 
 async function fixture(patch: Partial<SessionEntry> = {}) {

@@ -293,6 +293,8 @@ export type UserTurnTranscriptRecorder = {
   ) => void;
   /** Drop process custody after consumption without inventing a terminal cause. */
   releasePendingInput?: () => void;
+  /** Drop live custody on a transient outage while retaining the queued durable input. */
+  relinquishPendingInput?: () => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */

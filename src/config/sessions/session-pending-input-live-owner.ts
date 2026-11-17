@@ -1,6 +1,8 @@
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import type {
   SessionPendingInputWorkerFacts,
@@ -39,6 +41,9 @@ export function hydratePendingInputWorkerOwner(
     },
     release: () => {
       throw new Error("Worker custody cannot release its host owner");
+    },
+    relinquish: () => {
+      throw new Error("Worker custody cannot relinquish its host owner");
     },
   });
   return hydrate(facts);
@@ -169,4 +174,25 @@ export function releasePendingInputSources(sources: readonly SessionPendingInput
   if (failures.length) {
     throw new AggregateError(failures, "Failed to release collected input custody");
   }
+}
+
+export function relinquishPendingInputSources(sources: readonly SessionPendingInputOwner[]): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.relinquish();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to relinquish collected input custody");
+  }
+}
+
+export async function settlePendingInputReceipts(
+  receipts: readonly SessionPendingInputReceipt[],
+): Promise<void> {
+  const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
+  throwIfSettledRejected(results, "Failed to settle collected input custody");
 }

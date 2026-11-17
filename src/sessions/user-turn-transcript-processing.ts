@@ -2,7 +2,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import {
   isUserInitiatedAgentRunAbortReason,
-  resolveAgentRunAbortLifecycleFields,
+  resolveAgentRunErrorLifecycleFields,
 } from "../agents/run-termination.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
@@ -35,52 +35,58 @@ export async function completeUserTurnProcessing(
   }
   return undefined;
 }
-/** Undefined retains queued custody while restart authority or dispatch is unavailable. */
+/** Explicit terminal causes win; undefined leaves a transient outage queued. */
 export function resolvePendingInputEndCause(
   signal?: AbortSignal,
   failure?: unknown,
   defaultEndCause: SessionPendingInputEndCause = "failed",
 ): SessionPendingInputEndCause | undefined {
+  const reason = resolveAgentRunErrorLifecycleFields(failure, signal).stopReason;
+  if (isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)) {
+    return "user-stop";
+  }
+  if (defaultEndCause === "delete") {
+    return "delete";
+  }
+  if (
+    reason === "auth-revoked" ||
+    failure instanceof GatewayOperatorRecoveryAuthorizationError ||
+    readOperatorAuthorityFailure(failure)
+  ) {
+    return "revoked";
+  }
+  if (reason === "superseded") {
+    return "reset";
+  }
   if (
     isOperatorAuthorityUnavailable(failure) ||
     (failure instanceof GatewayDispatchUnavailableError && failure.retryable)
   ) {
     return undefined;
   }
-  const reason = resolveAgentRunAbortLifecycleFields(signal).stopReason;
-  return isUserInitiatedAgentRunAbortReason(signal?.reason)
-    ? "user-stop"
-    : reason === "auth-revoked" ||
-        failure instanceof GatewayOperatorRecoveryAuthorizationError ||
-        readOperatorAuthorityFailure(failure)
-      ? "revoked"
-      : reason === "superseded"
-        ? "reset"
-        : reason === "restart"
-          ? "restart-unrecoverable"
-          : defaultEndCause;
+  return reason === "restart" ? "restart-unrecoverable" : defaultEndCause;
 }
 
-/** The recorder releases consumed custody, retains outages, and records every other ending. */
+/** Accepted outages relinquish custody; pre-acceptance failures settle terminally. */
 export async function settleUserTurnPendingInput(
   recorder: UserTurnTranscriptRecorder | undefined,
   signal?: AbortSignal,
   failure?: unknown,
   deleted = false,
   disposition: "cancelled" | "interrupted" = "cancelled",
+  accepted = false,
 ): Promise<void> {
   const consumed = recorder?.isPendingInputConsumed?.();
   const endCause = consumed
     ? undefined
     : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : "failed");
-  if (!consumed && endCause === undefined) {
-    return;
-  }
   try {
-    if (consumed) {
+    if (!consumed && endCause === undefined && accepted) {
+      recorder?.relinquishPendingInput?.();
+    } else if (consumed) {
       recorder?.releasePendingInput?.();
-    } else if (endCause !== undefined) {
-      recorder?.finishPendingInput?.(disposition, endCause);
+    } else {
+      recorder?.finishPendingInput?.(disposition, endCause ?? "failed");
     }
   } finally {
     await recorder?.waitForPendingInputSettlement?.();
@@ -119,6 +125,16 @@ export function createUserTurnProcessingCompletion(
       } else {
         for (const source of sources ?? []) {
           source.releasePendingInput?.();
+        }
+      }
+    },
+    relinquishPendingInput: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput) {
+        pendingInput.relinquish();
+      } else {
+        for (const source of sources ?? []) {
+          source.relinquishPendingInput?.();
         }
       }
     },

@@ -48,7 +48,15 @@ export async function prepareReplySourceAdmission(params: {
   const ownsCustody = !recorder.getPendingInputMessage?.() && !recorder.hasPersisted();
   let admissionFailure: unknown;
   const release = ownsCustody
-    ? () => settleUserTurnPendingInput(recorder, operation.abortSignal, admissionFailure)
+    ? () =>
+        settleUserTurnPendingInput(
+          recorder,
+          operation.abortSignal,
+          admissionFailure,
+          false,
+          "cancelled",
+          operation.turnKind === "queued_followup",
+        )
     : undefined;
   try {
     if (ownsCustody && getReplyOperationSessionTarget(operation)) {

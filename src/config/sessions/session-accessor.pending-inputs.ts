@@ -13,7 +13,6 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
-import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
@@ -60,6 +59,8 @@ import {
   bindPendingInputMentionInvitation,
   finishPendingInputSources,
   releasePendingInputSources,
+  relinquishPendingInputSources,
+  settlePendingInputReceipts,
 } from "./session-pending-input-live-owner.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
@@ -140,6 +141,7 @@ function ownerReceipt(
     assertLifetimeCurrent: () => assertSessionPendingInputLifetimeCurrent(owner),
     finish: owner.finish,
     release: owner.release,
+    relinquish: owner.relinquish,
   };
   receiptOwners.set(receipt, owner);
   return receipt;
@@ -219,6 +221,7 @@ export function bindSessionPendingInputSources(
     sources,
     finish: finishPendingInputSources.bind(undefined, sources),
     release: releasePendingInputSources.bind(undefined, sources),
+    relinquish: relinquishPendingInputSources.bind(undefined, sources),
   };
   // A timer's owner must not retain this scope's original settlement receipts.
   aggregateOwner.assertReadCurrent = assertSessionPendingInputLifetimeCurrent.bind(
@@ -226,10 +229,7 @@ export function bindSessionPendingInputSources(
     aggregateOwner,
   );
   const aggregate = ownerReceipt(aggregateOwner);
-  aggregate.settled = async () => {
-    const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
-    throwIfSettledRejected(results, "Failed to settle collected input custody");
-  };
+  aggregate.settled = () => settlePendingInputReceipts(receipts);
   return aggregate;
 }
 
@@ -381,6 +381,7 @@ async function stagePreparedPendingInput(
         },
         finish: () => {},
         release: () => {},
+        relinquish: () => {},
       };
     }
     const assertUnowned = (row = existing) => {
@@ -419,6 +420,7 @@ async function stagePreparedPendingInput(
           },
           finish: () => {},
           release: () => {},
+          relinquish: () => {},
         };
       }
       assertUnowned();
@@ -566,6 +568,7 @@ async function stagePreparedPendingInput(
       authority: options.authority,
       finish,
       release,
+      relinquish: () => settle(),
     };
     if (committed) {
       // A matched receipt already proves the raw request. Its committed input owns

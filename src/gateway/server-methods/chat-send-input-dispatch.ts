@@ -302,6 +302,8 @@ export async function handleChatSendWithStorage(
           (admission.localGoalAdmission ||
             (userTurn.baseInput.display !== false &&
               (!systemInputProvenance || systemInputProvenance.kind === "external_user")))));
+    const inputAcceptance = context.dedupe.get(`chat:${clientRunId}`);
+    const queuedInputAdmission = readQueuedChatInputAdmission(clientRunId);
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =
@@ -319,6 +321,8 @@ export async function handleChatSendWithStorage(
           activeRunAbort.controller.signal,
           setupFailure ?? activeRunAbort.controller.signal.reason,
           reason === "delete",
+          "cancelled",
+          inputAcceptance?.effectAccepted === true || queuedInputAdmission !== undefined,
         );
         if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {

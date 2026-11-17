@@ -171,7 +171,8 @@ async function executeAgentRun(
       }
     };
     let mediaCleanup: Promise<void> | undefined;
-    const cleanupAdmittedRun = async () => {
+    let executionFailure: unknown;
+    const cleanupAdmittedRun = async (failure = executionFailure) => {
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
@@ -179,6 +180,7 @@ async function executeAgentRun(
           prepared.userTurn,
           "cancelled",
           abortController.signal,
+          failure,
         );
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
@@ -552,6 +554,7 @@ async function executeAgentRun(
           ),
         );
       } catch (err) {
+        executionFailure = err;
         if (
           prepared.activeRunAbort.controller.signal.aborted &&
           (!dispatched || isAbortError(err))

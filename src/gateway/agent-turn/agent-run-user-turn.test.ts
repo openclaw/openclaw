@@ -1,6 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import * as execHandoff from "../../agents/bash-tools.exec-approval-followup-state.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -169,6 +172,7 @@ it.each([
   ["committed", "rpc", "failed"],
   ["committed", "timeout", "failed"],
   ["committed", undefined, "restart-unrecoverable"],
+  ["committed", "user-stop", "user-stop"],
 ] as const)(
   "transfers failed preparation cleanup exactly once for %s input custody (stop=%s, cause=%s)",
   async (custody, stopReason, endCause) => {
@@ -197,6 +201,7 @@ it.each([
             run: (operation) => operation(),
             finish,
             release: vi.fn(),
+            relinquish: vi.fn(),
             settled: async () => {
               if (custody === "settlement-failed") {
                 throw settlementFailure;
@@ -205,7 +210,9 @@ it.each([
           });
         }
         if (stopReason) {
-          abort.abort();
+          abort.abort(
+            stopReason === "user-stop" ? createAgentRunDirectAbortError(true) : undefined,
+          );
         }
         throw failure;
       },

@@ -79,6 +79,7 @@ export function createSessionAccessorMockReset(mocks: SessionAccessorMocks) {
             run: (operation) => operation(),
             finish: vi.fn(),
             release: vi.fn(),
+            relinquish: vi.fn(),
           }
         : undefined;
     });
