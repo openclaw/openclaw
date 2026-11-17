@@ -1,10 +1,17 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { jsonResult } from "../../agents/tools/common.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
@@ -98,6 +105,296 @@ describe("runMessageAction core send routing", () => {
       to: "channel:C123",
       text: "synthetic channel policy probe",
     });
+  });
+
+  it.each([
+    { name: "delivers another conversation by default", target: "channel:C999" },
+    { name: "refuses another conversation when confined", target: "channel:C999", confine: true },
+    { name: "delivers its own conversation when confined", target: "channel:C123", confine: true },
+  ])("group turn send $name", async ({ target, confine }) => {
+    const sendText = registerSlackTextPlugin();
+    const send = runMessageAction({
+      cfg: {
+        ...slackConfig,
+        tools: { message: { crossContext: confine ? { confineChatTypes: ["group"] } : {} } },
+      },
+      action: "send",
+      params: { channel: "slack", target, message: "group turn probe" },
+      toolContext: {
+        currentChannelProvider: "slack",
+        currentChannelId: "channel:C123",
+        currentChatType: "group",
+        skipCrossContextDecoration: true,
+      },
+      dryRun: false,
+    });
+    if (confine && target === "channel:C999") {
+      await expect(send).rejects.toMatchObject({
+        message: expect.stringContaining("confineChatTypes keeps group turns"),
+        reasonCode: "message_cross_context_denied",
+        policyRef: "message-cross-context:target",
+      });
+      expect(sendText).not.toHaveBeenCalled();
+      return;
+    }
+    await expect(send).resolves.toMatchObject({ kind: "send", channel: "slack", to: target });
+    expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({
+      to: target,
+      text: "group turn probe",
+    });
+  });
+
+  it.each<{
+    name: string;
+    action?: ChannelMessageActionName;
+    params: Record<string, unknown>;
+    denied?: boolean;
+    conflict?: boolean;
+    boundToChat?: boolean;
+  }>([
+    { name: "the chat id with the current topic id", params: { threadId: "42" } },
+    { name: "the chat id inheriting the current topic", params: {} },
+    { name: "the current topic target", params: { target: "-1001234567890:topic:42" } },
+    { name: "the chat id with another topic id", params: { threadId: "99" }, denied: true },
+    { name: "another topic target", params: { target: "-1001234567890:topic:99" }, denied: true },
+    { name: "the top-level chat", params: { topLevel: true }, denied: true },
+    // Delivery lets an explicit thread id outrank the topic encoded in the target.
+    {
+      name: "the current topic target with another topic id",
+      params: { target: "-1001234567890:topic:42", threadId: "99" },
+      denied: true,
+    },
+    {
+      name: "another topic target with the current topic id",
+      params: { target: "-1001234567890:topic:99", threadId: "42" },
+    },
+    {
+      name: "the current topic target with another messageThreadId",
+      params: { target: "-1001234567890:topic:42", messageThreadId: "99" },
+      denied: true,
+    },
+    {
+      name: "the current topic target with another message_thread_id",
+      params: { target: "-1001234567890:topic:42", message_thread_id: "99" },
+      denied: true,
+    },
+    {
+      name: "the current topic target with another numeric threadId",
+      params: { target: "-1001234567890:topic:42", threadId: 99 },
+      denied: true,
+    },
+    // Sends and polls are delivered into the inherited topic. Telegram creates a topic in the
+    // base chat and edits the topic its thread id names.
+    {
+      name: "a poll to the chat id inheriting the current topic",
+      action: "poll",
+      params: { pollQuestion: "Lunch?", pollOption: ["yes", "no"] },
+    },
+    {
+      name: "a new topic in the chat id",
+      action: "topic-create",
+      params: { name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic in the chat id with the current topic id",
+      action: "topic-create",
+      params: { name: "New topic", threadId: "42" },
+      denied: true,
+    },
+    // Naming the current topic does not move a new topic out of the base chat.
+    {
+      name: "a new topic through the current topic target",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:42", name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic through the current topic target and id",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:42", threadId: "42", name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic in the chat its turn is bound to",
+      action: "topic-create",
+      params: { name: "New topic" },
+      boundToChat: true,
+    },
+    {
+      name: "a new topic through another topic target of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:99", name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
+    {
+      name: "a rename of the current topic through the chat id",
+      action: "topic-edit",
+      params: { name: "Renamed", threadId: "42" },
+      denied: true,
+    },
+    {
+      name: "a rename of the current topic",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", name: "Renamed" },
+    },
+    {
+      name: "a rename of another topic through the current topic target",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "99", name: "Renamed" },
+      denied: true,
+    },
+    // Telegram reads chatId, chat_id and channel_id ahead of the target, so they must agree.
+    {
+      name: "a rename through the current topic target and another chatId",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", chatId: "-1009999999999" },
+      conflict: true,
+    },
+    {
+      name: "a rename through the current topic target and another channel_id",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", channel_id: "-1009999999999" },
+      conflict: true,
+    },
+    {
+      name: "a rename through another chatId alone",
+      action: "topic-edit",
+      params: { target: undefined, threadId: "42", chatId: "-1009999999999" },
+      denied: true,
+    },
+    {
+      name: "a rename through the current topic target and the same chatId",
+      action: "topic-edit",
+      params: {
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        chatId: "-1001234567890:topic:42",
+      },
+    },
+    {
+      name: "a new topic through another chatId alone from a turn bound to the chat",
+      action: "topic-create",
+      params: { target: undefined, chatId: "-1009999999999", name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
+    {
+      name: "a new topic through the chatId of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: undefined, chatId: "-1001234567890", name: "New topic" },
+      boundToChat: true,
+    },
+    // Telegram also reads a numeric channelId ahead of the target.
+    {
+      name: "a new topic through a numeric channelId of another chat",
+      action: "topic-create",
+      params: { target: undefined, channelId: -1009999999999, name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
+    {
+      name: "a new topic through the numeric channelId of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: undefined, channelId: -1001234567890, name: "New topic" },
+      boundToChat: true,
+    },
+    {
+      name: "a rename through a numeric channelId of another chat",
+      action: "topic-edit",
+      params: { target: undefined, threadId: "42", channelId: -1009999999999 },
+      denied: true,
+    },
+  ])("judges a restricted Telegram turn's request for $name", async (scenario) => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "api.ts",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
+    // Both the chat-type confinement and the existing same-provider switch share this check.
+    const outcomes: string[] = [];
+    for (const crossContext of [
+      { confineChatTypes: ["group" as const] },
+      { allowWithinProvider: false },
+    ]) {
+      const run = runMessageAction({
+        cfg: {
+          channels: { telegram: { botToken: "123:test" } },
+          tools: { message: { crossContext } },
+        },
+        action: scenario.action ?? "send",
+        params: {
+          channel: "telegram",
+          target: "-1001234567890",
+          message: "topic probe",
+          ...scenario.params,
+        },
+        toolContext: {
+          currentChannelProvider: "telegram",
+          // Every other row is bound to topic 42 of the same chat.
+          ...(scenario.boundToChat
+            ? { currentChannelId: "telegram:-1001234567890" }
+            : { currentChannelId: "telegram:-1001234567890:topic:42", currentThreadTs: "42" }),
+          currentChatType: "group",
+        },
+        dryRun: true,
+      });
+      outcomes.push(
+        await run.then(
+          () => "allowed",
+          (error: unknown) =>
+            error instanceof MessageActionDeniedError ? error.reasonCode : String(error),
+        ),
+      );
+    }
+    const expected = scenario.conflict
+      ? `Error: Action ${scenario.action} received conflicting target and delivery alias values.`
+      : scenario.denied
+        ? "message_cross_context_denied"
+        : "allowed";
+    expect(outcomes).toEqual([expected, expected]);
+  });
+
+  it("drops a numeric channelId that disagrees with a Telegram topic target before the action runs", async () => {
+    const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
+      pluginId: "telegram",
+      artifactBasename: "api.ts",
+    });
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: { ...telegramPlugin, actions: { ...telegramPlugin.actions, handleAction } },
+        },
+      ]),
+    );
+    await runMessageAction({
+      cfg: {
+        channels: { telegram: { botToken: "123:test" } },
+        tools: { message: { crossContext: { confineChatTypes: ["group"] } } },
+      },
+      action: "topic-create",
+      params: {
+        channel: "telegram",
+        target: "-1001234567890",
+        channelId: -1009999999999,
+        name: "New topic",
+      },
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890",
+        currentChatType: "group",
+      },
+      dryRun: false,
+    });
+    const { params } = mockFirstRecordArg(handleAction, "handle action");
+    expect(params).not.toHaveProperty("channelId");
+    expect(params).toMatchObject({ to: "telegram:-1001234567890" });
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {

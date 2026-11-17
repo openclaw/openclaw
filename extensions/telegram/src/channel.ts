@@ -112,6 +112,7 @@ import {
   parseTelegramTopicConversation,
   buildTelegramConversationId,
   resolveTelegramConversationRef,
+  resolveTelegramCurrentChannelId,
   resolveTelegramTargetThread,
 } from "./topic-conversation.js";
 
@@ -852,15 +853,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveTelegramConfigAccessorAccount({ cfg, accountId }).config.replyToMode ?? "off",
     buildToolContext: buildTelegramThreadingToolContext,
     resolveAutoThreadId: resolveTelegramAutoThreadId,
-    resolveCurrentChannelId: ({ to, threadId }) => {
-      if (threadId == null) {
-        return to;
-      }
-      const parsed = parseTelegramTarget(to);
-      return parsed.messageThreadId != null || parsed.directMessagesTopicId != null
-        ? to
-        : `${to}:topic:${threadId}`;
-    },
+    resolveCurrentChannelId: resolveTelegramCurrentChannelId,
   },
   outbound: telegramChannelOutbound,
 });

@@ -1,0 +1,172 @@
+title: Cross-context confinement keeps group turns in their conversation
+
+scenario:
+  id: message-cross-context-confine-group
+  surface: channel
+  coverage:
+    primary:
+      - channels.message-tool-outbound
+    secondary:
+      - agent-runtime.tool-safety-controls
+  gatewayConfigPatch:
+    messages:
+      visibleReplies: message_tool
+      groupChat:
+        visibleReplies: message_tool
+  objective: Verify a group turn's message-tool send to the owner's DM is delivered by default and refused before delivery once tools.message.crossContext.confineChatTypes lists group, while the group's own conversation and DM turns keep working.
+  successCriteria:
+    - With no crossContext config, a group turn's message(action=send) to dm:alice reaches the DM.
+    - After config.patch sets confineChatTypes to [group], the same group-turn send returns a cross-context denial naming confineChatTypes and nothing reaches the DM.
+    - The confined group turn can still send to its own group.
+    - A DM turn can still send to another group.
+  docsRefs:
+    - docs/gateway/security/tool-permissions.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/infra/outbound/outbound-policy.ts
+    - src/infra/outbound/message-action-routing.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Patches tools.message.crossContext mid-run, which would confine later scenarios' group turns.
+    retryCount: 0
+    channel: qa-channel
+    summary: Send from a qa-channel group turn to the owner's DM before and after confining group turns, then check the group's own conversation and a DM turn.
+    config:
+      requiredProviderMode: mock-openai
+      groupId: qa-confine-group
+      otherGroupId: qa-confine-other
+      ownerId: alice
+      promptSnippet: qa msteams thread message-tool final dedupe
+      defaultMarker: QA-CONFINE-DEFAULT-DELIVERED
+      confinedMarker: QA-CONFINE-REFUSED
+      ownGroupMarker: QA-CONFINE-OWN-GROUP-OK
+      dmTurnMarker: QA-CONFINE-DM-TURN-OK
+      denialText: Cross-context messaging denied
+      quietWindowMs: 5000
+
+flow:
+  steps:
+    - name: delivers a group turn's send to the owner's DM by default
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode && Boolean(env.mock)"
+            message: this seeded scenario is mock-openai only
+        - assert:
+            expr: "env.cfg.tools?.message?.crossContext === undefined"
+            message: the default leg must run without any crossContext config
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: sendFrom
+          value:
+            lambda:
+              params: [conversation, target, marker, awaitResult]
+              async: true
+              expr: "(async () => { const cursor = (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor; const sinceIndex = state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length; await state.addInboundMessage({ conversation, senderId: config.ownerId, senderName: 'Alice', text: `@openclaw ${config.promptSnippet}. msteams message target: \\`${target}\\`. Send exact marker: \\`${marker}\\`` }); const deadline = Date.now() + liveTurnTimeoutMs(env, 60000); let plan; while (!plan && Date.now() < deadline) { plan = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`)).find((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.target === target && request.plannedToolArgs?.message === marker); if (!plan) { await sleep(250); } } if (!plan) { const seen = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${cursor}`); throw new Error(`timed out waiting for the message send plan to ${target}; requests=${JSON.stringify(seen.map((request) => ({ tool: request.plannedToolName, args: request.plannedToolArgs })))}; outbound=${formatTransportTranscript(state, { conversationId: conversation.id })}`); } if (awaitResult === false) { return { plan, toolOutput: '', sinceIndex }; } let followup; while (!followup && Date.now() < deadline) { followup = (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${plan.cursor}`)).find((request) => request.toolOutputCallId === plan.plannedToolCallId && Boolean(request.toolOutput)); if (!followup) { await sleep(250); } } if (!followup) { throw new Error(`timed out waiting for the message tool result for ${target}`); } return { plan, toolOutput: String(followup.toolOutput), sinceIndex }; })()"
+        - set: deliveredTo
+          value:
+            lambda:
+              params: [conversationId, marker, sinceIndex]
+              expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(sinceIndex).filter((message) => message.conversation.id === conversationId && String(message.text ?? '').includes(marker))"
+        - set: defaultSend
+          value:
+            expr: "await sendFrom({ id: config.groupId, kind: 'group', title: 'QA Confine Group' }, `dm:${config.ownerId}`, config.defaultMarker)"
+        - assert:
+            expr: "!defaultSend.toolOutput.includes(config.denialText)"
+            message:
+              expr: "`the default group-turn send was refused: ${defaultSend.toolOutput.slice(0, 600)}`"
+        - call: waitForOutboundMessage
+          saveAs: defaultDmDelivery
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.ownerId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '').includes(config.defaultMarker)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                expr: defaultSend.sinceIndex
+      detailsExpr: "`target=${defaultSend.plan.plannedToolArgs.target}; dmDelivery=${defaultDmDelivery.conversation.kind}:${defaultDmDelivery.conversation.id}:${String(defaultDmDelivery.text).slice(0, 120)}`"
+    - name: refuses the same send once group turns are confined
+      actions:
+        - call: patchConfig
+          args:
+            - env:
+                ref: env
+              patch:
+                tools:
+                  message:
+                    crossContext:
+                      confineChatTypes:
+                        - group
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: readConfigSnapshot
+          saveAs: confinedSnapshot
+          args:
+            - ref: env
+        - assert:
+            expr: "JSON.stringify(confinedSnapshot.config?.tools?.message?.crossContext?.confineChatTypes) === JSON.stringify(['group'])"
+            message:
+              expr: "`config.patch did not apply confineChatTypes: ${JSON.stringify(confinedSnapshot.config?.tools?.message ?? null)}`"
+        - set: confinedSend
+          value:
+            expr: "await sendFrom({ id: config.groupId, kind: 'group', title: 'QA Confine Group' }, `dm:${config.ownerId}`, config.confinedMarker)"
+        - assert:
+            expr: "confinedSend.toolOutput.includes(config.denialText) && confinedSend.toolOutput.includes('confineChatTypes') && confinedSend.toolOutput.includes(`dm:${config.ownerId}`)"
+            message:
+              expr: "`expected a cross-context denial naming confineChatTypes; toolOutput=${confinedSend.toolOutput.slice(0, 600)}`"
+        - call: sleep
+          args:
+            - expr: config.quietWindowMs
+        - set: refusedDeliveries
+          value:
+            expr: "deliveredTo(config.ownerId, config.confinedMarker, confinedSend.sinceIndex)"
+        - assert:
+            expr: refusedDeliveries.length === 0
+            message:
+              expr: "`the refused send still reached the DM: ${JSON.stringify(refusedDeliveries).slice(0, 600)}`"
+      detailsExpr: "`toolOutput=${confinedSend.toolOutput.slice(0, 400)}; dmDeliveriesAfterQuietWindow=${refusedDeliveries.length}`"
+    - name: keeps the confined group's own conversation and DM turns working
+      actions:
+        # A send into the source conversation settles the turn, so there is no follow-up
+        # model request to read; the failure-aware wait below throws on a denial reply.
+        - set: ownGroupSend
+          value:
+            expr: "await sendFrom({ id: config.groupId, kind: 'group', title: 'QA Confine Group' }, `group:${config.groupId}`, config.ownGroupMarker, false)"
+        - call: waitForOutboundMessage
+          saveAs: ownGroupDelivery
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.groupId && String(candidate.text ?? '').includes(config.ownGroupMarker)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                expr: ownGroupSend.sinceIndex
+        - set: dmTurnSend
+          value:
+            expr: "await sendFrom({ id: config.ownerId, kind: 'direct' }, `group:${config.otherGroupId}`, config.dmTurnMarker)"
+        - assert:
+            expr: "!dmTurnSend.toolOutput.includes(config.denialText)"
+            message:
+              expr: "`a DM turn was refused although only group turns are confined: ${dmTurnSend.toolOutput.slice(0, 600)}`"
+        - call: waitForOutboundMessage
+          saveAs: otherGroupDelivery
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.otherGroupId && String(candidate.text ?? '').includes(config.dmTurnMarker)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - sinceIndex:
+                expr: dmTurnSend.sinceIndex
+      detailsExpr: "`ownGroupDelivery=${ownGroupDelivery.conversation.kind}:${ownGroupDelivery.conversation.id}:${String(ownGroupDelivery.text).slice(0, 80)}; dmTurnToolOutput=${dmTurnSend.toolOutput.slice(0, 200)}; dmTurnDelivery=${otherGroupDelivery.conversation.kind}:${otherGroupDelivery.conversation.id}`"
