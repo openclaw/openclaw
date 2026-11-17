@@ -6,6 +6,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
+  deleteSessionEntryLifecycle,
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -260,10 +261,14 @@ describe("operator access cancellation", () => {
         if (end === "occurrence retired") {
           occurrence.retire();
         } else {
-          // An isolated run's exact-run session is removed when the run finishes.
-          await replaceSessionEntry(occurrence.target, {
-            ...occurrence.entry,
-            sessionId: "next-run-session",
+          // An isolated run's exact-run session is deleted when the run finishes.
+          await deleteSessionEntryLifecycle({
+            archiveTranscript: false,
+            storePath: occurrence.target.storePath,
+            target: {
+              canonicalKey: occurrence.target.sessionKey,
+              storeKeys: [occurrence.target.sessionKey],
+            },
           });
         }
         expect(restored.authority.assertCurrent).toThrow();
