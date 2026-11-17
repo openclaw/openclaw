@@ -277,6 +277,9 @@ describe("full release same-parent recovery workflow", () => {
           verifierCheckedOut ? verifierSha : "",
         );
       }
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(
+        !verifierCheckedOut,
+      );
       for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
         const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
         assert(job);
