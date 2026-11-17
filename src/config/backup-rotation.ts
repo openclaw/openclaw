@@ -43,6 +43,8 @@ export async function prepareConfigFileWrite(
     }
   };
   assertCurrent?.();
+  // Refuse invalid source bytes before staging them as recovery history.
+  assertBeforeMutation();
   let backup: Awaited<ReturnType<typeof tempFile>> | undefined;
   try {
     if (params.previousRaw !== null) {

@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #194181: malformed root/include bytes preserve all recovery files and explicit destructive writes remain supported.
+53

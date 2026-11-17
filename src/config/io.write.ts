@@ -492,6 +492,7 @@ export async function writeConfigFileFromContext(
         snapshot,
         stateDirectory,
         includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
+        validateUtf8: options.allowDestructiveWrite !== true,
         onRootRemoved: () => {
           publication.phase = "removed";
         },
