@@ -200,16 +200,17 @@ command lane and the `agents.defaults.subagents.maxConcurrent` cap with
 
 Use `api.runtime.subagent.runForkedTurn(...)` when background work must act on a
 stored session's conversation with tools, for example a reviewer that records
-what it learned. The fork reads through one completed transcript entry. In an
-`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished turn
-to fork.
+what it learned. The fork reads through one transcript entry: the one `through`
+names, or the session's latest message when `through` is omitted. In an
+`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished
+turn to fork.
 
 ```typescript
 const result = await api.runtime.subagent.runForkedTurn({
   sessionKey,
-  through: { sessionId, entryId }, // the completed entry to read through
+  through: { sessionId, entryId }, // optional; the latest message when omitted
   prompt: "Review this conversation and record one reusable note.",
-  tools: ["my_plugin_note"], // tools this plugin registered
+  tools: ["my_plugin_note", "read"], // this plugin's tools, plus read, ls or exec
   runId: `my-plugin-review:${reviewId}`, // optional; unique per run
   timeoutMs: 120_000, // optional; defaults to 120 seconds, no upper bound
   maxTokens: 4_096, // optional; defaults to the session's output limit
@@ -225,12 +226,23 @@ if (result.status === "refused") {
 }
 ```
 
-- `tools` names the tools the fork may run. It accepts only exact tools the
-  calling plugin uniquely registered. Core tools and tools another plugin
-  registered are rejected, the same rule as `subagent.run({ toolsAlsoAllow })`.
-  The source session's tool policy is still checked, including explicit denies;
+- `tools` names the tools the fork may run: exact tools the calling plugin
+  uniquely registered, plus `read`, `ls` and `exec`. Other core tools and tools
+  another plugin registered are rejected, the same rule as
+  `subagent.run({ toolsAlsoAllow })`. Every tool the session lists stays in the
+  request, so the provider serves its cached prefix; a call to any other tool
+  returns "not available in this background run" as a normal tool result.
+- The source session's tool policy is still checked, including explicit denies;
   a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
-  model call. Pass `[]` for a tool-free fork.
+  model call. `read`, `ls` and `exec` are never added to that policy: the session
+  must already allow them. Pass `[]` for a tool-free fork.
+- `exec` runs only when the anchored turn came from the owner. A fork never asks
+  for approval: a command the agent's exec approvals would ask about is denied,
+  and nothing is queued for approval. Allowlist entries and full-permission exec
+  apply as they do for the session's own turns.
+- A manifest's `contracts.tools` may claim a core catalog id only when the
+  catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
+  `exec`, `read` or another core-built tool grants nothing.
 - `through.sessionId` must still be the session's current id, and the entry must
   be on its active transcript; otherwise the call fails. A reset that keeps the
   session id does not refuse the fork. `outcome.source` reports the

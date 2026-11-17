@@ -61,7 +61,7 @@ export default defineControlUiPlugin({
           id: ACCESS_PAGE_ID,
           label: "Access",
           page: { id: ACCESS_PAGE_ID },
-          icon: "users",
+          icon: "access",
           defaultVisible: false,
         });
         disposePage = () => {

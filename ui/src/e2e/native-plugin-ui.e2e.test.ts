@@ -373,7 +373,7 @@ suite.define(() => {
         await button(page, "Pages").click();
         await page
           .locator(".sidebar-pages")
-          .getByRole("link", { name: "Plugins", exact: true })
+          .getByRole("link", { name: "Customize", exact: true })
           .waitFor();
         expect(
           await page.evaluate(() => ({
