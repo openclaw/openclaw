@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import Synchronization
 import SwiftUI
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 @testable import OpenClawChatUI
@@ -393,23 +393,10 @@ struct ChatComposerStateTests {
     }
 }
 
-private final class ComposerInvalidationProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-
-    var invalidations: Int {
-        self.lock.withLock { self.count }
-    }
-
-    func invalidate() {
-        self.lock.withLock { self.count += 1 }
-    }
-}
-
 @MainActor
 struct ChatInputResponsivenessTests {
     @Test
-    func `draft observation stays in the deferred composer sections`() {
+    func `draft observation stays in the deferred composer sections`() throws {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let composer = OpenClawChatComposer(
             viewModel: viewModel,
@@ -423,23 +410,23 @@ struct ChatInputResponsivenessTests {
             talkControl: nil,
             dictationControl: nil,
             voiceNoteControl: nil)
-        let probe = ComposerInvalidationProbe()
+        let probe = Mutex(0)
         withObservationTracking {
             _ = composer.editorOverlay
             _ = composer.cleanCaptureAndPrimaryControls
         } onChange: {
-            probe.invalidate()
+            probe.withLock { $0 += 1 }
         }
         viewModel.input = "typing while an answer arrives"
-        #expect(probe.invalidations == 0)
+        try #require(probe.withLock { $0 } == 0)
 
-        let childProbe = ComposerInvalidationProbe()
+        let childProbe = Mutex(0)
         withObservationTracking {
             _ = composer.cleanCaptureAndPrimaryControls.body
         } onChange: {
-            childProbe.invalidate()
+            childProbe.withLock { $0 += 1 }
         }
         viewModel.input = ""
-        #expect(childProbe.invalidations == 1)
+        #expect(childProbe.withLock { $0 } == 1)
     }
 }
