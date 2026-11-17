@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -25,7 +25,6 @@ import {
 } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-providers.css";
-import "../../styles/usage.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
@@ -71,15 +70,15 @@ function AddProvider(props: ModelProvidersViewProps) {
               <ModelProviderIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
               {provider()?.displayName ?? displayLabel(props.addProviderId)}
             </h2>
-            <button
+            <IconButton
+              size={28}
               class="oc-dialog__close"
-              type="button"
-              aria-label={t("common.close")}
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
               disabled={busy()}
               onClick={() => props.onAddProviderToggle()}
-            >
-              <Icon name="x" />
-            </button>
+            />
             <div class="oc-dialog__description">
               <p>{t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
             </div>
@@ -260,15 +259,13 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   });
   const connected = () => groups().connected;
   const unconnected = () => groups().unconnected;
-  const refreshLabel = () =>
-    props.refreshing ? t("modelProviders.refreshing") : t("common.refresh");
   // The last refresh time lives in the refresh tooltip instead of the header row.
   const refreshTooltip = () =>
     props.updatedAt && !props.refreshing
-      ? `${refreshLabel()} · ${t("modelProviders.updated", {
+      ? t("modelProviders.updated", {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
-        })}`
-      : refreshLabel();
+        })
+      : undefined;
   // Setup with nothing connected has no list to filter.
   const nothingToSearch = () =>
     needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
@@ -306,7 +303,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
           </SettingsGroup>
         ) : undefined}
-        {props.cards.length === 0 ? (
+        {props.cards.length === 0 && !props.error ? (
           <SettingsGroup>
             <SettingsEmpty
               message={
@@ -363,9 +360,9 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           {needsModelSetup(props) ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
-            label={refreshLabel()}
+            label={t("common.refresh")}
             tooltip={refreshTooltip()}
-            busy={props.refreshing}
+            disabled={props.refreshing}
             onClick={() => props.onRefresh()}
           />
         </>

@@ -359,11 +359,16 @@ describe("new capture through native private transport", () => {
             typeof options !== "number" &&
             options.input?.toString().includes("create " + checkpointRef + "\0")
           ) {
-            await pause();
+            const prepareInput = options.prepareInput;
             const beforeInput = options.beforeInput;
+            assert(prepareInput);
             assert(beforeInput);
             return await run(argv, {
               ...options,
+              prepareInput: async (...args) => {
+                await prepareInput(...args);
+                await pause();
+              },
               beforeInput: (...args) => {
                 finalInputChecked = true;
                 beforeInput(...args);

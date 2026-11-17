@@ -234,14 +234,11 @@ export async function monitorIrcProvider(
       const requireMention = message.isGroup
         ? resolveIrcGroupRequireMention({ groups: account.config.groups, target: message.target })
         : false;
-      const routeGroupAllowFrom = normalizeStringEntries(
-        groupMatch.groupConfig?.allowFrom?.length
-          ? groupMatch.groupConfig.allowFrom
-          : groupMatch.wildcardConfig?.allowFrom,
-      );
+      const routeGroupAllowFrom =
+        groupMatch.groupConfig?.allowFrom ?? groupMatch.wildcardConfig?.allowFrom;
       const accessGroupPolicy: IrcGroupPolicy =
         groupPolicy === "open" &&
-        (hasEntries(account.config.groupAllowFrom) || hasEntries(routeGroupAllowFrom))
+        (hasEntries(account.config.groupAllowFrom) || routeGroupAllowFrom !== undefined)
           ? "allowlist"
           : groupPolicy;
       const channelTarget =
@@ -294,7 +291,7 @@ export async function monitorIrcProvider(
                   precedence: 10,
                   blockReason: "channel_disabled",
                 },
-                hasEntries(routeGroupAllowFrom) && {
+                routeGroupAllowFrom !== undefined && {
                   id: "irc:channel-sender",
                   precedence: 20,
                   senderPolicy: "replace",

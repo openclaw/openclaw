@@ -51,6 +51,15 @@ struct SettingsHubScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            self.push(.deviceSettings)
+                        } label: {
+                            Text("Device")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        .accessibilityIdentifier("SettingsHub.Device")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
                             self.push(.espSetup)
                         } label: {
                             Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
@@ -181,31 +190,42 @@ struct EmbeddedDashboardContent: View {
             config: self.config,
             storedOperatorToken: storedOperatorToken,
             authorizationRevision: authorization?.revision)
-        VStack(spacing: 0) {
-            self.gatewayUpgradeBanner
-            self.ingressSignInGuidance
-            if let authorization {
-                if let cookie = authorization.dashboardCookie(self.url) {
-                    if self.failedAccessBoundaryIdentity == webContentIdentity {
-                        self.accessUnavailable
+        Group {
+            if let httpErrorStatus = self.embedCompatibility?.httpErrorStatus {
+                self.httpErrorView(statusCode: httpErrorStatus)
+            } else {
+                VStack(spacing: 0) {
+                    self.gatewayUpgradeBanner
+                    self.ingressSignInGuidance
+                    if let authorization {
+                        if let cookie = authorization.dashboardCookie(self.url) {
+                            if self.failedAccessBoundaryIdentity == webContentIdentity {
+                                self.accessUnavailable
+                            } else {
+                                self.dashboardWebView(
+                                    accessCookie: cookie,
+                                    authorization: authorization,
+                                    webContentIdentity: webContentIdentity,
+                                    onAccessCookieBoundaryFailure: {
+                                        self.failedAccessBoundaryIdentity = webContentIdentity
+                                    })
+                            }
+                        } else {
+                            self.accessUnavailable
+                        }
                     } else {
                         self.dashboardWebView(
-                            accessCookie: cookie,
-                            authorization: authorization,
-                            webContentIdentity: webContentIdentity,
-                            onAccessCookieBoundaryFailure: {
-                                self.failedAccessBoundaryIdentity = webContentIdentity
-                            })
+                            accessCookie: nil,
+                            authorization: nil,
+                            webContentIdentity: webContentIdentity)
                     }
-                } else {
-                    self.accessUnavailable
                 }
-            } else {
-                self.dashboardWebView(
-                    accessCookie: nil,
-                    authorization: nil,
-                    webContentIdentity: webContentIdentity)
             }
+        }
+        // The error page has no web view for `.id` to recreate, and the error outlives this view while
+        // a Gateway switch reconnects. Each new view or identity loads once, as the web view did.
+        .onChange(of: webContentIdentity, initial: true) { _, _ in
+            self.embedCompatibility?.reload()
         }
     }
 
@@ -266,7 +286,7 @@ struct EmbeddedDashboardContent: View {
     private var accessUnavailable: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(
-                "Dashboard unavailable with this Cloudflare session. Native chat and settings still work.")
+                "The web app is unavailable with this Cloudflare session. Native chat and settings still work.")
                 .font(OpenClawType.body)
             if let openGateway {
                 Button(action: openGateway) {
@@ -283,7 +303,7 @@ struct EmbeddedDashboardContent: View {
         if self.config?.ingressAuthorization != nil {
             VStack(alignment: .leading, spacing: 8) {
                 Text(
-                    "This Dashboard requires a Gateway UI that supports native app sign-in. " +
+                    "This page requires a Gateway web app that supports native app sign-in. " +
                         "If it cannot connect, update the Gateway. " +
                         "Native chat and settings remain available.")
                     .font(OpenClawType.footnote)
@@ -302,10 +322,44 @@ struct EmbeddedDashboardContent: View {
         }
     }
 
+    /// Replaces the web view so a Gateway error body never renders raw or reads as an outdated Dashboard;
+    /// Reload recreates the web view for a fresh load.
+    private func httpErrorView(statusCode: Int) -> some View {
+        let message = String(
+            format: String(localized: "The Gateway returned HTTP %ld (%@)."),
+            statusCode,
+            HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)
+        return VStack(spacing: 12) {
+            Text("Web app unavailable")
+                .font(OpenClawType.subheadSemiBold)
+            Text(message)
+                .font(OpenClawType.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                self.embedCompatibility?.reload()
+            } label: {
+                Text("Reload")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .openClawProminentButton()
+            .accessibilityIdentifier("SettingsHub.DashboardReload")
+            if let openGateway {
+                Button(action: openGateway) {
+                    Text("Open Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("SettingsHub.DashboardError")
+    }
+
     @ViewBuilder private var gatewayUpgradeBanner: some View {
         if let openGateway, self.embedCompatibility?.needsGatewayUpgrade == true {
             VStack(alignment: .leading, spacing: 8) {
-                Text("This Gateway's Dashboard is older than the app; update the Gateway to manage app settings here")
+                Text("This Gateway's web app is older than the app; update the Gateway to manage app settings here")
                     .font(OpenClawType.footnote)
                     .accessibilityIdentifier("SettingsHub.GatewayUpgradeWarning")
                 Button(action: openGateway) {

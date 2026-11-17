@@ -402,6 +402,10 @@ try {
       ...cfg.plugins.entries.codex,
       config: { appServer: { command: "/synthetic/custom-codex" } },
     };
+    cfg.agents!.defaults!.models!["openai/gpt-5.6-sol"] = {
+      agentRuntime: { id: "codex" },
+      params: { responsesServerCompaction: true, responsesCompactThreshold: 80_000 },
+    };
     summary.customCodexCommand = true;
   }
   if (values["standing-advisories"]) {

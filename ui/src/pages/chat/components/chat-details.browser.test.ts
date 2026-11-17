@@ -7,8 +7,13 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { captureChatDetailsSnapshot } from "../chat-details-snapshot.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "../session-message-cache.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
@@ -135,6 +140,53 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("retains docking after connection admits geometry measured while offline", async () => {
+    await page.viewport(1700, 900);
+    stubResizeObserver();
+    try {
+      const chatMessagesBySession: ChatMessageCache = new Map();
+      const host = {
+        assistantAgentId: "main",
+        chatMessagesBySession,
+        sessionKey: card.sessionKey,
+        currentSessionId: "details-1",
+        connected: false,
+        connectionEpoch: 0,
+        settings: { gatewayUrl: "wss://details.example" },
+        client: { recoveryScope: "account-a", recoveryScopeReady: true },
+      };
+      const target = { sessionKey: card.sessionKey };
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: host.currentSessionId,
+      });
+      const view = await fixture(
+        props({ connected: false, onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write }),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      const layout = JSON.stringify([1700]);
+      view.update({ dockingLayout: layout });
+      window.dispatchEvent(new Event("resize"));
+      flush();
+      const saved = () => readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      expect(saved()?.details?.docking).toBeUndefined();
+
+      host.connected = true;
+      view.updateChat({
+        connected: true,
+        onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write,
+      });
+      flush();
+      expect(saved()?.details?.docking).toEqual({ layout, wide: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
     await page.viewport(1700, 900);
     const view = await fixture(props(), 1320, false, "desktop", true);
@@ -380,21 +432,23 @@ describe("chat Details presentation", () => {
     panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
     document.body.append(panel);
     mounted.push(panel, styles);
-    mountSolid(
-      () =>
-        createComponent(ChatDetailsDesktopBody, {
-          presented: true,
-          get children() {
-            return () =>
-              createComponent(ChatDetailsEnvironment, {
-                details: props({
-                  detailsWorkspace: {
-                    root: "/workspace/details",
-                    label: null,
-                    branch: "feature/details",
-                  },
-                }),
-                presented: true,
+    const mountContent = () =>
+      mountSolid(
+        () =>
+          createComponent(ChatDetailsDesktopContent, {
+            presented: true,
+            dismissed: false,
+            cachedReady: true,
+            progressMenuRef: () => {},
+            onHideProgress: () => {},
+            chat: props({
+              progressCard: undefined,
+              detailsWorkspace: {
+                root: "/workspace/details",
+                label: null,
+                branch: "feature/details",
+              },
+              environment: {
                 onOpenUncommitted: openChanges,
                 uncommitted: {
                   sessionKey: card.sessionKey,
@@ -404,11 +458,18 @@ describe("chat Details presentation", () => {
                   additions: 3,
                   deletions: 1,
                 },
-              });
-          },
-        }),
-      { container: panel },
-    );
+              },
+            }),
+          }),
+        { container: panel },
+      );
+    // Load the public boundary, then measure a fresh scroll owner before its first layout turn.
+    const prepared = mountContent();
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
+    prepared.unmount();
+    mountContent();
     flush();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const expectHeadingInsets = () => {
@@ -422,10 +483,6 @@ describe("chat Details presentation", () => {
       panel.style.width = width + "px";
       expectHeadingInsets();
     }
-    // The Environment body loads lazily; capture its controls only after it renders.
-    await expect
-      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
-      .not.toBeNull();
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;

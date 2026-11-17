@@ -30,6 +30,13 @@ export const inviteSchema = z
     note: visitorNoteSchema.optional(),
   })
   .refine((input) => (input.email !== undefined) !== (input.github !== undefined));
+export const listSchema = z.strictObject({
+  cursor: z
+    .string()
+    .regex(/^v1:[a-f0-9]{64}:[1-9]\d{0,7}$/)
+    .optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+});
 export const grantIdSchema = z.uuid();
 export function parseVisitorInput<T>(schema: z.ZodType<T>, raw: unknown): T {
   const result = schema.safeParse(raw);

@@ -43,9 +43,9 @@ installSessionTitleRegistrar((target, label, display) => {
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
+    // Touch pointers are rejected by sessionProgressHoverTargetFromEvent below.
     trigger === "pointer" &&
-    ((event instanceof PointerEvent && event.pointerType === "touch") ||
-      !globalThis.matchMedia?.("(hover: hover)").matches)
+    !globalThis.matchMedia?.("(hover: hover)").matches
   ) {
     return;
   }

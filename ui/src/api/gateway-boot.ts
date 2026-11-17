@@ -1,9 +1,6 @@
-import {
-  getGatewaySessionMessageSubscriptionCoordinator,
-  releaseGatewaySessionMessageSubscription,
-  resetGatewaySessionMessageSubscriptionCoordinator,
-  type GatewaySessionMessageSubscription,
-  type GatewaySessionMessageSubscriptionOptions,
+import type {
+  GatewaySessionMessageSubscription,
+  GatewaySessionMessageSubscriptionOptions,
 } from "@openclaw/gateway-client/browser";
 import { hasOperatorApprovalsAccess } from "../app/operator-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
@@ -11,7 +8,6 @@ import {
   GatewayBrowserClient,
   type GatewayBrowserClientOptions,
   type GatewayEventFrame,
-  type GatewayHelloOk,
 } from "./gateway.ts";
 
 const MAX_BOOT_EVENTS = 256;
@@ -23,19 +19,21 @@ const boots = new WeakMap<GatewayBrowserClient, EarlyGateway>();
 export class EarlyGateway {
   readonly client: GatewayBrowserClient;
   private owner: GatewayBrowserClientOptions | undefined;
-  private hello: GatewayHelloOk | undefined;
   private closed: Parameters<NonNullable<GatewayBrowserClientOptions["onClose"]>>[0] | undefined;
   private events: GatewayEventFrame[] = [];
   private bytes = 0;
   private active = true;
   private draining = false;
   private subscription: Promise<GatewaySessionMessageSubscription> | undefined;
+  private subscriptionRuntime:
+    | typeof import("../lib/sessions/session-message-subscriptions.runtime.ts")
+    | undefined;
   private readonly timeout: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly options: GatewayBrowserClientOptions,
     private readonly sessionKey: string,
-    private readonly history: GatewaySessionMessageSubscriptionOptions["initialHistory"],
+    private history: GatewaySessionMessageSubscriptionOptions["initialHistory"],
     private readonly location: string,
   ) {
     const currentOptions = () => this.owner ?? options;
@@ -52,17 +50,11 @@ export class EarlyGateway {
         if (this.active && !this.retain(hello)) {
           return;
         }
-        if (this.active && this.subscription && hasOperatorApprovalsAccess(hello.auth ?? null)) {
-          this.subscription = this.subscription.then((subscription) =>
-            this.withApprovals(subscription),
-          );
-          void this.subscription.catch(() => undefined);
-        }
+        // Admit history from the live hello, including its approval scope.
+        this.startHistory();
         if (this.owner) {
           void this.owner.modelCatalog;
           this.owner.onHello?.(hello);
-        } else {
-          this.hello = hello;
         }
       },
       onEvent: (event) => {
@@ -83,11 +75,11 @@ export class EarlyGateway {
         if (this.active && !this.owner && info.error && info.willRetry) {
           // Keep the protocol's retry and its error receipt. Replacing this
           // client would hide admission errors and restart its retry budget.
-          this.hello = undefined;
           this.events = [];
           this.bytes = 0;
           this.subscription = undefined;
-          resetGatewaySessionMessageSubscriptionCoordinator(this.client);
+          this.history = undefined;
+          this.subscriptionRuntime?.resetGatewaySessionMessageSubscriptionCoordinator(this.client);
           if (this.retain(info)) {
             this.closed = info;
           }
@@ -115,22 +107,51 @@ export class EarlyGateway {
     this.timeout = setTimeout(() => this.fallback(), MAX_BOOT_WAIT_MS);
     boots.set(this.client, this);
     this.client.start();
-    if (history) {
-      this.subscription = this.client.connectSent.then(async (sent) => {
-        if (!sent || !this.active) {
-          throw new Error("Early Gateway connection retired");
+  }
+
+  startHistory(history = this.history): void {
+    // A late cache read must not hold or reclaim the foreground handoff.
+    if (!history || !this.active || this.draining || this.subscription) {
+      return;
+    }
+    this.history = history;
+    const hello = this.client.hello;
+    if (
+      !hello ||
+      (this.options.offlineRecoveryScope &&
+        this.client.offlineRecoveryScope !== this.options.offlineRecoveryScope)
+    ) {
+      return;
+    }
+    this.subscription = import("../lib/sessions/session-message-subscriptions.runtime.ts")
+      .then((runtime) => {
+        // Loading code must not admit history for a retired hello or recovery scope.
+        if (
+          !this.active ||
+          this.client.hello !== hello ||
+          (this.options.offlineRecoveryScope &&
+            this.client.offlineRecoveryScope !== this.options.offlineRecoveryScope)
+        ) {
+          throw new Error("Early Gateway retired");
         }
-        const subscription = await getGatewaySessionMessageSubscriptionCoordinator(this.client, {
-          keysEquivalent: areUiSessionKeysEquivalent,
-        }).acquire(sessionKey, { initialHistory: history });
+        this.subscriptionRuntime = runtime;
+        return runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(this.client, {
+            keysEquivalent: areUiSessionKeysEquivalent,
+          })
+          .acquire(this.sessionKey, {
+            initialHistory: history,
+            includeApprovals: hasOperatorApprovalsAccess(hello.auth ?? null),
+          });
+      })
+      .then((subscription) => {
         if (!this.active || !this.retain(subscription)) {
-          throw new Error("Early Gateway connection retired");
+          throw new Error("Early Gateway retired");
         }
         return subscription;
       });
-      // The foreground owner applies its existing read-retry policy on attach.
-      void this.subscription.catch(() => undefined);
-    }
+    // The foreground owner applies its existing read-retry policy on attach.
+    void this.subscription.catch(() => undefined);
   }
 
   private retain(value: unknown): boolean {
@@ -163,15 +184,14 @@ export class EarlyGateway {
       return null;
     }
     this.owner = options;
+    const hello = this.client.hello;
     // The store must install the returned client before any hello callback runs.
     queueMicrotask(() => {
       if (this.closed) {
         const closed = this.closed;
         this.closed = undefined;
         this.owner?.onClose?.(closed);
-      } else if (this.active && this.hello) {
-        const hello = this.hello;
-        this.hello = undefined;
+      } else if (this.active && hello && this.client.hello === hello) {
         try {
           void this.owner?.modelCatalog;
           this.owner?.onHello?.(hello);
@@ -203,37 +223,38 @@ export class EarlyGateway {
     }
     const historyMatches = JSON.stringify(options.initialHistory) === JSON.stringify(this.history);
     try {
-      let subscription = await pending;
-      if (!this.active) {
-        throw new Error("Early Gateway connection retired");
+      const subscription = await pending;
+      const runtime = this.subscriptionRuntime;
+      if (!this.active || !runtime) {
+        throw new Error("Early Gateway retired");
+      }
+      if (options.includeLiveToolOutput) {
+        // The early handle already owns approvals from this connection's hello.
+        // Stdout admission needs a current snapshot, never the early history.
+        const upgraded = await runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(this.client)
+          .acquire(this.sessionKey, {
+            includeApprovals: subscription.includeApprovals,
+            includeLiveToolOutput: true,
+          });
+        if (
+          !this.active ||
+          (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
+        ) {
+          throw new Error("Early Gateway connection retired");
+        }
+        await runtime.releaseGatewaySessionMessageSubscription(subscription);
+        return upgraded;
       }
       if (!historyMatches) {
         // The pane may learn a recovery cursor or pending input during boot.
         // Keep live delivery; its history owner will request the correct snapshot.
         delete subscription.initialHistory;
       }
-      if (options.includeApprovals && !subscription.includeApprovals) {
-        subscription = await this.withApprovals(subscription);
-      }
       return subscription;
     } finally {
       this.drain();
     }
-  }
-
-  private async withApprovals(subscription: GatewaySessionMessageSubscription) {
-    const upgraded = await getGatewaySessionMessageSubscriptionCoordinator(this.client, {
-      keysEquivalent: areUiSessionKeysEquivalent,
-    }).acquire(this.sessionKey, { includeApprovals: true });
-    if (
-      !this.active ||
-      (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
-    ) {
-      throw new Error("Early Gateway connection retired");
-    }
-    upgraded.initialHistory = subscription.initialHistory;
-    await releaseGatewaySessionMessageSubscription(subscription);
-    return upgraded;
   }
 
   private drain() {
@@ -279,14 +300,13 @@ export class EarlyGateway {
 
   private retire() {
     this.active = false;
-    this.hello = undefined;
     this.closed = undefined;
     this.events = [];
     this.bytes = 0;
     this.subscription = undefined;
     clearTimeout(this.timeout);
     boots.delete(this.client);
-    resetGatewaySessionMessageSubscriptionCoordinator(this.client);
+    this.subscriptionRuntime?.resetGatewaySessionMessageSubscriptionCoordinator(this.client);
   }
 }
 

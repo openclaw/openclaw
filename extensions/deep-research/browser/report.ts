@@ -19,7 +19,7 @@ export function sourceDomain(raw?: string) {
 }
 
 /** Text-only semantic rendering: no HTML, image, preview or privileged URL retrieval. */
-export function reportSegments(
+function reportSegments(
   job: Pick<ResearchView, "report" | "citations" | "sources">,
 ): Array<{ text: string; sourceId?: string }> {
   const bytes = new TextEncoder().encode(job.report ?? "");

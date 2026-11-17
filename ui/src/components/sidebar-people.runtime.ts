@@ -94,13 +94,17 @@ export class SidebarPeopleRuntime {
       if (this.portal.explicitHold && this.active?.row !== row) {
         return;
       }
-      const delay = this.portal.card || performance.now() - this.lastOpenAt < 300 ? 80 : 450;
-      this.activate(
-        row,
-        remainingHovercardOpenDelay(bootstrapStartedAt ?? performance.now(), delay),
-      );
-      this.portal.pointerInside = true;
-      this.portal.clearClose();
+      const enter = (startedAt = performance.now()) => {
+        const delay = this.portal.card || performance.now() - this.lastOpenAt < 300 ? 80 : 450;
+        this.activate(row, remainingHovercardOpenDelay(startedAt, delay));
+        this.portal.pointerInside = true;
+        this.portal.clearClose();
+      };
+      // Rows crossed on the way to the open card must not take it over.
+      if (this.active?.row !== row && this.portal.deferPointerSwitch(event, row, enter)) {
+        return;
+      }
+      enter(bootstrapStartedAt);
     } else if (
       event.type === "pointerout" &&
       event instanceof PointerEvent &&
@@ -109,7 +113,7 @@ export class SidebarPeopleRuntime {
       if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) {
         return;
       }
-      this.portal.schedulePointerExit();
+      this.portal.schedulePointerExit(event);
     } else if (event.type === "focusin" && !this.portal.restoringFocus) {
       // Pointer focus must not put a card over a navigation link before its click.
       if (event.target instanceof HTMLAnchorElement && !event.target.matches(":focus-visible")) {

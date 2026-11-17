@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
+import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive-hold.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
@@ -181,6 +182,19 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         onAction: () => {
           void this.createSession();
         },
+      };
+    }
+    if (this.state && this.isCurrentSessionArchivePending(this.state)) {
+      // Inside the Undo window nothing was sent, so Unarchive cancels the held archive
+      // like the notice's Undo. Once the archive is sending, it waits for the outcome.
+      const sessionKey = params.selectedSession?.key ?? params.sessionKey;
+      return {
+        kind: "composer-replacement" as const,
+        text: t("chat.archivedSessionDisabled"),
+        icon: "archive" as const,
+        actionLabel: t("common.unarchive"),
+        busy: !isArchiveHeld(sessionKey),
+        onAction: () => undoHeldArchive(sessionKey),
       };
     }
     if (params.selectedSessionArchived) {

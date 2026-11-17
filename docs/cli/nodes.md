@@ -14,6 +14,9 @@ Related: [Nodes overview](/nodes) - [Active computer presence](/nodes/presence) 
 
 Common options on every subcommand: `--url <url>`, `--token <token>`, `--timeout <ms>` (default varies by command), `--json`.
 
+Ctrl+C cancels the lookup used to resolve `--node`, including the legacy paired-node
+fallback. Camera and location reads can be interrupted before a node command starts.
+
 For numeric options such as `--location-timeout`, `--max-age`, and `--quality`, omit
 the flag to use its default. An explicit empty or whitespace-only value is invalid
 and fails before node lookup or Gateway requests.

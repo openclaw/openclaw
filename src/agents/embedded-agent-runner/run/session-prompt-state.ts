@@ -28,6 +28,7 @@ type ActivePrompt = {
   override?: string;
   persisted: boolean;
   internal: boolean;
+  replayCurrentTranscript?: true;
 };
 
 export async function createEmbeddedRunSessionPromptState(input: {
@@ -132,7 +133,11 @@ export async function createEmbeddedRunSessionPromptState(input: {
   // Internal control prompts are model-only context, never operator-authored transcript turns.
   const activateInternalPrompt = (prompt: string) => {
     basePromptOverride = prompt;
-    Object.assign(activePrompt, { persisted: true, internal: true });
+    Object.assign(activePrompt, {
+      persisted: true,
+      internal: true,
+      replayCurrentTranscript: undefined,
+    });
     suppressNextUserMessagePersistence = true;
   };
   if (params.pluginRuntimeRefreshContinuation) {
@@ -339,10 +344,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
           messages,
         };
       }
-      // A request rejected before any output left the transcript unchanged. Replaying
-      // the persisted keyed user turn resends that exact request; a hidden prompt
-      // would add a user turn and shift the prompt prefix on every retry.
+      // Replay the keyed turn and any completed tools in place. A hidden prompt
+      // would append another user turn and runtime carrier on every precheck retry.
       if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
+        activePrompt.replayCurrentTranscript = true;
         return;
       }
       const prompt = options?.includeToolFailureInstruction

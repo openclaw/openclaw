@@ -56,7 +56,8 @@ export function connectControlUiFaviconArtwork(context: {
     const preference = context.theme.settings.tabIcon ?? "default";
     // Theme suppression is presentation-only; switching back restores the saved choice.
     const mode = !branding.lobsterdex && preference.startsWith("lobster:") ? "default" : preference;
-    const shape = agentTabIconShape(mode);
+    // Control UI draws every agent tab icon as a circle; saved shape variants stay valid.
+    const shape = agentTabIconShape(mode) === null ? null : "circle";
     const lobsterId = mode.startsWith("lobster:") ? mode.slice("lobster:".length) : null;
     if (!lobsterId) {
       stopLobsterdex?.();

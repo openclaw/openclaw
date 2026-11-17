@@ -178,6 +178,16 @@ describe("tool image sanitizing", () => {
     expect(meta?.height).toBeLessThanOrEqual(120);
   }, 20_000);
 
+  it("downscales a tall screenshot above the generic decode cap", async () => {
+    // 25.2 MP: over MAX_IMAGE_INPUT_PIXELS, which used to drop the image before any resize.
+    const tall = createSolidPngBuffer(2000, 12_600, { r: 17, g: 31, b: 47 });
+    const image = getImageBlock(await sanitize(tall, { maxDimensionPx: 1200 }));
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(await getImageMetadata(Buffer.from(image.data, "base64"))).toMatchObject({
+      height: 1200,
+    });
+  }, 20_000);
+
   it("uses default image limits for non-finite options", async () => {
     const jpeg = createTinyJpegBuffer();
     const limits = { maxDimensionPx: Number.NaN, maxBytes: Number.NaN };

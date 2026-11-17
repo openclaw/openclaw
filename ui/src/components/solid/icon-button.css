@@ -16,7 +16,7 @@
   margin: 0;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: var(--icon-button-radius, var(--field-radius));
   background: transparent;
   color: var(--icon-button-color, var(--muted));
   font: inherit;
@@ -28,6 +28,7 @@
 
 .oc-icon-button--28 {
   --oc-icon-button-size: 28px;
+  border-radius: var(--icon-button-radius, var(--radius-md));
 }
 
 .oc-icon-button--36 {

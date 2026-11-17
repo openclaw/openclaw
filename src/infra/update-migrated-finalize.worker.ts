@@ -58,7 +58,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import {
   commitReadyUpdatePluginCohort,
   settleDelegatedUpdatePluginCohort,
@@ -156,7 +156,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return;
   }
   if (process.argv[2] === "--post-core") {
-    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
+    const postCoreInput = readUpdatePostCoreInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedPostCore(postCoreInput));
   }
   if (process.argv[2] === "--doctor") {
     const doctorInput = readUpdateDoctorInput(JSON.parse(text));
@@ -294,7 +295,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
     process.env[POST_CORE_UPDATE_ENV] !== "1" ||
     process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
     !executingRoot ||
-    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+    !updateInstallRootsMatch(executingRoot, input.root)
   ) {
     throw new Error("Post-core update does not match its delegated run and installed runtime.");
   }

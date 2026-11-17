@@ -165,7 +165,7 @@ export class Maintenance {
           } while (cursor);
           // A pass that linked nothing changed nothing; do not make open views refresh.
           if (linked && scope.visibility === "private") {
-            runtime.live.invalidate();
+            runtime.client.invalidate();
           }
         }
       } catch (e) {

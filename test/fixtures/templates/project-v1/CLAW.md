@@ -3,6 +3,8 @@ schemaVersion: 1
 agent:
   id: golden-template
   name: Golden Template
+  tools:
+    profile: minimal
 workspace:
   files:
     - source: references/guide.md

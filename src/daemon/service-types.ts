@@ -348,6 +348,21 @@ export function hasGatewayServiceDefinitionOverrides(
     : Boolean(command?.managedDefinition);
 }
 
+/** Rebinding and compensation rewrite the base, leaving inspected named overrides in place. */
+export function canPreserveGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return (
+    !hasGatewayServiceDefinitionOverrides(command) ||
+    Boolean(
+      command?.managedDefinition &&
+      command.managedOverrides &&
+      !hasGatewayServiceLauncherOverride(command) &&
+      resolveManagedGatewayServiceProcessEnv(command, {}) !== null,
+    )
+  );
+}
+
 /** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */
 export function hasGatewayServiceLauncherOverride(
   command: GatewayServiceCommandConfig | null | undefined,

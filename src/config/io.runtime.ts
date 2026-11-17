@@ -382,8 +382,10 @@ export async function recoverConfigFromJsonRootSuffix(
   return await createConfigIO().recoverConfigFromJsonRootSuffix(snapshot, assertRecoveryCandidate);
 }
 
-export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
-  return await readConfigFileSnapshot();
+export async function readSourceConfigSnapshot(
+  options?: Pick<ConfigSnapshotReadOptions, "observe">,
+): Promise<ConfigFileSnapshot> {
+  return await readConfigFileSnapshot(options);
 }
 
 export async function readConfigFileSnapshotForRuntimeTransaction(

@@ -380,6 +380,7 @@ function principalIngressFactory(
     assertCurrent: () => signal.throwIfAborted(),
     host: {
       signal,
+      admissionSignal: signal,
       controlUiBasePath: "",
       getRuntimeConfig: getConfig,
       getResolvedAuth: () => resolveGatewayAuthForConfig({ config: getConfig(), env: {} }),

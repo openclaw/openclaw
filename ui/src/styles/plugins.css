@@ -672,7 +672,6 @@
 }
 
 .plugins-tile--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
@@ -777,7 +776,7 @@
   padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header > .oc-dialog__close {
+.plugins-consent__header .oc-dialog__close {
   align-self: start;
   margin-block-start: calc(12px - var(--overlay-modal-padding));
 }

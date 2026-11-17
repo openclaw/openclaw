@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
+import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -18,7 +18,6 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import { pluginTabKey } from "../pages/plugin/route.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -26,6 +25,7 @@ import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { GatewayIdentityPlaceholder } from "./solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
@@ -162,14 +162,19 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
                 { "sidebar-agent-card__avatar--environment": Boolean(environment()) },
               ]}
             >
-              <AgentIdentityAvatar
-                agent={{
-                  id: cardAgentId(),
-                  avatar: avatar(),
-                  textAvatar: avatarText(),
-                  pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
-                }}
-              />
+              <Show
+                when={!host.connectionPending}
+                fallback={<GatewayIdentityPlaceholder kind="agent" />}
+              >
+                <AgentIdentityAvatar
+                  agent={{
+                    id: cardAgentId(),
+                    avatar: avatar(),
+                    textAvatar: avatarText(),
+                    pending: Boolean(avatarUrl()?.startsWith("/") && !avatarAuthReady()),
+                  }}
+                />
+              </Show>
               {menuUnread() && !menuOpen() ? (
                 <span
                   class="session-unread-dot sidebar-agent-card__menu-unread"
@@ -289,7 +294,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
           }
         }}
       >
-        {branding().brandIcon !== "claw" ? (
+        {host.connectionPending ? (
+          <span class="sidebar-workspace-header__mark" aria-hidden="true">
+            <GatewayIdentityPlaceholder kind="agent" />
+          </span>
+        ) : branding().brandIcon !== "claw" ? (
           <span
             class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
             aria-hidden="true"
@@ -493,7 +502,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
           onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
         >
           <span class="sidebar-identity-card__avatar">
-            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            <Show
+              when={!host.connectionPending}
+              fallback={<GatewayIdentityPlaceholder kind="user" />}
+            >
+              <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            </Show>
             <span class="sidebar-identity-card__status" aria-hidden="true" />
           </span>
           <span class="sidebar-identity-card__text">

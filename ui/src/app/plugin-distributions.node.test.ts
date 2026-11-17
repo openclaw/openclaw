@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -221,7 +222,11 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
   await writeFiles(at("extensions/manifest-only"), {
     "openclaw.plugin.json": { id: "manifest-only" },
   });
-  await fs.symlink(path.resolve("node_modules"), at("node_modules"), "junction");
+  await fs.symlink(
+    fileURLToPath(new URL("../../../node_modules", import.meta.url)),
+    at("node_modules"),
+    "junction",
+  );
   await writeFiles(root, {
     "package.json": {
       name: "openclaw",
@@ -264,4 +269,20 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
     expect(await readText(pluginRoot, generation, name)).toBe(body);
   }
   expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
+});
+
+it("leaves the Labs-owned Access island to the flag-gated Gateway catalog", async () => {
+  const { pluginRoot, generation } = await fixture();
+  await fs.writeFile(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "openclaw-id-access",
+      configSchema: { type: "object" },
+      controlUi: { entry: `${generation}/index.js`, styles: [`${generation}/index.css`] },
+    }),
+  );
+  await compile();
+  await expect(fs.stat(at("ui-output/assets/plugins/openclaw-id-access"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });

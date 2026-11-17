@@ -588,6 +588,7 @@ function BoardWidgetCellContent(
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
             "board-widget--fixed-report": fixedReport(),
+            "board-widget--fit-content": contribution()?.fitsContent === true,
           },
           presentation() && `board-widget--${presentation()}`,
         ]}
@@ -613,7 +614,6 @@ function BoardWidgetCellContent(
                 <span
                   class="board-widget__drag-handle"
                   aria-hidden="true"
-                  title={t("board.widget.moveHandle", { title: label() })}
                   onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
                 >
                   <span aria-hidden="true">⠿</span>
@@ -671,7 +671,6 @@ function BoardWidgetCellContent(
           <span
             class="board-widget__resize-handle"
             aria-hidden="true"
-            title={t("board.widget.resizeHandle", { title: label() })}
             onPointerDown={(event) => props.callbacks!.resizePointerDown(props.widget!, event)}
           />
         </Show>

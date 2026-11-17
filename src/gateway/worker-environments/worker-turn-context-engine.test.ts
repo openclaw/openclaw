@@ -189,7 +189,7 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     expect(worker.placements.get(worker.SESSION_ID)?.turnClaim).toBeNull();
     const admission = recorder.getAdmissionReceipt();
     expect(admission).toBeDefined();
-    expect(fences).toEqual([admission, admission]);
+    expect(fences).toEqual([undefined, undefined]);
     expect(bootstrap.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
       model: { provider: "openai", resolved: input.model },
       limits: { promptTokenBudget: 32_768 },

@@ -36,6 +36,7 @@ import {
   readProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -66,6 +67,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -85,10 +87,23 @@ export type NormalizedChatSendRequest = {
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
   requestIdentity?: string;
   mentions?: HumanMention[];
+  /** Selected people are the recipients; the agent records the message without a turn. */
+  humanAddressed?: true;
   appContext?: ChatAppContextAttachment[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
+
+/** Talk settings are machine preferences, not user commands for a particular model. */
+function shouldNormalizeTalkThinking(
+  request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
+): boolean {
+  return (
+    request.p.thinking !== undefined &&
+    request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+  );
+}
 
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
@@ -278,7 +293,7 @@ export function normalizeChatSendRequest(params: {
       !ordinaryChat)
   ) {
     return reject(
-      "Human mentions require a signed-in UI chat. Remove the selected mentions to use this mode.",
+      "Human mentions require a signed-in chat in the OpenClaw app. Remove the selected mentions to use this mode.",
     );
   }
   if (p.appContext && !ordinaryChat) {
@@ -318,6 +333,7 @@ export function normalizeChatSendRequest(params: {
     ...(workContext ? { workContext } : {}),
     ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
+    normalizeThinkingLevelOverride: shouldNormalizeTalkThinking({ p, systemInputProvenance }),
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
     toolBindings: p.toolBindings,

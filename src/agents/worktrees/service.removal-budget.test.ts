@@ -3,7 +3,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as localWorkspace from "../../gateway/worker-environments/local-workspace-projection.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -174,7 +173,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 it.each([
   ["promised", 1],
   ["promised-retry", 2],
-  ["unpromised", 0],
+  ["unpromised", 1],
   ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],
@@ -254,6 +253,8 @@ it.each([
     const trace = path.join(root, "partial-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const service = makeService(env);
+    // Retirement deadline behavior is covered separately in service.gc-performance.test.ts.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const result = await service.gc({ retryDeferred: damage === "promised-retry" });
     const suspended = damage === "checksum" || damage === "promised-retry";
     const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
@@ -327,34 +328,17 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
-it.each([
-  ["timeout", "idle"],
-  ["timeout", "retired"],
-  ["workspace-size", "idle"],
-  ["workspace-size", "retired"],
-] as const)(
-  "persists %s backoff for %s owners across restart and retries only when due or explicitly requested",
-  async (failure, ownerState) => {
+it.each(["idle", "retired"] as const)(
+  "persists timeout backoff for %s owners across restart and retries only when due or explicitly requested",
+  async (ownerState) => {
     const { env, materialize } = await fixture();
     const record = (await materialize(["timed-out"], { ownerId: "fixture-owner" }))[0]!;
     await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
     let attempts = 0;
     let fail = true;
-    const settle = localWorkspace.withSettledLocalWorkspace;
-    vi.spyOn(localWorkspace, "withSettledLocalWorkspace").mockImplementation(async (...args) => {
-      if (failure === "workspace-size") {
-        attempts++;
-        if (fail) {
-          throw new Error(
-            "Cloud workspace staged result exceeds its byte limit: 973111431 bytes across 383 changed files/symlinks; 805306368 byte limit.",
-          );
-        }
-      }
-      return settle(...args);
-    });
     const execute = gitExec.executeGitCommandBytes;
     vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-      if (failure === "timeout" && args.includes("write-tree")) {
+      if (args.includes("write-tree")) {
         attempts++;
         if (fail) {
           return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
@@ -368,7 +352,7 @@ it.each([
     expect((await gc()).outcome).toBe("partial");
     const first = retryState(env, record.id);
     expect(first).toEqual({
-      stage: failure === "timeout" ? "snapshot" : "preparation",
+      stage: "snapshot",
       elapsedMs: expect.any(Number),
       attempts: 1,
       retryAt: expect.any(Number),

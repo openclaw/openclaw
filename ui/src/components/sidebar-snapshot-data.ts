@@ -70,6 +70,7 @@ const sessionFields = {
   color: optionalText,
   pinned: json.boolean,
   archived: json.optional(json.boolean),
+  snoozedUntil: json.optional(json.number),
   isChild: json.boolean,
   category: optionalText,
   boardFace: json.optional(json.enumeration(["chat", "dashboard"])),

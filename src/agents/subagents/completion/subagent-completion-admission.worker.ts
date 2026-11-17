@@ -24,6 +24,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../../state/worker-operation-registry.js";
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
@@ -68,7 +72,7 @@ function commitCompletionWrite<T extends object>(
 }
 
 /** The shared-state worker owns queue insertion and its exact native completion owner. */
-export function admitSubagentCompletionInWorker(
+function admitSubagentCompletionInWorker(
   input: {
     writeId: string;
     queueEntry: QueuedSessionDelivery;
@@ -182,7 +186,7 @@ export function admitSubagentCompletionInWorker(
   });
 }
 
-export function mutateSubagentCompletionInWorker(
+function mutateSubagentCompletionInWorker(
   input: {
     writeId: string;
     mutation: SubagentCompletionMutation;
@@ -193,3 +197,14 @@ export function mutateSubagentCompletionInWorker(
     mutateSubagentCompletionInDatabase(database, input.mutation),
   );
 }
+
+export const subagentCompletionDeliveryOperations = {
+  "sessionDelivery.mutateSubagentCompletion": (
+    input: Parameters<typeof mutateSubagentCompletionInWorker>[0],
+    { open },
+  ) => mutateSubagentCompletionInWorker(input, open()),
+  "sessionDelivery.admitSubagentCompletion": (
+    input: Parameters<typeof admitSubagentCompletionInWorker>[0],
+    { open },
+  ) => admitSubagentCompletionInWorker(input, open()),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

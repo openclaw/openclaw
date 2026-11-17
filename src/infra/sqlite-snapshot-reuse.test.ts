@@ -121,10 +121,14 @@ reusing("sees commits and restores through an alias and preserved timestamps", a
   expect(leaseReusableSqliteSnapshot(restored.source)).toBeUndefined();
 });
 
-reusing("does not retain a source written within the timestamp quantum", () => {
-  const root = directories.make("sqlite-snapshot-reuse-");
-  const source = path.join(root, "source.sqlite");
+reusing("holds a recent source back only as long as its clock could hide a write", () => {
+  const source = path.join(directories.make("sqlite-snapshot-reuse-"), "source.sqlite");
   fs.writeFileSync(source, "main");
+  const recent = Math.floor(Date.now() / 1000) * 1000 - 200;
+  fs.utimesSync(source, new Date(recent), new Date(recent));
+  expect(captureReusableSqliteSource(source)).toBeDefined();
+  const wholeSecond = new Date(recent + 200);
+  fs.utimesSync(source, wholeSecond, wholeSecond);
   expect(captureReusableSqliteSource(source)).toBeUndefined();
 });
 

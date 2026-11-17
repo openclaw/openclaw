@@ -4,6 +4,7 @@ import { assert, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -59,6 +60,12 @@ import { addSessionMember } from "./session-sharing-store.native.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  beginAgentToolUsageInDatabase,
+  flushAgentToolUsageInDatabase,
+  readAgentToolUsageInDatabase,
+  readAgentToolUsageLiveRunsInDatabase,
+} from "./tool-usage.kernel.js";
 
 type Fixture = Parameters<Parameters<typeof withReplica>[0]>[0];
 type Replica = ReturnType<typeof replicaFor>;
@@ -263,11 +270,14 @@ it("keeps transcript replacement charges within the shared byte and entry budget
     fixture.replica.close();
     fixture.replica.invalidate();
     const cells: Array<{ replica: Replica; state: SessionActorHotState }> = [];
-    const create = (entryFirst = false, keepOpen = false) => {
+    const create = (entryFirst = false, keepOpen = false, sharedPrompt = "") => {
       const state: SessionActorHotState = {
         ...structuredClone(original),
         target: { ...original.target, sessionKey: `agent:main:budget-${cells.length}` },
       };
+      if (sharedPrompt) {
+        state.entry = { ...state.entry!, skillsSnapshot: { prompt: sharedPrompt, skills: [] } };
+      }
       state.dependencySessionIds = [];
       state.writeToken = tokenFor(state, fixture.database.path);
       if (entryFirst) {
@@ -289,7 +299,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       retainText(cell.state, "x".repeat(characters));
     try {
       const first = create(false, true);
-      const second = create(true);
+      const second = create(true, true);
       const third = create();
       const firstTranscript = retain(first, 1024 * 1024);
       retain(second, 1024 * 1024);
@@ -306,7 +316,10 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         },
       };
       retainSessionActorTranscriptReplica(first.state, grown);
-      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect([
+        readSessionActorTranscriptReplica(second.state),
+        second.replica.beginCommand().preimage?.entry,
+      ]).toEqual([undefined, second.state.entry]);
       expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
       expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
       retain(first, 512 * 1024);
@@ -325,8 +338,12 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         cell.replica.close();
         cell.replica.invalidate();
       }
+      // Retired shared values must release their pool charge before the next cohort.
+      for (let index = 0; index < 40; index++) {
+        create(false, false, String(index).padStart(2, "0").repeat(60000)).replica.invalidate();
+      }
       const small = Array.from({ length: 129 }, (_, index) => {
-        const cell = create(index % 2 === 0, true);
+        const cell = create(index % 2 === 0, true, "Shared instructions".repeat(6000));
         return { cell, transcript: retain(cell, 16) };
       });
       expect(readSessionActorTranscriptReplica(small[0]!.cell.state)).toBeUndefined();
@@ -544,6 +561,52 @@ it("shares committed facts across released handles and retires them for writes a
     hydrate({ ...fixture, replica: restarted }, "restarted");
     expect(restarted.read()?.version.epoch).toBe("restarted");
   }, "agent:main:matrix:group:!Room:server");
+});
+
+it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {
+  const { database, scope, replica } = fixture;
+  const initial = hydrate(fixture);
+  assert(initial.target.database.kind === "file", "Usage fixture requires a durable actor");
+  const target = { ...initial.target, database: initial.target.database };
+  const facts = readSessionActorEntryFacts(target);
+  const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
+  const rows = readSessionActorRowFacts(rowTarget);
+  expect(facts?.entry).toBe(initial.entry);
+  expect(rows).toBeDefined();
+  const now = Date.now();
+  let previousWrite = readSqliteDatabaseWriteTokenForPath(database.path);
+  const unchanged = () => {
+    const write = readSqliteDatabaseWriteTokenForPath(database.path);
+    expect(write).not.toBe(previousWrite);
+    previousWrite = write;
+    expect(readSessionActorEntryFacts(target)?.writeToken).toBe(facts?.writeToken);
+    expect(readSessionActorEntryFacts(target)?.entry).toBe(facts?.entry);
+    expect(readSessionActorRowFacts(rowTarget)).toEqual(rows);
+    expect(replica.read()).toBe(initial);
+  };
+  const admitted = runOpenClawAgentWriteTransaction(
+    ({ db }) => beginAgentToolUsageInDatabase(db, now, "scope-regression"),
+    { agentId: scope.agentId, path: database.path, env: scope.env },
+  );
+  expect(admitted.liveSince).toBe(now);
+  expect(readAgentToolUsageLiveRunsInDatabase(database.db, now)).toContain("scope-regression");
+  unchanged();
+  expect(
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        flushAgentToolUsageInDatabase(db, {
+          generation: admitted.generation,
+          runId: "scope-regression",
+          rows: [{ toolId: "openclaw:core:read", score: 1, updatedAt: now }],
+          now,
+        }),
+      { agentId: scope.agentId, path: database.path, env: scope.env },
+    ),
+  ).toBe(true);
+  expect(readAgentToolUsageInDatabase(database.db, now).rows).toEqual([
+    { toolId: "openclaw:core:read", score: 1, updatedAt: now },
+  ]);
+  unchanged();
 });
 
 it("retains unrelated session postimages but invalidates a shared physical session window", ({

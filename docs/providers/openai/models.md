@@ -37,16 +37,18 @@ GPT-5.4 and GPT-5.4 Mini are retired from the ChatGPT-account Codex route. Run `
 
 ## Models your API key lists
 
-With an OpenAI API key, `openclaw models list --provider openai` shows every chat
-model your account's `/v1/models` lists that runs on the Responses API, including
-models newer than your OpenClaw release. Models without a catalog row use
-conservative defaults: text input, a 128k context window, and unknown cost.
-Embedding, image, video, audio, realtime, speech, transcription, moderation, and
-legacy completions models stay hidden, as do models past their OpenAI shutdown
-date. Search models stay hidden because they run only on Chat Completions; live,
-unrecognized cyber, experiment, and alpha IDs stay hidden because they can fail
-on Responses. The documented `gpt-5.6-cyber` Daybreak model is included when the
-account lists it; approved Daybreak Red access is still required.
+With an OpenAI API key, the model picker offers every chat model your account's
+`/v1/models` lists that runs on the Responses API, including models newer than
+your OpenClaw release. Models without a catalog row use conservative defaults:
+text input, a 128k context window, and unknown cost. Models whose IDs name an
+embedding, image, video, audio, realtime, speech, transcription, moderation, or
+legacy completions family stay out of the default picker, as do live, cyber,
+experiment, and alpha IDs, which often fail on Responses for the listing key.
+`openclaw models list --provider openai` and `--all` list them, and a typed or
+configured reference to one still runs; an account with access to a cyber model
+such as `gpt-5.6-cyber` selects it that way. Models past their OpenAI shutdown
+date are excluded, and search models are not listed because they run only on
+Chat Completions.
 GPT-3.5, GPT-4 (including GPT-4o and GPT-4.1), o1, o3, and o4 models stay hidden
 from the list because their tool capabilities differ from the modern models.
 You can still select one by its reference, for example as
@@ -131,12 +133,14 @@ notice. The saved choice is kept and applies again when the chat returns to an
 OpenAI model. OpenAI models still fail visibly when their runtime or account
 cannot use the selected program.
 
-Named operator roles grant Blue and Red independently through
-`gateway.roles.definitions.<role>.accessPrograms.cyber`. An omitted or empty grant
-list permits Standard only, including for admin-scoped roles or roles without
-model restrictions. The actual model must separately be allowed by the role's
-model policy, and provider entitlement is still required. Configured defaults do
-not bypass these grants. Server-side checks cover direct requests, creation,
+An operator admitted with `operator.admin` can use eligible programs when the role
+omits `accessPrograms`. An explicit
+`gateway.roles.definitions.<role>.accessPrograms.cyber` list is a ceiling for every
+operator: `[]` permits Standard only, and Blue and Red are listed independently.
+For restricted operators, omission also permits Standard only. The actual model
+must separately be allowed by the role's model policy, and account access and
+provider entitlement are still required. Configured defaults do not bypass
+explicit ceilings or restricted-role grants. Server-side checks cover direct requests, creation,
 execution, and retained or recovered authority after permissions change.
 
 The OpenClaw runtime sends the program to its official Responses endpoint. Native

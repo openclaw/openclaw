@@ -9,11 +9,14 @@ export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
   committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
-  private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
+  private pending:
+    | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
+    | null = null;
 
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
+    private readonly measurePrependedRows: () => boolean,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -63,25 +66,28 @@ export class TranscriptPrependAnchor {
           captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
         : null;
     if (anchor) {
-      this.pending = { ...anchor, measured: false };
+      this.pending = {
+        ...anchor,
+        measured: false,
+        prepended: this.hasPrepend || retained?.prepended === true,
+      };
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
   }
 
-  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
+  /** Prefix insertion must land before paint; warm replacement joins the native batch. */
   update(
-    element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => boolean,
+    rowsMeasured: () => boolean,
   ): boolean {
     const anchor = this.pending;
-    if (!anchor) {
+    if (!anchor || (!anchor.prepended && !rowsMeasured())) {
       return false;
     }
-    const changed = measureRows();
+    const changed = anchor.prepended && this.measurePrependedRows();
     const moved = restoreTranscriptPrependAnchor(
       anchor,
-      element,
+      virtualizer.scrollElement,
       virtualizer,
       this.messageElements.values(),
       this.onLayoutCorrection,

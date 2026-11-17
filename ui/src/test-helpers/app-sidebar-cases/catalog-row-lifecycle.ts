@@ -14,6 +14,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { closeArchiveUndoToast } from "../archive-undo-window.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
@@ -79,10 +80,11 @@ describe("AppSidebar catalog row lifecycle", () => {
     const operation = vi.spyOn(sidebar.sessionOrganizer, "archiveSessionWithUndo");
     archive!.click();
     await operation.mock.results[0]!.value;
+    await closeArchiveUndoToast();
+    await vi.waitFor(() => expect(sessions.archiveVisibility(key)).toBe("archived"));
     await sidebar.updateComplete;
     expect(archived).toBe(true);
     expect(sessions.state.result?.sessions).toEqual([]);
-    expect(sessions.archiveVisibility(key)).toBe("archived");
     expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
   });
 

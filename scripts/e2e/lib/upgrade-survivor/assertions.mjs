@@ -498,15 +498,21 @@ function assertConfigSurvived() {
 
   if (coverage && acceptsIntent(coverage, "skill-library-split")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
+    assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
+    const preserve = baseline || mode === "preserve";
     assert(
       JSON.stringify(config.tools?.allow) ===
         JSON.stringify(
-          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+          preserve ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
         ),
       "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
     );
     assert(
-      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      baseline ||
+        (mode === "preserve"
+          ? config.meta?.migrations?.skillLibraryToolSplit === undefined
+          : config.meta?.migrations?.skillLibraryToolSplit === true),
       "Skill library split migration marker was not recorded",
     );
   }
@@ -1541,7 +1547,6 @@ function assertNpmPluginInstall([
   const records = readInstalledPluginIndex().installRecords ?? {};
   const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
   const record = records[pluginId];
-  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
   assertPluginArtifactConsent(
     record,
     pluginId,
@@ -1568,8 +1573,25 @@ function assertNpmPluginInstall([
     expectedTarball = publishedCompanionTarball;
   }
   const archive = fs.readFileSync(expectedTarball);
-  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
-  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
+  const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  // ClawHub records the archive's SHA-256 separately from npm's SHA-512.
+  // Check every recorded digest so a matching field cannot hide stale provenance.
+  const expectedDigests =
+    record.source === "clawhub"
+      ? {
+          integrity: `sha256-${createHash("sha256").update(archive).digest("base64")}`,
+          npmIntegrity,
+          clawpackSha256: createHash("sha256").update(archive).digest("hex"),
+        }
+      : { integrity: npmIntegrity };
+  const recordedDigests = Object.keys(expectedDigests).filter(
+    (field) => record[field] !== undefined,
+  );
+  assert(
+    recordedDigests.length > 0 &&
+      recordedDigests.every((field) => record[field] === expectedDigests[field]),
+    `${pluginId} plugin registry artifact integrity changed`,
+  );
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
@@ -1904,6 +1926,16 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
           (step?.name === "openclaw doctor" &&
             step.exitCode === 86 &&
             step.advisory?.kind === "package-post-install-doctor") ||
+          // The update owner intentionally skips this probe for remote/TLS profiles
+          // and when an existing Gateway owns the state; restart proof is separate.
+          (step?.name === "activated-gateway-startup" &&
+            step.exitCode === null &&
+            step.advisory?.kind === "recoverable-maintenance" &&
+            !step.termination &&
+            !step.signal &&
+            !step.killed &&
+            !step.outputLimitExceeded &&
+            !step.failureFacts?.length) ||
           (step?.name === "candidate-gateway-startup-cleanup" &&
             step.exitCode === null &&
             step.advisory?.kind === "recoverable-maintenance" &&

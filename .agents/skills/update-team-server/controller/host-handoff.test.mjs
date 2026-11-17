@@ -7,9 +7,8 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { makeHandoffSnapshotFixture } from "./host-handoff.test-support.mjs";
-import { runOwner } from "./worker-config-owner-fixture.mjs";
+import { runLibrary, runOwner } from "./worker-config-owner-fixture.mjs";
 
-const library = new URL("./release-lib.mjs", import.meta.url).pathname;
 const owner = readFileSync(new URL("./openclaw-release-deploy", import.meta.url), "utf8");
 const sourceId = "a".repeat(32), targetId = "b".repeat(32), targetSha = "b".repeat(40);
 const linuxRoot = { skip: process.platform !== "linux" || process.getuid() !== 0 ? "requires disposable Linux root" : false };
@@ -26,9 +25,9 @@ function fixture(t) {
   const shared = new DatabaseSync(f.shared); shared.exec("CREATE TABLE migration_runs(id TEXT PRIMARY KEY,status TEXT,report_json TEXT)"); shared.close();
   const capacity = join(f.root, "handoff-capacity.mjs");
   writeFileSync(capacity, "import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';const original=fs.statfsSync;fs.statfsSync=(...args)=>({...original(...args),bavail:16*1024*1024,bsize:4096});syncBuiltinESMExports();");
-  const run = (action, args = [], input = undefined, preload = undefined) => spawnSync(process.execPath, ["--import", capacity, ...(preload ? ["--import", preload] : []), library, "host-handoff", action, f.serving, ...args], { env: f.env, input: input ? JSON.stringify(input) : undefined, encoding: "utf8", timeout: 30000 });
+  const run = (action, args = [], input = undefined, preload = undefined) => runLibrary(f, ["host-handoff", action, f.serving, ...args], { imports: [capacity, ...(preload ? [preload] : [])], input: input ? JSON.stringify(input) : undefined });
   const success = result => { assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
-  const source = JSON.parse(success(spawnSync(process.execPath, [library, "validate-release", f.initial, f.sha, String(process.getuid()), "sealed"], { env: f.env, encoding: "utf8" })));
+  const source = JSON.parse(success(runLibrary(f, ["validate-release", f.initial, f.sha, process.getuid(), "sealed"])));
   const admission = { source, schedules: Object.fromEntries(["openclaw-hourly-health-check.timer", "openclaw-disk-maintenance.timer"].map(name => [name, { UnitFileState: "enabled", ActiveState: "active", SubState: "waiting", LastTriggerUSec: "original-last", NextElapseUSecRealtime: "original-next" }])), process: { pid: 111, generation: "1110", instance: "fixture-instance-111" }, suspension: { id: "lease", expiresAtMs: Date.now() + 60000, status: "ready", terminalPolicy: "preserve" } };
   const begin = () => success(run("source-begin", [targetId, targetSha, f.config, f.shared, "@stdin"], admission));
   const stop = () => {
@@ -223,7 +222,7 @@ function targetFixture(t, candidateVersion = 1) {
   deployment.schemaVersions = candidatePackage.openclaw.schemaVersions;
   writeFileSync(manifestPath, JSON.stringify(deployment));
   writeFileSync(join(candidate, "fixture-sdk.cjs"), `module.exports={candidate:${JSON.stringify(targetSha)}};`);
-  f.success(spawnSync(process.execPath, [library, "seal-tree", candidate], { env: f.env, encoding: "utf8" }));
+  f.success(runLibrary(f, ["seal-tree", candidate]));
   for (const snapshot of manifest.backups) {
     copyFileSync(snapshot.file.path, snapshot.source + ".copy"); renameSync(snapshot.source + ".copy", snapshot.source);
   }
@@ -333,7 +332,7 @@ test("imports one host into a disabled target and gates activation on Doctor and
   assert.equal(f.run("target-finish", [], undefined, interrupt).status, 73);
   assert.equal(lstatSync(completed).nlink, 2);
   assert.equal(existsSync(f.journal), true);
-  f.success(spawnSync(process.execPath, [library, "migration-publication-recover", f.serving], { env: f.env, encoding: "utf8" }));
+  f.success(runLibrary(f, ["migration-publication-recover", f.serving]));
   assert.equal(lstatSync(completed).nlink, 1);
   f.success(f.run("target-finish"));
   assert.equal(existsSync(f.journal), false);

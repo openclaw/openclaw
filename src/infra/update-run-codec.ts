@@ -146,7 +146,7 @@ function compactConfigWriteRefusal(value: unknown): unknown {
   );
 }
 
-export function isRetainedStep(item: unknown): boolean {
+function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
     typeof item.step === "string" &&
@@ -159,6 +159,23 @@ export function isRetainedStep(item: unknown): boolean {
   );
 }
 
+/** The summary counts warning rows and reports failed ones, so plain steps yield first. */
+export function findDisposableStep(steps: readonly unknown[]): number {
+  // Repair history shares this bound; its attempts stay chronological.
+  const stepName = (item: unknown) =>
+    isRecord(item) && typeof item.step === "string" ? item.step : undefined;
+  const failed = (item: unknown) =>
+    stepName(item) !== undefined && isRecord(item) && item.status === "failed";
+  const warning = (item: unknown) => stepName(item)?.startsWith("warning:") === true;
+  for (const tier of [(item: unknown) => !warning(item) && !failed(item), warning, () => true]) {
+    const index = steps.findIndex((item) => !isRetainedStep(item) && tier(item));
+    if (index >= 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 /** Phase history, notice custody, and restoration proof survive diagnostic eviction. */
 function boundedJson(
   input: unknown,
@@ -169,7 +186,7 @@ function boundedJson(
   let json = JSON.stringify(value);
   while (Buffer.byteLength(json) > maxBytes) {
     if (Array.isArray(value)) {
-      const disposable = value.findIndex((item) => !isRetainedStep(item));
+      const disposable = findDisposableStep(value);
       if (disposable >= 0) {
         value = value.toSpliced(disposable, 1);
       } else {
@@ -249,6 +266,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     requester,
     sessionKey,
@@ -264,6 +282,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -279,6 +298,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
         updateRecoveryCapture,
         managedHandoff,
         packageStage,
+        packageRelease,
         windowsUserSid,
         ...routing,
       })
@@ -302,6 +322,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     "candidateVersion",
     "installedVersion",
     "fallbackReason",
+    // A closed enum: halving it would make the stored record fail validation on read.
+    "cause",
   ]);
   const minimumDiagnostics = JSON.stringify(
     mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
@@ -355,6 +377,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     ...originDiagnostics
   } = input.origin;
@@ -386,6 +409,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

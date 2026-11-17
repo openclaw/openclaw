@@ -17,6 +17,42 @@ const tsx = path.resolve("scripts/tsx.mjs");
 const buildScript = path.resolve("scripts/build-plugin-control-ui.mts");
 const moduleUrl = (file: string) => pathToFileURL(path.resolve(file)).href;
 
+it("copies built UI assets without loading the source build toolchain", () => {
+  const root = tempDirs.make("openclaw-control-ui-copy-");
+  const files = fixtureFiles(root);
+  files.json("package.json", { type: "module" });
+  files.write("pnpm-workspace.yaml", "packages: []\n");
+  for (const file of [
+    "scripts/build-plugin-control-ui.mts",
+    "scripts/lib/output-root-guard.mjs",
+    "scripts/lib/repo-root.mjs",
+  ]) {
+    files.write(file, fs.readFileSync(file, "utf8"));
+  }
+  const plugin = fixtureFiles(files.file("extensions/fixture"));
+  const generation = `dist/control-ui/${"a".repeat(64)}`;
+  plugin.json("package.json", { name: "@openclaw/fixture", type: "module" });
+  plugin.json("openclaw.plugin.json", { id: "fixture" });
+  plugin.json("dist/openclaw.plugin.json", { controlUi: { entry: `${generation}/index.js` } });
+  plugin.write(`${generation}/index.js`, 'export const label = "Fixture";\n');
+  plugin.write(`${generation}/index.css`, ".fixture { color: red; }\n");
+
+  execFileSync(
+    process.execPath,
+    [files.file("scripts/build-plugin-control-ui.mts"), plugin.root, "--copy"],
+    {
+      cwd: root,
+      timeout: 10_000,
+      stdio: "pipe",
+    },
+  );
+
+  const copied = fixtureFiles(files.file("dist/extensions/fixture"));
+  expect(copied.read(`${generation}/index.js`)).toBe(plugin.read(`${generation}/index.js`));
+  expect(copied.read(`${generation}/index.css`)).toBe(plugin.read(`${generation}/index.css`));
+  expect(plugin.read("openclaw.plugin.json")).toBe('{"id":"fixture"}');
+});
+
 it("serializes concurrent Settings builders with checkout artifact writers", async ({ signal }) => {
   const root = tempDirs.make("openclaw-settings-build-");
   const files = fixtureFiles(root);

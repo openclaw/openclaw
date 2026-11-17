@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   replaceSessionEntry,
@@ -12,11 +13,15 @@ import { publishSessionEntryCacheInvalidation } from "../config/sessions/session
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
+import * as workerResources from "../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import * as worker from "../infra/sqlite-worker-store.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -38,7 +43,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import * as routing from "./session-store-key.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -63,6 +70,25 @@ const it = baseIt.extend<{ state: OpenClawTestState; harness: ReturnType<typeof 
 function releasing<T extends { release(): void }>(facts: T) {
   return Object.assign(facts, { [Symbol.dispose]: () => facts.release() });
 }
+
+it("reuses a published routing revision and rejects a same-object route change after yielding", async ({
+  harness,
+}) => {
+  const { cfg, sessionKey } = harness;
+  const reads = vi.spyOn(routing, "readSessionRoutingFacts");
+  const assertCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: "main" },
+  ]);
+  const initialReads = reads.mock.calls.length;
+  for (let i = 0; i < 10; i++) {
+    assertCurrent(cfg);
+  }
+  expect(reads).toHaveBeenCalledTimes(initialReads);
+  await Promise.resolve();
+  cfg.session!.store = `${cfg.session!.store}.replacement`;
+  setRuntimeConfigSnapshot(cfg);
+  expect(() => assertCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 function sharingHarness(
   cfg: OpenClawConfig,
@@ -130,6 +156,58 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
+it("joins an already-opening first-use creator before capturing its registry witness", async ({
+  state,
+  harness,
+  signal,
+  task,
+}) => {
+  const { cfg, storePath } = harness;
+  expect(fs.existsSync(storePath)).toBe(false);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const open = worker.openAgentDatabaseSqliteWorkerStore;
+  vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return open(...args);
+  });
+  const opening = prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  let facts: ReturnType<typeof harness.prepareMissing> | undefined;
+  try {
+    await withinTest(entered.promise, signal);
+    facts = harness.prepareMissing();
+    void facts.catch(() => {});
+    release.resolve();
+    const acquired = await facts.catch((error: unknown) => {
+      const outer = error instanceof Error ? error : undefined;
+      const cause = outer?.cause instanceof Error ? outer.cause : undefined;
+      Object.assign(task.meta, {
+        registryFailureProvenance: {
+          outer: outer?.name === "SessionMutationFactsUnavailableError",
+          cause: cause?.name === "AgentDatabaseRegistryChangedError",
+          owner: outer?.stack?.includes("session-sharing-preparation.ts") === true,
+          registry: cause?.stack?.includes("openclaw-agent-db-registry-listing.ts") === true,
+        },
+      });
+      throw error;
+    });
+    using prepared = releasing(acquired);
+    expect(prepared.readCurrent(cfg).target).toBeNull();
+    expect(fs.existsSync(storePath)).toBe(true);
+  } finally {
+    release.resolve();
+    await opening;
+    await facts?.then(
+      (prepared) => prepared.release(),
+      () => {},
+    );
+  }
+});
+
 it("discovers sharing facts after an already-opening writer publishes registration", async ({
   state,
   harness,
@@ -164,6 +242,92 @@ it("discovers sharing facts after an already-opening writer publishes registrati
   }
 });
 
+it("qualifies a cold registration that begins after inventory preparation", async ({
+  state,
+  harness,
+  signal,
+  task,
+}) => {
+  const { cfg, storePath } = harness;
+  harness.write({ sessionId: "late-cold-writer", updatedAt: 1 });
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  await prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: state.env }).read();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const discover = workerResources.prepareSessionStoreCandidatesInWorker;
+  vi.spyOn(workerResources, "prepareSessionStoreCandidatesInWorker").mockImplementationOnce(
+    async (...args) => {
+      const result = await discover(...args);
+      entered.resolve();
+      await release.promise;
+      return result;
+    },
+  );
+  const pending = harness.prepare();
+  void pending.catch(() => {});
+  let opening: ReturnType<typeof prepareOpenClawAgentDatabaseExecution> | undefined;
+  try {
+    await withinTest(entered.promise, signal);
+    opening = prepareOpenClawAgentDatabaseExecution(
+      { agentId: "main", path: storePath, env: state.env },
+      () => {},
+    );
+    await opening;
+    release.resolve();
+    const acquired = await pending.catch((error: unknown) => {
+      const outer = error instanceof Error ? error : undefined;
+      const cause = outer?.cause instanceof Error ? outer.cause : undefined;
+      Object.assign(task.meta, {
+        registryFailureProvenance: {
+          outer: outer?.name === "SessionMutationFactsUnavailableError",
+          cause: cause?.name === "AgentDatabaseRegistryChangedError",
+          owner: outer?.stack?.includes("session-sharing-preparation.ts") === true,
+          registry: cause?.stack?.includes("openclaw-agent-db-registry-listing.ts") === true,
+        },
+      });
+      throw error;
+    });
+    using prepared = releasing(acquired);
+    expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("late-cold-writer");
+  } finally {
+    release.resolve();
+    await opening;
+    await pending.then(
+      (prepared) => prepared.release(),
+      () => {},
+    );
+  }
+});
+
+it("prepares access facts on the reserved lane while bulk reads fill the session store pool", async ({
+  harness,
+  signal,
+}) => {
+  harness.write(restrictedEntry("under-load", "original"));
+  const run = vi.spyOn(sessionStoreLane.pool, "run");
+  const held = createDeferred<never>();
+  const bulk = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
+    sessionStoreLane.pool.run(() => held.promise, { diagnosticOperation: "synthetic-bulk" }),
+  );
+  try {
+    await expect(sessionStoreLane.pool.run(() => held.promise, {})).rejects.toMatchObject({
+      code: "overloaded",
+      message: expect.stringContaining("worker task capacity reached"),
+    });
+    using prepared = releasing(await withinTest(harness.prepare(), signal));
+    expect(prepared.readCurrent(harness.cfg).target.entry.sessionId).toBe("under-load");
+    expect(run).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ pointRead: true }),
+    );
+  } finally {
+    held.reject(new Error("synthetic bulk released"));
+    await Promise.allSettled(bulk);
+  }
+});
+
 it.for(["runtime", "automation"])(
   "retains sharing facts across metadata but invalidates broad %s changes",
   async (scope, { harness }) => {
@@ -176,6 +340,117 @@ it.for(["runtime", "automation"])(
     expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
   },
 );
+
+it("retains selected committed sharing facts across a broad sessions notification", async ({
+  harness,
+}) => {
+  const { cfg, scope } = harness;
+  harness.write(restrictedEntry("broad-survivor", "original"));
+  await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  sessionChanges.emit({ all: true, scope: "sessions" });
+  const current = prepared.readCurrent(cfg);
+  expect(prepared.readCurrent(cfg)).toBe(current);
+  expect(current.target.entry.sessionId).toBe("broad-survivor");
+  expect(current.membership.has("requester")).toBe(true);
+  expect(harness.authorize(current)).toBeNull();
+});
+
+it.for([
+  { all: true, scope: "sessions", factsInvalidated: true },
+  { all: true, scope: "sessions", runtimeSession: { sessionId: "guarded" } },
+  { all: true, scope: "stores" },
+  { all: true, scope: { agentId: "main" } },
+  { all: true, scope: { storePath: "selected" } },
+  { all: true, scope: { topology: true } },
+  { all: true, scope: "future-unknown-scope" },
+] satisfies SessionRowChange[])(
+  "keeps nonallowlisted publication closed: %j",
+  async (change, { harness }) => {
+    harness.write(restrictedEntry("guarded", "original"));
+    using prepared = releasing(await harness.prepare());
+    sessionChanges.emit(change);
+    sessionChanges.emit({ all: true, scope: "sessions" });
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it.for(["released", "absent", "sessionId", "lifecycle", "unknown"] as const)(
+  "does not revive %s facts after a broad sessions notification",
+  async (condition, { harness }) => {
+    const entry = restrictedEntry("guarded", "original");
+    if (condition !== "absent") {
+      harness.write(entry);
+    }
+    using prepared = releasing(await harness.prepareMissing());
+    const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+    if (condition === "released") {
+      prepared.release();
+    } else if (condition === "sessionId") {
+      harness.write({ ...entry, sessionId: "replacement" });
+    } else if (condition === "lifecycle") {
+      harness.write({ ...entry, lifecycleRevision: "replacement" });
+    } else if (condition === "unknown") {
+      harness.transaction((database) =>
+        publishSessionEntryCacheInvalidation(database, { sessionKey: harness.sessionKey }),
+      );
+    }
+    publish();
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it("restores exact committed facts after rollback without reviving a refused admission", async ({
+  harness,
+}) => {
+  const entry = restrictedEntry("rollback-sharing", "original");
+  harness.write(entry);
+  await addSessionMember(harness.scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  const before = prepared.readCurrent(harness.cfg);
+  const committedEntry = structuredClone(before.target.entry);
+  const committedMembers = [...before.membership];
+  const assertSource = () => {
+    const denied = harness.authorize(prepared.readCurrent(harness.cfg));
+    if (denied) {
+      throw new Error(denied.message);
+    }
+  };
+  const admission = prepareSystemAgentRunAdmission(
+    harness.cfg,
+    "pending-rollback-admission",
+    "main",
+    "pending-rollback",
+    assertSource,
+  );
+  const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+  try {
+    await admission.admit("plugin-harness", "rollback-harness");
+    expect(harness.authorize(before)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).not.toThrow();
+    expect(() =>
+      harness.transaction((database) => {
+        writeSessionEntry(database, harness.sessionKey, { ...entry, visibility: "draft" });
+        publish();
+        expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+        expect(() => admission.assertSourceCurrent()).toThrow(unavailableMessage);
+        throw new Error("candidate rollback");
+      }),
+    ).toThrow("candidate rollback");
+    publish();
+    const after = prepared.readCurrent(harness.cfg);
+    expect(after.target.entry).toEqual(committedEntry);
+    expect([...after.membership]).toEqual(committedMembers);
+    expect(after.target.entry.visibility).toBe("read-only");
+    expect(after.membership.has("requester")).toBe(true);
+    expect(harness.authorize(after)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).toThrow(
+      "source execution authority is no longer active",
+    );
+  } finally {
+    admission.close();
+  }
+});
 
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
   harness,
@@ -210,7 +485,68 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["unknown", "rollback"] as const)(
+it.for([
+  ["per-agent", "main"],
+  ["per-agent", "other"],
+  ["shared", "main"],
+  ["shared", "ops"],
+  ["shared", "other"],
+] as const)(
+  "qualifies %s acquisition when %s becomes ready",
+  async ([kind, readyAgentId], { state, signal }) => {
+    const storePath =
+      kind === "per-agent"
+        ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+        : state.statePath("shared-acquisition.sqlite");
+    const agentId = kind === "shared" ? "ops" : "main";
+    if (kind === "shared") {
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath, env: state.env });
+    }
+    const cfg = {
+      agents: { entries: { main: {}, ops: {}, other: {} } },
+      ...(kind === "shared" ? { session: { store: storePath } } : {}),
+    };
+    const harness = sharingHarness(cfg, `agent:${agentId}:acquiring`, storePath, agentId);
+    harness.write(restrictedEntry("acquiring", "first"));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await readEntries(...args);
+        if (args[0].projection === "full" && args[0].includeAuthorization) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    void pending.catch(() => {});
+    try {
+      await withinTest(entered.promise, signal);
+      sessionChanges.emit({ all: true, scope: { agentId: readyAgentId, topology: true } });
+      release.resolve();
+      if (readyAgentId === "other") {
+        using prepared = releasing(await pending);
+        const facts = prepared.readCurrent(cfg);
+        expect(facts.target.entry.sessionId).toBe("acquiring");
+        expect(facts.target.agentId).toBe(agentId);
+        expect(facts.sourceAgentId).toBe("main");
+      } else {
+        await expect(pending).rejects.toThrow(unavailableMessage);
+      }
+    } finally {
+      release.resolve();
+      await pending.then(
+        (prepared) => prepared.release(),
+        () => {},
+      );
+    }
+  },
+);
+
+it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {
     const storePath = state.statePath("shared.sqlite");
@@ -222,7 +558,7 @@ it.for(["unknown", "rollback"] as const)(
     using prepared = releasing(await harness.prepare());
     if (change === "unknown") {
       sessionChanges.emit({ all: true, scope: "stores" });
-    } else {
+    } else if (change === "rollback") {
       expect(() =>
         runOpenClawStateWriteTransaction(
           () => {
@@ -232,14 +568,28 @@ it.for(["unknown", "rollback"] as const)(
           { env: state.env },
         ),
       ).toThrow("Synthetic registry rollback");
+    } else {
+      sessionChanges.emit({ all: true, scope: { agentId: change, topology: true } });
     }
-    if (change === "rollback") {
+    if (change === "rollback" || change === "other") {
       expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("registry-sharing");
     } else {
       expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
     }
   },
 );
+
+it("invalidates absent shared-store facts when another physical owner becomes available", async ({
+  state,
+}) => {
+  const storePath = state.statePath("missing-shared.sqlite");
+  const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
+  const harness = sharingHarness(cfg, "agent:ops:missing", storePath, "ops");
+  using prepared = releasing(await harness.prepareMissing());
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 it("does not discover registry-only retired stores outside captured roots", async ({ state }) => {
   const storePath = state.statePath("external-retired.sqlite");

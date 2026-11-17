@@ -224,6 +224,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (handoff) {
+    defaultRuntime.error(
+      "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
+    );
+  }
   if (pluginCohort) {
     if (
       !validChannel ||

@@ -106,7 +106,8 @@
 
   .composer-context-strip__dismiss::before {
     position: absolute;
-    inset: -10px;
+    /* The 28px button needs 8px per side to retain its 44px touch target. */
+    inset: -8px;
     content: "";
   }
 }
