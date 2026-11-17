@@ -36,6 +36,19 @@
     var(--text) var(--surface-selected-hover-amount),
     transparent
   );
+  /* Form controls take the same ink over whatever surface holds them: fields,
+     tracks and the select menu edge are steps of --text, so every theme and
+     mode follows without its own values. Text fields sit one step above selects. */
+  --control-surface: color-mix(in srgb, var(--text) 6%, transparent);
+  --control-surface-hover: color-mix(in srgb, var(--text) 8%, transparent);
+  --control-edge: color-mix(in srgb, var(--text) 10%, transparent);
+  --control-edge-hover: color-mix(in srgb, var(--text) 16%, transparent);
+  --control-field-surface: var(--control-surface-hover);
+  --control-field-edge: var(--control-edge-hover);
+  --control-selected: color-mix(in srgb, var(--text) 14%, transparent);
+  --control-track: color-mix(in srgb, var(--text) 18%, transparent);
+  --control-focus-edge: color-mix(in srgb, var(--text-strong) 55%, transparent);
+  --control-focus-ring: color-mix(in srgb, var(--text-strong) 12%, transparent);
   --navigation-selected-border: transparent;
 
   --card: #161920;
