@@ -431,6 +431,10 @@ exhausted but the reply still continues:
 }
 ```
 
+The start message goes out before the [memory flush](#memory-flush), which can take
+minutes on a large local context. If the flush leaves nothing to compact, a
+"Compaction not needed" message follows instead of a completion message.
+
 ### Memory flush
 
 Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction.

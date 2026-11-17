@@ -29,6 +29,46 @@ const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
   context_bounded: BOUNDED_CONTEXT_NOTICE,
 };
 
+/**
+ * Notices for one preflight compaction, which may announce itself before its memory
+ * checkpoint and then replan. Delivery failures never fail compaction.
+ */
+export function createCompactionNotifier(
+  onNotice: ((phase: CompactionNoticePhase, text?: string) => Promise<void> | void) | undefined,
+) {
+  let started = false;
+  let ended = false;
+  const notify = async (phase: CompactionNoticePhase, text?: string) => {
+    // Compaction starting reopens a run whose earlier notice was a bounded-context warning.
+    ended = phase !== "start";
+    // The replan after the memory checkpoint reaches the start notice again.
+    if (phase === "start" && started) {
+      return;
+    }
+    started ||= phase === "start";
+    try {
+      await onNotice?.(phase, text);
+    } catch (err) {
+      logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
+    }
+  };
+  return {
+    notify,
+    get ended() {
+      return ended;
+    },
+    /** Ends a run that will not compact; a sent start notice gets "skipped". */
+    async endWithoutCompaction<T>(result: T): Promise<T> {
+      if (started && !ended) {
+        await notify("skipped");
+      }
+      return result;
+    },
+  };
+}
+
+export type CompactionNotifier = ReturnType<typeof createCompactionNotifier>;
+
 export function formatCompactionStatus(
   entry?: Pick<SessionEntry, "compactionCount" | "compactionQualityDegraded">,
 ): string | undefined {
