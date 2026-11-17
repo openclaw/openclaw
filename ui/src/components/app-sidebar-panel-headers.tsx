@@ -3,12 +3,12 @@ import { Show } from "solid-js";
 import { titleForRoute } from "../app-navigation.ts";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { automationsFiltered } from "../lib/cron/automations-filter.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
-import { SidebarAutomationsFilter } from "./app-sidebar-automations-filter.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
-import type { SidebarMenus } from "./sidebar-menus.tsx";
+import type { SidebarFilterMenu, SidebarMenus } from "./sidebar-menus.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 
@@ -29,7 +29,7 @@ export function SidebarPanelHeader(props: {
 
 export function SidebarPanelFilter(props: {
   menus: Pick<SidebarMenus, "togglePositionedMenu">;
-  menu: "peopleFilter" | "sessionSort";
+  menu: SidebarFilterMenu;
   expanded: boolean;
   filtered: boolean;
   title: string;
@@ -65,7 +65,14 @@ export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) 
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{titleForRoute("cron", t)}</span>
-      <SidebarAutomationsFilter />
+      <SidebarPanelFilter
+        menus={props.host.sidebarMenus}
+        menu="automationsFilter"
+        expanded={props.host.sidebarMenus.automationsFilterMenuPosition !== null}
+        filtered={automationsFiltered()}
+        title={t("chat.sidebar.menuFilters")}
+        label={t("chat.sidebar.menuFilters")}
+      />
     </SidebarPanelHeader>
   );
 }

@@ -15,3 +15,13 @@ export const DEFAULT_AUTOMATIONS_FILTER: AutomationsFilter = {
 // The sidebar's filter for this tab, set from its header and read by its list.
 const [automationsFilter, setAutomationsFilter] = createSignal(DEFAULT_AUTOMATIONS_FILTER);
 export { automationsFilter, setAutomationsFilter };
+
+/** Whether the Automations sidebar filter differs from its defaults. */
+export function automationsFiltered(): boolean {
+  const filter = automationsFilter();
+  return (
+    filter.status !== DEFAULT_AUTOMATIONS_FILTER.status ||
+    filter.lastRun !== DEFAULT_AUTOMATIONS_FILTER.lastRun ||
+    filter.sort !== DEFAULT_AUTOMATIONS_FILTER.sort
+  );
+}
