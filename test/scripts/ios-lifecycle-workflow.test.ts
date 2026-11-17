@@ -85,6 +85,13 @@ import path from "node:path";
 const [tool, ...args] = process.argv.slice(2);
 const root = process.env.WATCH_FIXTURE_ROOT;
 const mode = process.env.WATCH_FIXTURE_MODE;
+async function waitForMarker(name) {
+  const deadline = Date.now() + 5000;
+  while (!existsSync(path.join(root, name))) {
+    if (Date.now() >= deadline) throw new Error("Missing concurrent operation: " + name);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({
   tool, args, destination: process.env.IOS_DEST,
   settings: process.env.XCODE_XCCONFIG_FILE ? readFileSync(process.env.XCODE_XCCONFIG_FILE, "utf8") : undefined,
@@ -105,12 +112,27 @@ if (tool === "installer") {
       { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
         udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
     ] } }));
+  } else if (args[1] === "bootstatus" && args[2] === "companion-fixture" && mode.startsWith("overlap")) {
+    if (mode === "overlap-build-failed") {
+      process.on("SIGTERM", () => {
+        appendFileSync(path.join(root, "companion-reaped"), "terminated");
+        process.exit(0);
+      });
+      appendFileSync(path.join(root, "companion-started"), "ready");
+      await new Promise(() => setInterval(() => {}, 1000));
+    }
+    appendFileSync(path.join(root, "companion-started"), "ready");
+    await waitForMarker("build-started");
   } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
     console.error("Intentional simulator boot failure");
     process.exit(23);
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
   }
+} else if (args.includes("build-for-testing") && mode.startsWith("overlap")) {
+  appendFileSync(path.join(root, "build-started"), "ready");
+  await waitForMarker("companion-started");
+  if (mode === "overlap-build-failed") process.exit(26);
 } else if (args.includes("build-for-testing") && mode === "voice-build-failed-" + args[args.indexOf("-scheme") + 1]) {
   process.exit(26);
 } else if (args.includes("-showBuildSettings")) {
@@ -211,13 +233,14 @@ exec '${pythonExecutable}' "$@"
     result,
     commands,
     product,
+    companionReaped: existsSync(path.join(root, "companion-reaped")),
     summary: readFileSync(summaryFile, "utf8"),
     environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
 describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => {
-  it.each(["ready", "unpaired"])("prepares the %s destination before XCTest", (mode) => {
+  it.each(["ready", "unpaired", "overlap"])("prepares the %s destination before XCTest", (mode) => {
     const { result, commands, product } = runSimulatorStep(mode, [watchStep], {
       OPENCLAW_CI_SIMSLIM_BINARY: "/must-not-run-simslim",
     });
@@ -257,6 +280,14 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
     expect(
       xcodeCommands.find((command) => command.args.includes("test-without-building"))?.args,
     ).toContain(resultBundle("OpenClawWatchOperationTests"));
+  });
+
+  it("reaps companion preparation when the foreground build fails", () => {
+    const { result, commands, companionReaped } = runSimulatorStep("overlap-build-failed");
+    expect(result.status, result.stderr).toBe(26);
+    expect(companionReaped).toBe(true);
+    expect(commands.some((command) => command.args.includes("install"))).toBe(false);
+    expect(commands.some(isTestCommand)).toBe(false);
   });
 
   it.each(["missing-product", "ambiguous-product", "relative-product", "boot-failed"])(
