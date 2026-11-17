@@ -1,5 +1,6 @@
 import { request } from "node:https";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR } from "./native-hook-relay-transport-error.js";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayProcessResponse,
@@ -7,6 +8,7 @@ import type {
 
 const MAX_CREDENTIAL_BYTES = 16_384;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_REJECTION_BYTES = 1024;
 
 /** Read a dedicated credential, never a Gateway config or shared state database. */
 export async function invokeRemoteNativeHookRelay(
@@ -70,7 +72,29 @@ export async function invokeRemoteNativeHookRelay(
       (res) => {
         res.on("error", () => fail("Native hook callback response failed"));
         if (res.statusCode !== 200) {
-          fail(`Native hook callback rejected (${res.statusCode ?? 0})`);
+          const rejected = `Native hook callback rejected (${res.statusCode ?? 0})`;
+          if (res.statusCode !== 500) {
+            fail(rejected);
+            return;
+          }
+          // Only the fixed terminal-transport marker crosses; any other body stays opaque.
+          let rejection = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            rejection += chunk;
+            if (rejection.length > MAX_REJECTION_BYTES) {
+              fail(rejected);
+            }
+          });
+          res.on("end", () => {
+            let terminal = false;
+            try {
+              terminal = JSON.parse(rejection)?.error === NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR;
+            } catch {
+              // An unreadable rejection is an ordinary one.
+            }
+            fail(terminal ? NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR : rejected);
+          });
           return;
         }
         const chunks: Buffer[] = [];

@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { drainNativeHookRelayBridge } from "./native-hook-relay-bridge.js";
 import { NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR } from "./native-hook-relay-client.js";
@@ -14,6 +15,7 @@ import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import type { NativeHookRelayEvent } from "./native-hook-relay-types.js";
 import { isJsonObject } from "./native-hook-relay-utils.js";
 
+const log = createSubsystemLogger("agents/harness/native-hook-relay");
 const { relays } = nativeHookRelayState;
 
 /** Capture synchronous inputs before the relay owner admits its deferred policy read. */
@@ -150,10 +152,20 @@ export async function resolveNativeHookRelayInvocationBinding(
       throw new Error("native hook relay retained invocation not allowed");
     }
     if (retention.awaitForegroundAdmission) {
+      // Attribution for a hook that dies waiting here: a long admissionWaitMs
+      // means the child lost the admission race, a short one with no outcome
+      // means the relay was already gone.
+      const admissionStartedAt = Date.now();
       assertAdmission = await racePromiseWithAbortSignal(
         retention.awaitForegroundAdmission(claim, signal),
         signal,
       );
+      log.debug("native hook relay child admission settled", {
+        relayId: registration.relayId,
+        childThreadId: claim,
+        admissionWaitMs: Date.now() - admissionStartedAt,
+        outcome: assertAdmission ? "admitted" : "not-admitted",
+      });
       if (!assertAdmission) {
         throw new Error("native hook relay retained invocation not allowed");
       }

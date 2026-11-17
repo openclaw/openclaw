@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { readRequestBodyWithLimit } from "../../infra/http-body.js";
 import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
@@ -13,6 +14,10 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
+import {
+  normalizeCodexHookMetadata,
+  normalizeNativeHookToolName,
+} from "./native-hook-relay-codec.js";
 import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayBridgeRegistration,
@@ -26,14 +31,27 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
+import {
+  isNativeHookRelayTransportFailedError,
+  NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR,
+} from "./native-hook-relay-transport-error.js";
+import {
+  isNativeHookRelayAwaitingApproval,
+  NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS,
+  recordNativeHookRelayTransportFailure,
+} from "./native-hook-relay-transport-failure.js";
 import type {
   InvokeNativeHookRelayParams,
+  NativeHookRelayEvent,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
+  NativeHookRelayTransportFailureCause,
 } from "./native-hook-relay-types.js";
 import {
   isJsonObject,
+  isJsonValue,
   normalizePositiveInteger,
+  readNativeHookRelayEvent,
   readNonEmptyString,
 } from "./native-hook-relay-utils.js";
 
@@ -273,12 +291,122 @@ export function unregisterNativeHookRelayBridge(
   return bridge.closing;
 }
 
+/**
+ * Accounts for one bridge request so a client that walks away, or an invocation
+ * that outlives the server deadline, is not a non-event.
+ *
+ * Before this existed, a child whose socket died mid-invocation left the parent
+ * awaiting a promise nobody would ever read, wrote the eventual response into a
+ * closed socket, and logged nothing — so the dispatcher never learned that a
+ * child hook had been attempted at all. Disconnect detection itself belongs to
+ * the request abort signal; this only attributes and records the failure.
+ */
+type NativeHookRelayBridgeRequestTracker = {
+  signal: AbortSignal;
+  observe: (payload: InvokeNativeHookRelayParams) => void;
+  dispose: () => void;
+};
+
+function trackNativeHookRelayBridgeRequest(
+  requestAbort: AbortSignal,
+  auth: NativeHookRelayBridgeRequestAuth,
+): NativeHookRelayBridgeRequestTracker {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  let event: NativeHookRelayEvent | undefined;
+  let toolName: string | undefined;
+  let toolCallId: string | undefined;
+  const fail = (cause: NativeHookRelayTransportFailureCause, message: string) => {
+    if (controller.signal.aborted) {
+      return;
+    }
+    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+      // Settle the retired invocation without charging its same-ID successor.
+      controller.abort(new Error(NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR));
+      return;
+    }
+    const elapsedMs = Date.now() - startedAt;
+    log.warn(message, {
+      relayId: auth.relayId,
+      ...(event ? { event } : {}),
+      elapsedMs,
+    });
+    recordNativeHookRelayTransportFailure({
+      relayId: auth.relayId,
+      cause,
+      ...(event ? { event } : {}),
+      elapsedMs,
+      ...(toolName ? { toolName } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
+    });
+    controller.abort(new Error(NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR));
+  };
+  const onClientDisconnected = () => {
+    fail("client-disconnected", "native hook relay bridge client disconnected");
+  };
+  // Re-arm rather than fire while the parent is holding an approval prompt open:
+  // Codex's hookTimeoutSec has no upper bound and the approval owns its own
+  // budget, so this ceiling only bounds a parent that stopped making progress.
+  // The pending approval is removed on decision, expiry, or relay teardown, so
+  // the window after that is the one that trips.
+  // A relay that admitted a longer command budget (workspace readiness waits
+  // inside the pre-tool hook) is still making progress until that budget is spent.
+  const deadlineMs = Math.min(
+    Math.max(
+      NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS,
+      auth.registration.commandTimeoutMs ?? 0,
+    ),
+    MAX_TIMER_TIMEOUT_MS,
+  );
+  let deadline: ReturnType<typeof setTimeout>;
+  const armDeadline = () => {
+    deadline = setTimeout(() => {
+      if (isNativeHookRelayAwaitingApproval(auth.relayId)) {
+        armDeadline();
+        return;
+      }
+      fail("server-deadline", "native hook relay bridge invocation deadline exceeded");
+    }, deadlineMs);
+    deadline.unref();
+  };
+  armDeadline();
+  requestAbort.addEventListener("abort", onClientDisconnected, { once: true });
+  if (requestAbort.aborted) {
+    onClientDisconnected();
+  }
+  return {
+    signal: controller.signal,
+    observe: (payload) => {
+      try {
+        event = readNativeHookRelayEvent(payload.event);
+      } catch {
+        // An unreadable event only costs the log a field; the request still fails below.
+      }
+      if (!isJsonValue(payload.rawPayload)) {
+        return;
+      }
+      try {
+        const metadata = normalizeCodexHookMetadata(payload.rawPayload);
+        toolCallId = metadata.toolUseId;
+        toolName = normalizeNativeHookToolName(metadata.toolName);
+      } catch {
+        // Metadata is only used to attribute the failure to a tool call.
+      }
+    },
+    dispose: () => {
+      clearTimeout(deadline);
+      requestAbort.removeEventListener("abort", onClientDisconnected);
+    },
+  };
+}
+
 export async function handleNativeHookRelayBridgeRequest(
   req: IncomingMessage,
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
   const requestAbort = createHttpRequestAbortSignal(req, res);
+  let tracker: NativeHookRelayBridgeRequestTracker | undefined;
   const fail = (statusCode: number, error: string) =>
     writeNativeHookRelayBridgeJson(res, statusCode, { ok: false, error });
   try {
@@ -294,6 +422,9 @@ export async function handleNativeHookRelayBridgeRequest(
       fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
+    // Only an authenticated, current request may charge its disconnect to the relay.
+    const tracked = trackNativeHookRelayBridgeRequest(requestAbort.signal, auth);
+    tracker = tracked;
     const body = auth.remote
       ? await readRequestBodyWithLimit(req, {
           maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
@@ -307,6 +438,7 @@ export async function handleNativeHookRelayBridgeRequest(
           })
         ).toString("utf8");
     const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
+    tracked.observe(payload);
     if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
       fail(403, "native hook relay bridge target mismatch");
       return;
@@ -320,22 +452,27 @@ export async function handleNativeHookRelayBridgeRequest(
       return;
     }
     const result = await runInDetachedAsyncContext(() =>
-      auth.invokeRelay({ ...payload, requireGeneration: true }, requestAbort.signal),
+      auth.invokeRelay({ ...payload, requireGeneration: true }, tracked.signal),
     );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
     if (requestAbort.signal.aborted) {
       return;
     }
-    fail(
-      isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
-      auth.remote
-        ? "Native hook callback failed"
-        : error instanceof Error
-          ? error.message
-          : String(error),
-    );
+    // A deadline abort is this bridge's own transport verdict on a still-connected
+    // child; name it so the child escalates instead of fail-closed denying. The
+    // latched terminal refusal crosses a remote callback as the same fixed marker.
+    const message =
+      tracker?.signal.aborted || (auth.remote && isNativeHookRelayTransportFailedError(error))
+        ? NATIVE_HOOK_RELAY_TRANSPORT_FAILED_ERROR
+        : auth.remote
+          ? "Native hook callback failed"
+          : error instanceof Error
+            ? error.message
+            : String(error);
+    fail(isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500, message);
   } finally {
+    tracker?.dispose();
     requestAbort.cleanup();
   }
 }

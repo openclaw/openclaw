@@ -1,6 +1,8 @@
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
+  isNativeHookRelayTransportFailedError,
+  NATIVE_HOOK_RELAY_DISPOSITION_MARKER,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
 import { NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD } from "../agents/harness/native-hook-relay-constants.js";
@@ -85,18 +87,32 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     writeText(stderr, response.stderr);
     return response.exitCode;
   };
-  const unavailable = (message = "Native hook relay unavailable") =>
-    writeResponse(
-      renderNativeHookRelayUnavailableResponse({
-        provider,
-        event,
-        preToolUseUnavailable: opts.preToolUseUnavailable,
-        message,
-      }),
-    );
+  const unavailable = (
+    message = "Native hook relay unavailable",
+    // "failed" means the relay could not be reached at all; a policy deny
+    // carries no disposition, which is what keeps the two distinguishable.
+    failureDisposition: NativeHookRelayProcessResponse["failureDisposition"] = "failed",
+  ): number => {
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider,
+      event,
+      preToolUseUnavailable: opts.preToolUseUnavailable,
+      message,
+      failureDisposition,
+    });
+    const exitCode = writeResponse(response);
+    if (response.failureDisposition && response.stdout) {
+      // `failureDisposition` is an in-process field and cannot leave this child,
+      // so the deny it attributes would otherwise be indistinguishable from an
+      // OpenClaw policy decision. stderr is the only channel that survives, so
+      // the attribution rides it as a fixed-shape marker.
+      writeText(stderr, `${NATIVE_HOOK_RELAY_DISPOSITION_MARKER} ${response.failureDisposition}\n`);
+    }
+    return exitCode;
+  };
   const timedOut = (error: NativeHookRelayDeadlineError) => {
     writeText(stderr, formatRelayCliError("native hook relay timed out", error));
-    return unavailable("Native hook relay timed out");
+    return unavailable("Native hook relay timed out", "timed_out");
   };
   try {
     let rawPayload: unknown;
@@ -151,7 +167,8 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
       } catch (error) {
         if (
           isNativeHookRelayDeadlineError(error) ||
-          isNativeHookRelayBridgeStaleRegistrationError(error)
+          isNativeHookRelayBridgeStaleRegistrationError(error) ||
+          isNativeHookRelayTransportFailedError(error)
         ) {
           throw error;
         }
@@ -171,6 +188,9 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return timedOut(error);
+      }
+      if (isNativeHookRelayTransportFailedError(error)) {
+        return writeNativeHookRelayTransportFailedResponse({ stderr, error });
       }
       writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
       return unavailable();
@@ -321,4 +341,13 @@ async function withNativeHookRelayDeadline<T>(
     remainingNativeHookRelayDeadlineMs(deadline);
     throw error;
   }
+}
+
+/** Native hooks require exit 2 plus stderr to block on a dead policy transport. */
+function writeNativeHookRelayTransportFailedResponse(params: {
+  stderr: NodeJS.WritableStream;
+  error: unknown;
+}): number {
+  writeText(params.stderr, formatRelayCliError("native hook relay transport failed", params.error));
+  return 2;
 }
