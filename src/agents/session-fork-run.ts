@@ -260,7 +260,7 @@ async function readSessionForkPin(
  * fork does not read the call as failed. The model view has no persistence target: these
  * results exist only in the fork.
  */
-export async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+async function markRunningToolCalls(manager: SessionManager): Promise<void> {
   // The latest batch is the last assistant message plus the tool results recorded after it.
   const completed = new Set<string>();
   let batch: AssistantMessage | undefined;
