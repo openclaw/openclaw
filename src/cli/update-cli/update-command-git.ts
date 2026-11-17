@@ -654,10 +654,15 @@ export async function updateGitInstall(params: {
 
 /**
  * Whether a release switch reaches the next Gateway start: the installed service already
- * starts the release link, or it starts this checkout and its definition can be redirected
- * to the launcher. Otherwise the checkout updates in place.
+ * starts the release link, or it starts this checkout and this update restarts it with a
+ * definition redirected to the launcher (`--no-restart` never rewrites it). Otherwise the
+ * checkout updates in place.
  */
-export async function gatewayServiceOwnsGitInstall(root: string, timeoutMs?: number) {
+export async function gatewayServiceOwnsGitInstall(
+  root: string,
+  shouldRestart: boolean,
+  timeoutMs?: number,
+) {
   try {
     const state = await readGatewayServiceStateForUpdate(
       resolveGatewayService(),
@@ -670,7 +675,7 @@ export async function gatewayServiceOwnsGitInstall(root: string, timeoutMs?: num
       return true;
     }
     const checkout = await inspectManagedGatewayServiceBeforeUpdate({ root, state });
-    return checkout.kind === "owned" && checkout.refreshDefinition;
+    return shouldRestart && checkout.kind === "owned" && checkout.refreshDefinition;
   } catch {
     // An unreadable service keeps the in-place runner, which needs no service.
   }

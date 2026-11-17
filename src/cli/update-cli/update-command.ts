@@ -325,7 +325,9 @@ async function updateCommandInternal(
       updateInstallKind === "git" &&
       usesGitReleases(
         switchToGit,
-        await (await import("./update-command-git.js")).gatewayServiceOwnsGitInstall(root),
+        await (
+          await import("./update-command-git.js")
+        ).gatewayServiceOwnsGitInstall(root, shouldRestart),
         (reason) => {
           releaseLayoutWarning = `Git release layout unavailable (${reason}); updating the checkout in place. The next update tries the release layout again.`;
           defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);

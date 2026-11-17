@@ -327,16 +327,20 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
       const entry = path.join(checkout, "dist", "index.js");
       // Run by hand: nothing would start through the release link.
       service(null);
-      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(false);
+      expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
       service(entry);
-      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(true);
+      expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
       // A sealed definition keeps starting the checkout, so the switch would never serve.
       service(entry, true);
-      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(false);
+      expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
+      // --no-restart never rewrites the definition, so the next start would run the checkout.
+      service(entry);
+      expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(false);
       // Once the unit names the launcher, switches need no definition write.
       await publishGitRelease({ prefix, releaseRoot: checkout, trial: false });
       service(await writeGitReleaseLauncher(prefix), true);
-      expect(await gatewayServiceOwnsGitInstall(checkout)).toBe(true);
+      expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(true);
+      expect(await gatewayServiceOwnsGitInstall(checkout, false)).toBe(true);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
