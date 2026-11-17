@@ -21,8 +21,13 @@ import { resolveTelegramPrimaryMedia } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
-const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
+// One budget for getFile, its retries and the download. Inbound media is fetched before
+// the update is adopted, so the budget must end well inside the ingress adoption stall
+// watchdog (5 min): a fetch the watchdog aborts is retried and holds every later message
+// in the chat. Out of budget, the caller delivers the message without the attachment.
+// A watchdog configured below this budget still retries; that is an operator choice.
+const TELEGRAM_MEDIA_FETCH_DEADLINE_MS = 2 * 60_000;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
   message: NonNullable<Parameters<typeof resolveTelegramPrimaryMedia>[0]>;
@@ -104,15 +109,8 @@ function resolveMediaMetadata(msg: TelegramMediaContext["message"]) {
 
 async function resolveTelegramFileWithRetry(
   ctx: Pick<TelegramContext, "getFile">,
-  abortSignal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<{ file_path?: string }> {
-  const deadline = new AbortController();
-  const deadlineTimer = setTimeout(
-    () => deadline.abort(new Error("Telegram getFile retry deadline exceeded")),
-    TELEGRAM_GET_FILE_RETRY_DEADLINE_MS,
-  );
-  deadlineTimer.unref?.();
-  const signal = abortSignal ? AbortSignal.any([abortSignal, deadline.signal]) : deadline.signal;
   // grammY ships a compatible AbortSignal runtime with a structurally distinct
   // declaration, so keep the cast at this dependency boundary.
   const getFileSignal = signal as Parameters<TelegramContext["getFile"]>[0];
@@ -149,8 +147,6 @@ async function resolveTelegramFileWithRetry(
         status,
       },
     );
-  } finally {
-    clearTimeout(deadlineTimer);
   }
 }
 
@@ -251,14 +247,26 @@ export async function resolveMedia(params: {
   if (!metadata.fileRef?.file_id) {
     return null;
   }
-  const file = await resolveTelegramFileWithRetry(ctx, params.abortSignal);
-  if (!file.file_path) {
-    throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
-  }
-  const filePath = file.file_path;
+  const deadline = new AbortController();
+  const deadlineTimer = setTimeout(
+    () =>
+      deadline.abort(
+        new Error(`Telegram media fetch exceeded ${TELEGRAM_MEDIA_FETCH_DEADLINE_MS / 1000}s`),
+      ),
+    TELEGRAM_MEDIA_FETCH_DEADLINE_MS,
+  );
+  deadlineTimer.unref?.();
+  const signal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, deadline.signal])
+    : deadline.signal;
   const telegramFileName = metadata.fileName;
   const mimeType = metadata.mimeType;
   const saved = await (async (): Promise<Awaited<ReturnType<typeof saveRemoteMedia>>> => {
+    const file = await resolveTelegramFileWithRetry(ctx, signal);
+    if (!file.file_path) {
+      throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
+    }
+    const filePath = file.file_path;
     const trustedLocalFile = resolveTrustedLocalTelegramRoot(
       filePath,
       downloadOptions.trustedLocalFileRoots,
@@ -318,9 +326,7 @@ export async function resolveMedia(params: {
       shouldRetryFetchError: shouldRetryTelegramTransportFallback,
       // The update spool and best-effort album/reply callers own failure handling.
       // Nested retries would multiply this header deadline before those owners act.
-      ...(downloadOptions.abortSignal
-        ? { requestInit: { signal: downloadOptions.abortSignal } }
-        : {}),
+      requestInit: { signal },
       filePathHint: filePath,
       maxBytes: downloadOptions.maxBytes,
       responseHeaderTimeoutMs: TELEGRAM_DOWNLOAD_RESPONSE_HEADER_TIMEOUT_MS,
@@ -332,7 +338,7 @@ export async function resolveMedia(params: {
       fallbackContentType: mimeType,
       originalFilename: telegramFileName,
     });
-  })();
+  })().finally(() => clearTimeout(deadlineTimer));
   let stickerMetadata: TelegramResolvedMedia["stickerMetadata"];
   if (sticker) {
     const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;

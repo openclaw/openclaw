@@ -18,11 +18,7 @@ import {
   type TelegramInboundMediaHydration,
 } from "./bot-handlers.inbound-buffer.js";
 import { createTelegramInboundMedia } from "./bot-handlers.inbound-media.js";
-import {
-  isDurablyRetryableInboundMediaError,
-  isMediaSizeLimitError,
-  TelegramBotApiFileTooLargeError,
-} from "./bot-handlers.media.js";
+import { isMediaSizeLimitError, TelegramBotApiFileTooLargeError } from "./bot-handlers.media.js";
 import {
   buildSyntheticContext,
   promptContextBoundaryOptions,
@@ -290,7 +286,6 @@ export function createTelegramInboundPipeline({
       }
 
       const nativeMedia = resolveTelegramPrimaryMedia(normalizedMsg);
-      const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(syntheticContext.update);
       const hydrateMedia = async (
         abortSignals: readonly AbortSignal[],
       ): Promise<TelegramInboundMediaHydration> => {
@@ -319,10 +314,11 @@ export function createTelegramInboundPipeline({
             });
           }
         } catch (mediaErr) {
-          if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
-            // Abort mid-media-resolution must stay retryable for live updates too;
-            // a clean claim release would settle the update as handled and silently
-            // drop the message during shutdown or deadline cancellation.
+          if (mediaRuntime.abortSignal?.aborted) {
+            // The update's owner left (shutdown, lost claim) mid-fetch. Its next owner
+            // replays it; settling it here would drop the message. Any other media
+            // failure delivers the message without the attachment: retrying it would
+            // hold every later message in the chat behind one unfetchable file.
             return { kind: "retry", error: mediaErr };
           }
           if (isMediaSizeLimitError(mediaErr)) {
@@ -346,9 +342,6 @@ export function createTelegramInboundPipeline({
             );
           } else {
             mediaLog.warn(`media fetch failed: ${String(mediaErr)}`, { chatId });
-            if (replayingSpooledUpdate && isDurablyRetryableInboundMediaError(mediaErr)) {
-              return { kind: "retry", error: mediaErr };
-            }
             unavailable = { reason: "download-failed" };
             if (mediaDisposition !== "silent-ingest") {
               await sendMediaWarning(mediaInput, "⚠️ Failed to download media. Please try again.");
