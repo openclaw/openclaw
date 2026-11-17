@@ -135,6 +135,23 @@ describe("tool schema hints", () => {
     expect(inputHint(destination)).toBe(
       "{ destination: { id: string; ... } | { title: string }; ... }",
     );
+
+    const long = Type.Optional(Type.Literal("x".repeat(280)));
+    const nullable = {
+      ...closedObject({ id: Type.String(), extra: Type.Optional(Type.String()) }),
+      nullable: true,
+    };
+    expect(inputHint(closedObject({ choice: nullable, note: long }))).toBe(
+      "{ choice: { id: string; ... } | null; ... }",
+    );
+    expect(
+      inputHint(
+        Type.Union([
+          closedObject({ id: Type.String(), extra: long }),
+          closedObject({ name: Type.String() }),
+        ]),
+      ),
+    ).toBe("{ id: string; ... } | { name: string }");
   });
 
   it("shortens required types that still overflow and keeps the result bounded", () => {

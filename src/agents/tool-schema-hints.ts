@@ -201,20 +201,25 @@ function compactSchemaUnion(
   if (variants.length > (limits.declaration ? 256 : MAX_COMPACT_UNION_TYPES)) {
     return UNKNOWN_HINT;
   }
-  const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
+  return joinVariantHints(
+    variants.map((variant) => compactSchemaType(variant, depth + 1, limits)),
+    limits,
+  );
+}
+
+function joinVariantHints(rendered: SchemaHint[], limits: CompactSchemaLimits): SchemaHint {
+  const overflowed = rendered.some((hint) => hint.overflowed);
   // Required-only variants are incomplete by design; still name their required keys.
   if (
     rendered.some((hint) => !hint.complete && (!limits.requiredOnly || hint.text === "unknown"))
   ) {
-    // An overflowing variant lets the enclosing object retry with required keys only.
-    return rendered.some((hint) => hint.overflowed)
-      ? { ...UNKNOWN_HINT, overflowed: true }
-      : UNKNOWN_HINT;
+    // An overflowing variant lets the caller retry with required keys only.
+    return overflowed ? { ...UNKNOWN_HINT, overflowed } : UNKNOWN_HINT;
   }
   return {
     text: [...new Set(rendered.map((hint) => hint.text))].join(" | "),
     complete: rendered.every((hint) => hint.complete),
-    overflowed: rendered.some((hint) => hint.overflowed),
+    overflowed,
   };
 }
 
@@ -481,13 +486,12 @@ function compactSchemaType(
     ) {
       return UNKNOWN_HINT;
     }
-    const rendered = type.map((value) =>
-      compactSchemaType({ ...schema, type: value }, depth + 1, limits),
+    return finish(
+      joinVariantHints(
+        type.map((value) => compactSchemaType({ ...schema, type: value }, depth + 1, limits)),
+        limits,
+      ),
     );
-    if (rendered.some((hint) => !hint.complete)) {
-      return UNKNOWN_HINT;
-    }
-    return finish(completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | ")));
   }
   if (type === "integer" || type === "number") {
     if (!limits.numericInputConstraints) {
@@ -547,10 +551,15 @@ export function compactToolInputHint(schema: unknown): string {
   if (!isRecord(schema)) {
     return "unknown";
   }
-  const hint =
-    schema.type === "object"
-      ? compactObjectHint(schema, 0, INPUT_LIMITS)
-      : compactSchemaType(schema, 0, INPUT_LIMITS);
+  if (schema.type === "object") {
+    const hint = compactObjectHint(schema, 0, INPUT_LIMITS);
+    return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
+  }
+  let hint = compactSchemaType(schema, 0, INPUT_LIMITS);
+  // A root union has no enclosing object to retry with required keys only.
+  if (hint.overflowed || hint.text.length > INPUT_LIMITS.maxChars) {
+    hint = compactSchemaType(schema, 0, { ...INPUT_LIMITS, requiredOnly: true });
+  }
   return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
 }
 
