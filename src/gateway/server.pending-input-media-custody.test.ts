@@ -253,7 +253,7 @@ it.for(
         // Lost admission evidence no longer hides durable input from history/recovery.
         expect(pending).toMatchObject({
           total: 1,
-          items: [{ id: `${f.runId}:user`, runId: f.runId, state: "queued" }],
+          items: [{ id: expect.any(String), runId: f.runId, state: "queued" }],
         });
         expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
         expect(JSON.stringify(pending.items[0]?.message)).toContain(request.message);
@@ -307,6 +307,8 @@ it.for(
             current: true,
             pending: { run_id: f.runId, state: "queued" },
           });
+          // History exposes the opaque storage ID, not the request's idempotency key.
+          expect(pending.items[0]?.id).toBe(source.pending?.input_id);
           expect(source.pending?.message_json).toContain(media.id);
           expect(source.pending?.message_json).toContain(request.message);
         } else if (accepted) {
