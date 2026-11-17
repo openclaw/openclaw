@@ -174,13 +174,11 @@ export async function defersTokenCompactionToChatGPTBoundary(
   const [
     { getPreparedRuntimeAuthProfileStoreSnapshot },
     { prepareAgentRuntimeAuth },
-    { resolvePreparedExtraParams },
-    { isChatGPTV2CompactionEligible },
+    { usesNativeOpenAICodexResponsesBackend },
   ] = await Promise.all([
     import("../../agents/auth-profiles.js"),
     import("../../agents/runtime-plan/prepare-auth.js"),
-    import("../../agents/embedded-agent-runner/extra-params.js"),
-    import("../../agents/embedded-agent-runner/run/chatgpt-v2-compaction.js"),
+    import("@openclaw/ai/transports"),
   ]);
   // Reuse the attempt's route planner with lifecycle-published metadata only.
   // Maintenance must not load secrets or refresh credentials.
@@ -202,22 +200,27 @@ export async function defersTokenCompactionToChatGPTBoundary(
     // A missing or stale route snapshot retains ordinary reply maintenance.
     return false;
   }
-  return (
-    route !== undefined &&
-    isChatGPTV2CompactionEligible({
-      config: run.config,
-      model: route,
-      extraParams: resolvePreparedExtraParams({
-        cfg: run.config,
-        provider: run.provider,
-        modelId: run.model,
-        agentId: run.agentId,
-        agentDir: run.agentDir,
-        workspaceDir: run.workspaceDir,
-      }),
-      compactionEnabled: run.config.agents?.defaults?.compaction?.enabled !== false,
-      // Native Responses always replays checkpoints, independent of credentials.
-      compactionReplayEnabled: true,
-    })
-  );
+  // Runtime parameters can disable native compaction, never enable it on another backend.
+  if (route === undefined || !usesNativeOpenAICodexResponsesBackend(route)) {
+    return false;
+  }
+  const [{ resolvePreparedExtraParams }, { isChatGPTV2CompactionEligible }] = await Promise.all([
+    import("../../agents/embedded-agent-runner/extra-params.js"),
+    import("../../agents/embedded-agent-runner/run/chatgpt-v2-compaction.js"),
+  ]);
+  return isChatGPTV2CompactionEligible({
+    config: run.config,
+    model: route,
+    extraParams: resolvePreparedExtraParams({
+      cfg: run.config,
+      provider: run.provider,
+      modelId: run.model,
+      agentId: run.agentId,
+      agentDir: run.agentDir,
+      workspaceDir: run.workspaceDir,
+    }),
+    compactionEnabled: run.config.agents?.defaults?.compaction?.enabled !== false,
+    // Native Responses always replays checkpoints, independent of credentials.
+    compactionReplayEnabled: true,
+  });
 }
