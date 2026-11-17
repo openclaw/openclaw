@@ -302,6 +302,20 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          # Keep admission imports, workspace manifests and patches; omit unrelated trees.
+          sparse-checkout: |
+            /*
+            !/*/
+            /.github/
+            /scripts/
+            /src/
+            /packages/
+            /patches/
+            /extensions/*/package.json
+            /examples/*/package.json
+            /ui/package.json
+            /tools/solid-lint/package.json
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -2712,7 +2726,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@0bfca9316a086a140894c74fbf7ad26b33d9e202
     with:
       mode: decision
       runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
@@ -2739,7 +2753,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@0bfca9316a086a140894c74fbf7ad26b33d9e202
     with:
       mode: drain
       runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}

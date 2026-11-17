@@ -960,12 +960,15 @@
   margin-inline: 12px;
 }
 
+/* The summary ends where the reply text does. An auto track would grow to the
+   unwrapped summary in WebKit and Firefox and carry it past the column. */
 .chat-activity-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
   min-width: 0;
-  max-width: var(--chat-message-max-width, min(760px, 100%));
+  max-width: var(--chat-message-max-width, 100%);
 }
 
 /* Author display rules must preserve the live disclosure's hidden state. */
@@ -978,6 +981,7 @@
   min-width: 0;
   overflow: hidden;
   font: inherit;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1079,7 +1083,6 @@
 
 .chat-activity-group__label.chat-activity-group__label--live {
   color: inherit;
-  text-overflow: ellipsis;
 }
 
 @keyframes chat-activity-headline-enter {

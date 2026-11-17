@@ -9,7 +9,11 @@ import {
   type OwnerApprovalRequest,
 } from "./owner-approval.ts";
 import { thisOwnerDevice } from "./owner-devices.ts";
-import type { OpenClawIdPeopleLink, OpenClawIdStatusResult } from "./types.ts";
+import type {
+  OpenClawIdPeopleLink,
+  OpenClawIdRecoveryUse,
+  OpenClawIdStatusResult,
+} from "./types.ts";
 
 const owners = new WeakMap<GatewayBrowserClient, OwnerApproval>();
 
@@ -23,7 +27,7 @@ export function bindOwnerApproval(
   gateway: ApplicationGateway,
   onRequest: (client: GatewayBrowserClient, request: OwnerApprovalRequest) => void,
   onKitUsed: (client: GatewayBrowserClient, device: string | undefined) => void,
-  onMemberDeviceAdded: () => void,
+  onMemberDeviceAdded: (recoveryUse: OpenClawIdRecoveryUse | undefined) => void,
 ) {
   let client: GatewayBrowserClient | null = null;
   let account = openClawIdAccount();

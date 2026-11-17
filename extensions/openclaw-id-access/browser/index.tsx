@@ -6,6 +6,7 @@ import {
   type ControlUiHost,
   type ControlUiView,
 } from "openclaw/plugin-sdk/control-ui";
+import { createSignal } from "solid-js";
 import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 import "./control-ui.css";
@@ -14,8 +15,9 @@ import "./control-ui.css";
 export const ACCESS_PAGE_ID = "access";
 
 const mountAccess: ControlUiView = (container, context) => {
-  const dispose = render(() => <PeoplePage host={context.host} />, container);
-  return { dispose };
+  const [params, setParams] = createSignal(context.props, { ownedWrite: true });
+  const dispose = render(() => <PeoplePage host={context.host} params={params()} />, container);
+  return { dispose, update: (next) => setParams(next.props) };
 };
 
 // The Gateway owns the flag and whether this connection may read people.
