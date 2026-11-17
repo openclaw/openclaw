@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
   type FixtureReceiptChannel,
@@ -550,7 +551,9 @@ await import(${JSON.stringify(pathToFileURL(sourceEntry).href)});`,
       },
       env,
     );
-    let executable = process.execPath;
+    // Keep orchestration and compilation on Node; Vitest uses the selected runtime.
+    const nodeExecutable = resolveTestNodeExecPath();
+    let executable = nodeExecutable;
     if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
       // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
       const hasZeroHardCoreLimit = /^Max core file size\s+\S+\s+0\s/mu.test(
@@ -560,7 +563,7 @@ await import(${JSON.stringify(pathToFileURL(sourceEntry).href)});`,
         // Linux reserves one byte to suppress piped core collectors too; zero does not.
         // Inherit it through wrappers that re-raise the fixture's intentional signal.
         executable = "prlimit";
-        command = ["--core=1:1", "--", process.execPath, ...command];
+        command = ["--core=1:1", "--", nodeExecutable, ...command];
       }
     }
     const { child, completion } = spawnOwnedVitestProcess({
