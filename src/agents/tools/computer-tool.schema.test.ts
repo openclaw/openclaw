@@ -492,26 +492,20 @@ describe("createComputerTool v2 execution", () => {
   );
 
   it("maps browser observations and opaque refs through the public tool", async () => {
-    useActions(["get_browser_state", "browser_pointer"]);
-    callGatewayToolMock.mockResolvedValueOnce({
-      payload: {
-        ok: true,
-        observation: { kind: "browser", observationId: "browser-observation-1" },
-        details: {
-          browserRef: "browser-1",
-          pageRef: "page-1",
-          elements: [{ elementRef: "element-1" }, { elementRef: "element-2" }],
-        },
-      },
-    });
+    useActions(["get_browser_state", "browser_pointer", "browser_type"]);
+    mockComputerAct((params) => ({
+      payload:
+        params?.action === "get_browser_state"
+          ? { ok: true, observation: { kind: "browser", observationId: "browser-observation-1" } }
+          : { ok: true, effect: "confirmed" },
+    }));
     const tool = createVisionComputerTool({
-      pairedNodeComputerUse: { actions: ["get_browser_state", "browser_pointer"] },
+      pairedNodeComputerUse: { actions: ["get_browser_state", "browser_pointer", "browser_type"] },
     });
-
+    const refs = { browserRef: "browser-1", pageRef: "page-1" };
     await expectForwarded(tool, "observe-browser", {
       action: "get_browser_state",
-      browserRef: "browser-1",
-      pageRef: "page-1",
+      ...refs,
       snapshotFormat: "dom_refs_v1",
       includeScreenshot: true,
     });
@@ -520,11 +514,19 @@ describe("createComputerTool v2 execution", () => {
       expect.stringContaining("get_browser_state: requires snapshotFormat=semantic_v2"),
     );
 
-    mockComputerAct(() => ({ payload: { ok: true, effect: "confirmed" } }));
+    for (const text of ["  hello\t\n", " \t\n", ""]) {
+      await tool.execute("observe", { action: "get_browser_state", ...refs });
+      await expectForwarded(tool, "type-browser", {
+        action: "browser_type",
+        ...refs,
+        observationId: "browser-observation-1",
+        elementRef: "element-1",
+        text,
+      });
+    }
     await expectForwarded(tool, "drag-browser", {
       action: "browser_pointer",
-      browserRef: "browser-1",
-      pageRef: "page-1",
+      ...refs,
       observationId: "browser-observation-1",
       pointerAction: "drag",
       inputRoute: "dom_event",
@@ -542,35 +544,32 @@ describe("createComputerTool v2 execution", () => {
           : { ok: true, effect: "confirmed" },
     }));
     const tool = createVisionComputerTool();
-    await tool.execute("observe", { action: "get_window_state", windowRef: "window-1" });
-
-    await expect(
-      tool.execute("click", {
-        action: "left_click",
-        windowRef: "window-1",
-        elementRef: "element-1",
-        observationId: "observation-1",
-        deliveryMode: "background",
-      }),
-    ).resolves.toBeDefined();
-    expect(readLastComputerActParams("left_click")).toEqual({
-      action: "left_click",
-      screenIndex: 0,
-      refWidth: EFFECTIVE_REF_WIDTH,
+    const refs = {
       windowRef: "window-1",
       elementRef: "element-1",
       observationId: "observation-1",
       deliveryMode: "background",
+    };
+    await tool.execute("observe", { action: "get_window_state", windowRef: refs.windowRef });
+    await expect(tool.execute("click", { action: "left_click", ...refs })).resolves.toBeDefined();
+    expect(readLastComputerActParams("left_click")).toEqual({
+      action: "left_click",
+      screenIndex: 0,
+      refWidth: EFFECTIVE_REF_WIDTH,
+      ...refs,
     });
+    for (const value of ["  hello\t\n", " \t\n", ""]) {
+      await tool.execute("observe", { action: "get_window_state", windowRef: refs.windowRef });
+      await tool.execute("write", { action: "set_value", ...refs, value });
+      expect(readLastComputerActParams("set_value")).toMatchObject({ ...refs, value });
+    }
     callGatewayToolMock.mockClear();
     await expect(
       tool.execute("write", {
         action: "set_value",
-        windowRef: "window-1",
-        elementRef: "element-1",
+        ...refs,
         observationId: "observation-stale",
         value: "hello",
-        deliveryMode: "background",
       }),
     ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
     expect(callGatewayToolMock).not.toHaveBeenCalled();
