@@ -318,6 +318,9 @@ describe("ClawHub chat recommendations", () => {
           action === "install" ? "Install" : "Unavailable",
         ),
       );
+      expect(part(card, "status")?.textContent?.trim()).toBe(
+        action === "install" ? "Ready to install" : "Unavailable",
+      );
       expect(card.querySelector(".plugin-official-badge")).toBeNull();
       expect(part(card, "dismiss")).toBeNull();
       if (action === "install") {

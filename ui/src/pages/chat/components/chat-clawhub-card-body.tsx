@@ -396,7 +396,7 @@ export function ChatClawHubCardBody(
     }
     if (!result.installed) {
       return result.canInstall
-        ? ""
+        ? t("chat.clawhub.readyToInstall")
         : t(result.restricted ? "chat.clawhub.permissionRequired" : "chat.clawhub.unavailable");
     }
     return t(

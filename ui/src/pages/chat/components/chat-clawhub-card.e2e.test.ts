@@ -107,7 +107,7 @@ describeControlUiE2e("Chat plugin installation status", () => {
         ? createControlUiE2eArtifactDir("chat-plugin-lifecycle")
         : undefined;
     const states = [
-      { id: "available", installed: false, status: "", action: "Install" },
+      { id: "available", installed: false, status: "Ready to install", action: "Install" },
       { id: "installed", installed: true, status: "Installed", action: "Manage" },
       {
         id: "sign-in",

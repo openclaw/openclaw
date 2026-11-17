@@ -42,6 +42,7 @@ const enPluginManagement = {
       manage: "Manage",
       connect: "Connect",
       checking: "Checking installation",
+      readyToInstall: "Ready to install",
       installing: "Installing",
       installFailed: "Installation failed",
       connectionCancelled: "Connection canceled",
