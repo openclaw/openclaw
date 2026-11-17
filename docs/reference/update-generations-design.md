@@ -582,10 +582,19 @@ something the source showed.
   installed. It still refuses for a live updater or helper, a removed or
   replaced lease store (a reboot), an edited package, a relinked launcher, a
   rollback in progress, and a helper sealed by another build.
-  Still open: after that settlement the same update stops at a second check,
+  After that settlement the same update used to stop at a second check,
   `Update <id> has unfinished recovery`, until one `openclaw update repair`
-  runs. Whether update admission can reconcile a dead run itself is being
-  measured.
+  ran. [#200680](https://github.com/openclaw/openclaw/pull/200680) lets the
+  next command-line update settle the killed update's plugin recovery itself
+  with repair's settlement. It does so only when the update lease store still
+  holds the dead updater's lease, its recorded process is gone, it did not
+  leave the Gateway stopped, and the outcome is a rollback onto the
+  still-installed previous version or keeping a verified candidate. It still
+  refuses and names `openclaw update repair` for an installed version that
+  was not verified, a rollback the killed update had already begun, a stopped
+  Gateway, an update the Gateway started, a lost lease store, and a source
+  checkout. The `package-installed-recovery` lane was not rerun against this
+  change.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
