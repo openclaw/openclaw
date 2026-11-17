@@ -33,6 +33,7 @@ import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { stripStructuralPrefixes } from "./mentions.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
@@ -192,6 +193,20 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     workspaceDir: params.workspaceDir,
     isGroup: sessionState.isGroup,
   });
+  // Status cards report the activation this conversation's replies use, not a fixed label.
+  const defaultActivation = sessionState.isGroup
+    ? defaultGroupActivation(
+        await resolveGroupRequireMention({
+          cfg: params.cfg,
+          group: prepareReplyConversation({
+            ctx: sessionState.sessionCtx,
+            sessionEntry:
+              sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
+            groupResolution: sessionState.groupResolution,
+          }).group,
+        }),
+      )
+    : "mention";
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
@@ -282,7 +297,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
               ...selection,
               catalog: thinkingCatalog,
             }),
-          defaultGroupActivation: () => "always",
+          defaultGroupActivation: () => defaultActivation,
           mediaDecisions: params.ctx.MediaUnderstandingDecisions,
         }),
       ),
@@ -336,7 +351,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         previousSessionEntry: sessionState.previousSessionEntry,
         sessionStore: sessionState.sessionStore,
         opts: params.opts,
-        defaultGroupActivation: () => "always",
+        defaultGroupActivation: () => defaultActivation,
         resolveModelLevels: async () => ({
           resolvedThinkLevel: undefined,
           resolvedReasoningLevel: "off",

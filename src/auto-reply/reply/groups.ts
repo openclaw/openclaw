@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
 import { resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -9,7 +10,10 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import {
+  prepareReplyConversation,
+  type PreparedReplyConversation,
+} from "./prompt-session-context.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
 const silentReplyGuidance = `If no text reply is needed, including after a reaction or other action, reply with exactly "${SILENT_REPLY_TOKEN}" as the entire final answer, without commentary, punctuation, or formatting. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
@@ -72,6 +76,18 @@ export async function resolveGroupRequireMention(params: {
 /** Converts requireMention into the default prompt activation label. */
 export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
   return !requireMention ? "always" : "mention";
+}
+
+/** Resolves a stored session's default activation from its persisted route, as event turns do. */
+export async function resolveSessionDefaultGroupActivation(params: {
+  cfg: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+}): Promise<"always" | "mention"> {
+  const { group } = prepareReplyConversation({
+    ctx: { InternalTurnSource: "event" },
+    sessionEntry: params.sessionEntry,
+  });
+  return defaultGroupActivation(await resolveGroupRequireMention({ cfg: params.cfg, group }));
 }
 
 function resolveProviderLabel(rawProvider: string | undefined): string {

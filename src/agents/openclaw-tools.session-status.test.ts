@@ -655,6 +655,39 @@ describe("session_status tool", () => {
     }
   });
 
+  it.each([
+    { requireMention: false, expected: "always" },
+    { requireMention: undefined, expected: "mention" },
+  ])(
+    "reports the reply-path default activation for a channel thread (requireMention=$requireMention)",
+    async ({ requireMention, expected }) => {
+      const sessionKey = "agent:main:slack:channel:c123:thread:t1";
+      resetSessionStore({
+        [sessionKey]: fixtureSession("s-slack-thread", {
+          chatType: "channel",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "slack", to: "channel:C123", accountId: "work", threadId: "t1" },
+          }),
+        }),
+      });
+      mockConfig = {
+        ...createMockConfig(),
+        channels: {
+          slack: { accounts: { work: { groups: { "*": { requireMention } } } } },
+        },
+      };
+
+      await status({ sessionKey: "current" }, sessionKey, { runSessionKey: sessionKey });
+
+      const statusArg = buildStatusMessageMock.mock.calls[0]?.[0] as {
+        isGroup?: boolean;
+        defaultGroupActivation?: () => string;
+      };
+      expect(statusArg.isGroup).toBe(true);
+      expect(statusArg.defaultGroupActivation?.()).toBe(expected);
+    },
+  );
+
   it("reports origin, active, and persisted delivery route metadata for semantic current", async () => {
     const sessionKey = "agent:main:discord:channel:1489550370136129537";
     const origin = { provider: "discord", accountId: "bot-primary" };

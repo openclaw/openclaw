@@ -3,7 +3,10 @@ import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../con
 import { resolveSessionEntryCandidateTargetForRuntime } from "../../config/sessions/session-accessor.entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
+
+const loadGroupsRuntime = createLazyPromise(() => import("../../auto-reply/reply/groups.js"));
 
 export type ResolvedStatusSessionEntry = {
   entry: SessionEntry;
@@ -131,4 +134,26 @@ export function listImplicitDefaultDirectFallbackKeys(params: {
     }),
     params.mainKey,
   ]);
+}
+
+/** Resolves whether a status target is shared, and its activation when no /activation is set. */
+export async function resolveSessionStatusGroupActivation(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+}): Promise<{ isGroup: boolean; defaultActivation: "always" | "mention" }> {
+  const { cfg, entry, sessionKey } = params;
+  const isGroup =
+    entry.chatType === "group" ||
+    entry.chatType === "channel" ||
+    sessionKey.includes(":group:") ||
+    sessionKey.includes(":channel:");
+  if (!isGroup) {
+    return { isGroup, defaultActivation: "mention" };
+  }
+  const { resolveSessionDefaultGroupActivation } = await loadGroupsRuntime();
+  return {
+    isGroup,
+    defaultActivation: await resolveSessionDefaultGroupActivation({ cfg, sessionEntry: entry }),
+  };
 }

@@ -316,3 +316,48 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([
+  { requireMention: false, stored: undefined, expected: "always" },
+  { requireMention: undefined, stored: undefined, expected: "mention" },
+  { requireMention: false, stored: "mention" as const, expected: "mention" },
+])(
+  "renders native group /status activation $expected (requireMention=$requireMention, stored=$stored)",
+  async ({ requireMention, stored, expected }) => {
+    buildStatusReplyMock.mockImplementation(
+      async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
+        buildStatusReplyParts({
+          ...params,
+          statusChannel: "telegram",
+          resolvedHarness: "openclaw",
+          pluginHealthLineOverride: "",
+          modelAuthOverride: "api-key",
+          activeModelAuthOverride: "api-key",
+          includeTranscriptUsage: false,
+        }),
+    );
+    const sessionKey = "agent:main:telegram:group:123";
+    await fixture.write(
+      { sessionId: "group", updatedAt: Date.now(), groupId: "123", groupActivation: stored },
+      sessionKey,
+    );
+    const result = await runStatus(
+      {
+        From: "telegram:group:123",
+        OriginatingTo: "telegram:123",
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: sessionKey,
+      },
+      {
+        cfg: fixture.config({
+          agents: { defaults: { model: "openai/gpt-5.5" } },
+          channels: { telegram: { groups: { "123": { requireMention } } } },
+        } as OpenClawConfig),
+      },
+    );
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining(`Activation: ${expected}`) },
+    });
+  },
+);
