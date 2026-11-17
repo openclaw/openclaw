@@ -13302,6 +13302,7 @@ struct ChatViewModelTests {
     }
 
     @Test func `sessions refresh waits for failing thinking patch before applying authoritative level`() async throws {
+        FileHandle.standardError.write(Data("[thinking-refresh] entry\n".utf8))
         let patchGate = AsyncGate()
         let patchStarted = AsyncGate()
         let initialSessions = sessionsResponse(
@@ -13322,21 +13323,27 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        FileHandle.standardError.write(Data("[thinking-refresh] bootstrap settled\n".utf8))
         await MainActor.run { vm.selectThinkingLevel("max") }
+        FileHandle.standardError.write(Data("[thinking-refresh] thinking selected\n".utf8))
         await patchStarted.wait()
+        FileHandle.standardError.write(Data("[thinking-refresh] patch started\n".utf8))
         let refresh = Task { await vm.fetchSessions(limit: nil) }
 
         try await Task.sleep(for: .milliseconds(50))
         #expect(await MainActor.run { vm.thinkingLevel } == "max")
 
         await patchGate.open()
+        FileHandle.standardError.write(Data("[thinking-refresh] patch gate released\n".utf8))
         await refresh.value
+        FileHandle.standardError.write(Data("[thinking-refresh] refresh settled\n".utf8))
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevel } == "high")
     }
 
     @Test func `failed thinking overlap does not restore an older successful model`() async throws {
+        FileHandle.standardError.write(Data("[thinking-overlap] entry\n".utf8))
         let staleListGate = AsyncGate()
         let listCallCount = AsyncCounter()
         let levels = ["off", "high", "max"].map { thinkingOption($0) }
@@ -13375,7 +13382,7 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
-                print("[thinking-overlap] list call \(call)")
+                FileHandle.standardError.write(Data("[thinking-overlap] list call \(call)\n".utf8))
                 if call == 1 {
                     return initialSessions
                 }
@@ -13387,22 +13394,22 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        print("[thinking-overlap] bootstrap settled")
+        FileHandle.standardError.write(Data("[thinking-overlap] bootstrap settled\n".utf8))
         await MainActor.run { vm.selectModel("openai/model-b") }
         await vm.waitForPendingSessionSettings(in: "main")
-        print("[thinking-overlap] model settled")
+        FileHandle.standardError.write(Data("[thinking-overlap] model settled\n".utf8))
 
         let refresh = Task { await vm.fetchSessions(limit: nil) }
         await listCallCount.wait { $0 >= 2 }
         #expect(await listCallCount.current() == 2)
         await MainActor.run { vm.selectThinkingLevel("max") }
-        print("[thinking-overlap] thinking settlement enter")
+        FileHandle.standardError.write(Data("[thinking-overlap] thinking settlement enter\n".utf8))
         await vm.waitForPendingSessionSettings(in: "main")
-        print("[thinking-overlap] thinking settled")
+        FileHandle.standardError.write(Data("[thinking-overlap] thinking settled\n".utf8))
         await staleListGate.open()
-        print("[thinking-overlap] stale list gate released")
+        FileHandle.standardError.write(Data("[thinking-overlap] stale list gate released\n".utf8))
         await refresh.value
-        print("[thinking-overlap] refresh settled")
+        FileHandle.standardError.write(Data("[thinking-overlap] refresh settled\n".utf8))
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-c")
         #expect(await MainActor.run { vm.sessions.first?.model } == "model-c")

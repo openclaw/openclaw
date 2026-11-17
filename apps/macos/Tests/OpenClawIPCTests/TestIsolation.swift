@@ -11,8 +11,8 @@ actor TestIsolationLock {
 
     func acquire() async {
         let label = "\(ProcessInfo.processInfo.processIdentifier):\(Test.current?.name ?? "unknown test")"
-        print("[test-isolation] waiting \(label)")
-        defer { print("[test-isolation] acquired \(label)") }
+        FileHandle.standardError.write(Data("[test-isolation] waiting \(label)\n".utf8))
+        defer { FileHandle.standardError.write(Data("[test-isolation] acquired \(label)\n".utf8)) }
         if !self.locked {
             self.locked = true
             return
@@ -24,8 +24,9 @@ actor TestIsolationLock {
     }
 
     func release() {
-        print(
-            "[test-isolation] released \(ProcessInfo.processInfo.processIdentifier):\(Test.current?.name ?? "unknown test")")
+        FileHandle.standardError.write(Data(
+            "[test-isolation] released \(ProcessInfo.processInfo.processIdentifier):\(Test.current?.name ?? "unknown test")\n"
+                .utf8))
         if self.waiters.isEmpty {
             self.locked = false
             return
