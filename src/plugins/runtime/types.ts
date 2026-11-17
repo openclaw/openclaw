@@ -70,8 +70,8 @@ export type SubagentForkedTurnParams<T> = {
   sessionKey: string;
   /**
    * The completed transcript entry the fork reads through; the session's latest message when
-   * omitted. Refused when the session was replaced (`sessionId` no longer current) or the entry
-   * is no longer on its active transcript. A reset that keeps the session id is reported through
+   * omitted. Refused when `sessionId` is no longer the session's current id or the entry is no
+   * longer on its active transcript. A reset that keeps the session id is reported through
    * `outcome.source.lifecycleRevision`.
    */
   through?: { sessionId: string; entryId: string };
