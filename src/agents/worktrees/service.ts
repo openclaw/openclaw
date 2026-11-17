@@ -477,15 +477,14 @@ export class ManagedWorktreeService {
       { ...params, env: this.env, id: `branches:${repository.repoRoot}` },
       async (admission) => {
         const currentSlots = await readPendingWorktrees(this.env);
-        const owner = params.ownerId
-          ? await readLiveRegistryWorktreeByOwner(
-              captureWorktreeRunEndContext(this.env),
-              params.ownerKind ?? "manual",
-              params.ownerId,
-            )
-          : undefined;
+        const currentRecords = await readRegistryWorktrees(this.env, { liveOnly: true });
         const currentCollision =
-          owner ??
+          currentRecords.find(
+            (record) =>
+              (params.ownerId && worktreeOwnerMatches(record, params)) ||
+              (record.repoFingerprint === repository.fingerprint &&
+                record.name === destination.name),
+          ) ??
           currentSlots.find(
             ({ record, state }) =>
               (state === "pending" && params.ownerId && worktreeOwnerMatches(record, params)) ||
