@@ -100,7 +100,11 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
-  async function resolveCardActionChatType(chatType?: "p2p" | "group"): Promise<"p2p" | "group"> {
+  const sendNotice = (text: string) =>
+    sendMessageFeishu({ cfg, to: resolveCallbackTarget(event), text, accountId });
+  async function resolveCardActionChatType(
+    chatType?: "p2p" | "group",
+  ): Promise<"p2p" | "group" | undefined> {
     if (chatType) {
       return chatType;
     }
@@ -129,17 +133,15 @@ export async function handleFeishuCardAction(params: {
           cacheResolvedCardActionChatType(cacheKey, resolvedChatType, now);
           return resolvedChatType;
         }
-        log(
-          `feishu[${account.accountId}]: card action missing chat type for chat; defaulting to p2p`,
-        );
-      } else {
-        log(`feishu[${account.accountId}]: failed to resolve chat type; defaulting to p2p`);
       }
     } catch {
-      log(`feishu[${account.accountId}]: failed to resolve chat type; defaulting to p2p`);
+      // Unknown classification must not select DM policy for a possible group.
     }
-
-    return "p2p";
+    log(`feishu[${account.accountId}]: card action chat type unavailable; action refused`);
+    await sendNotice(
+      "⚠️ Could not verify this chat's conversation type, so this action was not run. Try clicking again later.",
+    );
+    return undefined;
   }
 
   async function dispatchSyntheticCommand(
@@ -148,14 +150,17 @@ export async function handleFeishuCardAction(params: {
   ): Promise<void> {
     const { trackTask, botOpenId, channelRuntime } = params;
     const resolvedChatType = await resolveCardActionChatType(chatType);
-    function buildSyntheticMessageEvent(): FeishuMessageEvent {
+    if (!resolvedChatType) {
+      return;
+    }
+    function buildSyntheticMessageEvent(knownChatType: "p2p" | "group"): FeishuMessageEvent {
       const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
       // card-action-c-* IDs are temporary callback tokens, not valid Feishu message IDs.
       // Using them as reply targets causes "Invalid ids" errors from the streaming reply API.
       const isTemporaryCardActionId = replyTargetMessageId?.startsWith("card-action-c-");
       const validReplyTargetId =
         replyTargetMessageId && !isTemporaryCardActionId ? replyTargetMessageId : undefined;
-      const normalizedBotOpenId = resolvedChatType === "group" ? botOpenId?.trim() : undefined;
+      const normalizedBotOpenId = knownChatType === "group" ? botOpenId?.trim() : undefined;
       return {
         sender: {
           sender_id: {
@@ -170,7 +175,7 @@ export async function handleFeishuCardAction(params: {
           ...(validReplyTargetId ? { typing_target_message_id: validReplyTargetId } : {}),
           ...(!validReplyTargetId ? { suppress_reply_target: true } : {}),
           chat_id: event.context.chat_id || event.operator.open_id,
-          chat_type: resolvedChatType,
+          chat_type: knownChatType,
           message_type: "text",
           content: JSON.stringify({ text: command }),
           ...(normalizedBotOpenId
@@ -190,7 +195,7 @@ export async function handleFeishuCardAction(params: {
     await handleFeishuMessage({
       trackTask,
       cfg,
-      event: buildSyntheticMessageEvent(),
+      event: buildSyntheticMessageEvent(resolvedChatType),
       botOpenId,
       runtime,
       channelRuntime,
@@ -264,6 +269,10 @@ export async function handleFeishuCardAction(params: {
           await sendInvalidInteractionNotice("malformed");
           return;
         }
+        const chatType = await resolveCardActionChatType(envelope.c?.t);
+        if (!chatType) {
+          return;
+        }
         await sendCardFeishu({
           cfg,
           to: resolveCallbackTarget(event),
@@ -274,7 +283,7 @@ export async function handleFeishuCardAction(params: {
             prompt,
             sessionKey: envelope.c?.s,
             expiresAt,
-            chatType: await resolveCardActionChatType(envelope.c?.t),
+            chatType,
             confirmLabel: command === "/reset" ? "Reset" : "Confirm",
           }),
           accountId,
