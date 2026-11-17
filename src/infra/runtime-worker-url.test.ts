@@ -43,7 +43,9 @@ function expectRuntimeArgs(
     fileURLToPath(url),
   ]);
   expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
-    needsLoader ? ["--import", new URL("./runtime-worker-loader.mjs", import.meta.url).href] : [],
+    needsLoader
+      ? ["--import", expect.stringMatching(/^file:.*\/infra\/runtime-worker-loader\.(?:mjs|js)$/)]
+      : [],
   );
   expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), runtime)).toBe(needsLoader);
 }
