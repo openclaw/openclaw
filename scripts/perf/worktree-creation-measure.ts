@@ -11,6 +11,9 @@
  * report inclusive preparation phases; Git and worker timings are also inclusive.
  * Main CPU/allocation exclude workers; process CPU includes workers, not Git children.
  * OPENCLAW_BENCH_BASELINE_DIR selects a sparse frozen owner overlay in every worker.
+ * --eviction-delay-ms injects snapshot latency during capacity GC and measures a concurrent
+ * creation once a slot is available. Records allocation wait plus whole-operation CPU.
+ * --agent-db-fixture clones an offline synthetic agent database into each arm.
  * Acceptance: same checkout commit/files, one fewer cold object census, lower
  * owner CPU/allocation, no material creation regression with matched controls.
  * Small samples describe latency, never establish p99. This is not Gateway load.
@@ -51,6 +54,8 @@ const { values } = parseArgs({
     fixture: { type: "boolean" },
     "project-routing": { type: "boolean" },
     "project-owner": { type: "string" },
+    "eviction-delay-ms": { type: "string" },
+    "agent-db-fixture": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
@@ -130,6 +135,33 @@ Object.defineProperty(globalThis, key, {
     return () => record(gitTimings, command ?? "unknown", performance.now() - start);
   },
 });
+let snapshotEntered: (() => void) | undefined;
+let allocationWaitMs = 0;
+const evictionDelayMs = Number(values["eviction-delay-ms"] ?? 0);
+assert(Number.isFinite(evictionDelayMs) && evictionDelayMs >= 0);
+const contentionKey = Symbol.for("openclaw.perf.worktree-contention");
+Reflect.set(globalThis, contentionKey, {
+  async snapshot() {
+    if (snapshotEntered) {
+      const entered = snapshotEntered;
+      snapshotEntered = undefined;
+      entered();
+      await new Promise((resolve) => {
+        setTimeout(resolve, evictionDelayMs);
+      });
+    }
+  },
+  phase(name?: string) {
+    const start = performance.now();
+    let finished = false;
+    return () => {
+      if (!finished && name === "allocationWait") {
+        allocationWaitMs += performance.now() - start;
+      }
+      finished = true;
+    };
+  },
+});
 const hooks = registerHooks({
   load(url, context, next) {
     if (
@@ -148,6 +180,29 @@ const hooks = registerHooks({
         shortCircuit: true,
         source: readFileSync(values["checkout-owner"], "utf8"),
       };
+    }
+    if (evictionDelayMs && url.endsWith("/src/agents/worktrees/snapshot-host.ts")) {
+      let source = readFileSync(new URL(url), "utf8");
+      const declaration = "export async function captureManagedWorktreeSnapshot(";
+      assert(source.includes(declaration));
+      source = source.replace(declaration, "async function captureMeasuredSnapshot(");
+      source += `\nexport async function captureManagedWorktreeSnapshot(...args: Parameters<typeof captureMeasuredSnapshot>) {
+        await globalThis[Symbol.for("openclaw.perf.worktree-contention")].snapshot();
+        return await captureMeasuredSnapshot(...args);
+      }`;
+      return { format: "module-typescript", shortCircuit: true, source };
+    }
+    if (evictionDelayMs && url.endsWith("/src/agents/worktrees/preparation-timing.ts")) {
+      let source = readFileSync(new URL(url), "utf8");
+      const declaration = "export function startWorktreePreparationPhase(";
+      assert(source.includes(declaration));
+      source = source.replace(declaration, "function startMeasuredPhase(");
+      source += `\nexport function startWorktreePreparationPhase(...args: Parameters<typeof startMeasuredPhase>) {
+        const finish = startMeasuredPhase(...args);
+        const measure = globalThis[Symbol.for("openclaw.perf.worktree-contention")].phase(preparation.getStore() ? args[0] : undefined);
+        return () => { measure(); finish(); };
+      }`;
+      return { format: "module-typescript", shortCircuit: true, source };
     }
     if (!url.endsWith("/src/infra/git-exec.ts")) {
       return next(url, context);
@@ -177,6 +232,7 @@ const observe = (message: unknown) => {
 diagnostics.subscribe(observe);
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const config = {
+  worktreeMaxCount: 4096,
   logging: {
     level: "info" as const,
     consoleLevel: "info" as const,
@@ -184,6 +240,18 @@ const config = {
   },
 };
 setRuntimeConfigSnapshot(config, config);
+if (values["agent-db-fixture"]) {
+  const destination = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "agents/main/agent/openclaw-agent.sqlite",
+  );
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(
+    values["agent-db-fixture"],
+    destination,
+    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+  );
+}
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { requireGit } = await import("../../src/agents/worktrees/git.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
@@ -263,6 +331,36 @@ try {
       refill = request;
     });
     const sourceOnly = projectSelection ? false : !values["alternate-policy"] || index % 2 === 1;
+    let collecting: ReturnType<typeof service.gc> | undefined;
+    let maintenanceStart = 0;
+    let maintenanceCpu = process.cpuUsage();
+    let maintenanceAllocated = 0;
+    if (evictionDelayMs) {
+      await service.create({
+        repoRoot: repo,
+        name: `victim-${path.basename(output)}-${index}`,
+        baseRef: commit,
+        ownerKind: "manual",
+        runSetupScript: false,
+        provisionIgnoredFiles: false,
+      });
+      config.worktreeMaxCount = 0;
+      const entered = new Promise<void>((resolve) => {
+        snapshotEntered = resolve;
+      });
+      maintenanceStart = performance.now();
+      maintenanceCpu = process.cpuUsage();
+      maintenanceAllocated = getHeapStatistics().total_allocated_bytes;
+      collecting = service.gc();
+      await Promise.race([
+        entered,
+        collecting.then(() => {
+          throw new Error("GC did not reach snapshot");
+        }),
+      ]);
+      config.worktreeMaxCount = 4096;
+    }
+    allocationWaitMs = 0;
     const loadBefore = loadavg();
     const cpu = process.threadCpuUsage();
     const processCpu = process.cpuUsage();
@@ -297,6 +395,11 @@ try {
       ownerSha256,
       projectOwnerSha256,
       elapsedMs,
+      allocationWaitMs,
+      evictionDelayMs,
+      maintenanceMs: 0,
+      maintenanceProcessCpuMs: 0,
+      maintenanceAllocatedBytes: 0,
       promptReadyMs,
       mainThreadCpuMs: (used.user + used.system) / 1000,
       processCpuMs: (processUsed.user + processUsed.system) / 1000,
@@ -312,6 +415,21 @@ try {
       baseScratchBytes: 0,
       managedScratchBytes: 0,
     };
+    if (collecting) {
+      const { acquireWorktreeRunLease } = await import("../../src/agents/worktrees/run-lease.js");
+      assert("id" in created);
+      const lease = await acquireWorktreeRunLease(created.id);
+      try {
+        await collecting;
+        row.maintenanceMs = performance.now() - maintenanceStart;
+        const maintenanceUsed = process.cpuUsage(maintenanceCpu);
+        row.maintenanceProcessCpuMs = (maintenanceUsed.user + maintenanceUsed.system) / 1000;
+        row.maintenanceAllocatedBytes =
+          getHeapStatistics().total_allocated_bytes - maintenanceAllocated;
+      } finally {
+        await lease.release();
+      }
+    }
     assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), commit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
     if (projectSelection) {
@@ -357,4 +475,5 @@ try {
   diagnostics.unsubscribe(observe);
   hooks.deregister();
   Reflect.deleteProperty(globalThis, key);
+  Reflect.deleteProperty(globalThis, contentionKey);
 }
