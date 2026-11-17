@@ -56,6 +56,7 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
+  captureGatewayOperatorContinuation,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -619,6 +620,34 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
+  it("keeps tokenless continuation device revocation independent of its accepting request", () =>
+    withRecovery(
+      async (fixture) => {
+        const caller = acceptedCaller(fixture);
+        const captured = expectDefined(await caller.capture(), "accepted source");
+        expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
+          captured.authority;
+        const continuation = expectDefined(
+          await captureGatewayOperatorContinuation({
+            client: fixture.client,
+            context: fixture.context,
+          }),
+          "detached continuation",
+        );
+        try {
+          expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
+          caller.release();
+          captured.release();
+          expect(continuation.authority.assertCurrent).not.toThrow();
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expect(continuation.authority.assertCurrent).toThrow();
+        } finally {
+          continuation.release();
+        }
+      },
+      { tokenlessDevice: true },
+    ));
+
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
       async (fixture) => {
