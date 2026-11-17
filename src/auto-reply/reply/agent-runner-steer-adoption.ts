@@ -139,7 +139,6 @@ export async function runActiveReplySteer(
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
-  let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = reserveSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     return "handled";
@@ -225,7 +224,7 @@ export async function runActiveReplySteer(
     ) {
       return await fallback("reply-owner-ended");
     }
-    steerSessionId = activeReplyOperation.sessionId;
+    const steerSessionId = activeReplyOperation.sessionId;
     if (!backendAtArrival) {
       // The exact operation survived startup; capture its first available backend
       // before policy preparation can yield or replace that attachment.
