@@ -26,7 +26,6 @@ import {
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   resolveTuiCtrlCAction,
-  resolveTuiLocalAuthCliInvocation,
   resolveTuiSessionSelection,
   stopTuiSafely,
 } from "./tui.js";
@@ -46,31 +45,6 @@ it("resolveFinalAssistantText formats malformed fragments when final text is emp
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
     }),
   ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
-});
-
-it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CLI runtime context", () => {
-  const originalArgv = [...process.argv];
-  const originalExecArgv = process.execArgv;
-  try {
-    const cliEntry = path.resolve("openclaw.mjs");
-    const loaderArgs = ["--import", "/repo/node_modules/tsx/dist/loader.mjs"];
-    const authArgs = ["models", "auth", "login", "--provider", "test-provider"];
-    process.argv[1] = cliEntry;
-    process.execArgv = [...loaderArgs, "--inspect-brk=0", "--trace-warnings"];
-
-    expect(
-      resolveTuiLocalAuthCliInvocation({
-        provider: "test-provider",
-      }),
-    ).toStrictEqual({
-      command: process.execPath,
-      args: [...loaderArgs, "--trace-warnings", cliEntry, ...authArgs],
-      cwd: path.resolve("."),
-    });
-  } finally {
-    process.argv = originalArgv;
-    process.execArgv = originalExecArgv;
-  }
 });
 
 it("isTuiBusyActivityStatus treats post-connect initialization as visibly busy", () => {

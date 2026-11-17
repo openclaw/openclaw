@@ -12,8 +12,6 @@ import {
   resolveSessionAgentId,
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
@@ -34,6 +32,7 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { createNonExitingRuntime } from "../runtime.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -103,16 +102,6 @@ type RunTuiOptions = TuiOptions & {
   config?: OpenClawConfig;
   title?: string;
 };
-
-export function resolveTuiLocalAuthCliInvocation(params: { provider?: string }) {
-  const provider = params.provider?.trim();
-  return resolveCurrentOpenClawCliInvocation([
-    "models",
-    "auth",
-    "login",
-    ...(provider ? ["--provider", provider] : []),
-  ]);
-}
 
 export function formatTuiAuthCommandArgv(command: string, args: readonly string[]): string {
   const value = sanitizeRenderableLine(redactToolPayloadText(JSON.stringify([command, ...args])));
@@ -523,6 +512,8 @@ async function runTuiUnlocked(
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
   const authChild = createTuiAuthChildOwner();
+  const authAbort = new AbortController();
+  let authCompletion: Promise<void> | undefined;
   let statusTimer: NodeJS.Timeout | null = null;
   let statusIntervalMs = 0;
   let statusStartedAt: number | null = null;
@@ -991,32 +982,35 @@ async function runTuiUnlocked(
   };
 
   const runAuthFlow = isLocalMode
-    ? async (params: { provider?: string }) =>
-        await withTuiSuspended(async () => {
+    ? (params: { provider?: string }) => {
+        authAbort.signal.throwIfAborted();
+        if (authCompletion) {
+          throw new Error("TUI auth flow is already running");
+        }
+        const run = withTuiSuspended(async () => {
           const provider = params.provider?.trim() || undefined;
 
           // Codex owns its auth store; the command handler already resolves the session provider.
           const codexBin = provider === OPENAI_CODEX_PROVIDER ? await resolveCodexCliBin() : null;
 
-          let command: string;
-          let args: string[];
-          let cwd: string;
-          if (codexBin) {
-            command = codexBin;
-            args = ["login"];
-            cwd = resolveUsableCwd();
-          } else {
-            const invocation = resolveTuiLocalAuthCliInvocation({ provider });
-            ({ command, args, cwd } = invocation);
+          if (!codexBin) {
+            // Built-in login must share the local TUI's retained state owner.
+            const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
+            return await modelsAuthLoginCommand(
+              { provider, signal: authAbort.signal },
+              createNonExitingRuntime(),
+            );
           }
 
+          const command = codexBin;
+          const args = ["login"];
           const invocation = resolveLocalAuthSpawnInvocation({ command, args });
           const commandArgv = formatTuiAuthCommandArgv(command, args);
           tuiAuthLog.info(`auth child spawn: argv=${commandArgv}`);
           try {
             const result = await authChild.spawnAndWait(() =>
               spawn(invocation.command, invocation.args, {
-                cwd,
+                cwd: resolveUsableCwd(),
                 env: process.env,
                 stdio: "inherit",
                 ...invocation.options,
@@ -1025,12 +1019,6 @@ async function runTuiUnlocked(
             const outcome = `argv=${commandArgv} exitCode=${String(result.exitCode)} signal=${String(result.signal)}`;
             if (result.exitCode === 0 && !result.signal) {
               tuiAuthLog.info(`auth child finished: ${outcome}`);
-              if (!codexBin) {
-                await reloadSharedAuthStoreOwnership();
-                // The auth child persisted outside this process. Invalidate the
-                // published generation so retained local runtimes rebuild from it.
-                clearRuntimeAuthProfileStoreSnapshots();
-              }
             } else {
               tuiAuthLog.error(`auth child failed: ${outcome}`);
             }
@@ -1041,7 +1029,15 @@ async function runTuiUnlocked(
             );
             throw error;
           }
-        })
+        });
+        authCompletion = run.then(
+          () => undefined,
+          () => undefined,
+        );
+        return run.finally(() => {
+          authCompletion = undefined;
+        });
+      }
     : undefined;
 
   const updateFooter = () => {
@@ -1234,6 +1230,7 @@ async function runTuiUnlocked(
       return;
     }
     exitRequested = true;
+    authAbort.abort();
     const sessionMemoryClosed = sessionMemory.close();
     const authChildClosed = authChild.close();
     // Exit owns the input boundary before transport teardown can race a buffered submit.
@@ -1253,6 +1250,7 @@ async function runTuiUnlocked(
           localCli.shutdown(),
           sessionMemoryClosed,
           authChildClosed,
+          authCompletion,
           autocompleteReady,
         ]);
         throwSettledAggregate(results, "TUI command cleanup failed");

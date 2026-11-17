@@ -693,6 +693,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
 }
 
 type LoginOptions = {
+  signal?: AbortSignal;
   provider?: string;
   method?: string;
   profileId?: string;
@@ -727,7 +728,6 @@ export type ModelsAuthLoginFlowOptions = LoginOptions & {
   prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
   isRemote?: boolean;
-  signal?: AbortSignal;
   openUrl?: (url: string) => Promise<void>;
   browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
   beforePersistentEffect?: () => void | Promise<void>;
@@ -953,7 +953,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     {
       ...opts,
       runtime,
-      prompter: createClackPrompter(),
+      prompter: createClackPrompter(process.stdout, opts.signal),
     },
     isSharedGatewayForCliLogin,
   );

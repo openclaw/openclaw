@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { readServiceChildMessage } from "../process/supervisor/service-child-protocol.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
@@ -287,4 +288,97 @@ export function readLocalShellControlFloodPids(rolePidPath: string, commandPidPa
     throw new Error("control-flood PID receipt does not match its live anchor");
   }
   return entries;
+}
+
+export const writeJsonFixture = (file: string, value: unknown) =>
+  writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+
+export async function prepareLocalAuthProviderFixture(params: {
+  config: OpenClawConfig;
+  tempDir: string;
+  providerId: string;
+}): Promise<OpenClawConfig> {
+  const { config, tempDir, providerId } = params;
+  const pluginId = "t05-local-auth-fixture";
+  const pluginDir = path.join(tempDir, "auth-plugin");
+  await mkdir(pluginDir, { recursive: true });
+  await Promise.all([
+    writeJsonFixture(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/t05-local-auth-fixture",
+      version: "0.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    }),
+    writeJsonFixture(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: pluginId,
+      name: "T05 Local Auth Fixture",
+      providers: [providerId],
+      setup: {
+        providers: [{ id: providerId, envVars: ["T05_LOCAL_AUTH_API_KEY"] }],
+      },
+      providerAuthChoices: [
+        {
+          provider: providerId,
+          method: "api-key",
+          choiceId: `${providerId}-api-key`,
+          choiceLabel: "T05 local auth API key",
+          groupId: providerId,
+          groupLabel: "T05 local auth",
+          optionKey: "t05LocalAuthApiKey",
+          cliFlag: "--t05-local-auth-api-key",
+          cliOption: "--t05-local-auth-api-key <key>",
+          onboardingScopes: ["text-inference"],
+        },
+      ],
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+    }),
+    writeFile(
+      path.join(pluginDir, "index.js"),
+      `const providerId = ${JSON.stringify(providerId)};
+export default {
+  id: ${JSON.stringify(pluginId)},
+  name: "T05 Local Auth Fixture",
+  register(api) {
+    api.registerProvider({
+      id: providerId,
+      label: "T05 local auth",
+      envVars: ["T05_LOCAL_AUTH_API_KEY"],
+      auth: [{
+        id: "api-key",
+        kind: "api_key",
+        label: "T05 local auth API key",
+        run: async (ctx) => {
+          const key = await ctx.prompter.text({
+            message: "Enter T05 local auth API key",
+            sensitive: true,
+          });
+          return {
+            profiles: [{
+              profileId: providerId + ":default",
+              credential: { type: "api_key", provider: providerId, key },
+            }],
+          };
+        },
+      }],
+    });
+  },
+};
+`,
+      "utf8",
+    ),
+  ]);
+  return {
+    ...config,
+    plugins: {
+      enabled: true,
+      slots: { memory: "none" },
+      load: { paths: [pluginDir] },
+      allow: [pluginId],
+      entries: { [pluginId]: { enabled: true } },
+    },
+  };
 }

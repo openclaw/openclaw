@@ -41,6 +41,8 @@ import {
   lastOutputIndexAfter,
   readLocalShellControlFloodPids,
   registerIdempotentCleanup,
+  prepareLocalAuthProviderFixture,
+  writeJsonFixture,
   startGatewayCaseControlClient,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
@@ -123,8 +125,6 @@ async function waitForModelRequests(
 }
 
 type CleanupRegistrar = (cleanup: () => Promise<void>) => void;
-const writeJsonFixture = (file: string, value: unknown) =>
-  writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 
 async function writeResponsesSse(
   res: ServerResponse,
@@ -1076,101 +1076,24 @@ describe("TUI PTY real backends", () => {
   itWithBuiltCli(
     "authenticates a manifest-discovered provider and resumes the unchanged local model",
     async ({ onTestFinished }) => {
-      const pluginId = "t05-local-auth-fixture";
       const providerId = "tui-pty-mock";
       const profileId = `${providerId}:default`;
       const sentinel = `t05-${randomUUID()}`;
       const expectedDigest = createHash("sha256").update(sentinel).digest("hex");
       const fixture = await startLocalModeTui(onTestFinished, {
         replyText: "LOCAL_AUTH_RESPONSE",
-        prepareConfig: async ({ config, tempDir }) => {
-          const pluginDir = path.join(tempDir, "auth-plugin");
-          await mkdir(pluginDir, { recursive: true });
-          await Promise.all([
-            writeJsonFixture(path.join(pluginDir, "package.json"), {
-              name: "@openclaw/t05-local-auth-fixture",
-              version: "0.0.0",
-              type: "module",
-              openclaw: { extensions: ["./index.js"] },
-            }),
-            writeJsonFixture(path.join(pluginDir, "openclaw.plugin.json"), {
-              id: pluginId,
-              name: "T05 Local Auth Fixture",
-              providers: [providerId],
-              setup: {
-                providers: [{ id: providerId, envVars: ["T05_LOCAL_AUTH_API_KEY"] }],
-              },
-              providerAuthChoices: [
-                {
-                  provider: providerId,
-                  method: "api-key",
-                  choiceId: `${providerId}-api-key`,
-                  choiceLabel: "T05 local auth API key",
-                  groupId: providerId,
-                  groupLabel: "T05 local auth",
-                  optionKey: "t05LocalAuthApiKey",
-                  cliFlag: "--t05-local-auth-api-key",
-                  cliOption: "--t05-local-auth-api-key <key>",
-                  onboardingScopes: ["text-inference"],
-                },
-              ],
-              configSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {},
-              },
-            }),
-            writeFile(
-              path.join(pluginDir, "index.js"),
-              `const providerId = ${JSON.stringify(providerId)};
-export default {
-  id: ${JSON.stringify(pluginId)},
-  name: "T05 Local Auth Fixture",
-  register(api) {
-    api.registerProvider({
-      id: providerId,
-      label: "T05 local auth",
-      envVars: ["T05_LOCAL_AUTH_API_KEY"],
-      auth: [{
-        id: "api-key",
-        kind: "api_key",
-        label: "T05 local auth API key",
-        run: async (ctx) => {
-          const key = await ctx.prompter.text({
-            message: "Enter T05 local auth API key",
-            sensitive: true,
-          });
-          return {
-            profiles: [{
-              profileId: providerId + ":default",
-              credential: { type: "api_key", provider: providerId, key },
-            }],
-          };
-        },
-      }],
-    });
-  },
-};
-`,
-              "utf8",
-            ),
-          ]);
-          return {
-            ...config,
-            plugins: {
-              enabled: true,
-              slots: { memory: "none" },
-              load: { paths: [pluginDir] },
-              allow: [pluginId],
-              entries: { [pluginId]: { enabled: true } },
-            },
-          };
-        },
+        prepareConfig: (params) => prepareLocalAuthProviderFixture({ ...params, providerId }),
       });
       await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
       await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
       await fixture.run.waitForOutput(`opening auth flow for ${providerId}`);
       await fixture.run.waitForOutput("Enter T05 local auth API key");
+      await fixture.run.write("\u0003", { delay: false });
+      await fixture.run.waitForOutput("auth flow failed:");
+
+      const retryOffset = fixture.run.visibleOutput().length;
+      await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
+      await waitForOutputAfter(fixture.run, "Enter T05 local auth API key", retryOffset);
       await fixture.run.write(`${sentinel}\r`, { delay: false });
       await fixture.run.waitForOutput(`auth flow finished for ${providerId}`);
       expect(fixture.run.output().includes(sentinel)).toBe(false);
@@ -1199,13 +1122,23 @@ export default {
       expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
         "tui-pty-mock/gpt-5.5",
       );
+      const replyOffset = fixture.run.visibleOutput().length;
       await fixture.run.write("prompt after local auth\r");
       await waitForModelRequests(fixture, 1);
       expect(fixture.mockModel.requests()[0]?.body.model).toBe("gpt-5.5");
       expect(fixture.mockModel.requests()[0]?.authorization).toBe(`Bearer ${sentinel}`);
       await fixture.run.waitForOutput("LOCAL_AUTH_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
+      await waitForOutputAfter(fixture.run, "| idle", replyOffset);
 
-      await fixture.run.write("/exit\r", { delay: false });
+      if (process.platform === "win32") {
+        await fixture.run.write("/exit\r", { delay: false });
+      } else {
+        // Windows SIGTERM terminates immediately instead of running the TUI shutdown handlers.
+        const shutdownOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
+        await waitForOutputAfter(fixture.run, "Enter T05 local auth API key", shutdownOffset);
+        process.kill(fixture.run.pid, "SIGTERM");
+      }
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
     },
     LOCAL_TEST_TIMEOUT_MS,
