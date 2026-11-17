@@ -652,7 +652,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           : selectionScopeLabel
             ? t(selectionScopeLabel)
             : undefined,
-        modelOptions: setupRequired && !sessionModelPinned ? [] : modelOptions,
+        // Missing sign-in is not missing configuration. Keep diagnosed catalog rows;
+        // only the undiagnosed inherited default is a phantom in an unconfigured chat.
+        modelOptions:
+          setupRequired && !sessionModelPinned
+            ? modelOptions.filter((option) => !option.isDefault || option.unavailableReason)
+            : modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
         selectedAgentRuntime,
