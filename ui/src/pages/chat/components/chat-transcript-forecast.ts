@@ -1,0 +1,199 @@
+import type { Virtualizer } from "@tanstack/virtual-core";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
+
+type TranscriptForecast = { top: number; direction: number; wholeViewport: boolean };
+
+export function pendingWheelDelta(wheel: { delta: number; time: number } | undefined): number {
+  // Native scrollTop rounds wheel travel; residue must not hide the observed next step.
+  return wheel && performance.now() - wheel.time < 100 && Math.abs(wheel.delta) > 1
+    ? wheel.delta
+    : 0;
+}
+
+export function viewport(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  delta: number,
+  wholeViewport: boolean,
+): TranscriptForecast {
+  let top = Math.max(0, (virtualizer.scrollOffset ?? 0) + delta);
+  if (wholeViewport) {
+    const height = virtualizer.scrollRect?.height ?? 600;
+    top = Math.min(top, Math.max(0, virtualizer.getTotalSize() - height));
+  }
+  return { top, direction: Math.sign(delta), wholeViewport };
+}
+
+export function indexes(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  forecast: TranscriptForecast | undefined,
+  range: { startIndex: number; endIndex: number },
+  mounted: ReadonlySet<number>,
+  rows: readonly TranscriptRow[],
+  prepareRowLimit: number,
+): number[] {
+  if (!forecast) {
+    return [];
+  }
+  const height = virtualizer.scrollRect?.height ?? 600;
+  // Measurement latency can span several inputs. Multiplying it by velocity
+  // skips the arriving viewport and evicts rows that are still approaching.
+  const { top, direction } = forecast;
+  const first = virtualizer.getVirtualItemForOffset(top);
+  const last = virtualizer.getVirtualItemForOffset(top + height);
+  if (!first || !last) {
+    return [];
+  }
+  // Wheel input can arrive after native scrolling. Cover its destination within
+  // the existing allowance even after consumption; other movement prepares one row.
+  const result: number[] = [];
+  const limit = forecast.wholeViewport ? prepareRowLimit : 1;
+  const endIndex =
+    forecast.wholeViewport && last.start >= top + height ? last.index - 1 : last.index;
+  for (
+    let index = direction < 0 ? endIndex : first.index;
+    index >= first.index && index <= endIndex;
+    index += direction
+  ) {
+    if (
+      (direction < 0 ? index < range.startIndex : index > range.endIndex) &&
+      !mounted.has(index) &&
+      rows[index]?.retainDom
+    ) {
+      result.push(index);
+      if (result.length === limit) {
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+export function rowKeys(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  forecast: TranscriptForecast | undefined,
+  rows: readonly TranscriptRow[],
+  preparedRowKeys: ReadonlySet<string>,
+): Set<string> {
+  const keys = new Set<string>();
+  if (forecast && virtualizer.range) {
+    const { direction, top: next } = forecast;
+    const top = virtualizer.scrollOffset ?? 0;
+    const height = virtualizer.scrollRect?.height ?? 600;
+    // Previous forecasts bridge the gap to the next viewport. Retaining their
+    // DOM preserves reversals, but only these two viewports need live layout.
+    for (const item of virtualizer.getVirtualItems()) {
+      const key = rows[item.index]!.key;
+      const approaching =
+        direction < 0
+          ? item.index < virtualizer.range.startIndex
+          : item.index > virtualizer.range.endIndex;
+      const coversViewport =
+        (item.end > top && item.start < top + height) ||
+        (item.end > next && item.start < next + height);
+      if (approaching && coversViewport && preparedRowKeys.has(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  return keys;
+}
+
+/**
+ * The flow starts at the first active row's virtual offset, which counts rows of unknown size at
+ * their estimates. A row arriving before laid-out content would enter the flow at its real size
+ * in a frame where the content already moved by its estimate's error, so it waits outside the
+ * flow until its size is known, and so do the rows before it. Rows of known size between it and
+ * the flow join at once, so the flow keeps up with the reader. Removes the waiting rows from
+ * `active`; with nothing laid out, as after a jump, every row enters.
+ *
+ * A row outside the flow paints where it will land: a row before the flow hangs above the rows
+ * between them, a row after it sits at its virtual slot. That place is exact only once the sizes of
+ * those rows (and, after the flow, its own) are known. Until then it stays unpainted (`unsettled`),
+ * so no text first appears in one place and then moves.
+ */
+export function hold(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  active: number[],
+  keys: Set<string>,
+  measured: (indexes: readonly number[]) => boolean,
+): { held: Set<string>; unsettled: Set<string> } {
+  const key = (index: number) => String(virtualizer.options.getItemKey(index));
+  const known = (index: number) => virtualizer.itemSizeCache.has(key(index)) || measured([index]);
+  const laidOut = active.findIndex((index) => {
+    const element = virtualizer.elementsCache.get(key(index));
+    return element?.isConnected === true && element.dataset.preparedRow !== "true";
+  });
+  const edge = active.slice(0, Math.max(laidOut, 0)).findLastIndex((index) => !known(index));
+  const held = new Set(active.splice(0, edge + 1).map(key));
+  for (const row of held) {
+    keys.add(row);
+  }
+  const unsettled = new Set<string>();
+  const first = active[0];
+  const last = active.at(-1);
+  for (const item of virtualizer.getVirtualItems()) {
+    const row = String(item.key);
+    if (first === undefined || last === undefined || !keys.has(row)) {
+      continue;
+    }
+    const [from, to] = item.index < first ? [item.index + 1, first - 1] : [last + 1, item.index];
+    for (let index = from; index <= to; index++) {
+      if (!known(index)) {
+        unsettled.add(row);
+        break;
+      }
+    }
+  }
+  return { held, unsettled };
+}
+
+export function retainedKeys(
+  preparedRowKeys: ReadonlySet<string>,
+  rowIndexes: ReadonlyMap<string, number>,
+  rowCount: number,
+  range: { startIndex: number; endIndex: number },
+  delta: number,
+): string[] {
+  const keys = [...preparedRowKeys];
+  keys.reverse();
+  const direction = Math.sign(delta);
+  if (direction) {
+    const edge = direction < 0 ? range.startIndex : range.endIndex;
+    const rank = (key: string) => {
+      const ahead = direction * (rowIndexes.get(key)! - edge);
+      return ahead > 0 ? ahead : rowCount;
+    };
+    keys.sort((left, right) => rank(left) - rank(right));
+  }
+  return keys;
+}
+
+export function preparation(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  range: { startIndex: number; endIndex: number },
+  direction: number,
+  distance: number,
+) {
+  const height = virtualizer.scrollRect?.height ?? 600;
+  // At speed, prepare the next viewport rather than rows the reader skips.
+  // Virtual-core resolves this from cached sizes; no neighbor layout reads.
+  const predictedTop = Math.max(
+    0,
+    Math.min(
+      (virtualizer.scrollOffset ?? 0) + direction * distance,
+      Math.max(0, virtualizer.getTotalSize() - height),
+    ),
+  );
+  const predictedOffset = predictedTop + (direction < 0 ? height : 0);
+  const predicted = virtualizer.getVirtualItemForOffset(Math.max(0, predictedOffset));
+  // Ordinary rows mount with overscan. Warm those neighbours as well as
+  // the viewport so its first frame does not parse the cold edge rows.
+  const overscan = distance ? virtualizer.options.overscan : 0;
+  const origin =
+    distance && predicted
+      ? predicted.index - direction * (1 + overscan)
+      : direction > 0
+        ? range.endIndex
+        : range.startIndex;
+  return { predictedTop, predicted, overscan, origin };
+}

@@ -218,6 +218,7 @@ patchedDependencies:
   '@shinyoshiaki/binary-data@0.6.1': 231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b
   '@solidjs/signals@2.0.0-rc.18': 421b418083c0218bb54ceb3e12bd0eb74a84e86474ca26cc1f1114abbe58de48
   '@solidjs/web@2.0.0-rc.18': 6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf
+  acorn@8.19.0: 2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a
   apache-arrow@21.2.0: c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.12.0: 1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92
@@ -298,7 +299,7 @@ importers:
         version: 0.4.2
       '@openclaw/proxyline':
         specifier: 0.4.1
-        version: 0.4.1(undici@8.12.3)
+        version: 0.4.1(undici@8.12.4)
       '@opentelemetry/semantic-conventions':
         specifier: 1.44.0
         version: 1.44.0
@@ -316,7 +317,7 @@ importers:
         version: 8.23.1
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       chalk:
         specifier: 6.0.1
         version: 6.0.1
@@ -400,7 +401,7 @@ importers:
         version: 12.2.1
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -441,8 +442,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       web-push:
         specifier: 3.6.7
         version: 3.6.7(supports-color@10.2.2)
@@ -722,7 +723,7 @@ importers:
     dependencies:
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -787,8 +788,8 @@ importers:
         specifier: 11.3.2
         version: 11.3.2(supports-color@10.2.2)
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -867,7 +868,7 @@ importers:
         version: 2.4.0
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       chrome-devtools-mcp:
         specifier: 1.12.0
         version: 1.12.0(patch_hash=1512760e206b35bf417387b18d4c1a5d0f68e2ffeef994cb733c9e02ba4eba92)
@@ -897,8 +898,8 @@ importers:
         specifier: 21.0.3
         version: 21.0.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
 
   extensions/buzz:
     dependencies:
@@ -927,6 +928,12 @@ importers:
       typebox:
         specifier: 1.4.3
         version: 1.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/celeris:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1015,7 +1022,7 @@ importers:
         version: 0.27.1
       acorn:
         specifier: 8.19.0
-        version: 8.19.0
+        version: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       semver:
         specifier: 7.8.5
         version: 7.8.5
@@ -1233,8 +1240,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -1291,6 +1298,12 @@ importers:
         version: link:../..
 
   extensions/fal:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/fastino:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1363,6 +1376,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/fish-audio-speech:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/gbrain:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1768,7 +1787,7 @@ importers:
         version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       typebox:
         specifier: 1.4.3
         version: 1.4.3
@@ -1948,6 +1967,12 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/nace:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2396,7 +2421,7 @@ importers:
     dependencies:
       '@slack/bolt':
         specifier: 5.1.0
-        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)
+        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)
       '@slack/types':
         specifier: 3.3.0
         version: 3.3.0
@@ -2410,8 +2435,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2513,12 +2538,15 @@ importers:
       grammy:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
+      quickjs-wasi:
+        specifier: 3.6.3
+        version: 3.6.3
       typebox:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2913,7 +2941,7 @@ importers:
         version: 1.44.0
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -3289,6 +3317,9 @@ importers:
       parse5:
         specifier: 8.0.1
         version: 8.0.1
+      qrcode:
+        specifier: 1.5.4
+        version: 1.5.4
       remend:
         specifier: 1.4.0
         version: 1.4.0
@@ -10713,8 +10744,8 @@ packages:
     resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unhomoglyph@1.0.6:
@@ -13000,7 +13031,7 @@ snapshots:
       '@types/estree-jsx': 1.0.5
       '@types/hast': 3.0.5
       '@types/mdx': 2.0.14
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       collapse-white-space: 2.1.0
       devlop: 1.1.0
       estree-util-is-identifier-name: 3.0.0
@@ -13009,7 +13040,7 @@ snapshots:
       hast-util-to-jsx-runtime: 2.3.6(supports-color@10.2.2)
       markdown-extensions: 2.0.0
       recma-build-jsx: 1.0.0
-      recma-jsx: 1.0.1(acorn@8.19.0)
+      recma-jsx: 1.0.1(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       recma-stringify: 1.0.0
       rehype-recma: 1.0.0(supports-color@10.2.2)
       remark-mdx: 3.1.1(supports-color@10.2.2)
@@ -13422,9 +13453,9 @@ snapshots:
       '@openclaw/proc-safe-win32-arm64-msvc': 0.4.2
       '@openclaw/proc-safe-win32-x64-msvc': 0.4.2
 
-  '@openclaw/proxyline@0.4.1(undici@8.12.3)':
+  '@openclaw/proxyline@0.4.1(undici@8.12.4)':
     dependencies:
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@openclaw/uirouter@0.1.2': {}
 
@@ -14283,11 +14314,11 @@ snapshots:
 
   '@sindresorhus/transliterate@2.3.1': {}
 
-  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)':
+  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/oauth': 4.0.0
-      '@slack/socket-mode': 3.1.0(undici@8.12.3)
+      '@slack/socket-mode': 3.1.0(undici@8.12.4)
       '@slack/types': 3.3.0
       '@slack/web-api': 8.3.0
       '@types/express': 5.0.6
@@ -14311,13 +14342,13 @@ snapshots:
       '@types/node': 26.6.6
       jsonwebtoken: 9.0.3
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.3.0
       '@types/node': 26.6.6
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.3.0': {}
 
@@ -15219,11 +15250,11 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.1.0
 
-  acorn-jsx@5.3.2(acorn@8.19.0):
+  acorn-jsx@5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)):
     dependencies:
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
 
-  acorn@8.19.0: {}
+  acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a): {}
 
   acpx@0.21.1:
     dependencies:
@@ -15851,7 +15882,7 @@ snapshots:
   esast-util-from-js@2.0.1:
     dependencies:
       '@types/estree-jsx': 1.0.5
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
       esast-util-from-estree: 2.0.0
       vfile-message: 4.0.3
 
@@ -15955,8 +15986,8 @@ snapshots:
 
   espree@11.2.0:
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       eslint-visitor-keys: 5.0.1
 
   esquery@1.7.0:
@@ -16808,7 +16839,7 @@ snapshots:
       parse5: 8.0.1
       saxes: 6.0.0
       tough-cookie: 6.0.2
-      undici: 8.12.3
+      undici: 8.12.4
       w3c-xmlserializer: 6.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -17449,8 +17480,8 @@ snapshots:
 
   micromark-extension-mdxjs@3.0.0:
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       micromark-extension-mdx-expression: 3.0.1
       micromark-extension-mdx-jsx: 3.0.2
       micromark-extension-mdx-md: 2.0.0
@@ -17840,13 +17871,13 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.4
       google-auth-library: 10.9.1(supports-color@10.2.2)
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.0
       zod: 4.6.7
 
@@ -18116,7 +18147,7 @@ snapshots:
 
   playwright-core@1.64.1(patch_hash=eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16):
     dependencies:
-      acorn: 8.19.0
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
 
   playwright@1.64.1:
     dependencies:
@@ -18272,10 +18303,10 @@ snapshots:
       estree-util-build-jsx: 3.0.1
       vfile: 6.0.3
 
-  recma-jsx@1.0.1(acorn@8.19.0):
+  recma-jsx@1.0.1(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)):
     dependencies:
-      acorn: 8.19.0
-      acorn-jsx: 5.3.2(acorn@8.19.0)
+      acorn: 8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a)
+      acorn-jsx: 5.3.2(acorn@8.19.0(patch_hash=2abf815a7e66bb39548d0a14081a6fde06f22eb1f6b5bd5f242d4c11a66db77a))
       estree-util-to-js: 2.0.0
       recma-parse: 1.0.0
       recma-stringify: 1.0.0
@@ -19027,7 +19058,7 @@ snapshots:
 
   undici@8.11.2: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   unhomoglyph@1.0.6: {}
 

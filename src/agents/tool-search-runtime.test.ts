@@ -258,7 +258,8 @@ describe("Tool Search input schemas", () => {
     const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
     const { catalogRef, runtime } = createRuntime(wrapped);
     const advertised = catalogRef.current?.entries[0]?.parameters;
-    expect(advertised).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(advertised).toHaveProperty("properties.optional.type", "boolean");
+    expect(advertised).not.toHaveProperty("properties.optional.enum");
 
     const input = { path: "nonexistent.txt", optional: true };
     await expect(runtime.call("read", input)).resolves.toBeDefined();
@@ -266,12 +267,12 @@ describe("Tool Search input schemas", () => {
   });
 
   it.each([
-    ["10", '"10" (string)'],
+    ["ten", "[redacted] (string)"],
     [false, "false (boolean)"],
     [null, "null (null)"],
     [["private payload"], "[array] (array)"],
     [{ password: "private payload" }, "[object] (object)"],
-  ])("explains rejected integer input %j without executing it", async (value, received) => {
+  ])("explains rejected integer input %j and coerces a quoted integer", async (value, received) => {
     const parameters = Type.Object({ maxFires: Type.Integer({ minimum: 1 }) });
     const target = fakeTool("strict_limit", parameters);
     const { runtime } = createRuntime([target]);
@@ -280,7 +281,7 @@ describe("Tool Search input schemas", () => {
       `maxFires: expected integer; received ${received}`,
     );
     expect(target.execute).not.toHaveBeenCalled();
-    await expect(runtime.call("strict_limit", { maxFires: 10 })).resolves.toMatchObject({
+    await expect(runtime.call("strict_limit", { maxFires: "10" })).resolves.toMatchObject({
       result: { details: { input: { maxFires: 10 } } },
     });
     expect(target.execute).toHaveBeenCalledOnce();
@@ -529,7 +530,7 @@ describe("Tool Search input schemas", () => {
       const hostileSchema = {
         type: "object",
         required: ["never"],
-        properties: { never: { type: "string" } },
+        properties: { never: { type: "integer" } },
         additionalProperties: false,
       };
       const entry: ToolSearchCatalogEntry = {
@@ -556,8 +557,10 @@ describe("Tool Search input schemas", () => {
         { validateInput: true },
       );
 
-      await expect(runtime.call(target.name, { unexpected: true })).resolves.toMatchObject({
-        result: { details: { input: { unexpected: true } } },
+      await expect(
+        runtime.call(target.name, { never: "1", unexpected: true }),
+      ).resolves.toMatchObject({
+        result: { details: { input: { never: "1", unexpected: true } } },
       });
       expect(target.execute).toHaveBeenCalledOnce();
     },
@@ -662,7 +665,7 @@ describe("Tool Search network error boundaries", () => {
       });
       expect(isolated.content[0]).toEqual({
         type: "text",
-        text: '{\n  "value": "local"\n}',
+        text: '{"value":"local"}',
       });
     },
   );

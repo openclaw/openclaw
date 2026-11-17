@@ -60,7 +60,7 @@ it("retains a channel draft through validation, submits it, and resets on a new 
   const [stepId, setStepId] = createSignal("account");
   const { container, answer } = mountStep(step("text"), () => ({
     get step(): WizardStep {
-      return { id: stepId(), type: "text", message: "Account name" };
+      return { id: stepId(), type: "text", message: "Account name\nUse your team account" };
     },
     value: "",
     presentation: "channels",
@@ -68,6 +68,9 @@ it("retains a channel draft through validation, submits it, and resets on a new 
       return validationError();
     },
   }));
+  expect(container.querySelector(".channels-wizard__message")?.textContent).toBe(
+    "Account name\nUse your team account",
+  );
   const input = container.querySelector("input")!;
   typeInto(input, "typed account");
   setValidationError("account-error");

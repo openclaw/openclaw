@@ -1,8 +1,9 @@
-import childProcess from "node:child_process";
 import fsSync, { constants } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import { hasErrnoCode } from "../../infra/errno.js";
+import type { ProvisionCopyDetails } from "../../infra/fs-safe-copy-worker-contract.js";
 import type { Root } from "../../infra/fs-safe.js";
+import { createProvisionCopyCommand } from "./provisioned-copy-command.js";
 import { normalizeProvisionedRelativePath } from "./provisioned-file-inspection.js";
 
 type Selection = { files: Set<string>; directories: Map<string, Selection> };
@@ -30,25 +31,23 @@ export async function copyProvisionedPathsLinux(
   options: {
     signal?: AbortSignal;
     assertCurrent?: () => void;
+    copyDetails?: ProvisionCopyDetails;
   },
 ): Promise<string[] | undefined> {
   if (process.platform !== "linux") {
+    if (options.copyDetails) {
+      options.copyDetails.fallbackReason = "platform";
+    }
     return undefined;
   }
-  // Linux without procfs or GNU cp retains the portable guarded copier.
-  try {
-    await fs.access("/proc/self/fd");
-    if (
-      !childProcess
-        .execFileSync("cp", ["--version"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        })
-        .startsWith("cp (GNU coreutils)")
-    ) {
-      return undefined;
+  // Retain procfs once; the helper probes its access and GNU cp before mutation.
+  await using proc = await fs
+    .open("/proc/self/fd", constants.O_RDONLY | constants.O_DIRECTORY)
+    .catch(() => undefined);
+  if (!proc) {
+    if (options.copyDetails) {
+      options.copyDetails.fallbackReason = "procfs-unavailable";
     }
-  } catch {
     return undefined;
   }
   const tree = selection();
@@ -91,6 +90,7 @@ export async function copyProvisionedPathsLinux(
   };
   await using sourceRootHandle = await openRoot(sourceRoot);
   await using destinationRootHandle = await openRoot(destinationRoot);
+  let command: ReturnType<typeof createProvisionCopyCommand> | undefined;
   const copied: string[] = [];
   const batch: { path: string; target: string; fd: number; mode: number }[] = [];
   const destinations = new Map<string, number>();
@@ -121,43 +121,15 @@ export async function copyProvisionedPathsLinux(
       check();
       options.assertCurrent?.();
       check();
-      // Inherited descriptors pin every input. Native cp retains nanosecond timestamps
-      // and reflinks; one bounded batch can span many small selected directories.
-      await new Promise<void>((resolve, reject) => {
-        const child = childProcess.spawn(
-          "cp",
-          [
-            "-L",
-            "--reflink=auto",
-            "--preserve=timestamps",
-            "-t",
-            "/proc/self/fd/3",
-            ...batch.map((_, index) => `/proc/self/fd/${index + 4}`),
-          ],
-          {
-            stdio: ["ignore", "ignore", "pipe", staging.fd, ...batch.map((file) => file.fd)],
-          },
-        );
-        let failure: Error | undefined;
-        let stderr = "";
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr = (stderr + chunk.toString()).slice(0, 8192);
-        });
-        child.once("error", (error) => {
-          failure = error;
-        });
-        // Cancellation stops admission, but custody includes child close and cleanup.
-        child.once("close", (code) =>
-          code === 0
-            ? resolve()
-            : reject(failure ?? new Error(`Provisioning copy failed (${code}): ${stderr}`)),
-        );
-      });
+      await command!.copy(
+        staging.fd,
+        batch.map((file) => file.fd),
+      );
       check();
       options.assertCurrent?.();
       check();
-      for (const [index, file] of batch.entries()) {
-        const staged = `${descriptorPath(staging)}/${index + 4}`;
+      for (const file of batch) {
+        const staged = `${descriptorPath(staging)}/${file.fd}`;
         fsSync.chmodSync(staged, file.mode);
         try {
           fsSync.linkSync(staged, file.target);
@@ -208,6 +180,9 @@ export async function copyProvisionedPathsLinux(
       try {
         const stat = fsSync.fstatSync(fd);
         if (stat.isFile()) {
+          if (options.copyDetails) {
+            options.copyDetails.sourceBytes += stat.size;
+          }
           let target = destinations.get(prefix);
           if (target === undefined) {
             // Pending files outlive this recursive directory visit; pin its admitted parent.
@@ -260,10 +235,25 @@ export async function copyProvisionedPathsLinux(
     }
   };
   try {
+    check();
+    options.assertCurrent?.();
+    check();
+    command = createProvisionCopyCommand(proc.fd, sourceRootHandle.fd, options.copyDetails);
+    const fallbackReason = await command.ready();
+    if (fallbackReason) {
+      if (options.copyDetails) {
+        options.copyDetails.fallbackReason = fallbackReason;
+      }
+      return undefined;
+    }
+    if (options.copyDetails) {
+      options.copyDetails.copier = "linux-batched";
+    }
     await visit(sourceRootHandle, destinationRootHandle, tree, "");
     await flush();
     return copied.toSorted();
   } finally {
+    await command?.close();
     releaseBatch();
   }
 }

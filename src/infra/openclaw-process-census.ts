@@ -82,10 +82,11 @@ type ArtifactCustody =
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
 // the updater that created it, and `update`, its wizard, Doctor's git update,
 // and update workers all run it in-process. Only the Gateway, its spawn broker,
-// and the Windows job anchor that supervises its child never do; the Gateway's
-// process title erases its script path.
+// the directory watch helper, and the Windows job anchor that supervises its
+// child never do; the Gateway's process title erases its script path.
 const gatewayWorkerEntrypoints = [
   runtimeProcessEntrypoints.spawnBroker,
+  runtimeProcessEntrypoints.directoryWatchHost,
   runtimeProcessEntrypoints.serviceChildWindowsJobAnchor,
 ].flatMap((entry) => [
   path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
@@ -154,6 +155,14 @@ function classifyProcessArtifactCustody(
     return unknown ? { kind: "unknown", reason: unknown } : { kind: "holder", paths };
   }
   const identity = classifyOpenClawArgv(argv, options);
+  const inspectorUid = process.getuid?.();
+  const opaqueForeignIdentity =
+    process.platform === "linux" &&
+    identity.kind === "unclassified" &&
+    identity.cause === "service-marker" &&
+    command.uid !== undefined &&
+    inspectorUid !== undefined &&
+    command.uid !== inspectorUid;
   const gateway = isGatewayProcess(argv, identity);
   // Artifact evidence, including a resolved alias, keeps an unscoped holder conservative.
   let artifactEvidence = references.length > 0 || paths.length > 0;
@@ -185,10 +194,12 @@ function classifyProcessArtifactCustody(
     ) {
       return { kind: "not-holder" };
     }
-    return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+    if (!opaqueForeignIdentity) {
+      return { kind: "unknown", reason: unknown ?? "working directory is unavailable" };
+    }
   }
   const pkg =
-    typeof position !== "number" && position.kind !== "not-runtime"
+    cwd && path.isAbsolute(cwd) && typeof position !== "number" && position.kind !== "not-runtime"
       ? readProcessPackageIdentity(cwd, true)
       : undefined;
   if (pkg?.kind === "package" && pkg.name === "openclaw") {
@@ -231,6 +242,12 @@ function classifyProcessArtifactCustody(
           ? { kind: "holder", paths: [...(holder?.paths ?? []), evidence.artifactPath] }
           : unscoped();
     }
+  }
+  // A foreign account's unreadable service marker is not custody evidence.
+  // Still inspect absolute operands above: a preload alias can prove a holder
+  // even when that process's cwd and environment are both inaccessible.
+  if (opaqueForeignIdentity && !artifactEvidence && !holder) {
+    return { kind: "not-holder" };
   }
   return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
 }

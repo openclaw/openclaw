@@ -182,6 +182,7 @@ const TelegramAccountSchemaBase = z
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     richMessages: z.boolean().optional(),
+    widgets: z.boolean().optional(),
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),

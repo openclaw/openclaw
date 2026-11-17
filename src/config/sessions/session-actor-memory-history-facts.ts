@@ -241,7 +241,7 @@ function maintenance(
               ? { writes: collectCodeModeStoreWrites(events), incremental: false }
               : undefined,
           }
-        : { events }),
+        : { events: events && [...events] }),
     };
   }
 
@@ -576,7 +576,7 @@ export function readSessionActorMemoryHistoryFacts(
       for (const row of rows.slice(start, start + SOURCE_PAGE_MAX_MESSAGES)) {
         if (row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {
           throw new Error(
-            `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+            `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
           );
         }
         if (bytes + row.serializedBytes > SOURCE_PAGE_MAX_BYTES) {

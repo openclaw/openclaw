@@ -20,7 +20,7 @@ import {
   type WebPushSnapshotAction,
 } from "./push-web-store.scope.js";
 import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.js";
-import { getOrLoadSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
+import { peekSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 export {
   WebPushSubscriptionBindingError,
@@ -177,10 +177,9 @@ export function listWebPushSubscriptions(stateDir?: string) {
 export function hasBoundWebPushSubscriptions(stateDir?: string) {
   const captured = context(stateDir);
   captured.admission.assertCurrent();
-  const admitted = getOrLoadSqliteDatabaseAdmissionForPath(
+  const admitted = peekSqliteDatabaseAdmissionForPath(
     captured.admission.databasePath,
     boundWebPushSubscriptionsAdmission,
-    () => undefined,
   );
   return admitted === undefined
     ? executeWebPushCommand("webPush.hasBoundWebPushSubscriptions", undefined, captured)

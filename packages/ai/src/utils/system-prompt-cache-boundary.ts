@@ -117,6 +117,23 @@ export function splitSystemPromptCacheBoundary(
   };
 }
 
+/** Keep the stripped prompt's separator in wire text while marking its stable prefix. */
+export function splitSystemPromptCacheBoundaryForWire(
+  text: string,
+): { stablePrefix: string; dynamicSuffix: string } | undefined {
+  const split = splitSystemPromptCacheBoundary(text);
+  if (!split) {
+    return undefined;
+  }
+  const wireText = text.replaceAll(SYSTEM_PROMPT_CACHE_BOUNDARY, "\n");
+  if (!split.stablePrefix) {
+    return { stablePrefix: "", dynamicSuffix: wireText };
+  }
+  return split.dynamicSuffix
+    ? { stablePrefix: split.stablePrefix, dynamicSuffix: wireText.slice(split.stablePrefix.length) }
+    : { stablePrefix: wireText, dynamicSuffix: "" };
+}
+
 /** Keep explicit cache breakpoints while removing relocation metadata. */
 export function stripSystemPromptRelocatableBoundary(text: string): string {
   // The closing marker carries its own leading newline and is dropped whole:

@@ -158,20 +158,23 @@ function resolveApprovedTokenScopes(params: {
 }): string[] {
   const pendingScopes = resolveRoleTokenScopes(params.role, params.pending.scopes);
   if (pendingScopes.length > 0) {
+    // A revoked token grants nothing to keep: re-issue what this request asks for, so a
+    // narrower reconnect after sign-out (OCF-495) is not held to the revoked grant.
+    const liveToken = params.existingToken?.revokedAtMs ? undefined : params.existingToken;
     const approvedBaseline = resolveRoleTokenScopes(
       params.role,
       params.existing?.approvedScopes ?? params.existing?.scopes,
     );
     const requestedScopeDelta =
-      params.existingToken && approvedBaseline.length > 0
+      liveToken && approvedBaseline.length > 0
         ? pendingScopes.filter((scope) => !approvedBaseline.includes(scope))
         : pendingScopes;
-    if (requestedScopeDelta.length === 0 && params.existingToken) {
-      return resolveRoleTokenScopes(params.role, params.existingToken.scopes);
+    if (requestedScopeDelta.length === 0 && liveToken) {
+      return resolveRoleTokenScopes(params.role, liveToken.scopes);
     }
     return resolveRoleTokenScopes(
       params.role,
-      mergeDevicePairingScopes(params.existingToken?.scopes, requestedScopeDelta),
+      mergeDevicePairingScopes(liveToken?.scopes, requestedScopeDelta),
     );
   }
   return resolveRoleTokenScopes(

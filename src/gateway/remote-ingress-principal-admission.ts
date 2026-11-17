@@ -112,7 +112,7 @@ export async function prepareGatewayIngressPrincipalAdmission(
     signal.throwIfAborted();
     await prepareOpenClawIdTunnelPrincipal(source);
     assertCurrent();
-    return { signal, assertCurrent, release };
+    return { principal: source, signal, assertCurrent, release };
   } catch {
     release();
     throw denied();

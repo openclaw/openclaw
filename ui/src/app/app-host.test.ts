@@ -19,6 +19,7 @@ import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../lib/toast.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { afterModalHidden, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -688,7 +689,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     const openPalette = vi.fn();
     const trigger = document.createElement("button");
+    const { gateway } = createApplicationGateway();
     const shell = testShell({
+      gateway,
       navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
     });
     shell.routeState = { routeId: "chat" };
@@ -870,19 +873,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       },
       { sessionKey: "global", agentId: "writer" },
     );
-    expect(setAgent).toHaveBeenLastCalledWith("writer");
-    expect(setSessionKey).toHaveBeenLastCalledWith("global");
-    expect(pluginPanelEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        detail: {
-          sessionKey: "global",
-          agentId: "writer",
-          pluginId: "review",
-          panelId: "document",
-          open: true,
-        },
-      }),
-    );
+    expect(setAgent).not.toHaveBeenCalledWith("writer");
+    expect(setSessionKey).not.toHaveBeenCalledWith("global");
+    expect(pluginPanelEvent).not.toHaveBeenCalled();
     window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);

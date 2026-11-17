@@ -134,6 +134,7 @@ describe("worker-side before_agent_run admission", () => {
         agentId: input.agentId,
         agentDir: resolveAgentDir(input.config, input.agentId),
         workspaceDir: input.workspaceDir,
+        runtimePluginSelections: [{ provider: input.provider, modelId: input.model }],
       });
       const registry = runtime.snapshot.pluginRegistry;
       assert(registry);

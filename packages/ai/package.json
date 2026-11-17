@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.11.2",
+  "version": "2026.11.4",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -116,6 +116,11 @@
       "types": "./dist/internal/runtime.d.mts",
       "import": "./dist/internal/runtime.mjs",
       "default": "./dist/internal/runtime.mjs"
+    },
+    "./internal/session-resources": {
+      "types": "./dist/internal/session-resources.d.mts",
+      "import": "./dist/internal/session-resources.mjs",
+      "default": "./dist/internal/session-resources.mjs"
     },
     "./internal/shared": {
       "types": "./dist/internal/shared.d.mts",

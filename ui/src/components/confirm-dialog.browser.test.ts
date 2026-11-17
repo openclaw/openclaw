@@ -42,6 +42,7 @@ describe("promise dialog native focus and dismissal", () => {
     });
     try {
       const result = showConfirmDialog({
+        compact: true,
         title: "Remove synthetic device?",
         message: "Its pairing stops working.",
         confirmLabel: "Remove",

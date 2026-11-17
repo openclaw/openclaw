@@ -55,10 +55,14 @@ it.each([37, 38])(
   },
 );
 
-it.each([39, 40, 41])(
+it.each([39, 40, 41, 42])(
   "keeps companion tables and deletion indexes at schema %s",
   async (version) => {
     const descriptor = await loadAgentPortDescriptor(version);
+    const usage = "agent_tool_usage";
+    expect(descriptor.tables.some(({ name }) => name === usage)).toBe(version >= 42);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === usage)).toBe(version >= 42);
+    expect(descriptor.preData.includes(`CREATE TABLE "${usage}"`)).toBe(version >= 42);
     const receipt = "session_creation_operations";
     expect(descriptor.tables.some(({ name }) => name === receipt)).toBe(version >= 40);
     expect(descriptor.expectedCatalog.some((fact) => fact.table === receipt)).toBe(version >= 40);

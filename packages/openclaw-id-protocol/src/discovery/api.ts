@@ -22,6 +22,11 @@ export const DISCOVERY_ENDPOINTS = {
   getRegistration: { method: "GET", path: "/v1/claws/{claw_id}/registration", auth: "gateway" },
   listClaws: { method: "GET", path: "/v1/claws", auth: "user" },
   publishDescriptor: { method: "PUT", path: "/v1/claws/{claw_id}/descriptor", auth: "gateway" },
+  getPublishedDescriptor: {
+    method: "POST",
+    path: "/v1/claws/{claw_id}/published-descriptor",
+    auth: "gateway",
+  },
   getNodeDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/node/descriptor", auth: "node" },
   sendNodeMail: { method: "POST", path: "/v1/claws/{claw_id}/mailbox/node", auth: "node" },
   getDescriptor: { method: "GET", path: "/v1/claws/{claw_id}/descriptor", auth: "user" },
@@ -61,9 +66,19 @@ export const DISCOVERY_ERRORS = {
 /** One of the {@link DISCOVERY_ERRORS} codes. */
 export type DiscoveryErrorCode = keyof typeof DISCOVERY_ERRORS;
 
-/** Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`. */
+/**
+ * Error response body. `retry_after` (seconds) accompanies `rate_limited` and `unavailable`.
+ * A descriptor publish refused with `stale_binding` or `conflict` (its binding verified under
+ * the claw's root, signed by its K_gw) carries `binding`, the ServerBinding Discovery
+ * publishes: its owner verifies it to tell a superseded machine from an integrity error.
+ */
 export type DiscoveryErrorBody = {
-  error: { code: DiscoveryErrorCode; message: string; retry_after?: number };
+  error: {
+    code: DiscoveryErrorCode;
+    message: string;
+    retry_after?: number;
+    binding?: SignedStatement<"ServerBinding">;
+  };
 };
 
 /** POST /v1/enrollment-codes: a one-time code that links a claw to the signed-in account. */

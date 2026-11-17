@@ -8,9 +8,11 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -60,6 +62,7 @@ function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
       harness.executeTool({
         tool: target,
         toolName: target.name,
+        toolId: `openclaw:${overrides.sourceName ?? "core"}:${target.name}`,
         source: "openclaw",
         toolCallId,
         input: {},
@@ -116,6 +119,70 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     vi.useRealTimers();
     await resetCodeModeTestState();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("preserves a silent host exec deadline without ambient caller context", async () => {
+    await import("./session-placement-admission.js");
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const harness = createHarness({ name: "exec-deadline", timeoutMs: 2_000 });
+    const operation = harness.replyOperation;
+    operation.setPhase("running");
+    const cancel = vi.fn(() => {
+      harness.runAbortController.abort();
+      operation.complete();
+    });
+    operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+    const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    // Process admission happens between the watchdog's one-second polls.
+    await vi.advanceTimersByTimeAsync(10);
+    const started = createDeferred();
+    const target = tool("shell_exec", "Run a silent command", async () => {
+      // Exec publishes the supervisor's enforced deadline after process startup.
+      recordDiagnosticToolExecutionDeadline(Date.now() + 1_800_000);
+      started.resolve();
+      await new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Command timed out after 1800 seconds")), 1_800_000);
+      });
+      return jsonResult({ unreachable: true });
+    });
+    // Tools can already have their hook layer before the run catalog is prepared.
+    const wrapped = wrapToolWithBeforeToolCallHook(target, { runId: harness.runId });
+    const caller = { agentId: "main", sessionKey: harness.sessionKey, watchdogAttempt };
+    const surface = applyCodeModeCatalog({
+      ...harness,
+      tools: [...harness.tools, wrapped],
+      toolHookContext: caller,
+    });
+    const outer = expectDefined(
+      surface.tools.find((entry) => entry.name === "exec"),
+      "exec",
+    );
+    const execution = outer.execute("deadline-cell", {
+      code: `try { await shell_exec({}); } catch (error) {
+              return { timeout: error.message, continued: true };
+            }`,
+      awaitResults: true,
+    });
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(900_001);
+    await operation.watchdog.tick(Date.now());
+    await vi.waitFor(() =>
+      expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+    );
+    expect(operation.abortSignal.reason).toBeUndefined();
+    expect(operation.watchdog.snapshot().tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ explicitDeadlineAtMs: expect.any(Number) }),
+      ]),
+    );
+    await vi.advanceTimersByTimeAsync(899_999);
+    const result = resultDetails(await execution);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: { timeout: "Command timed out after 1800 seconds", continued: true },
+    });
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it.each(executors)(
@@ -448,10 +515,17 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         started.resolve();
         return await new Promise<never>(() => {});
       });
-      owner.add(stalled);
+      const watchdogAttempt = owner.replyOperation.watchdog.attachAttempt({ assertCurrent() {} });
+      owner.add(wrapToolWithBeforeToolCallHook(stalled, { watchdogAttempt, runId: owner.runId }));
       try {
         const execution = owner.run("return await stalled({});", undefined, "deadline-exec");
         await started.promise;
+        expect(owner.replyOperation.watchdog.snapshot().tools).toMatchObject([
+          {
+            toolName: "stalled",
+            toolCallId: expect.stringMatching(/^tool_call:deadline-exec:[^:]+:stalled:1$/),
+          },
+        ]);
         await vi.advanceTimersByTimeAsync(1_500);
         const parked = await execution;
         expect(parked.status).toBe("waiting");

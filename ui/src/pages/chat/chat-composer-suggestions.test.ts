@@ -153,15 +153,10 @@ describe("chat composer suggestion accessibility", () => {
       expect(status?.getAttribute("aria-live")).toBe("polite");
       const announcementText = expectDefined(status?.textContent?.trim(), "announcement");
       expect(announcementText).not.toBe("");
-      const expectedAnnouncement =
+      expect(announcementText).toBe(
         draft === "/tools "
           ? `/tools ${text(activeOption, ".slash-menu-name")}`
-          : [".slash-menu-name", ".slash-menu-args", ".slash-menu-desc"]
-              .map((selector) => text(activeOption, selector))
-              .filter(Boolean)
-              .join(" ");
-      expect(announcementText).toBe(
-        draft === "/" ? `${expectedAnnouncement}.` : expectedAnnouncement,
+          : "/reset Reset the current session.",
       );
 
       inputDraft(container, "plain message");
@@ -192,7 +187,7 @@ describe("chat composer suggestion accessibility", () => {
     }
   });
 
-  it("refreshes the current thinking argument menu after its catalog settles", async () => {
+  it("preserves the selected thinking argument across selection and catalog refresh", async () => {
     const refresh = createDeferred();
     const { container } = createReactiveDraftHarness({
       ...thinkingSession(["low", "ultra"]),
@@ -200,10 +195,17 @@ describe("chat composer suggestion accessibility", () => {
     });
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
-    expect(getComposerTextarea(container).value).toBe("/think ");
+    const textarea = getComposerTextarea(container);
+    expect(textarea.value).toBe("/think ");
+    keydownComposer(container, "ArrowUp");
+    textarea.setSelectionRange(6, 7, "backward");
+    textarea.dispatchEvent(new Event("select", { bubbles: true }));
+    flush();
     refresh.resolve();
     await refresh.promise;
     await waitForSolid(() => expect(optionNames(container)).toEqual(["default", "low", "ultra"]));
+    keydownComposer(container, "Tab");
+    expect(textarea.value).toBe("/think ultra");
   });
 
   it("keeps the keyboard-selected command when a pending catalog refresh settles", async () => {
@@ -346,7 +348,7 @@ it("starts Goal mode with the prose behind a leading /goal token as its objectiv
 
   await import("./components/chat-composer-slash-menu.tsx");
   await waitForSolid(() =>
-    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("/goal"),
+    expect(container.querySelector(".slash-menu-name")?.textContent?.trim()).toContain("Goal"),
   );
   keydownComposer(container, "Enter");
 

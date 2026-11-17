@@ -1,4 +1,3 @@
-// Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -55,6 +54,7 @@ import {
 import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { finalizeChatSendDispatchedReplies } from "./chat-send-reply-finalization.js";
+// Detached chat.send dispatch owns runtime delivery, post-dispatch persistence, and terminalization.
 import { createAcceptedChatSendRetry, waitForAcceptedChatSendRetry } from "./chat-send-retry.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
 import { registerChatSendToolEventRecipients } from "./chat-send-tool-event-recipients.js";
@@ -76,6 +76,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     client,
     context,
     toolsAllow,
+    deferWorkspaceBootstrap,
     skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -380,6 +381,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                     : {}),
                   runId: clientRunId,
                   operatorAuthority: admission.operatorAuthority,
+                  deferWorkspaceBootstrap,
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
@@ -425,14 +427,13 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   media: replyOptionMedia,
                   ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
                   thinkingLevelOverride: p.thinking,
+                  normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...(injectionDisposition.isCollaborationBlocked()
-                    ? { messageInjectionDisposition: "collaborative-steering-disabled" as const }
-                    : p.queueMode === "steer" && messageInjectionTarget
-                      ? { messageInjectionDisposition: "rejected" as const }
-                      : {}),
+                  ...injectionDisposition.replyOptions(
+                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
+                  ),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({
@@ -618,6 +619,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
           const hasTerminalAgentError =
             dispatchResult.collaborativeSteeringRefused ||
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
+          await dispatchErrorLifecycle.settleTerminalPersistence();
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
               await dispatchErrorLifecycle.recordUnstartedFailure({

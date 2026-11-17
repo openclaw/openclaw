@@ -36,15 +36,18 @@ import {
   packChangedExtensionConfigShards,
   resolveChangedExtensionRoots,
 } from "./ci-extension-test-shards.mts";
+import { routeBoatNodeTestJobs } from "./ci-node-test-capacity.mts";
 import {
   canSplitWholeConfigGroup,
   listNodeTestConfigFiles,
   listWholeConfigFiles,
+  type NodeTestVolume,
 } from "./ci-node-test-inventory.mts";
 import {
   UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
+  prepareNodeTestVolumes,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
@@ -55,6 +58,8 @@ import {
   SOURCE_CHANNEL_TEST_POLICY,
   type NodeTestShard,
   type RuntimeTestSelection,
+  type NodeTestVolumeContext,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
@@ -1146,8 +1151,21 @@ export function createChangedNodeTestShards(
       dedicatedUiE2e?: boolean;
       dedicatedUiTests?: boolean;
       selectedTestTargets?: readonly string[];
+      volumeContext?: NodeTestVolumeContext;
     } = {},
 ): ChangedNodeTestShard[] | null {
+  if (options.runnerBackend === "boat") {
+    const jobs = createChangedNodeTestShards(changedPaths, { ...options, runnerBackend: "hybrid" });
+    return (
+      jobs &&
+      routeBoatNodeTestJobs(
+        jobs,
+        options.compactNodeJobCap === undefined
+          ? undefined
+          : options.compactNodeJobCap + jobs.filter((job) => job.requiresDist).length,
+      )
+    );
+  }
   const cwd = options.cwd ?? process.cwd();
   const fallback = (reason: string) => {
     options.onFallback?.(reason);
@@ -1262,6 +1280,7 @@ export function createChangedNodeTestShards(
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
   // synthetic or alternate source root with coincidentally matching paths.
+  let describeVolume: ((group: NodeTestShardGroup) => NodeTestVolume) | undefined;
   const canonicalShards = canonicalTargets.length
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
@@ -1273,11 +1292,18 @@ export function createChangedNodeTestShards(
           // These exact targets already passed deferral above, including explicit policy watches.
           includeReleaseOnlyRuntimeTests: true,
           includePrExemptRuntimeTests: true,
+          volumeContext: options.volumeContext,
+          onVolumePrepared: (describe) => {
+            describeVolume = describe;
+          },
         })
       : null
     : [];
   if (canonicalShards === null) {
     return fallback("test targets lack canonical shard metadata");
+  }
+  if (!describeVolume && options.volumeContext && path.resolve(cwd) === process.cwd()) {
+    describeVolume = prepareNodeTestVolumes(options.volumeContext);
   }
   const artifactBoundaryOwned =
     changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
@@ -1383,20 +1409,34 @@ export function createChangedNodeTestShards(
   // Time-based splitting must not make an admitted owner plan exceed the matrix
   // budget. Retain its compact rows, including plugin work, without widening scope.
   const cap = options.compactNodeJobCap;
+  const withVolumes = (result: ChangedNodeTestShard[]) => {
+    if (describeVolume) {
+      for (const job of result) {
+        for (const group of job.groups ?? []) {
+          try {
+            group.volume = describeVolume({ ...group, env: { ...job.env, ...group.env } });
+          } catch {
+            delete group.volume;
+          }
+        }
+      }
+    }
+    return result;
+  };
   if (cap === undefined || bounded.filter((shard) => !shard.requiresDist).length <= cap) {
-    return bounded;
+    return withVolumes(bounded);
   }
   const otherNonDistRows = [...otherShards, ...boundaryShards].filter(
     (shard) => !shard.requiresDist,
   ).length;
   if (shards.filter((shard) => !shard.requiresDist).length <= cap || otherNonDistRows >= cap) {
-    return shards;
+    return withVolumes(shards);
   }
   // Only target chunks may grow to fit the remaining rows; all other owners
   // keep their compact execution envelopes and the workflow owns final admission.
-  return [
+  return withVolumes([
     ...otherShards,
     ...createChangedTargetShards(changedTargets, names, cap - otherNonDistRows),
     ...boundaryShards,
-  ];
+  ]);
 }

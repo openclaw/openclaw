@@ -12,7 +12,7 @@ import {
 import type { Evaluation, EvaluationInput } from "./schema-definition.js";
 import type { ImageAssets } from "./schema.js";
 
-type TypeSafeDecisionBatch = DecisionBatchV2 & {
+export type TypeSafeDecisionBatch = DecisionBatchV2 & {
   readonly state:
     | { readonly type: "text"; readonly text: string }
     | { readonly type: "json"; readonly value: Exclude<DecisionEntry, string> };

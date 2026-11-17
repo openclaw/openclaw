@@ -303,16 +303,18 @@ unixTest("does not dial when verified rotation cannot be persisted", async () =>
 });
 
 unixTest(
-  "retains signed evidence of a newer binding even when Discovery withholds that binding",
+  "refuses a snapshot naming a binding it was not verified under, and keeps nothing of it (J5)",
   async () => {
     const tunnel = await start();
+    // A K_gw-signed claim of binding 2 under binding 1 never raises the high-water.
     served = await responseFor(world.binding, { seq: 4, binding_seq: 2 });
     expect(await requestThrough(tunnel)).toBe(502);
-    expect(saved.freshness?.snapshot).toMatchObject({ seq: 4, binding_seq: 2 });
-    served = await responseFor();
-    expect(await requestThrough(tunnel)).toBe(502);
     expect(connect).not.toHaveBeenCalled();
-    expect(saved.freshness?.snapshot?.binding_seq).toBe(2);
+    expect(saved.freshness?.snapshot?.binding_seq ?? 1).toBe(1);
+    // The honest binding still dials.
+    served = await responseFor();
+    await requestThrough(tunnel);
+    expect(connect).toHaveBeenCalled();
   },
 );
 

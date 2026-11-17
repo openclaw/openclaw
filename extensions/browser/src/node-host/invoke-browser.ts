@@ -164,6 +164,7 @@ function combineBrowserProxySignals(
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/operator/input" ||
     path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||

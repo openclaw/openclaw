@@ -453,6 +453,37 @@ suite.define(() => {
       await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
     }));
 
+  it("keeps the slow microphone permission hint whole in a narrow composer", () =>
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 320, height: 720 } },
+      async ({ page }) => {
+        const { textarea } = await openDictation(page, { route: "new" });
+        await textarea.waitFor();
+        // A pending browser permission prompt keeps microphone acquisition open.
+        await page.evaluate(() =>
+          Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+            configurable: true,
+            value: () => new Promise<MediaStream>(() => {}),
+          }),
+        );
+        await button(page, "Dictate", true).click();
+        const phase = page.locator(".agent-chat__dictation-phase");
+        await expect
+          .poll(() => phase.textContent())
+          .toBe(
+            "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.",
+          );
+        const clipped = await phase.evaluate(
+          (element) =>
+            element.scrollWidth > element.clientWidth ||
+            element.getBoundingClientRect().right >
+              element.closest(".agent-chat__dictation-status")!.getBoundingClientRect().right,
+        );
+        await captureComposer(page, "dictation-permission-hint-narrow.png");
+        expect(clipped).toBe(false);
+      },
+    ));
+
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

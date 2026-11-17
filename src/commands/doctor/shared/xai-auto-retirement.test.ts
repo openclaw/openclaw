@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
@@ -137,4 +138,18 @@ it("keeps a pinned session when its successor is outside the allowed models", as
   expect(repairSession(entry, "main", resolve, "xai/grok-4.7", warnings)).toBe(false);
   expect(entry).toMatchObject({ modelOverride: "auto", authProfileOverride: "xai:fixture" });
   expect(warnings).toEqual([expect.stringContaining("not permitted")]);
+});
+
+it("removes a Decision selection its provider manifest retires", () => {
+  const subq = fileURLToPath(new URL("../../../../extensions/subq", import.meta.url));
+  const plugins = { load: { paths: [subq] }, entries: { subq: { enabled: true } } };
+  const decision = { agents: { defaults: { decisionModel: "subq/subq-snap-preview" } }, plugins };
+  const { config, changes } = repairConfig(
+    decision,
+    createResolver({ cfg: decision, env: state.env }),
+  );
+  expect(config.agents?.defaults).toEqual({});
+  expect(changes).toEqual([
+    'Removed retired agents.defaults.decisionModel "subq/subq-snap-preview"; decisions use the inherited Decision model, or stay off without one.',
+  ]);
 });

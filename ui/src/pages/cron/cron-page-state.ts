@@ -50,7 +50,6 @@ import { createCronEventEditor } from "./event-editor.ts";
 import { resolveCronEventPatch, validateCronEventSelection } from "./event-source.ts";
 import { canManageCronJob } from "./human-owner.ts";
 import * as cronRoute from "./route-model.ts";
-import { createCronRunTranscript } from "./run-transcript.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
 
@@ -83,17 +82,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     (source) => source.state,
   );
   const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
-  const runTranscript = createCronRunTranscript(publish, () => {
-    const scope = gateway.capture();
-    const current = cron;
-    return scope
-      ? {
-          client: scope.client,
-          isCurrent: () =>
-            active && host().isConnected && gateway.isCurrent(scope) && cron === current,
-        }
-      : null;
-  });
   const routeSelection = cronRoute.createCronRouteSelection();
   let pendingRunScroll = false;
   const runRows = new Map<HTMLElement, () => CronRunLogEntry>();
@@ -184,7 +172,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         invalidateCronRefresh(cron);
         cron.client = snapshot.client;
         cron.connected = snapshot.phase === "connected";
-        runTranscript.reconnect();
         if (!cron.cronEditingJob && !cron.cronCreateOpen) {
           routeSelection.requested = false;
         }
@@ -275,7 +262,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   function resetGatewayState(snapshot: ApplicationContext["gateway"]["snapshot"]) {
     presentation.retire();
     presentation.resetModels();
-    runTranscript.close();
     eventSource.reset();
     invalidateCronRefresh(cron);
     const connected = snapshot.phase === "connected";
@@ -363,7 +349,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
     presentation.retire();
     routeSearch = search;
-    runTranscript.close();
     cron.cronError = null;
     cron.cronNotice = null;
     const routeData = cronRoute.resolveCronRouteData(search);
@@ -381,14 +366,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   }
 
   function preparePanel() {
-    // Retire transcript requests before displaying another panel target.
+    // Retire the previous presentation before displaying another panel target.
     const editingJobId = cron.cronEditingJob?.id ?? null;
     const mode = editingJobId ? "job" : cron.cronCreateOpen ? "create" : "overview";
     const panelKey = `${mode}:${editingJobId ?? ""}`;
     if (panelKey !== lastPanelKey) {
       presentation.retire();
       lastPanelKey = panelKey;
-      runTranscript.close();
       setDetailTab(cronRoute.resolveCronDetailTab(cron.cronEditingJob, cron.cronRunsRunId));
       const scroller = host().closest(".content");
       if (scroller instanceof HTMLElement && typeof scroller.scrollTo === "function") {
@@ -654,7 +638,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       }
       if (runNow) {
         // Explicit create-and-run intent survives navigation while saving.
-        await runCronJob(cronState, result.jobId, "force");
+        await runCronJob(cronState, result.jobId);
       }
       // Creating returns to the overview's all-job history.
       if (
@@ -693,8 +677,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onClosePanel: closePanel,
     onClone: cloneJob,
     onToggle: (job: CronJob, enabled: boolean) => toggle(job, enabled),
-    onRun: (job: CronJob, mode?: "force" | "due") =>
-      runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id, mode ?? "force")),
+    onRun: (job: CronJob) => runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id)),
     onRemove: (job: CronJob) => {
       const view = presentation.capture();
       return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));
@@ -722,8 +705,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
         await loadCronRuns(cronState);
       }),
-    onViewRunTranscript: (entry: CronRunLogEntry, trigger: HTMLButtonElement) =>
-      void runTranscript.open(entry, trigger),
   };
   return {
     context,
@@ -740,7 +721,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     listTab,
     detailTab,
     actions,
-    runTranscript,
     deliveryDirectory,
     eventSource,
     revision: projection.revision,

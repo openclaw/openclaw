@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -34,6 +34,7 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -68,7 +69,7 @@ import {
   tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(childProcess.execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
 const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
@@ -137,6 +138,11 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 
 function parseArgs(argv) {
   const command = argv[0];
+  if (command === "recover") {
+    throw new Error(
+      "recover is retired; receipt-backed recovery is no longer supported. Run fresh qualification with pnpm ci:full-release for the same immutable candidate.",
+    );
+  }
   const options = {
     command,
     dryRun: false,
@@ -1076,7 +1082,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion);
+      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
@@ -1161,9 +1167,11 @@ async function inspectQualificationStatus(plan, runId, client) {
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
   const blockers = [
     ...parentJobBlockers(currentJobs, parent.run_attempt),
-    ...childJobBlockers(status.children, plan.targetVersion),
+    ...childJobBlockers(status.children, plan.targetVersion, plan.targetSha),
   ];
-  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJobs = currentJobs.filter(
+    (job) => releaseWatcherJobName(job.name) === "Diagnostic Drain",
+  );
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
     status: drainJob?.status ?? "unknown",
@@ -1185,7 +1193,10 @@ async function inspectQualificationStatus(plan, runId, client) {
       decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
     } else if (
       parent.status === "completed" ||
-      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+      currentJobs.some(
+        (job) =>
+          releaseWatcherJobName(job.name) === "Release Decision" && job.status === "completed",
+      )
     ) {
       observationErrors.push("Decision evidence unavailable");
     }
@@ -3346,10 +3357,10 @@ function parentJobBlockers(jobs, attempt) {
     }));
 }
 
-function childJobBlockers(children, targetVersion) {
+function childJobBlockers(children, targetVersion, targetSha) {
   return children.flatMap((child) =>
     child.jobs
-      ? evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+      ? evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
           owner: child.key,
           job: job.name,
           conclusion: job.conclusion,
@@ -3579,6 +3590,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           for (const job of evaluateReleaseChildPolicy({
             child: { key: child.key, jobs: composite.jobs },
             targetVersion: observation.plan?.targetVersion,
+            targetSha: observation.plan?.targetSha,
           }).blockingJobs) {
             const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
               (row) => row.name === job.name && row.conclusion !== "skipped",

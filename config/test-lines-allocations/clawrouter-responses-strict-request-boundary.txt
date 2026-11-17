@@ -1,2 +1,0 @@
-# Configured and discovered ClawRouter OpenAI Responses rows reach the real stream wrapper with strict=false.
-10

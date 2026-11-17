@@ -40,7 +40,6 @@ import {
   resolveSessionPermissionExecMode,
   type PreparedSessionPermissionPolicy,
 } from "../../tool-fs-policy.js";
-import { resolveToolLoopDetectionConfig } from "../../tool-loop-detection-config.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
@@ -359,6 +358,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             resolveWebSearchRoute().kind === "managed";
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
+        githubPublicationConfigurationAware:
+          !isRawModelRun && attempt.operation !== "settled-tool-finalization" ? true : undefined,
         abortSignal,
         skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
@@ -469,10 +470,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
         channelId: attempt.currentChannelId,
         trace: params.runTrace,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: attempt.config,
-          agentId: params.setup.sessionAgentId,
-        }),
         onToolOutcome: attempt.onToolOutcome,
         allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
       },

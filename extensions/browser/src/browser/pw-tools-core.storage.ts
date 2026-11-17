@@ -1,5 +1,6 @@
 import type { BrowserContext } from "playwright-core";
 import { getPageForTargetId } from "./pw-session.js";
+import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 import {
   assertInteractionCurrent,
   type InteractionTargetOptions,
@@ -7,11 +8,44 @@ import {
 
 type PlaywrightCookieInput = Parameters<BrowserContext["addCookies"]>[0][number];
 
-export async function cookiesGetViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-}): Promise<{ cookies: unknown[] }> {
+export async function cookiesGetViaPlaywright(
+  opts: InteractionTargetOptions & {
+    partition?: "unpartitioned";
+    signal?: AbortSignal;
+  },
+): Promise<{ cookies: unknown[]; cookiePartition?: "unpartitioned" }> {
+  opts.signal?.throwIfAborted();
   const page = await getPageForTargetId(opts);
+  if (opts.partition === "unpartitioned") {
+    return await withPageScopedCdpClient({
+      page,
+      fn: async (send) => {
+        await assertInteractionCurrent(opts);
+        opts.signal?.throwIfAborted();
+        // Page-scoped Network binds the selected storage partition. Storage.getCookies
+        // without a browser-context id instead reads the default browser context.
+        const result = await send("Network.getAllCookies");
+        await assertInteractionCurrent(opts);
+        opts.signal?.throwIfAborted();
+        if (
+          !result ||
+          !Array.isArray(result.cookies) ||
+          result.cookies.some(
+            (cookie) => !cookie || typeof cookie !== "object" || Array.isArray(cookie),
+          )
+        ) {
+          throw new Error("Invalid browser cookie response");
+        }
+        // Filter before Playwright drops opaque/nonce markers. Presence, even false
+        // or malformed metadata, never certifies an ordinary cookie. Keep selected
+        // rows intact rather than joining them to a second, lossy cookie snapshot.
+        const cookies = result.cookies.filter(
+          (cookie) => !("partitionKey" in cookie) && !("partitionKeyOpaque" in cookie),
+        );
+        return { cookies, cookiePartition: "unpartitioned" };
+      },
+    });
+  }
   const cookies = await page.context().cookies();
   return { cookies };
 }

@@ -7,7 +7,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import * as preparedFacts from "../../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import { prepareLeaseFacts } from "../../../config/sessions/session-delivery-generation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
@@ -39,7 +39,7 @@ it.for(["unrelated", "same session"] as const)(
     let initial: SubagentKillSession | undefined;
     let prepared: SubagentKillSession | undefined;
     let execution: OpenClawAgentDatabaseExecution | undefined;
-    let generationFacts: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+    let generationFacts: Awaited<ReturnType<typeof prepareLeaseFacts>> | undefined;
     let producer: Promise<unknown> | undefined;
     let preparation: Promise<SubagentKillSession> | undefined;
     let publication: Promise<void> | undefined;
@@ -114,7 +114,7 @@ it.for(["unrelated", "same session"] as const)(
       nativeClaim.assertCurrent();
       if (writerTarget === "unrelated") {
         initial.assertCurrent();
-        generationFacts = await prepareSessionGenerationFacts({
+        generationFacts = await prepareLeaseFacts({
           agentId: "main",
           storePath,
           sessionKey: childKey,

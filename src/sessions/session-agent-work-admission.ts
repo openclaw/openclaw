@@ -3,7 +3,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 
 export type AgentWorkAdmissionTarget = {
   agentId: string;
@@ -33,11 +34,15 @@ export const sessionWorkAdmissionClosures = resolveGlobalSingleton(
 export function agentWorkAdmissionIdentity(
   target: AgentWorkAdmissionTarget,
 ): AgentWorkAdmissionIdentity {
+  const pathname = resolveDatabasePath({ path: target.statePath, env: target.env });
+  const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(pathname);
   return {
     agentId: normalizeAgentId(target.agentId),
-    statePath: readDatabasePathIdentitySync(
-      target.statePath ?? resolveOpenClawStateSqlitePath(target.env ?? process.env),
-    ).canonicalPath,
+    // Canonical warm owners already published this name; cold paths and aliases still qualify.
+    statePath:
+      known?.canonicalPath === pathname
+        ? known.canonicalPath
+        : readDatabasePathIdentitySync(pathname).canonicalPath,
   };
 }
 

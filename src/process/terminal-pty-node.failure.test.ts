@@ -25,8 +25,9 @@ vi.mock("node:fs", async (importOriginal) => {
     },
   };
 });
-vi.mock("../infra/node-runtime-executable.js", () => ({
-  resolveNodeRuntimeExecutable: () => process.execPath,
+vi.mock("../infra/node-runtime-executable.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/node-runtime-executable.js")>()),
+  resolveNodeRuntimeExecutableAsync: async () => process.execPath,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,6 +73,7 @@ it("joins failed terminal startup cleanup when procfs identity is unavailable", 
     const starting = spawnNodeTerminalPty(params);
     const settled = vi.fn();
     void starting.then(settled, settled);
+    await vi.waitFor(() => expect(child.listenerCount("error")).toBeGreaterThan(0));
     child.emit("error", new Error("worker failed before startup"));
     await vi.advanceTimersByTimeAsync(2_000);
     expect(signals.mock.calls).toEqual([[7777, "SIGKILL"]]);

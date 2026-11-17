@@ -2,6 +2,8 @@ import { beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { prepareSessionStoreCandidatesInWorker } from "../../config/sessions/session-transcript-worker-resources.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -28,7 +30,7 @@ export async function setup(env: NodeJS.ProcessEnv, sessionId: string) {
   writeSessionEntry(database, sessionKey, entry);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   const scope = { agentId: "main", sessionKey, sessionId, storePath: database.path };
-  const request = {
+  const input = {
     prepared: { cfg: {}, sessionKey, storePath: database.path, timeoutMs: 60_000 },
     followupRun: createTestFollowupRun({ sessionKey, sessionId }),
     sessionId,
@@ -36,19 +38,30 @@ export async function setup(env: NodeJS.ProcessEnv, sessionId: string) {
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     startedAt: Date.now(),
   };
-  const schedule = (
-    afterOwnerSettles?: Promise<boolean>,
-    resolveGatewayContext?: () => GatewayRequestContext | undefined,
-  ) =>
-    withPluginRuntimeGatewayRequestScope(
-      {
-        pluginRegistry: createEmptyPluginRegistry(),
-        resolveGatewayContext,
-        isWebchatConnect: () => false,
-      },
-      () => scheduleSessionMaintenance(request, afterOwnerSettles),
-    );
-  return { scope, entry, schedule, request };
+  const prepare = async () => {
+    const sourceTarget = captureSessionTranscriptTargetBinding({ ...scope, env });
+    const { write } = await prepareSessionStoreCandidatesInWorker({
+      write: { storePath: sourceTarget.storePath },
+    });
+    if (!write) {
+      throw new Error("Maintenance fixture source inventory is unavailable");
+    }
+    const request = { ...input, sourceTarget, sourceIdentities: write.identities };
+    const schedule = (
+      afterOwnerSettles?: Promise<boolean>,
+      resolveGatewayContext?: () => GatewayRequestContext | undefined,
+    ) =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          pluginRegistry: createEmptyPluginRegistry(),
+          resolveGatewayContext,
+          isWebchatConnect: () => false,
+        },
+        () => scheduleSessionMaintenance(request, afterOwnerSettles),
+      );
+    return { schedule, request };
+  };
+  return { scope, entry, ...(await prepare()), prepare };
 }
 
 export function blockFlush(onStart = () => {}) {

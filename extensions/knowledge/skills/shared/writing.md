@@ -21,7 +21,8 @@ Write like a good human notetaker: short, specific, names first.
   inline where they matter in the prose.
 - **No personal contact details** (email addresses, phone numbers) in page prose.
 - **Citations:** one readable citation per claim, at the end of the sentence or
-  bullet. Merge adjacent ranges (`lines 93–98`, not `lines 93–93` plus
+  bullet. More than about three on one sentence means it bundles several
+  facts: split it, or move each citation beside the fact it supports. Merge adjacent ranges (`lines 93–98`, not `lines 93–93` plus
   `lines 94–98`). Never cite a whole transcript.
 - **Quotes** must be verbatim and worth reading: a decision, a position or a
   memorable framing. A garbled or trivial line is not a notable quote; use the

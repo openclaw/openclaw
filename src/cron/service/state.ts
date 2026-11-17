@@ -368,10 +368,7 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<
-    CronServiceDepsInternal,
-    "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs" | "defaultAgentId"
-  > &
+  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "defaultAgentId"> &
     Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
@@ -406,6 +403,8 @@ export type CronServiceState = {
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
   stopped: boolean;
+  /** A reload's replacement owns scheduling; runs already executing here still publish results. */
+  handedOver?: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;
