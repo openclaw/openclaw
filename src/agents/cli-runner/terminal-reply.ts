@@ -54,16 +54,23 @@ export function resolveCliSourceReplyMirror(params: {
 }
 
 export function prepareCliRunTerminalReply(context: PreparedCliRunContext, output: CliOutput) {
+  const rawText = output.rawFinalText ?? output.rawText ?? output.text;
+  const prepared = prepareAgentRunTerminalReply({ rawText });
   let sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams: context.params,
     modelId: context.modelId,
   });
+  const explicitFinalSource = resolveExplicitFinalSourceReplyDeliveryEvidence(output);
   const completedFinalSource =
     sourceReplyMirror.payloads.length > 0 &&
-    resolveExplicitFinalSourceReplyDeliveryEvidence(output) === true &&
+    explicitFinalSource === true &&
     hasCompletedSourceReplyDeliveryEvidence(output);
-  if (resolveReplyExpectation(context.params) === "result-required" && !completedFinalSource) {
+  if (
+    (resolveReplyExpectation(context.params) === "result-required" && !completedFinalSource) ||
+    // Progress sends complete the turn only when it ends empty or silent.
+    (explicitFinalSource === false && prepared.terminalReply.disposition === "visible")
+  ) {
     sourceReplyMirror = { payloads: [], delivered: false };
   }
   // A delivery receipt without a mirrored body must not replace authored silence with empty output.
@@ -76,8 +83,6 @@ export function prepareCliRunTerminalReply(context: PreparedCliRunContext, outpu
       terminalReply: sanitizeAgentRunTerminalReply(text),
     };
   }
-  const rawText = output.rawFinalText ?? output.rawText ?? output.text;
-  const prepared = prepareAgentRunTerminalReply({ rawText });
   const finalText =
     prepared.terminalReply.disposition === "silent"
       ? ""

@@ -431,6 +431,70 @@ export function registerCliReplyCompletionTests({
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   });
 
+  it.each([
+    { name: "a plain final answer", sends: [], result: "Build installed.", answer: true },
+    { name: "NO_REPLY", sends: [], result: SILENT_REPLY_TOKEN, answer: false },
+    {
+      name: "a final send of the same answer",
+      sends: ["Build installed."],
+      result: "Build installed.",
+      answer: false,
+    },
+  ])("keeps WebChat progress and $name in message_tool_only", async (testCase) => {
+    const sessionKey = "agent:main:main";
+    const { dir, sessionTarget } = createSessionFixture({ sessionKey });
+    const config: OpenClawConfig = { agents: { entries: { main: { workspace: dir } } } };
+    setRuntimeConfigSnapshot(config);
+    const context = createContext({
+      sessionKey,
+      runId: "cli-webchat-progress",
+      ...sessionParams(sessionTarget, dir),
+      persistAssistantTranscript: true,
+      config,
+      messageChannel: "webchat",
+      messageProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    context.backendResolved.config.output = "jsonl";
+    const tool = createMessageTool({
+      config,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      sessionId: sessionTarget.sessionId,
+      agentId: "main",
+      runId: context.params.runId,
+    });
+    const progress = "Build started.";
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      const sends = [
+        { action: "send", message: progress, final: false },
+        ...testCase.sends.map((message) => ({ action: "send", message, final: true })),
+      ];
+      for (const [index, args] of sends.entries()) {
+        captureMessage(input, args, await tool.execute(`cli-webchat-progress-${index}`, args));
+      }
+      emitResult(input, testCase.result);
+      return makeManagedRun();
+    });
+
+    const result = await run(context);
+
+    const transcriptTexts = (await readTranscriptMessages(sessionTarget))
+      .filter((message) => isRecord(message) && message.role === "assistant")
+      .map((message) => extractStoredAssistantText(message));
+    expect(transcriptTexts).toEqual([
+      progress,
+      ...testCase.sends,
+      ...(testCase.answer ? [testCase.result] : []),
+    ]);
+    expect(result.payloads?.some((payload) => payload.text === "Build installed.")).toBe(
+      testCase.result !== SILENT_REPLY_TOKEN,
+    );
+  });
+
   it.each([false, true])(
     "requires a real child result even when continuation custody is %s",
     async (expectsCompletionMessage) => {
