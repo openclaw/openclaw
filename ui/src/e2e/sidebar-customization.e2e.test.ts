@@ -760,20 +760,15 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        const pages = await openSidebarPages(page);
-        await pages
-          .locator(".sidebar-pages__entry")
-          .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
-          .getByRole("button", { name: "Pin", exact: true })
-          .click();
         await sidebar.locator('[data-navigation-view="sessions"]').click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
 
         const activity = home.locator(".session-glyph");
+        // Usage is one of the rail's default pins.
         const shortcut = sidebar
-          .locator('.sidebar-rail__pin[data-sidebar-entry="route:sessions"]')
-          .getByRole("link", { name: "Sessions", exact: true });
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]')
+          .getByRole("link", { name: "Usage", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);

@@ -1,4 +1,4 @@
-import type { SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DashboardsDisplay } from "../../app/settings-contract.ts";
 
@@ -20,6 +20,8 @@ export type DashboardsRouteData = {
   error: string | null;
   basePath: string;
   fallbackAgentId: string;
+  /** The agent roster, for agent authors' names. */
+  agents: AgentsListResult["agents"];
   mainKey: string;
   globalScope: boolean;
 };

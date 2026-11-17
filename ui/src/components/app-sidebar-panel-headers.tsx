@@ -1,16 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
-import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { automationsFiltered } from "../lib/cron/automations-filter.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import type { SidebarFilterMenu, SidebarMenus } from "./sidebar-menus.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Picker } from "./solid/select-picker.tsx";
 
 /** Every panel header renders above the list scroller with one geometry, so it stays pinned
     and clears the scrollbar gutter on Sessions, Pages, and Users alike. */
@@ -95,41 +91,16 @@ export function SidebarPageHeader(props: { host: AppSidebarRenderHost; route: Na
 }
 
 export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
-  const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const people = () => props.host.people;
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
-      <Show
-        when={mobile()}
-        fallback={<span class="sidebar-panel-header__title">{t("presence.peopleTitle")}</span>}
-      >
-        <Picker
-          id="sidebar-people-presence"
-          class="sidebar-session-owner-filter"
-          triggerIcon="chevronsUpDown"
-          label={t("presence.usersTitle")}
-          value={people().presenceFilter}
-          sheet
-          showOptionTooltips={false}
-          options={[
-            { value: "online", label: t("presence.rosterTitle") },
-            { value: "all", label: t("presence.allUsers") },
-          ]}
-          onChange={(value) => {
-            if (value === "online" || value === "all") {
-              people().set("presenceFilter", value);
-            }
-          }}
-        />
-      </Show>
+      <span class="sidebar-panel-header__title">{t("presence.peopleTitle")}</span>
       <SidebarPanelFilter
         menus={props.host.sidebarMenus}
         menu="peopleFilter"
         class="sidebar-online__filter-toggle"
         expanded={props.host.sidebarMenus.peopleFilterMenuPosition !== null}
-        filtered={
-          people().statusFilter === "running" || (!mobile() && people().presenceFilter === "all")
-        }
+        filtered={people().statusFilter === "running" || people().presenceFilter === "all"}
         title={t("presence.filters.label")}
         label={t("presence.filters.label")}
       />

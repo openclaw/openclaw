@@ -47,7 +47,10 @@ export function SidebarPagesMenu(props: {
 }): JSX.Element {
   const zone = createMemo(() => props.host.reconciledSidebarZone());
   const routes = createMemo(() =>
-    SIDEBAR_NAV_ROUTES.filter((route) => props.host.sidebarMenus.isRouteEnabled(route))
+    // Sessions opens from the agent avatar and its groups, so the menu leaves it out.
+    SIDEBAR_NAV_ROUTES.filter(
+      (route) => route !== "sessions" && props.host.sidebarMenus.isRouteEnabled(route),
+    )
       .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
       .map((route) => serializeSidebarEntry({ type: "route", route })),
   );
