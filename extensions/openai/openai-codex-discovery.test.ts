@@ -40,6 +40,14 @@ describe("OpenAI discovered subscription models", () => {
       "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1",
     ]);
   });
+  it("uses the bundled version when the Codex runtime cannot report one", async () => {
+    codexClient.resolveCodexClientVersion.mockResolvedValueOnce(undefined);
+    const { fetch } = await discoverCodexModels([{ slug: "gpt-5.5", visibility: "list" }]);
+
+    expect(fetch.mock.calls.map(([{ url }]) => url)).toEqual([
+      "https://chatgpt.com/backend-api/codex/models?client_version=0.169.0",
+    ]);
+  });
   it.each([128_000, undefined])(
     "preserves the active window %s and enabled reasoning for discovered GPT-6.1 Sol",
     async (contextWindow) => {
