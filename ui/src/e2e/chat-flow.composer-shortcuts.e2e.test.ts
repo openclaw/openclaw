@@ -302,6 +302,10 @@ suite.define(() => {
       .click({ button: "right" });
     const menu = page.locator(".chat-reply-context-menu");
     await menu.waitFor({ state: "visible" });
+    // The menu installs its document keyboard listener on the next frame.
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "hidden" });
     await expectRequestCountStable(gateway, "chat.abort", 0);
