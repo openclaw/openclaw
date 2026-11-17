@@ -285,6 +285,23 @@ handles, including retained composer operations. Header and composer actions als
 retire when their pane stops being presented. A later return to that pane allows
 new actions; it does not revive handles from an earlier invocation.
 
+A composer action's `run` context also receives `composer`, bound to the pane
+that invoked it. `composer.draft` returns that pane's draft when read, and
+`composer.setDraft(text)` replaces it. Both throw once the action's `signal`
+aborts, so a retained handle never reads or edits the draft of a later session.
+Header and session actions receive no `composer`.
+
+```typescript
+host.ui.registerAction({
+  id: "shout",
+  label: "Uppercase draft",
+  placement: "composer",
+  run({ composer }) {
+    composer?.setDraft(composer.draft.toUpperCase());
+  },
+});
+```
+
 Replacements can compose the built-in view by calling
 `context.mountDefault(container)`. A workspace replacement should use this
 when it wants to retain the built-in chat state and session owners. The SDK

@@ -209,6 +209,8 @@ export type ControlUiAction = {
       session?: ControlUiSession;
       host: ControlUiHost;
       signal: AbortSignal;
+      /** Composer placement only: the invoking pane's live draft; retires with `signal`. */
+      composer?: { readonly draft: string; setDraft: (text: string) => void };
     },
   ) => void | Promise<void>;
 };
