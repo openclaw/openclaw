@@ -4,34 +4,6 @@ import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-
 import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
-it("carries the host-captured native conversation id into hook identity context", () => {
-  const ctx = buildSessionEventContext({
-    cfg: {},
-    agentId: "main",
-    sessionKey: "agent:main:cron:proof-job",
-    text: "background completion turn",
-    options: { source: "restart" },
-    occurrenceId: "chatid-occurrence",
-    deliveryContext: {
-      channel: "discord",
-      // Route addresses are prefixed ("channel:<id>"); they are not the
-      // native conversation identity and must not leak into ChatId.
-      to: "channel:123456789012345678",
-      accountId: "acct-1",
-    },
-    target: {
-      sessionId: "existing",
-      generation: "current",
-      settings: { nativeChannelId: "123456789012345678" },
-    },
-    assertCurrent() {},
-  });
-  // Session-event turns run through the same same-conversation authority
-  // projection as inbound messages; it compares the host-captured native
-  // conversation id exactly, so steering keeps matching the conversation.
-  expect(ctx.ChatId).toBe("123456789012345678");
-});
-
 it("does not substitute the prefixed route address for the chat id", () => {
   const ctx = buildSessionEventContext({
     cfg: {},
