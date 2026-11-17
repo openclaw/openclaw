@@ -216,6 +216,29 @@ describe("running installation replacement", () => {
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
   });
 
+  it("leaves a replaced installation to the update run that holds it", async () => {
+    const tempRoot = await import("../infra/tmp-openclaw-dir.js");
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      directories.make("openclaw-update-lease-"),
+    );
+    const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-lease.js"),
+      import("../infra/update-install-root.js"),
+    ]);
+    const store = createManagedHandoffLeaseStore();
+    const run = store.acquire(resolveUpdateInstallRoot(fixture.root), "run", { kind: "update" });
+    if (run.kind !== "acquired") {
+      throw new Error("fixture acquisition failed");
+    }
+    const handoff = registerReplacement();
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    expect(store.release(run.lease)).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+  });
+
   it("leaves installation handoff with the suspension owner from preparation until rollback", async () => {
     const restart = vi.fn();
     await registerRunHandoff(restart);

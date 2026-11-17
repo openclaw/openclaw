@@ -191,7 +191,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
     return observer.check;
   }
   observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
-    .then((value) => {
+    .then(async (value) => {
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
@@ -199,7 +199,10 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       if (!version || version.length > 96 || !buildId || buildId.length > 96) {
         return;
       }
-      if (version !== observer.running.version || buildId !== observer.running.buildId) {
+      if (
+        (version !== observer.running.version || buildId !== observer.running.buildId) &&
+        !(await isInstallationHeldByUpdateRun(root))
+      ) {
         recordReplacement(observer, { version, buildId });
       }
     })
@@ -207,6 +210,32 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       observer.check = undefined;
     });
   return observer.check;
+}
+
+/**
+ * The update run owns the installation while it holds the install lease: it stops
+ * and restarts this Gateway itself. A self-restart into the new package during the
+ * run races its Doctor and Gateway start. A Gateway the run leaves stale restarts on
+ * a later check, after the run releases the lease.
+ */
+async function isInstallationHeldByUpdateRun(root: string): Promise<boolean> {
+  try {
+    const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-lease.js"),
+      import("../infra/update-install-root.js"),
+    ]);
+    const store = createManagedHandoffLeaseStore();
+    const held = store.read(resolveUpdateInstallRoot(root));
+    return (
+      held.kind === "current" &&
+      [held.lease.helper, held.lease.executor].some((holder) =>
+        store.isProcessIdentityCurrent(holder),
+      )
+    );
+  } catch {
+    // An unreadable lease cannot hold the installation; keep today's self-restart.
+    return false;
+  }
 }
 
 export function classifyGatewayStaleInstall(error: unknown): {
