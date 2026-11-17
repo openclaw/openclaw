@@ -51,6 +51,7 @@ it("keeps latest physical-attempt metadata on retry exhaustion", async ({ onTest
       acceptedSessionSpawns: physicalAttempt === 1 ? [accepted] : [],
       preflightRecovery: {
         route: "truncate_tool_results_only",
+        pressure: "overflow",
         source: "mid-turn",
         handled: true,
         truncatedCount: 0,
