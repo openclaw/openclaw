@@ -736,7 +736,28 @@ rolled a replaced core back.
   cohort, so the first update from them gains nothing: the new child still
   fails and the old parent rolls back. This is read from source, not run.
 
-Backup retirement after a verified activation and collection follow.
+#### What else can still fail a kept update
+
+An inventory of every step after the verification point, read at
+`ae31ea3be6d`, found most of them already warnings or owed steps. The rest
+fall into three groups.
+
+- **Fixed as a warning.** After a switch from a Git checkout to a package
+  install, an old `openclaw` wrapper that could not be removed failed the
+  update and rolled the package back unless a restart had been verified.
+  [#200579](https://github.com/openclaw/openclaw/pull/200579) keeps the
+  package and warns. It is not an owed step: the run record has no field for
+  the wrapper path, and a recheck over `PATH` both settles falsely and stays
+  owed forever, because the installer writes the same wrapper template in
+  other places. A wrapper owned by a system package still fails the update.
+- **Blocking on purpose.** Service revalidation and the second restart after
+  deferred plugin convergence, plugin cohort commit, Windows autostart
+  restore, and the terminal record and ledger finish protect authority,
+  readiness, cohort settlement, or state only this run can restore.
+- **Being measured.** Package backup retirement fails the command when a
+  backup link is retained or retirement throws, and a non-errno throw in Git
+  runtime backup or release collection does the same. These were read from
+  source and not reproduced through the command.
 
 ### B3: stop, publish, and rollback authority
 
