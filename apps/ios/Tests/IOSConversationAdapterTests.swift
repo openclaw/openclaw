@@ -52,6 +52,31 @@ struct IOSConversationAdapterTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func `embedded palette comes from native sidebar and follows app appearance`() async throws {
+        let fixture = try await ConversationFixture.start()
+        defer { fixture.stop() }
+        let palette = try #require(try await fixture.webView.evaluateJavaScript(
+            "window.__OPENCLAW_NATIVE_EMBED__.appearance") as? [String: [String: String]])
+        #expect(palette == OpenClawSidebarPalette.conversationTheme)
+        for (mode, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
+            let values = try #require(palette[mode])
+            #expect(values.count == 19)
+            #expect(values["background"] == (style == .dark ? "#000000ff" : "#fafafaff"))
+            #expect(values["accent"] == (style == .dark ? "#ff6b66ff" : "#b73833ff"))
+            fixture.webView.overrideUserInterfaceStyle = style
+            try await TestWait.state("embedded appearance follows native interface style") {
+                try await fixture.webView.evaluateJavaScript(
+                    "matchMedia('(prefers-color-scheme: light)').matches") as? Bool == (style == .light)
+            }
+        }
+        #expect(try await fixture.post("{type:'ready',surface:'conversation',capabilities:[]}"))
+        let replacement = try await fixture.reopen()
+        defer { replacement.stop() }
+        #expect(try await replacement.webView.evaluateJavaScript(
+            "window.__OPENCLAW_NATIVE_EMBED__.appearance") as? [String: [String: String]] == palette)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func `bridge adopts only current documents and monotonic state`() async throws {
         let fixture = try await ConversationFixture.start()
         defer { fixture.stop() }

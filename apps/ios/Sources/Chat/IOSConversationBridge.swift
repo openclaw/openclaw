@@ -34,9 +34,13 @@ final class IOSConversationBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     var hostScript: String? {
-        IOSDeviceSettingsBridge.originGatedScript(
+        guard let data = try? JSONSerialization.data(withJSONObject: OpenClawSidebarPalette.conversationTheme),
+              let appearance = String(data: data, encoding: .utf8) else { return nil }
+        return IOSDeviceSettingsBridge.originGatedScript(
             """
-            window.__OPENCLAW_NATIVE_EMBED__ = { platform: "ios", formFactor: "pad", surface: "conversation" };
+            window.__OPENCLAW_NATIVE_EMBED__ = {
+              platform: "ios", formFactor: "pad", surface: "conversation", appearance: \(appearance)
+            };
             window.__OPENCLAW_NATIVE_CONVERSATION__ = {
               contract: 1, features: ["session-facts-v1", "session-actions-v1"]
             };
