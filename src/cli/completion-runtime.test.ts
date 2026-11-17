@@ -66,6 +66,39 @@ const readProfile = (profilePath: string) => fs.readFile(profilePath, "utf8");
 const removeSelectedCompletion = (stateDir: string, assertCurrent = () => {}) =>
   removeCompletionRegistrations({ stateDirs: [stateDir], preservePaths: [], assertCurrent });
 
+literalIt.skipIf(process.platform === "win32").for([".bash_profile", ".bash_login", ".profile"])(
+  "preserves Bash login settings when installing completion in %s",
+  async (profile, { homeDir, stateDir }) => {
+    const profilePath = path.join(homeDir, profile);
+    const original = "export OPENCLAW_LOGIN_PROOF=preserved\n";
+    await fs.writeFile(profilePath, original);
+    await writeCompletionCache("bash", "complete -W 'status' openclaw\n");
+
+    await installCompletion("bash", true);
+    const installed = await fs.readFile(profilePath, "utf8");
+    const login = spawnSync(
+      "bash",
+      ["--login", "-c", 'printf "%s\\n" "$OPENCLAW_LOGIN_PROOF"; complete -p openclaw'],
+      { encoding: "utf8", env: { HOME: homeDir, PATH: process.env.PATH } },
+    );
+    expect(login).toMatchObject({ status: 0, stderr: "" });
+    expect(login.stdout).toBe("preserved\ncomplete -W 'status' openclaw\n");
+    await expect(isCompletionInstalled("bash")).resolves.toBe(true);
+    await installCompletion("bash", true);
+    expect(await fs.readFile(profilePath, "utf8")).toBe(installed);
+
+    if (profile === ".profile") {
+      const otherShell = spawnSync("sh", ["-c", '. "$HOME/.profile"'], {
+        encoding: "utf8",
+        env: { HOME: homeDir, PATH: process.env.PATH },
+      });
+      expect(otherShell).toMatchObject({ status: 0, stderr: "" });
+    }
+    await removeSelectedCompletion(stateDir);
+    expect((await fs.readFile(profilePath, "utf8")).trim()).toBe(original.trim());
+  },
+);
+
 it.skipIf(process.platform === "win32")(
   "escapes terminal controls in installation messages without changing profile paths",
   async ({ homeDir }) => {
@@ -277,10 +310,12 @@ it.skipIf(process.platform === "win32").for([false, true])(
   },
 );
 
-literalIt(
-  "replaces the current fish source after the literal state directory changes",
-  async ({ stateDir }) => {
-    const shell = "fish";
+literalIt.for(["fish", "bash"] as const)(
+  "replaces the current %s source after the literal state directory changes",
+  async (shell, { homeDir, stateDir }) => {
+    if (shell === "bash") {
+      await fs.writeFile(path.join(homeDir, ".profile"), "");
+    }
     const previousStateDir = tempDirs.make(
       `openclaw-completion-previous-${process.platform === "win32" ? "" : '"'}$state's ‘quoted’-`,
     );
