@@ -4143,7 +4143,6 @@
 ["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../../packages/terminal-core/src/note.js","450be5235770b4d05474698a4509b9b875cb392aa2e4fe326f659b4e3d5980dd",1]
 ["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../commands/backup-health.js","9fc0832c082d459110dbeff1be105bc79867175f153a68b8cb8000ac728c05f8",1]
 ["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../commands/doctor-state-integrity.js","d2419e0ee777c3592f4174e936eaade8dc66c04a4116dbc8f9a8792e0f07dcb0",1]
-["src/flows/doctor-health-contribution-runners.state.paths.test.ts","../state/openclaw-state-db.js","1f667e3385b075aa2b33fd00d27edb2dd6076e8f3527fe89514420b8fd339282",1]
 ["src/flows/doctor-health-contributions.availability.test.ts","./bundled-health-checks.js","d426d53f1183cadbdbc5077bd7ed3c53e79e7f5af97cef292c5b73d5ee30d72d",1]
 ["src/flows/doctor-health-contributions.test.ts","../../packages/terminal-core/src/note.js","c6d89a1729db8972b8ff3b9dae124554a7712ef7e1ded98f6bf42809f10805a0",1]
 ["src/flows/doctor-health-contributions.test.ts","../agents/agent-scope.js","f60c31fd4a77a8f689cc4e49956bfa8405400e006b02544aef86bb3075f1a155",1]
