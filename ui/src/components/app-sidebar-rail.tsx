@@ -223,7 +223,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__views">
-        <openclaw-tooltip prop:content={t("presence.usersTitle")}>
+        <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
           <button
             ref={[
               elementRef((element: HTMLButtonElement) => {
@@ -238,7 +238,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             type="button"
             class="sidebar-rail__button"
             data-navigation-view="online"
-            aria-label={t("presence.usersTitle")}
+            aria-label={t("presence.peopleTitle")}
             aria-pressed={peoplePressed() ? "true" : "false"}
             onClick={() => {
               // People is the Users section: Activity in the content, people in the sidebar.

@@ -92,7 +92,7 @@ export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <Show
         when={mobile()}
-        fallback={<span class="sidebar-panel-header__title">{t("presence.usersTitle")}</span>}
+        fallback={<span class="sidebar-panel-header__title">{t("presence.peopleTitle")}</span>}
       >
         <Picker
           id="sidebar-people-presence"

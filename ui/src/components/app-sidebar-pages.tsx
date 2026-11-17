@@ -6,6 +6,7 @@ import {
   serializeSidebarEntry,
   SIDEBAR_NAV_ROUTES,
   titleForRoute,
+  USERS_SECTION_PLUGIN_PAGES,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -56,7 +57,10 @@ export function SidebarPagesMenu(props: {
         ...zone().pluginTabs.keys(),
         ...props.host.pluginNavigation().map((entry) => entry.key),
       ]),
-    ].map((key) => serializeSidebarEntry({ type: "plugin", key })),
+    ]
+      // The Users section lists its plugin pages itself.
+      .filter((key) => !USERS_SECTION_PLUGIN_PAGES.has(key))
+      .map((key) => serializeSidebarEntry({ type: "plugin", key })),
   );
   const Entry = (entry: { key: string }) => {
     // Allocate once per entry; the rendered link owns its reactive fields.
