@@ -52,7 +52,6 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../../../state/openclaw-agent-db.js";
-import { ensureSessionPendingInputsSchema } from "../../../state/openclaw-agent-pending-inputs-schema.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   readCustodiedDrainedSqliteSource,
@@ -196,23 +195,6 @@ export async function scanDoctorSessionEntryRecords(
   if (!result.found) {
     throw new Error(`Session database unavailable during raw state inspection: ${result.reason}`);
   }
-}
-
-/** Normalize pending-input facts before startup or offline repair consumes accepted rows. */
-export async function prepareDoctorSessionPendingInputs(
-  scope: DoctorSessionScanScope,
-  assertCurrent: () => void,
-): Promise<void> {
-  const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" }));
-  await withOpenClawAgentDatabaseAsync(
-    options,
-    () =>
-      runOpenClawAgentWriteTransaction((database) => {
-        assertCurrent();
-        ensureSessionPendingInputsSchema(database.db);
-      }, options),
-    assertCurrent,
-  );
 }
 
 /** Startup normalizes legacy outcomes before canonical reads; clean stores stay read-only. */

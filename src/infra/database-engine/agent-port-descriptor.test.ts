@@ -64,11 +64,31 @@ it.each([37, 38])(
   },
 );
 
-it.each([39, 40, 41, 42])(
+it.each([39, 40, 41, 42, 43])(
   "keeps companion tables and deletion indexes at schema %s",
   async (version) => {
     const descriptor = await loadAgentPortDescriptor(version);
     const usage = "agent_tool_usage";
+    for (const column of ["end_cause", "origin_source_json"]) {
+      expect(descriptor.preData.includes(`"${column}"`)).toBe(version >= 43);
+      expect(descriptor.sqlite.includes(`${column} TEXT`)).toBe(version >= 43);
+      expect(
+        descriptor.tables
+          .find(({ name }) => name === "session_pending_inputs")!
+          .columns.some(({ name }) => name === column),
+      ).toBe(version >= 43);
+      expect(
+        descriptor.expectedCatalog.some(
+          (fact) =>
+            fact.table === "session_pending_inputs" &&
+            fact.kind === "column" &&
+            typeof fact.value === "object" &&
+            fact.value !== null &&
+            "name" in fact.value &&
+            fact.value.name === column,
+        ),
+      ).toBe(version >= 43);
+    }
     expect(descriptor.tables.some(({ name }) => name === usage)).toBe(version >= 42);
     expect(descriptor.expectedCatalog.some((fact) => fact.table === usage)).toBe(version >= 42);
     expect(descriptor.preData.includes(`CREATE TABLE "${usage}"`)).toBe(version >= 42);
@@ -150,11 +170,12 @@ it.each([21, currentVersion])(
   },
 );
 
-it("normalizes legacy user endings before port installs additive columns", async () => {
+it("migrates v42 user endings on the private port copy", async () => {
   const root = tempDirs.make("agent-port-legacy-endings-");
   const source = path.join(root, "source.sqlite");
   const copy = path.join(root, "private.sqlite");
   const descriptor = await loadAgentPortDescriptor();
+  const predecessor = await loadAgentPortDescriptor(42);
   const message = JSON.stringify({
     role: "user",
     content: "Stopped before upgrade",
@@ -162,10 +183,9 @@ it("normalizes legacy user endings before port installs additive columns", async
   });
   {
     using db = openNodeSqliteDatabase(source);
-    db.exec(`${descriptor.sqlite}
-      PRAGMA user_version = ${currentVersion};
-      INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
-      ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+    db.exec(`${predecessor.sqlite}
+      PRAGMA user_version = 42;
+      INSERT INTO schema_meta VALUES ('primary', 'agent', 42, 'main', NULL, 1, 1);
       INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
         VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
       INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
@@ -178,7 +198,7 @@ it("normalizes legacy user endings before port installs additive columns", async
   }
   const original = await fs.readFile(source);
   await fs.copyFile(source, copy);
-  await migrateDatabasePortSource(copy, descriptor, currentVersion, () => {});
+  await migrateDatabasePortSource(copy, descriptor, 42, () => {});
   using migrated = openNodeSqliteDatabase(copy);
   expect(
     migrated.prepare("SELECT end_cause, message_json FROM session_pending_inputs").get(),

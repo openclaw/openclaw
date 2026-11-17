@@ -15,6 +15,8 @@ import {
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -207,7 +209,7 @@ describe("Doctor canonical completion receipt repair", () => {
 });
 
 describe("Doctor canonical pending-input repair", () => {
-  it("preserves legacy user-stop retirement and message bytes across owner repair and restart", async () => {
+  it("preserves version 42 user-stop retirement and message bytes across owner repair and restart", async () => {
     await withStateDirEnv("doctor-legacy-stopped-input-", async ({ stateDir }) => {
       const f = fixture(stateDir);
       f.create();
@@ -224,14 +226,33 @@ describe("Doctor canonical pending-input repair", () => {
       });
       {
         using old = new DatabaseSync(filename);
-        old.exec("ALTER TABLE session_pending_inputs DROP COLUMN end_cause");
+        old.exec(`
+          ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+          ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+          PRAGMA user_version = 42;
+          UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+        `);
         old
           .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
           .run(legacyMessage, first.inputId);
       }
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "ops", env, pathname: filename },
+          maintenance,
+        ),
+      );
 
       expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
       await f.restart();
+      expect(f.database().db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(
+        f
+          .database()
+          .db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 43 });
       expect(
         f
           .database(true)

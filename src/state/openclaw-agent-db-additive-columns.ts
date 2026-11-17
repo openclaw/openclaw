@@ -34,7 +34,6 @@ export const FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS = [
   ...SESSION_OWNER_COLUMN_DEFINITIONS,
   LEGACY_ACP_MIGRATION_COLUMN_DEFINITION,
   CANONICAL_READY_COLUMN_DEFINITION,
-  { tableName: "session_pending_inputs", columnName: "end_cause", dataType: "TEXT" },
 ] as const satisfies readonly LazyAdditiveAgentColumnDefinition[];
 
 // Startup installs these on every existing table before exposing session readers.

@@ -25,6 +25,10 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
 import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
+import {
+  AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
+  withoutAgentPendingInputEndings,
+} from "./openclaw-agent-pending-input-endings-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
@@ -346,10 +350,14 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
           : targetVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION
             ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
             : OPENCLAW_AGENT_SCHEMA_SQL;
+  const pendingInputSchemaSql =
+    targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
+      ? withoutAgentPendingInputEndings(schemaSql)
+      : schemaSql;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
-      ? withoutAgentColdNavigation(schemaSql)
-      : schemaSql;
+      ? withoutAgentColdNavigation(pendingInputSchemaSql)
+      : pendingInputSchemaSql;
   const coldArchiveSchemaSql =
     targetVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
       ? withoutAgentColdArchiveChunks(navigationSchemaSql)

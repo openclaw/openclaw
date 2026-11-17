@@ -16,14 +16,18 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { migrateAgentPendingInputEndingsInTransaction } from "./openclaw-agent-pending-input-endings-schema.js";
 import {
   ensureSessionPendingInputsSchema,
   ensureSessionInputCompletionsSchema,
@@ -49,6 +53,14 @@ async function previousDatabase(filename: string) {
   fs.copyFileSync(filename, `${filename}.previous`);
   fs.renameSync(`${filename}.previous`, filename);
   return new DatabaseSync(filename);
+}
+async function migratePreviousDatabase(
+  options: { agentId: string; env: NodeJS.ProcessEnv },
+  pathname: string,
+) {
+  await withAgentDatabaseMaintenanceLease(options, (maintenance) =>
+    migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
+  );
 }
 async function stage(
   scope: Parameters<typeof stageSessionPendingInput>[0],
@@ -87,12 +99,22 @@ describe("pending input additive schema", () => {
     }
   });
 
-  it("backfills legacy user endings atomically when end_cause is first installed", () => {
-    using database = openNodeSqliteDatabase(":memory:");
-    database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-    database.exec(
-      "PRAGMA foreign_keys = OFF; ALTER TABLE session_pending_inputs DROP COLUMN end_cause",
-    );
+  it("migrates version 42 user endings atomically on schema admission without rewriting messages", async () => {
+    const options = fixture();
+    const scope = {
+      ...options,
+      sessionKey: "agent:main:test",
+      sessionId: "test",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const filename = openOpenClawAgentDatabase(options).path;
+    const database = await previousDatabase(filename);
+    database.exec(`
+      ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+      ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+      PRAGMA user_version = 42;
+      UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+    `);
     const messages = [
       { role: "user", content: "stopped", __openclaw: { pendingInputCancelledByUser: true } },
       { role: "user", content: "dismissed", display: false },
@@ -111,26 +133,67 @@ describe("pending input additive schema", () => {
     }
     expect(() =>
       runSqliteImmediateTransactionSync(database, () => {
-        ensureSessionPendingInputsSchema(database);
-        throw new Error("rollback first use");
+        migrateAgentPendingInputEndingsInTransaction(database);
+        throw new Error("rollback migration");
       }),
-    ).toThrow("rollback first use");
+    ).toThrow("rollback migration");
     expect(tableHasColumn(database, "session_pending_inputs", "end_cause")).toBe(false);
-    ensureSessionPendingInputsSchema(database);
+    expect(tableHasColumn(database, "session_pending_inputs", "origin_source_json")).toBe(false);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 42 });
+    expectRow(database, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
+      schema_version: 42,
+    });
     expect(
-      database
-        .prepare("SELECT message_json, end_cause FROM session_pending_inputs ORDER BY seq")
+      database.prepare("SELECT message_json FROM session_pending_inputs ORDER BY seq").all(),
+    ).toEqual(messages.map((message_json) => ({ message_json })));
+    database.close();
+    await migratePreviousDatabase(options, filename);
+    const admitted = openOpenClawAgentDatabase(options).db;
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
+      schema_version: 43,
+    });
+    expect(
+      admitted
+        .prepare(
+          "SELECT message_json, end_cause, origin_source_json FROM session_pending_inputs ORDER BY seq",
+        )
         .all(),
     ).toEqual(
       messages.map((message_json, index) => ({
         message_json,
         end_cause: index < 2 ? "user-stop" : null,
+        origin_source_json: null,
       })),
     );
-    admitSqliteSchema(database);
-    const exec = vi.spyOn(database, "exec");
-    ensureSessionPendingInputsSchema(database);
-    expect(exec).not.toHaveBeenCalled();
+    admitSqliteSchema(requireNativeSqliteDatabase(admitted));
+    const exec = vi.spyOn(admitted, "exec");
+    try {
+      ensureSessionPendingInputsSchema(admitted);
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  it("admits a version 42 store without creating its absent optional pending-input table", async () => {
+    const options = fixture();
+    const filename = openOpenClawAgentDatabase(options).path;
+    {
+      using old = await previousDatabase(filename);
+      old.exec(`
+        DROP TABLE session_pending_inputs;
+        PRAGMA user_version = 42;
+        UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+      `);
+    }
+    await migratePreviousDatabase(options, filename);
+    const admitted = openOpenClawAgentDatabase(options).db;
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
+      schema_version: 43,
+    });
+    expect(tableExists(admitted, "session_pending_inputs")).toBe(false);
   });
 
   beforeEach(() => {
@@ -297,41 +360,12 @@ describe("pending input additive schema", () => {
       }
     },
   );
-  it.each(["end_cause"] as const)(
-    "reads absent %s without installing it until the pending-input writer runs",
-    async (column) => {
-      const options = fixture();
-      const scope = {
-        ...options,
-        sessionKey: "agent:main:optional-column",
-        sessionId: "optional-column",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      await stage(scope, "old-input", "Retain accepted bytes");
-      const filename = openOpenClawAgentDatabase(options).path;
-      const old = await previousDatabase(filename);
-      old.exec(`ALTER TABLE session_pending_inputs DROP COLUMN ${column}`);
-      const version = old.prepare("PRAGMA user_version").get();
-      old.close();
-      expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
-      await closeAgents();
-      {
-        using read = new DatabaseSync(filename, { readOnly: true });
-        expect(tableHasColumn(read, "session_pending_inputs", column)).toBe(false);
-      }
-      await stage(scope, "new-input", "Install only through the writer");
-      await closeAgents();
-      using written = new DatabaseSync(filename, { readOnly: true });
-      expect(tableHasColumn(written, "session_pending_inputs", column)).toBe(true);
-      expect(written.prepare("PRAGMA user_version").get()).toEqual(version);
-    },
-  );
 
   it.each([
     { marker: { __openclaw: { pendingInputCancelledByUser: true } }, retired: true },
     { marker: { display: false }, retired: true },
     { marker: {}, retired: false },
-  ])("uses canonical retirement for pre-end_cause input: %j", async ({ marker, retired }) => {
+  ])("migrates retirement before reclamation: %j", async ({ marker, retired }) => {
     const options = fixture();
     const scope = {
       ...options,
@@ -362,11 +396,17 @@ describe("pending input additive schema", () => {
     const legacyMessage = JSON.stringify({ ...sourceTurn, ...marker });
     {
       using old = await previousDatabase(filename);
-      old.exec("ALTER TABLE session_pending_inputs DROP COLUMN end_cause");
+      old.exec(`
+        ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+        ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+        PRAGMA user_version = 42;
+        UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+      `);
       old
         .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
         .run(legacyMessage, first.inputId);
     }
+    await migratePreviousDatabase(options, filename);
     await runSessionStartupMigration({
       cfg: { session: { store: filename } },
       env: options.env,

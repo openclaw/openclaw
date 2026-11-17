@@ -42,27 +42,15 @@ export function hasSessionPendingInputsSchema(db: EngineConnection): boolean {
   return tableExists(db, SESSION_PENDING_INPUTS_TABLE);
 }
 
-/** Install canonical first-use storage and migrate older same-version tables. */
+/** Install canonical first-use storage and its optional consumption tracking column. */
 export function ensureSessionPendingInputsSchema(db: EngineConnection): void {
   if (isPostgresSqlConnection(db)) {
     return;
   }
   ensurePendingTable(db);
-  if (
-    !hasPendingInputConsumptionColumn(db) ||
-    !tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause")
-  ) {
+  if (!hasPendingInputConsumptionColumn(db)) {
     runSqliteImmediateTransactionSync(db, () => {
       ensurePendingInputConsumptionColumn(db);
-      if (ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause TEXT")) {
-        // Pre-end_cause pending messages are plain JSON; normalize their user retirement facts once.
-        // sqlite-allow-raw -- Same-version additive migration preserves the accepted message bytes.
-        db.exec(`UPDATE session_pending_inputs SET end_cause = 'user-stop'
-          WHERE state = 'cancelled' AND end_cause IS NULL AND (
-            json_type(message_json, '$.__openclaw.pendingInputCancelledByUser') = 'true'
-            OR json_type(message_json, '$.display') = 'false'
-          )`);
-      }
     });
   }
 }

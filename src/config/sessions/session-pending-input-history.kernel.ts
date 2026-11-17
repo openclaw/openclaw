@@ -13,7 +13,6 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
-import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PendingInputHistoryQuery,
@@ -133,13 +132,10 @@ function readPendingInputPageInDatabase(
         "input.lifecycle_generation",
         "input.state",
         "input.accepted_at",
+        "input.end_cause",
       ])
       .select((eb) => [
         (hasConsumption ? eb.ref("input.consumed_event_id") : eb.val(null)).as("consumed_event_id"),
-        (tableHasColumn(database.db, "session_pending_inputs", "end_cause")
-          ? eb.ref("input.end_cause")
-          : eb.val(null)
-        ).as("end_cause"),
         eb
           .case()
           .when(
