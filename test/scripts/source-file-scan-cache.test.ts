@@ -7,6 +7,7 @@ import {
   mapSourceFileContents,
 } from "../../scripts/lib/source-file-scan-cache.mts";
 import { createDeferred } from "../helpers/promise.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 let pendingScan: ReturnType<typeof collectSourceFileContents> | undefined;
@@ -30,7 +31,7 @@ afterEach(async () => {
   // Native test timeout releases held reads; join them before removing their files.
   await Promise.allSettled(pendingScan ? [pendingScan] : []);
   pendingScan = undefined;
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  cleanupTempDirs(tempDirs);
 });
 
 it("bounds reads, refills the pool, and returns sorted content despite a held first read", async ({

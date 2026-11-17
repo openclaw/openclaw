@@ -1383,6 +1383,26 @@ describe("FRV continuation preflight", () => {
 });
 
 describe("FRV same-parent recovery", () => {
+  it("keeps raw failure while classifying only the plan-bound candidate exception as passed", async () => {
+    const selected = child("normalCi", "101");
+    const client = {
+      repository: REPOSITORY,
+      getRun: async () => runFor(selected, 1, "failure"),
+      getAttemptJobs: async () => [job("macos-swift (tests)", "failure")],
+    };
+    const accepted = {
+      ...plan([selected]),
+      targetVersion: "2026.11.4",
+      targetSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93",
+    };
+    expect((await inspectContinuation(accepted, client)).passed).toEqual([
+      expect.objectContaining({ conclusion: "failure", key: "normalCi" }),
+    ]);
+    expect(
+      (await inspectContinuation({ ...accepted, targetSha: TARGET_SHA }, client)).failed,
+    ).toHaveLength(1);
+  });
+
   it("reports missing selected children without reading nonexistent runs", async () => {
     const selected = child("normalCi", "101");
     const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));

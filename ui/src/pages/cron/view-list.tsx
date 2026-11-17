@@ -480,7 +480,7 @@ function JobRows(props: CronProps & { rows: CronJob[] }) {
         busy={busy()}
         connected={connected()}
         toggleSavingJobId={props.toggleSavingJobId}
-        onRun={(job, mode) => props.onRun(job, mode)}
+        onRun={(job) => props.onRun(job)}
         onToggle={(job, enabled) => props.onToggle(job, enabled)}
         onClone={(job) => props.onClone(job)}
         onRemove={(job) => props.onRemove(job)}
@@ -653,7 +653,7 @@ function JobRow(
             tooltip={t("cron.actions.runNow")}
             icon={sessionIcon("play", 12, ROW_GLYPH_STROKE)}
             disabled={props.busy || !props.connected}
-            onClick={() => props.onRun(props.job, "force")}
+            onClick={() => props.onRun(props.job)}
           />
           <EnabledSwitch {...props} job={props.job} compact />
           <JobMenu

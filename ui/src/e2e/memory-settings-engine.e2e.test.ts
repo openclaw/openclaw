@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -56,6 +57,64 @@ const memoryPlugins = [
 ];
 
 suite.define(() => {
+  it("does not ask to reconnect while the memory catalog is still loading", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        colorScheme: "dark",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 1000 },
+      },
+      async ({ page }) => {
+        const catalog = { plugins: memoryPlugins, diagnostics: [], mutationAllowed: true };
+        const gateway = await installMockGateway(page, {
+          heldMethods: ["plugins.list"],
+          methodResponses: {
+            "config.get": configResponse("memory-lancedb", "catalog-readiness"),
+            "config.schema": configSchema(
+              objectSchema("", {
+                memory: objectSchema("", {
+                  search: objectSchema("", {
+                    enabled: { type: "boolean", title: "Enable Memory Search", default: true },
+                  }),
+                }),
+              }),
+              { "memory.search.enabled": { advanced: false } },
+            ),
+            "plugins.list": catalog,
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/memory/settings");
+        await gateway.waitForRequest("plugins.list");
+        const surface = page.locator("openclaw-memory-settings");
+        await surface.getByText("memory-lancedb", { exact: true }).waitFor();
+        const advice = surface.getByText("Reconnect to change the memory engine.", { exact: true });
+        const prematureAdvice = await advice.count();
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            surface.locator(".settings-section").first(),
+            [surface.getByText("memory-lancedb", { exact: true })],
+            { animations: "disabled" },
+          );
+          writeFileSync(path.join(uiProofArtifactDir, "catalog-pending.png"), frame.png);
+        }
+        await gateway.resolveDeferred("plugins.list", catalog);
+        const engine = surface.getByRole("combobox", { name: "Memory engine", exact: true });
+        await expect.poll(() => engine.inputValue()).toBe("memory-lancedb");
+        expect(await advice.count()).toBe(0);
+        await gateway.setOnline(false);
+        await advice.waitFor();
+        expect(await engine.count()).toBe(0);
+        await gateway.setOnline(true);
+        await expect.poll(() => engine.inputValue()).toBe("memory-lancedb");
+        expect(await advice.count()).toBe(0);
+        expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+        expect(prematureAdvice, "An in-flight catalog read does not require reconnecting").toBe(0);
+      },
+    );
+  });
+
   it.each(["success", "failure"] as const)(
     "keeps engine focus and blocks repeated selection until save %s",
     async (outcome) => {

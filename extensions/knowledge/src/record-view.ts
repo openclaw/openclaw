@@ -341,7 +341,7 @@ export async function showDetail(
         el("p", candidate.basis),
         el(
           "p",
-          `Both records stay separate unless ${agentName() ?? "your agent"} finds evidence they’re the same person.`,
+          `Both records stay separate unless ${agentName() ?? "your agent"} finds evidence they refer to the same subject.`,
           "knowledge-muted",
         ),
         button(

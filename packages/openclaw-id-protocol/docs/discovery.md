@@ -169,25 +169,69 @@ Binding grants nothing at any claw: admission comes from the Gateway's membershi
 Store-and-forward of messages for one claw. Recipients: `gateway`, `owners` (every owner
 device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload kinds:
 
-| kind                | Sent by                   | To          | Reader's check                                                                            |
-| ------------------- | ------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
-| `invite_redemption` | invitee                   | gateway     | `InviteRedemption` self-signature + invite proof; result is only a **pending** redemption |
-| `root_statement`    | a device holding the kit  | gateway     | R-signed statements under the pinned root                                                 |
-| `revocation`        | owner device              | gateway     | signer must be R or a current owner device of the claw                                    |
-| `enrollment`        | new device / owner device | fp / owners | SAS protocol (below)                                                                      |
-| `notice`            | Gateway                   | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
+| kind                     | Sent by                          | To          | Reader's check                                                                            |
+| ------------------------ | -------------------------------- | ----------- | ----------------------------------------------------------------------------------------- |
+| `invite_redemption`      | invitee                          | gateway     | `InviteRedemption` self-signature + invite proof; result is only a **pending** redemption |
+| `root_statement`         | a device holding the kit         | gateway     | R-signed statements under the pinned root                                                 |
+| `revocation`             | owner device                     | gateway     | signer must be R or a current owner device of the claw                                    |
+| `enrollment`             | new device / owner device        | fp / owners | SAS protocol (below)                                                                      |
+| `notice`                 | Gateway                          | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
+| `member_browser_request` | bound device of a current member | gateway     | current local membership; display-only Inbox metadata, never admission                    |
+| `member_recovery`        | signed-in member with kit        | gateway     | current recovery-only key, same account, add_member_device only                           |
 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
 the Gateway's current seq in decimal (`parseSeqConflictRef`). Discovery delivers it only to a
-device of the claw's owner account, in the control lane. Every other event goes to `owners`.
+device of the claw's owner account, in the control lane. The Gateway sends every other event
+through its owner-notification path.
+
+There is no per-redemption success/refusal response to the redeeming browser. A mailbox ACK
+only settles delivery; `redemption_resolved` carries an invite reference, not an outcome.
+Although the generic notice recipient validator permits a device fingerprint for that hint,
+it does not define a redeeming-browser outcome contract. An approved same-account/key replay
+is therefore accepted silently; a refused reused invite is diagnosed in Gateway logs. Clients
+must confirm admission from the current membership snapshot rather than treat mailbox
+submission as a fresh pending request.
 
 The Gateway accepts only `GATEWAY_MAILBOX_KINDS` (`invite_redemption`, `root_statement`,
-`node_redemption`, `revocation`) from the mailbox. **A device-signed MembershipChange that arrives through the
-mailbox is refused**, so an approval can never be forged or replayed by Discovery.
+`node_redemption`, `member_recovery`, `revocation`, `member_browser_request`) from the mailbox. A browsing-device-signed
+MembershipChange through the mailbox is refused. Only a current recovery-only member key
+may add its own account's browser through `member_recovery`; the Gateway checks signature,
+current key listing, claw, target and seq. Discovery checks the payload shape, signed-in account
+and current relationship for routing only. This never admits the recovery key to the relay.
 
 Limits: payload <= 64 KiB, TTL 7 days, long-poll `wait` <= 30 s, rate limits per claw, per
 account and per source address (`rate_limited` with `retry_after`).
+
+#### Member browser Inbox hint (v1-draft)
+
+`member_browser_request` has exactly `kind`, `request_id` (16 random bytes, lowercase hex),
+`action` (`request` or `cancel`), `member_account_id` (1–256 characters), `label`
+(1–256 characters), and `expires_at` (integer Unix seconds). It contains no D/W keys,
+certificates or admission data. For `request`, Discovery accepts only a bound device of that same
+current member account, only to `gateway`; owners and nonmembers cannot send requests. The existing
+per-account/control-lane mailbox limits apply. A bound **current owner device** may send
+`cancel` for a current member, but never `request`. Account ownership alone is insufficient:
+Discovery checks its current owner-device mirror or the existing owner-certificate path.
+Expiry must be in the next 1800 seconds
+(`MEMBER_BROWSER_REQUEST_TTL_SECONDS`), using Discovery's clock.
+
+The Gateway independently checks its current membership, rejects future `received_at`,
+and requires expiry after its own current time and at most `received_at + 1800`. One live
+notice per account is kept in local claw metadata, with at most three accepted requests
+per rolling 1800 seconds. Replacements and cancellations do not refund that budget. Exact
+request-ID receipts last for that local window, preventing a canceled or replaced request
+from becoming live again. Approving a new member device retires that account's notice while
+preserving its rate/replay receipts. Removed accounts lose their notice and receipts; expired notices
+are never projected. Name and email come from the Gateway's canonical member profile, not
+mailbox sender claims. Label and bounded location are untrusted display hints.
+
+Only the existing owner-authorized People view exposes the notice. It changes neither the
+membership sequence nor any key or role, and creates no profile. Approval and denial still
+use the direct, authenticated owner signing flow; clients send a matching `cancel` after
+either terminal result (or explicit cancellation) to retire this display hint; an owner's
+matching cancel retires denial without waiting for member confirmation or polling. Mailbox
+acceptance is not proof that the Gateway displayed it or approved a browser.
 
 Enrollment `data` per step (spec 6.1; messages are relayed verbatim):
 

@@ -103,6 +103,20 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
         }
     }
 
+    /// POST /v1/join-tickets: the claw id for an invite link's hostname. Discovery answers any signed-in
+    /// account here, before it belongs to the claw; the one-minute ticket it also issues is for the
+    /// loader's origin and is not used.
+    func joinTicketClawID(_ session: OpenClawIDDiscoverySession, hostname: String) async throws -> String {
+        struct Response: Decodable { let claw_id: String }
+        let body = OpenClawIDCanonicalJSON.object(["hostname": .string(hostname)]).encoded
+        let data = try await self.call("POST", "/v1/join-tickets", body: body, bearer: session.token)
+        let clawID = try Self.decode(Response.self, data).claw_id
+        guard OpenClawIDNodeEnrollmentLink.matches(clawID, "^[0-9a-f]{32}$") else {
+            throw OpenClawIDNodeEnrollmentError.malformed
+        }
+        return clawID
+    }
+
     /// The claw's descriptor and snapshot in the `{ descriptor, snapshot }` shape the verifier reads.
     func descriptorAndSnapshot(_ session: OpenClawIDDiscoverySession, clawID: String) async throws -> Data {
         let descriptor = try await OpenClawIDCanonicalJSON.parse(
@@ -205,7 +219,7 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
         let response = try await self.http.send(request)
         try Task.checkCancellation()
         guard (200...299).contains(response.status) else {
-            throw OpenClawIDDiscoveryAccountError(status: response.status, code: Self.errorCode(response.body))
+            throw OpenClawIDNodeEnrollmentError.discoveryRejected(response.status)
         }
         return response.body
     }
@@ -213,18 +227,4 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
     private static func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         do { return try JSONDecoder().decode(type, from: data) } catch { throw OpenClawIDNodeEnrollmentError.malformed }
     }
-
-    /// Discovery's error `code` only; the message is never surfaced.
-    private static func errorCode(_ data: Data) -> String? {
-        struct Failure: Decodable { struct Details: Decodable { let code: String }
-            let error: Details
-        }
-        return try? JSONDecoder().decode(Failure.self, from: data).error.code
-    }
-}
-
-/// A refused Discovery call: HTTP status and the protocol's error code, never remote text.
-public struct OpenClawIDDiscoveryAccountError: Error, Sendable, Equatable {
-    public let status: Int
-    public let code: String?
 }

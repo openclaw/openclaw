@@ -433,6 +433,7 @@ repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
+- If `openclaw` cannot start after an update was interrupted on an `install-cli.sh` prefix or the durable service copy, and `lib/node_modules/openclaw` is missing, rename the leftover `lib/node_modules/.openclaw.release-link-*` link onto `lib/node_modules/openclaw`. It names the unchanged previous release. See [release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).

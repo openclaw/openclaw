@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState as withState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -151,46 +152,51 @@ it("refuses a worker-leased effect after expiry before the host expiry callback 
   });
 });
 
-it("drains an accepted callback and releases its lease during canonical close", async () => {
-  await withState({ label: "async-lease-canonical-close" }, async (state) => {
-    const entered = createDeferredCore<OpenClawStateAsyncLeaseContext>();
-    const finish = createDeferredCore();
-    const operation = withLease(
-      { ...leaseOptions, key: "close" },
-      captureContext({ env: state.env }),
-      async (lease) => {
-        entered.resolve(lease);
-        await finish.promise;
-      },
-    );
-    const outcome = operation.catch((error: unknown) => error);
-    const lease = await awaitGateBeforeSettlement(
-      entered.promise,
-      operation,
-      "Lease completed before callback entry",
-    );
-    const closed = vi.fn();
-    const closing = closeDatabase().then(closed);
-    try {
-      if (!lease.signal.aborted) {
-        await once(lease.signal, "abort");
+it.each(["database", "singletons"])(
+  "drains an accepted callback and releases its lease during %s close",
+  async (owner) => {
+    await withState({ label: "async-lease-canonical-close" }, async (state) => {
+      const entered = createDeferredCore<OpenClawStateAsyncLeaseContext>();
+      const finish = createDeferredCore();
+      const operation = withLease(
+        { ...leaseOptions, key: "close" },
+        captureContext({ env: state.env }),
+        async (lease) => {
+          entered.resolve(lease);
+          await finish.promise;
+        },
+      );
+      const outcome = operation.catch((error: unknown) => error);
+      const lease = await awaitGateBeforeSettlement(
+        entered.promise,
+        operation,
+        "Lease completed before callback entry",
+      );
+      const closed = vi.fn();
+      const closing = (
+        owner === "database" ? closeDatabase() : drainGlobalSingletonLifecycleState("shared-state")
+      ).then(closed);
+      try {
+        if (!lease.signal.aborted) {
+          await once(lease.signal, "abort");
+        }
+        expect(closed).not.toHaveBeenCalled();
+        await expect(lease.renew()).rejects.toMatchObject({
+          code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+        });
+        expect(() => lease.assertCurrent()).toThrow();
+        finish.resolve();
+        expect(await outcome).toBeInstanceOf(Error);
+        await closing;
+        expectReleased(openDatabase({ env: state.env }), "close");
+      } finally {
+        finish.resolve();
+        await outcome;
+        await closing;
       }
-      expect(closed).not.toHaveBeenCalled();
-      await expect(lease.renew()).rejects.toMatchObject({
-        code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-      });
-      expect(() => lease.assertCurrent()).toThrow();
-      finish.resolve();
-      expect(await outcome).toBeInstanceOf(Error);
-      await closing;
-      expectReleased(openDatabase({ env: state.env }), "close");
-    } finally {
-      finish.resolve();
-      await outcome;
-      await closing;
-    }
-  });
-});
+    });
+  },
+);
 
 it.each([
   { heartbeat: undefined, leaseMs: 30_000 },

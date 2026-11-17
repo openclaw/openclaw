@@ -149,7 +149,7 @@ function DetailHeader(
                 class="btn btn--sm"
                 data-test-id="cron-run-now"
                 disabled={props.busy || !props.connected}
-                onClick={() => props.onRun(job, "force")}
+                onClick={() => props.onRun(job)}
               >
                 <Icon name="play" /> {t("cron.actions.runNow")}
               </button>

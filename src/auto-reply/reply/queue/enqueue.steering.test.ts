@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -140,6 +141,31 @@ it("rechecks channel execution authority after waiting for native settlement", a
   await rejected;
   await settleSource(second.controllerInput!);
   expect(second.controllerInput?.phase).toBe("consumed");
+});
+
+it("queues an unaccepted steer when its authority check is temporarily unavailable", async () => {
+  const [first, second] = [source("first"), source("second")];
+  let unavailable = false;
+  second.operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "fixture",
+    scopes: ["operator.write"],
+    assertCurrent() {
+      if (unavailable) {
+        unavailable = false;
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+    },
+  });
+  const { delivered, drained } = recordDelivery(1);
+  const firstReservation = await queue.admit(first);
+  const secondAdmission = queue.reserve(second).admit();
+  const rejected = expect(secondAdmission).rejects.toThrow(GatewayOperatorAccessUnavailableError);
+  unavailable = true;
+  firstReservation.consume("consumed");
+  await rejected;
+  expect(second.controllerInput?.abortSignal.aborted).toBe(false);
+  await drained;
+  expect(delivered).toEqual(["second"]);
 });
 
 it.each(["accepted", "rejected"] as const)(

@@ -171,8 +171,6 @@ it.for(["active", "revoked", "non-owner"] as const)(
                   assert(tool);
                   taint.observe({
                     toolName: "web_fetch",
-                    argsHash: "fixture-github-request",
-                    resultHash: "fixture-github-response",
                     resultContentSource: "network",
                   });
                   const pending = tool.execute("assign-fixture-role", {

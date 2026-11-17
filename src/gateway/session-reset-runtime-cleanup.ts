@@ -6,11 +6,14 @@ import {
   clearSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
   SessionResetCleanupError,
+  stopSessionResetProcesses,
   stopSessionResetSubagents,
 } from "../auto-reply/reply/session-reset-cleanup.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
+import { clearDiagnosticSessionActivity } from "../logging/diagnostic-run-activity-state.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
@@ -21,6 +24,8 @@ export async function ensureSessionRuntimeCleanup(params: {
   target: GatewaySessionStoreTarget;
   sessionId?: string;
   sessionLifecycleRevision?: string;
+  /** Why the chat's work stops; a reset unless the chat is deleted. */
+  cause?: "deleted";
   assertCurrent?: () => void;
 }) {
   let cleanup: Awaited<ReturnType<typeof prepareSessionResetCleanupGuard>>;
@@ -67,6 +72,7 @@ export async function ensureSessionRuntimeCleanup(params: {
       agentId: params.target.agentId,
       assertCurrent,
     });
+    await stopSessionResetProcesses({ scopeKeys: [...queueKeys, params.key], assertCurrent });
   } catch (error) {
     if (error instanceof SessionResetCleanupError) {
       return errorShape(ErrorCodes.UNAVAILABLE, error.message);
@@ -81,6 +87,7 @@ export async function ensureSessionRuntimeCleanup(params: {
   // output or hide a background process whose owner has not confirmed exit.
   clearFinishedSessionsForScopes([...queueKeys, params.key]);
   clearSessionResetRuntimeState(queueKeys, {
+    cause: params.cause ?? "reset",
     controllerTarget: captureSessionTarget({
       storeScope: params.target.storePath,
       sessionKey: params.target.canonicalKey,
@@ -122,7 +129,9 @@ export async function ensureSessionRuntimeCleanup(params: {
       );
     },
   });
+  await waitForDiagnosticEventsDrained();
   assertCurrent();
+  clearDiagnosticSessionActivity(sessionId);
   cleanupProviderResources();
   await closeTrackedBrowserTabs();
   return undefined;

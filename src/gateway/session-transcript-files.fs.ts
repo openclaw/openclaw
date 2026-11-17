@@ -13,8 +13,7 @@ import { extractGeneratedTranscriptSessionId } from "../config/sessions/generate
 import {
   resolveSessionArtifactDirectory,
   resolveSessionFilePathCore,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptPathInDir,
+  resolveSessionFilePathCoreAsync,
 } from "../config/sessions/paths.js";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -39,6 +38,46 @@ const resetArchiveDiscoveryCache = new Map<
   }
 >();
 
+type TranscriptCandidate =
+  | string
+  | { sessionsDir?: string; agentId?: string; sessionFile?: string };
+
+function planSessionTranscriptCandidates(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): TranscriptCandidate[] {
+  const candidates: TranscriptCandidate[] = [];
+  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
+  if (storePath) {
+    const sessionsDir = resolveSessionArtifactDirectory(storePath);
+    if (sessionFile && !staleSessionFile) {
+      candidates.push({ sessionsDir, agentId, sessionFile });
+    }
+    candidates.push({ sessionsDir });
+    if (sessionFile && staleSessionFile) {
+      candidates.push({ sessionsDir, agentId, sessionFile });
+    }
+  } else if (sessionFile) {
+    if (agentId) {
+      if (!staleSessionFile) {
+        candidates.push({ agentId, sessionFile });
+      }
+    } else if (sessionFile.trim()) {
+      candidates.push(path.resolve(sessionFile.trim()));
+    }
+  }
+  if (agentId) {
+    candidates.push({ agentId });
+    if (sessionFile && staleSessionFile) {
+      candidates.push({ agentId, sessionFile });
+    }
+  }
+  return candidates;
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -46,49 +85,48 @@ export function resolveSessionTranscriptCandidates(
   agentId?: string,
 ): string[] {
   const candidates: string[] = [];
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  const staleSessionFile = Boolean(transcriptSessionId && transcriptSessionId !== sessionId);
-  const pushCandidate = (resolve: () => string): void => {
+  for (const candidate of planSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  )) {
     try {
-      candidates.push(resolve());
+      candidates.push(
+        typeof candidate === "string"
+          ? candidate
+          : resolveSessionFilePathCore(sessionId, candidate, candidate),
+      );
     } catch {
       // Ignore invalid paths/IDs and keep scanning other safe candidates.
     }
-  };
+  }
+  return uniqueStrings(candidates);
+}
 
-  if (storePath) {
-    const sessionsDir = resolveSessionArtifactDirectory(storePath);
-    if (sessionFile && !staleSessionFile) {
-      pushCandidate(() =>
-        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
+export async function resolveSessionTranscriptCandidatesAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string[]> {
+  const candidates: string[] = [];
+  for (const candidate of planSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  )) {
+    try {
+      candidates.push(
+        typeof candidate === "string"
+          ? candidate
+          : await resolveSessionFilePathCoreAsync(sessionId, candidate, candidate),
       );
-    }
-    pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
-    if (sessionFile && staleSessionFile) {
-      pushCandidate(() =>
-        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
-      );
-    }
-  } else if (sessionFile) {
-    if (agentId) {
-      if (!staleSessionFile) {
-        pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
-      }
-    } else {
-      const trimmed = sessionFile.trim();
-      if (trimmed) {
-        candidates.push(path.resolve(trimmed));
-      }
+    } catch {
+      // Ignore invalid paths/IDs and keep scanning other safe candidates.
     }
   }
-
-  if (agentId) {
-    pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
-    if (sessionFile && staleSessionFile) {
-      pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
-    }
-  }
-
   return uniqueStrings(candidates);
 }
 

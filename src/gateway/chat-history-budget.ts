@@ -19,7 +19,7 @@ export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MES
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
-  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+  "[chat.history unavailable: chat history too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
 
 export function createChatHistoryActivityProjection(

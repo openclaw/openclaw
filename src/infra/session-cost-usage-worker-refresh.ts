@@ -21,19 +21,22 @@ import {
   isSessionTranscriptLeafControl,
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
-import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
-  dropInheritedTranscriptEvents,
+  selectBilledUsageEntries,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
 import { parseUsageCostTranscriptRecord } from "./session-cost-usage-pricing.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { createUsageRollupScan } from "./session-cost-usage-rollup-scan.js";
 import type { UsageCostWorkerDatabase } from "./session-cost-usage-worker.types.js";
-import type { ParsedTranscriptEntry, UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+import type {
+  ParsedTranscriptEntry,
+  UsageCostTranscriptFile,
+  UsageRollupTiming,
+} from "./session-cost-usage.types.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
@@ -544,14 +547,18 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     // A rewind or side branch needs the prefix, but the suffix is already decoded.
     records = [...(await readRange(-1, afterSeq)), ...records];
   }
-  // Appended rows follow any inherited history, so only full scans drop it.
-  const selected = appendOnly
-    ? records.filter(isCanonicalSessionTranscriptEntry)
-    : dropInheritedTranscriptEvents(records, selectVisibleTranscriptEvents(records));
   const scan = createUsageRollupScan({ ...params, appendOnly });
-  await scan.addEntries(
-    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : [])),
-  );
+  // Appended rows follow any inherited history, so only full scans drop it. An
+  // appended tail is already the active branch and continues the stored cursor;
+  // a full scan resolves billing and timing through canonical navigation.
+  const billed: { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } = appendOnly
+    ? {
+        entries: records.flatMap((record) =>
+          isCanonicalSessionTranscriptEntry(record) && record.usageEntry ? [record.usageEntry] : [],
+        ),
+      }
+    : selectBilledUsageEntries(records);
+  await scan.addEntries(billed.entries, billed.timing);
   const visibleLeafId = appendOnly
     ? incremental?.visibleLeafId
     : (scanSessionTranscriptTree(records).leafId ?? undefined);

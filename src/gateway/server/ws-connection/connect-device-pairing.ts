@@ -322,6 +322,16 @@ export async function authorizeGatewayConnectDevice(
             isCurrent: isConnectAuthorizationCurrent,
           });
         } else if (operatorApprovalScopes !== null && plan.operatorApprovalKind) {
+          if (authResult.openclawId) {
+            // Persist attribution before the grant: a failed binding must not leave
+            // a tokenless native approval usable as local authority on retry.
+            // If approval later fails, any existing same-key grant stays bound.
+            await recordDeviceTokenPeer({
+              deviceId: device.id,
+              role,
+              peerKey: authResult.openclawId.peerKey,
+            });
+          }
           approved = await approveDevicePairing(pairing.request.requestId, {
             callerScopes: operatorApprovalScopes,
             accessMetadata: clientAccessMetadata,
@@ -574,7 +584,7 @@ export async function authorizeGatewayConnectDevice(
     if (paired && !isPaired && state.remoteIngressPrincipal) {
       failPairingHandshake({
         message:
-          "Remote Control UI device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
+          "Remote web app device key does not match the paired device; remove the stale device in Devices and reconnect with a fresh browser identity.",
       });
       return undefined;
     }

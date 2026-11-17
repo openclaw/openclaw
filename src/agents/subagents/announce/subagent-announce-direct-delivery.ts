@@ -1,7 +1,10 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
+import { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound/best-effort-delivery.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
@@ -21,7 +24,6 @@ import {
   isEmbeddedAgentRunHandleActive,
   resolveEmbeddedRunAbandonment,
 } from "../../embedded-agent-runner/runs.js";
-import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -42,18 +44,14 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
+  classifyAnnounceDeliveryError,
   isIncompleteAnnounceAgentResultError,
-  isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
   SourceOwnerChangedError,
-  summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  getSubagentAnnounceRuntimeConfig,
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
-  resolveExternalBestEffortDeliveryTarget,
-  resolveQueueSettings,
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
@@ -73,7 +71,6 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
     path: "none",
     reason: "completion_handoff_pending",
     terminal: true,
-    disposition: "intentional_non_delivery",
   };
 }
 
@@ -93,9 +90,16 @@ async function sendSubagentAnnounceDirectlyBound(
   params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
 ): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
-    return { delivered: false, path: "none" };
+    return classifyAnnounceDeliveryError(params.signal.reason, {
+      path: "none",
+      interruption: "requester_aborted",
+      replaySafe: true,
+    });
   }
   const parentOnly = params.completionTarget === "parent";
+  const sourceToolId =
+    normalizeOptionalLowercaseString(params.sourceTool) ??
+    (params.expectsCompletionMessage ? "subagent_announce" : "");
   const cfg = getSubagentAnnounceRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
@@ -103,6 +107,9 @@ async function sendSubagentAnnounceDirectlyBound(
     ? RUNTIME_EVENT_USER_PROMPT
     : params.triggerMessage;
   let dispatchPrepared = params.onBeforeDispatch === undefined;
+  let executionStarted = false;
+  let accepted = false;
+  const beforeAdmission = () => !accepted && !params.controllerInput?.custody.rpcAdopted;
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -136,9 +143,6 @@ async function sendSubagentAnnounceDirectlyBound(
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
-    const sourceToolId =
-      normalizeOptionalLowercaseString(params.sourceTool) ??
-      (params.expectsCompletionMessage ? "subagent_announce" : "");
     const isSubagentCompletion = sourceToolId === "subagent_announce";
     const trustedCompletionEvent = resolveExactSubagentCompletionEvent({
       inputProvenance: {
@@ -186,23 +190,16 @@ async function sendSubagentAnnounceDirectlyBound(
       params.targetRequesterSessionKey,
       requester,
     );
-    // Settlement and private findings bind to the captured requester incarnation,
-    // including a visible continuation after the spawning turn has yielded.
+    // Settlement and private findings go to the requester chat, also after a reset or a
+    // compaction successor, including a visible continuation after the spawning turn yielded.
     const requesterSessionBound =
-      parentOnly ||
-      ((sourceToolId === "subagent_settle" || agentMediatedCompletion) &&
-        params.completionRequesterSessionId !== undefined);
-    if (
-      requesterSessionBound &&
-      (!params.completionRequesterSessionId ||
-        requesterActivity.sessionId !== params.completionRequesterSessionId ||
-        requesterEntry?.lifecycleRevision !== params.completionRequesterLifecycleRevision)
-    ) {
+      parentOnly || sourceToolId === "subagent_settle" || agentMediatedCompletion;
+    if (requesterSessionBound && !requesterActivity.sessionId) {
       return {
         delivered: false,
         path: "none",
         reason: "completion_handoff_unavailable",
-        error: "completion requester session is unavailable or replaced",
+        error: "completion requester session is unavailable",
         terminal: true,
         disposition: "intentional_non_delivery",
       };
@@ -360,7 +357,11 @@ async function sendSubagentAnnounceDirectlyBound(
       }
     }
     if (params.signal?.aborted) {
-      return { delivered: false, path: "none" };
+      return classifyAnnounceDeliveryError(params.signal.reason, {
+        path: "none",
+        interruption: "requester_aborted",
+        replaySafe: true,
+      });
     }
     const directAgentOrigin = shouldDeliverAgentFinal
       ? deliveryTarget
@@ -409,10 +410,9 @@ async function sendSubagentAnnounceDirectlyBound(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
-    // Public completions bind the selected requester, including a nested fallback.
-    // Private and settle completions keep their captured incarnation checked above.
+    // Completions bind the current requester chat, including a nested fallback.
     const boundRequesterSessionId = requesterSessionBound
-      ? params.completionRequesterSessionId
+      ? requesterActivity.sessionId
       : isSubagentCompletion
         ? requesterSessionId
         : undefined;
@@ -420,10 +420,7 @@ async function sendSubagentAnnounceDirectlyBound(
       directAgentParams = bindInProcessSessionRun(directAgentParams, {
         sessionKey: canonicalRequesterSessionKey,
         sessionId: boundRequesterSessionId,
-        lifecycleRevision:
-          (requesterSessionBound
-            ? params.completionRequesterLifecycleRevision
-            : requesterLifecycleRevision) ?? null,
+        lifecycleRevision: requesterLifecycleRevision ?? null,
         runId: params.directIdempotencyKey,
       });
     }
@@ -452,6 +449,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       directAnnounceResponse = await runAnnounceAgentCall({
         agentParams: directAgentParams,
+        subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,
         replyExpectation: inputReplyExpectation,
         // A resumed parent has no inbound channel dispatcher to keep activity visible.
@@ -500,8 +498,14 @@ async function sendSubagentAnnounceDirectlyBound(
             : undefined,
         expectFinal: true,
         signal: params.signal,
-        onAccepted: params.onAccepted,
-        onExecutionStarted: params.onExecutionStarted,
+        onAccepted: (payload) => {
+          accepted = true;
+          params.onAccepted?.(payload);
+        },
+        onExecutionStarted: () => {
+          executionStarted = true;
+          params.onExecutionStarted?.();
+        },
         onBeforeDispatch: params.onBeforeDispatch
           ? async () => {
               await params.onBeforeDispatch!();
@@ -528,9 +532,6 @@ async function sendSubagentAnnounceDirectlyBound(
       if (hasAnnounceSendEvidence(err)) {
         throw err;
       }
-      if (params.signal?.aborted) {
-        return { delivered: false, path: "none" };
-      }
       const directCompletionFallbackKind = hasFailedTrustedSubagentCompletion
         ? "failed_notice"
         : isIncompleteAnnounceAgentResultError(err)
@@ -548,18 +549,12 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
-      const retryTranscriptConflict =
-        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
-      directFailure = {
-        delivered: false,
-        path: "direct",
-        ...(retryTranscriptConflict ? { reason: "requester_transcript_conflict" as const } : {}),
-        error: summarizeDeliveryError(err),
-        disposition:
-          !retryTranscriptConflict && isPermanentAnnounceDeliveryError(err)
-            ? "permanent_failure"
-            : "retryable",
-      };
+      directFailure = classifyAnnounceDeliveryError(err, {
+        requesterSettle: sourceToolId === "subagent_settle",
+        replaySafe: !executionStarted,
+        beforeAdmission: beforeAdmission(),
+        ...(params.signal?.aborted ? { interruption: "requester_aborted" } : {}),
+      });
     }
 
     const classified = directFailure ?? classifyResponse(directAnnounceResponse);
@@ -570,16 +565,10 @@ async function sendSubagentAnnounceDirectlyBound(
       throw err;
     }
     params.onDeliveryError?.(err);
-    const disposition = hasAnnounceSendEvidence(err)
-      ? "ambiguous"
-      : isPermanentAnnounceDeliveryError(err)
-        ? "permanent_failure"
-        : "retryable";
-    return {
-      delivered: false,
-      path: "direct",
-      error: summarizeDeliveryError(err),
-      disposition,
-    };
+    return classifyAnnounceDeliveryError(err, {
+      requesterSettle: sourceToolId === "subagent_settle",
+      replaySafe: !executionStarted,
+      beforeAdmission: beforeAdmission(),
+    });
   }
 }

@@ -6,7 +6,11 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
+import {
+  MessageInjectionWithdrawnError,
+  createMessageInjectionAuthority,
+} from "../auto-reply/reply/message-injection-authority.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
@@ -215,6 +219,27 @@ function revocableAuthority(message: string) {
 }
 
 describe("submitSessionControllerSteer", () => {
+  it("retains an unaccepted steer through a transient policy outage", async () => {
+    let unavailable = true;
+    const assertCurrent = createMessageInjectionAuthority(() => {
+      if (unavailable) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+      return true;
+    });
+    const { input, injected, operation } = startTurn({ adapter: { authority: { assertCurrent } } });
+    await expect(steer(input)).rejects.toThrow(GatewayOperatorAccessUnavailableError);
+    expect(input.retirementRequested).toBeUndefined();
+    expect(input.abortSignal.aborted).toBe(false);
+    expect(operation.abortSignal.aborted).toBe(false);
+    expect(injected).toEqual([]);
+    unavailable = false;
+    expect(assertCurrent).not.toThrow();
+    operation.complete();
+    const claim = expectDefined(tryClaimSessionControllerTask(input), "retained fallback input");
+    releaseSessionControllerClaim(claim);
+  });
+
   it.each([
     [undefined, "required"],
     [undefined, "optional"],

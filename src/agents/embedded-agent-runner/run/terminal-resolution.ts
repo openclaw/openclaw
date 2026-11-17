@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   retainSilentFinalPayloads,
   setReplyPayloadMetadata,
@@ -43,6 +44,7 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { attachEmbeddedFinalPresentation } from "./final-presentation.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   classifyAssistantTurn,
@@ -168,7 +170,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     | "activateCompactionContinuation"
     | "clearCompactionContinuation"
   >;
-  armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
@@ -351,7 +352,6 @@ export async function resolveEmbeddedRunTerminal(input: {
       `compaction interrupted visible final answer: ${runLogContext} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
-    input.armPostCompactionGuard();
     return { action: "retry" };
   }
   // Invisible retries return above; visible and terminal paths release this retained constraint.
@@ -464,6 +464,9 @@ async function completeEmbeddedRun(
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
+          code:
+            extractErrorCode(terminalFailure) ??
+            resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }
@@ -623,7 +626,7 @@ async function completeEmbeddedRun(
           : input.prepared.preparedTerminalReply.terminalReply;
   return {
     action: "complete",
-    result: {
+    result: attachEmbeddedFinalPresentation(input, {
       payloads: terminalPayloads?.length ? terminalPayloads : undefined,
       ...(!error && input.attempt.diagnosticTrace
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
@@ -715,6 +718,6 @@ async function completeEmbeddedRun(
       },
       ...copyAttemptDeliveryState(input.attempt),
       sourceReplyDeliveryState: input.prepared.sourceReplyDeliveryState,
-    },
+    }),
   };
 }

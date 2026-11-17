@@ -289,6 +289,7 @@ it.each(["fixture", "unrelated"])(
       new AuthProfileMigrationRequiredError({
         agentDir,
         sources: [{ kind: "auth-profiles", path: legacyPath }],
+        affectedProviders: [affectedProvider],
       }),
     );
     const binding = bindRoute(route, fingerprintResolvedProviderAuth(auth), profileId);

@@ -2,6 +2,13 @@ import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isOwnedTranscriptPayload, retainOwnedTranscriptPayload } from "./transcript-json.js";
 
+// V8's SlicedString and ConsString minimum length is 13 code units; Bun has no such guarantee.
+const MIN_DETACH_STRING_LENGTH = process.versions.bun ? 0 : 13;
+
+function needsStringDetachment(value: unknown): value is string {
+  return typeof value === "string" && value.length >= MIN_DETACH_STRING_LENGTH;
+}
+
 /** Preserve ordinary transcript objects while admitting their JSON storage shape. */
 export function normalizeTranscriptJsonValue(value: unknown, key: string): unknown {
   const visited = new Set<object>();
@@ -74,7 +81,7 @@ function normalizePlainJson(
   retainRoots = true,
 ): unknown {
   if (value === null || typeof value !== "object") {
-    if (copyStrings && typeof value === "string") {
+    if (copyStrings && needsStringDetachment(value)) {
       // A small slice can otherwise pin an entire tool output. Preserve lone surrogates.
       return Buffer.from(value, "utf16le").toString("utf16le");
     }
@@ -109,7 +116,7 @@ function normalizePlainJson(
     }
     // Equal string contents do not imply equal backing-store ownership.
     if (
-      !(copyStrings && typeof current === "string") &&
+      !(copyStrings && needsStringDetachment(current)) &&
       Object.is(current, retained) &&
       (retained !== undefined || !descriptor)
     ) {

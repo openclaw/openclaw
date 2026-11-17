@@ -1005,7 +1005,7 @@ describe("chat loading skeleton", () => {
     // The session provider matches a plan-usage group, so dollar estimates
     // yield to the subscription windows.
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
-    flush();
+    await vi.dynamicImportSettled();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
     expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
@@ -2609,16 +2609,15 @@ describe("chat model controls", () => {
         ...(known ? { modelOverrides: { main: null } } : {}),
       });
       const trigger = getChatModelSelect(container);
-      expect(trigger.getAttribute("aria-busy")).toBe(String(!known));
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
+      expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
       if (known) {
         expect(trigger.textContent).toContain("gpt-5 · openai");
         expect(trigger.getAttribute("aria-label")).toBe("Chat model: gpt-5 · openai");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
         expect(container.querySelector("[data-chat-model-option]")).toBeNull();
       } else {
         expect(trigger.getAttribute("aria-disabled")).toBe("false");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
         expect(trigger.textContent).not.toContain("Loading models");
         const effort = container.querySelector(".chat-controls__effort-picker");
         expect(effort?.getAttribute("aria-hidden")).toBe("true");

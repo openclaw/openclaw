@@ -40,6 +40,8 @@ enum TextSummarySupport {
 
     private static func isCliRecoveryFooter(_ line: String) -> Bool {
         line.hasPrefix("[openclaw] For help, run `") ||
+            line.hasPrefix("[openclaw] For details, open Settings → Logs in the OpenClaw app or run `") ||
+            // Older installed CLIs can still emit the previous recovery footer.
             line.hasPrefix("[openclaw] For details, open Settings → Logs in the Control UI or run `") ||
             line.hasPrefix("[openclaw] Try: ") || line.hasPrefix("[openclaw] Help: ")
     }

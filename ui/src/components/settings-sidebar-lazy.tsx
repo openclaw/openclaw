@@ -16,6 +16,8 @@ export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
   | "activeRouteId"
+  | "pluginTabs"
+  | "activePluginTab"
   | "connectionStatus"
   | "footerStatus"
   | "onExit"
@@ -95,7 +97,8 @@ function SettingsSidebarFallback(props: {
             <h1 class="page-title">
               {props.sidebarProps.presentation === "embed-list"
                 ? t("nav.settings")
-                : titleForRoute(props.sidebarProps.activeRouteId, t)}
+                : (props.sidebarProps.activePluginTab?.label ??
+                  titleForRoute(props.sidebarProps.activeRouteId, t))}
             </h1>
             <p role={props.failed ? "alert" : "status"}>
               {t(props.failed ? "nav.settingsLoadFailed" : "common.loading")}
@@ -171,7 +174,13 @@ function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
               <Show when={group.labelKey}>
                 <span class="skeleton settings-sidebar__loading-group-label" />
               </Show>
-              <For each={group.routes}>
+              <For
+                each={
+                  group.labelKey === "nav.settingsGroupAgents"
+                    ? [...group.routes, ...(props.pluginTabs ?? [])]
+                    : group.routes
+                }
+              >
                 {() => (
                   <span class="settings-sidebar__item settings-sidebar__loading-item">
                     <span class="skeleton settings-sidebar__loading-icon" />

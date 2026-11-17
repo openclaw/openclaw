@@ -122,6 +122,21 @@ cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 
+Catalog descriptors and their rendered prompts are shared across attempts, runs,
+and sessions when the finalized tool definitions match. The process retains at
+most 32 prepared catalogs, limited to 1 Mi characters of schema and key per catalog
+and 4 Mi characters across the cache. Native and published schemas use the same
+content fingerprint. The cache shares immutable
+data. Changes to tool selection, descriptions, or projected schemas select a
+different catalog; unchanged inputs preserve identical prompt bytes. Unpublished
+remote schemas remain opaque and do not enter the shared cache.
+Client projections share only their metadata; their advertised input remains
+`unknown`, and the live schema stays with the current run's describe/call path.
+
+Executable tools, hooks, abort signals, counters, and result stores remain owned
+by the current run. Terminal cleanup releases those bindings; cached descriptors
+never keep a completed run executable.
+
 Every new `exec` starts a fresh JavaScript context. Variables, functions, and
 imports never carry over between cells; `wait` continues the original cell.
 

@@ -243,6 +243,8 @@ export type ChatItem =
       showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
+      /** Invisible narration boundary, consumed before rendered rows are built. */
+      activityBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
@@ -360,6 +362,8 @@ export function accumulatedStreamText(
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
+  /** A hidden narrative message separates this activity from preceding tools. */
+  startsActivityGroup?: true;
   kind: "group";
   key: string;
   role: string;
@@ -513,6 +517,8 @@ export type ToolCard = {
   liveOutput?: LiveToolOutput;
   /** Result identity stays distinct from the assistant call after presentation grouping. */
   resultMessageId?: string;
+  /** agents_wait per-ID errors recorded before the output cap; they have no completion row. */
+  subagentCollectionErrors?: number;
   /** Gateway display projection omitted content; the durable result may still be complete. */
   outputTruncated?: boolean;
   /** Bounded external preview; does not authorize full-message recovery. */
@@ -524,6 +530,8 @@ export type ToolCard = {
   liveDiffStat?: { added: number; removed: number };
   /** Producer-reported process exit code, when the result supplies one. */
   exitCode?: number;
+  /** Code-mode receipt confirms dispatch began, even when the execution failed. */
+  bridgeDispatchStarted?: boolean;
   isError?: boolean;
   /** Prepared presentation facts; never replace the raw execution fields above. */
   activity?: AgentActivityItem;

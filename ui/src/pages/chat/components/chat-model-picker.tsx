@@ -58,7 +58,6 @@ export type ChatModelPickerParams = {
   triggerModelLabel: string;
   triggerModelValue?: string;
   triggerStatusLabel?: string;
-  triggerLoading?: boolean;
   onModelSetup?: () => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
@@ -93,7 +92,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       searchInput.focus({ preventScroll: true });
     }
   };
-  // Retain the panel after first use so search and provider expansion survive dismissal.
+  // Retain the panel after first use so expanded model lists survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
     search.setOpen(target.open);
@@ -170,12 +169,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       >
         <summary
           ref={[(element) => (summary = element), search.summaryRef, pickerOverlay.trigger]}
-          class={[
-            "chat-controls__inline-select-trigger chat-controls__model-trigger",
-            {
-              "chat-controls__model-trigger--loading": params.triggerLoading,
-            },
-          ]}
+          class="chat-controls__inline-select-trigger chat-controls__model-trigger"
           data-chat-model-select="true"
           data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
           data-chat-select-value={params.selectedModelValue}
@@ -185,12 +179,11 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
               : "false"
           }
           aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
-          aria-busy={params.triggerLoading ? "true" : "false"}
+          aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
         >
-          {!params.triggerLoading &&
-          !params.triggerStatusLabel &&
+          {!params.triggerStatusLabel &&
           state().triggerModelOption &&
           (state().triggerModelOption!.presentation ||
             hasProviderBrandIcon(state().triggerModelOption!.provider)) ? (
@@ -201,11 +194,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             />
           ) : undefined}
           <span class="chat-controls__inline-select-label">
-            {params.triggerLoading ? (
-              <span class="skeleton chat-controls__model-trigger-skeleton" aria-hidden="true" />
-            ) : (
-              (params.triggerStatusLabel ?? params.triggerModelLabel)
-            )}
+            {params.triggerStatusLabel ?? params.triggerModelLabel}
           </span>
           {state().showContextWindowBadge ? (
             <span
@@ -239,16 +228,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                 </div>
               )}
             >
-              <Loading
-                fallback={
-                  <div
-                    class="chat-controls__model-menu chat-controls__model-catalog-state chat-controls__model-catalog-state--empty"
-                    role="status"
-                  >
-                    {t("chat.modelControls.loadingModels")}
-                  </div>
-                }
-              >
+              <Loading>
                 <ChatModelPickerPanel
                   params={params}
                   onSelectionClose={closeModelPickerAfterSelection}
