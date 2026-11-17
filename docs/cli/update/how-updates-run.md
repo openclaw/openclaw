@@ -945,9 +945,11 @@ Later commands settle what is owed:
 - The next `openclaw update` runs plugin convergence again, including when the
   core is already current, and settles the step when convergence completes.
   Individual plugins that fail to update are reported as plugin warnings, as
-  before, and do not keep the step owed. Convergence that throws again during a
-  core update is owed again for the new reason. On an already-current core it
-  fails the command as before, and the step stays owed.
+  before, and do not keep the step owed. Convergence that is deferred because
+  config changed during the update settles nothing: every plugin step stays
+  owed. Convergence that throws again during a core update is owed again for the
+  new reason. On an already-current core it fails the command as before, and the
+  step stays owed.
 - An update settles an owed post-plugin Doctor only when it changes plugins and
   its own Doctor then completes. An update that leaves plugins unchanged does not
   run full Doctor, so the step stays owed and the update repeats the warning.
