@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { closeSync } from "node:fs";
 import { createRequire } from "node:module";
 import { Socket } from "node:net";
-import { pipeline, type Readable } from "node:stream";
+import type { Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type * as lineageWriter from "../../node-host/node-worker-lineage-completion.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,7 +19,7 @@ import {
   commandStdio,
   delay,
   finishAnchorTransport,
-  releaseCommandOutput,
+  relayCommandOutput,
 } from "./service-child-group-anchor-io.js";
 import {
   hasLiveOwnedProcessGroupMembers,
@@ -56,6 +56,7 @@ export function runServiceChildGroupAnchor(): void {
   let rootResultDelivery: Promise<void> | undefined;
   let rootExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   const pendingOutput = new Set(["stdout", "stderr"] as const);
+  let releaseOutput: Array<() => Promise<void>> = [];
   let lineageClosed = false;
   let lineageObservationFailed = false;
   let markHostLineageClosed: (() => void) | undefined;
@@ -362,15 +363,14 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     state = "closed";
-    const releasedCommand = command;
     closingSequence = sequence + 1;
     await send({ type: "released", survivors });
     // The receipt is consumed before transport closure, like a closing receipt.
     await Promise.race([retirementReady.promise, delay(GRACEFUL_CANCEL_TIMEOUT_MS)]);
     closeFds(start.parentLineageFds);
     ownedLineage?.destroy();
-    const drained = releaseCommandOutput(releasedCommand, pendingOutput);
-    releasedCommand.unref();
+    const drained = Promise.all(releaseOutput.map((release) => release()));
+    command.unref();
     const transportClosed =
       control && !control.destroyed ? once(control, "close").catch(() => undefined) : undefined;
     finish(0);
@@ -649,17 +649,16 @@ export function runServiceChildGroupAnchor(): void {
         await requestCleanup("lineage-lost");
       }
     };
-    for (const stream of ["stdout", "stderr"] as const) {
-      pipeline(command[stream]!, process[stream], () => {
-        // Older Bun needs this half-close; newer Bun can report ENOTCONN after its own.
-        // Shutdown completion is not lineage loss; the host still requires output EOF.
+    const outputCommand = command;
+    releaseOutput = (["stdout", "stderr"] as const).map((stream) =>
+      relayCommandOutput(outputCommand[stream]!, process[stream], () => {
+        // Bun may need an explicit half-close; ENOTCONN after its own is harmless.
         shutdownOutput?.(stream === "stdout" ? 1 : 2, 1);
         pendingOutput.delete(stream);
         void settleRoot();
-      });
-    }
+      }),
+    );
     if (start.stdinMode !== "inherit" && command.stdin) {
-      const input = process.stdin;
       const destination = command.stdin;
       // EOF and control use independent pipes. Hold EOF until the host explicitly
       // ends input; a dead host must be killed without becoming a protocol reply.
@@ -669,14 +668,14 @@ export function runServiceChildGroupAnchor(): void {
         }
       };
       finishInput = () => {
-        if (input.readableEnded) {
+        if (process.stdin.readableEnded) {
           endInput();
         }
       };
       let inputClosed = false;
       const stopInput = () => {
-        input.unpipe(destination);
-        input.off("end", endInput);
+        process.stdin.unpipe(destination);
+        process.stdin.off("end", endInput);
         releaseProcessStdin();
         if (!inputClosed) {
           inputClosed = true;
@@ -686,11 +685,11 @@ export function runServiceChildGroupAnchor(): void {
       destination.once("error", stopInput);
       destination.once("close", stopInput);
       // Own EOF explicitly: pipe's default end check initializes global Bun output writers.
-      input.pipe(destination, { end: false });
-      if (input.readableEnded) {
+      process.stdin.pipe(destination, { end: false });
+      if (process.stdin.readableEnded) {
         endInput();
       } else {
-        input.once("end", endInput);
+        process.stdin.once("end", endInput);
       }
     }
     command.once("error", (error) => {
