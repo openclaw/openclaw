@@ -133,6 +133,7 @@ export function inspectSqlitePortSchema(
   db: DatabaseSync,
   baseDescriptor: PortDescriptor,
   pendingColumns: Readonly<Record<string, readonly string[]>> = {},
+  pendingTables: readonly string[] = [],
 ): PortDescriptor {
   assertSqliteIntegrity(db, "Port SQLite source");
   admitSqliteSchema(db);
@@ -180,6 +181,9 @@ export function inspectSqlitePortSchema(
   }
   for (const table of descriptor.tables) {
     const columns = readTableColumns(db, table.name);
+    if (!columns.size && pendingTables.includes(table.name)) {
+      continue;
+    }
     const expected = new Set(table.columns.map((column) => column.name));
     const pending = pendingColumns[table.name] ?? [];
     if (
@@ -192,7 +196,11 @@ export function inspectSqlitePortSchema(
       );
     }
   }
-  if (descriptor.triggers?.some((trigger) => !facts.triggers.has(trigger.name))) {
+  if (
+    descriptor.triggers?.some(
+      (trigger) => !facts.triggers.has(trigger.name) && !pendingTables.includes(trigger.table),
+    )
+  ) {
     throw new DatabasePortDataError("Missing canonical SQLite trigger");
   }
   return {
