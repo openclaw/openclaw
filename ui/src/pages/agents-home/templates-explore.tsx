@@ -18,6 +18,7 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -30,14 +31,14 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import "../../styles/templates-catalog.css";
+import "../../styles/carapace-control-ui.css";
+import "../../styles/plugins.css";
 import {
   readTemplatesOverview,
   searchTemplates,
   type TemplateCatalogEntry,
 } from "./templates-catalog-client.ts";
-import "../../styles/agents-home.css";
-import "../../styles/carapace-control-ui.css";
-import "../../styles/plugins.css";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
@@ -62,10 +63,20 @@ const SECTION_SIZE = 8;
 type TemplateCategory = (typeof templateCategories)[number];
 type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
 
-function TemplateCard(props: {
-  entry: TemplateCatalogEntry;
-  onSelect?: (entry: TemplateCatalogEntry) => void;
-}) {
+type TemplateAddProps = {
+  onAdd: (entry: TemplateCatalogEntry) => void;
+  addingPackageName: string | null;
+  addDisabled: boolean;
+  /** The last Add that left nothing behind, shown on that Template's card. */
+  addFailure?: { entry: Pick<TemplateCatalogEntry, "packageName">; message: string } | null;
+};
+
+function TemplateCard(
+  props: TemplateAddProps & {
+    entry: TemplateCatalogEntry;
+    onSelect?: (entry: TemplateCatalogEntry) => void;
+  },
+) {
   return (
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
@@ -87,14 +98,30 @@ function TemplateCard(props: {
           type="button"
           class="btn btn--sm agents-home__template-add oc-action oc-action-secondary"
           aria-label={t("templatesCatalog.addNamed", { name: props.entry.displayName })}
-          disabled={!props.entry.latestVersion}
-          onClick={() => props.onSelect?.(props.entry)}
+          disabled={!props.entry.latestVersion || props.addDisabled}
+          aria-busy={props.addingPackageName === props.entry.packageName ? "true" : undefined}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onAdd(props.entry);
+          }}
         >
-          {t("templatesCatalog.add")}
+          <Show when={props.addingPackageName === props.entry.packageName}>
+            <span class="btn__spinner" aria-hidden="true" />
+          </Show>
+          {t(
+            props.addingPackageName === props.entry.packageName
+              ? "templatesCatalog.adding"
+              : "templatesCatalog.add",
+          )}
         </button>
       </div>
       <Show when={props.entry.summary}>
         <p class="agents-home__template-summary">{props.entry.summary}</p>
+      </Show>
+      <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
+        <p class="agents-home__template-error" role="alert">
+          {props.addFailure?.message}
+        </p>
       </Show>
     </article>
   );
@@ -134,7 +161,11 @@ function TemplateCatalogSkeleton() {
   );
 }
 
-export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntry) => void }) {
+export function TemplatesExplore(
+  props: TemplateAddProps & {
+    onSelect?: (entry: TemplateCatalogEntry) => void;
+  },
+) {
   const context = useApplication();
   const [view, setView] = createStore({ query: "", category: "" });
   const [request, setRequest] = createSignal<{
@@ -249,9 +280,9 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
             </CatalogDiscoveryChips>
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
-                <div class="callout warn" role="status">
+                <InlineAlert tone="warning" role="status">
                   {t("templatesCatalog.unavailable")}
-                </div>
+                </InlineAlert>
               </Show>
               <Show when={request()} keyed>
                 {(current) => {
@@ -323,12 +354,12 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                   return (
                     <Errored
                       fallback={(error) => (
-                        <div class="callout danger" role="alert">
+                        <InlineAlert tone="danger" role="alert">
                           {formatUiError(error(), t("templatesCatalog.unavailable"))}
                           <button type="button" class="btn btn--sm" onClick={() => loadCatalog()}>
                             {t("templatesCatalog.retry")}
                           </button>
-                        </div>
+                        </InlineAlert>
                       )}
                     >
                       <Loading fallback={<TemplateCatalogSkeleton />}>
@@ -357,7 +388,14 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             <div class="plugin-catalog-grid" data-templates-featured>
                               <For each={result().featured} keyed={(entry) => entry.packageName}>
                                 {(entry) => (
-                                  <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                  <TemplateCard
+                                    entry={entry()}
+                                    onSelect={props.onSelect}
+                                    onAdd={props.onAdd}
+                                    addingPackageName={props.addingPackageName}
+                                    addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
+                                  />
                                 )}
                               </For>
                             </div>
@@ -381,7 +419,14 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                                     keyed={(entry) => entry.packageName}
                                   >
                                     {(entry) => (
-                                      <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                      <TemplateCard
+                                        entry={entry()}
+                                        onSelect={props.onSelect}
+                                        onAdd={props.onAdd}
+                                        addingPackageName={props.addingPackageName}
+                                        addDisabled={props.addDisabled}
+                                        addFailure={props.addFailure}
+                                      />
                                     )}
                                   </For>
                                 </div>
@@ -405,7 +450,14 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             <div class="plugin-catalog-grid" data-templates-results>
                               <For each={result().entries} keyed={(entry) => entry.packageName}>
                                 {(entry) => (
-                                  <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                  <TemplateCard
+                                    entry={entry()}
+                                    onSelect={props.onSelect}
+                                    onAdd={props.onAdd}
+                                    addingPackageName={props.addingPackageName}
+                                    addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
+                                  />
                                 )}
                               </For>
                             </div>

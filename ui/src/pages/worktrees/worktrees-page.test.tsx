@@ -199,6 +199,8 @@ describe("WorktreesPage lifecycle", () => {
     await waitForRead(request);
     await waitForSolid(() => expect(page.element.textContent).toContain("Loading"));
     expect(page.element.textContent).not.toContain("No managed worktrees");
+    const cleanup = page.button("Clean up now");
+    expect(cleanup).toMatchObject({ disabled: true });
 
     first.reject(new Error("List unavailable"));
     await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
@@ -209,6 +211,8 @@ describe("WorktreesPage lifecycle", () => {
     );
     expect(request).toHaveBeenCalledTimes(2);
     expect(page.query('[role="alert"]')).toBeNull();
+    expect(page.button("Clean up now")).toBe(cleanup);
+    expect(cleanup.disabled).toBe(false);
   });
 
   it("retains a rejected creation draft and releases its pending presentation", async () => {
@@ -527,6 +531,9 @@ describe("WorktreesPage lifecycle", () => {
         operation: operation === "restore" ? "row" : operation,
         loading: operation === "gc",
       });
+      if (operation === "gc") {
+        await waitForSolid(() => expect(page.button("Loading…")).toMatchObject({ disabled: true }));
+      }
       source.emit(false);
       source.emit(true);
       expect(page.model.operation).not.toBe("create");
@@ -539,6 +546,11 @@ describe("WorktreesPage lifecycle", () => {
       }
       await running;
       expect(page.model).toMatchObject({ error: null, operation: null, loading: false });
+      if (operation === "gc") {
+        await waitForSolid(() =>
+          expect(page.button("Clean up now")).toMatchObject({ disabled: false }),
+        );
+      }
     },
   );
 

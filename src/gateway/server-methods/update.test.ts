@@ -33,7 +33,7 @@ import {
   sendGatewayLifecycleNoticeMock as sendNotice,
   resolveGatewayLifecycleNoticeRouteMock as resolveNoticeRoute,
   scheduleGatewayRestartMock as scheduleRestart,
-  readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsyncMock,
   invokeUpdateRun,
   captureUpdateRunPayload,
   mockGlobalInstallSurface,
@@ -688,7 +688,7 @@ describe("update.run prepared foreground handoff", () => {
   });
 
   it("does not hand off an unverified foreground process", async () => {
-    readGatewayOwnerLeaseMock.mockReturnValueOnce(undefined);
+    readGatewayOwnerLeaseAsyncMock.mockResolvedValueOnce(undefined);
     const payload = await captureUpdateRunPayload();
     expect(payload?.ok).toBe(false);
     expect(startHandoff).not.toHaveBeenCalled();

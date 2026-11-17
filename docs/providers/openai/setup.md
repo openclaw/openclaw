@@ -486,16 +486,19 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
-The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
-on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
-starting sign-in. For an SSH host, keep this command running on your browser's
-computer:
+The browser returns to `http://localhost:PORT/auth/callback`, where OpenClaw picks
+a free `PORT` for each sign-in, so an app already using a port cannot block it.
+If your browser runs on another computer, OpenClaw shows the port with the sign-in
+link. Forward that port to OpenClaw's IPv4 loopback before opening the link. For an
+SSH host, keep this command running on your browser's computer, with `PORT`
+replaced:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+ssh -N -L PORT:127.0.0.1:PORT user@gateway-host
 ```
 
-Open the sign-in link on that computer.
+Open the sign-in link on that computer. The port changes on every sign-in, so a
+forward from an earlier attempt does not carry over.
 
 To reconnect an existing account, sign in with the same ChatGPT user and
 workspace. To switch either, choose **Connect a different ChatGPT account or

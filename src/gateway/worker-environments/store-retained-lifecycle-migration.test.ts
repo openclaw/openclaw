@@ -86,6 +86,7 @@ it.each(["runtime", "doctor"] as const)(
       expect(database.db.prepare("SELECT * FROM worker_environments").get()).toEqual({
         ...before,
         retention_json: null,
+        provision_source_json: null,
       });
       expect(
         runSqliteReadOperationSync(scope, () =>
@@ -96,7 +97,7 @@ it.each(["runtime", "doctor"] as const)(
             purpose: "runtime",
           }),
         ).schemas.incompatible,
-      ).toMatchObject([{ foundVersion: 39, supportedVersion: 38 }]);
+      ).toMatchObject([{ foundVersion: OPENCLAW_STATE_SCHEMA_VERSION, supportedVersion: 38 }]);
       const store = await createWorkerEnvironmentStore({ database });
       expect(store.get("environment")).toMatchObject({ resourceReceipt: receipt, retention: null });
       await closeOpenClawStateDatabaseAsync();

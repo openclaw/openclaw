@@ -3,6 +3,7 @@ import { BoardGrantedCapabilities } from "../../../components/board/board-widget
 import { BOARD_SIZE_PRESETS } from "../../../components/board/board-widget-cell-options.ts";
 import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -155,7 +156,7 @@ export function ChatDashboardMenuContent(inputs: ChatPanelMenuContentProps) {
       {
         kind: "content",
         id: "resize-heading",
-        content: <div class="board-widget__menu-heading">{t("chat.sidePanel.dashboardSize")}</div>,
+        content: <MenuHeading label={t("chat.sidePanel.dashboardSize")} />,
       },
       {
         kind: "group",

@@ -302,7 +302,16 @@ describe("subagent registry sqlite store", () => {
   });
 
   it("decodes owned compact rows without copying while preserving stored identities", () => {
-    const run = createRun();
+    const run = createRun({
+      delivery: {
+        status: "pending",
+        requesterDelivery: {
+          state: "consumed",
+          runId: "requester-continuation",
+          at: 300,
+        },
+      },
+    });
     saveRuns(run);
     const database = openOpenClawStateDatabase();
     database.db
@@ -320,6 +329,7 @@ describe("subagent registry sqlite store", () => {
         runId: run.runId,
         childSessionKey: run.childSessionKey,
         requesterSessionKey: run.requesterSessionKey,
+        delivery: run.delivery,
       });
       // A compact query owns its rows; a second row allocation adds no isolation.
       expect(decode.mock.calls[0]?.[0]).toBe(queries.mock.results.at(-1)?.value.rows[0]);

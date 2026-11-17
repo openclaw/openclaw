@@ -21,6 +21,7 @@ import {
   untouched,
   descriptor,
   addSession,
+  reconcileConfig,
 } from "./retained-repair-test-support.mjs";
 
 function git(directory, ...args) {
@@ -345,6 +346,10 @@ assert.ok(prepareOwner);
 const quote = (value) => "'" + String(value).replaceAll("'", "'\\''") + "'";
 for (const scenario of [
   "success",
+  "reviewed-config",
+  "main-advanced",
+  "main-replay",
+  "exact-stale",
   "fetch-fails",
   "build-fails",
   "timer-active",
@@ -357,14 +362,25 @@ for (const scenario of [
     (t) => {
       const f = ready(t),
         trace = join(f.root, "prepare-events");
+      const selected = f.request.target.sha;
+      let fetched = selected;
+      if (["main-advanced", "main-replay", "exact-stale"].includes(scenario)) {
+        if (scenario === "main-replay") { build(f, "begin", f.request); build(f, "origin"); }
+        const tree = git(f.mirror, "rev-parse", selected + "^{tree}");
+        fetched = git(f.mirror, "commit-tree", tree, "-p", selected, "-m", "main advanced before fetch");
+        f.addRelease(fetched);
+      }
+      const expected = scenario === "main-advanced" ? fetched : selected;
+      const configHash = scenario === "reviewed-config" ? reconcileConfig(f) : "";
       if (scenario === "foreign-origin")
         git(f.mirror, "remote", "set-url", "origin", "https://example.invalid/foreign.git");
       const program = `set -Eeuo pipefail
 node_bin=${quote(process.execPath)};release_lib=${quote(f.library)}
 serving_root=${quote(f.serving)};releases_root="$serving_root/releases"
-current_link="$serving_root/current";requested_sha=${quote(f.request.target.sha)}
+current_link="$serving_root/current";requested_sha=${quote(scenario.startsWith("main-") ? "main" : selected)}
 operator_expected_sha=${quote(f.record.candidate.sha)};operator_expected_pid=${f.pid};operator_expected_generation=${quote(f.start)}
 repair_operation=${quote(f.request.operation)};repair_journal_hash=${quote(f.request.source.sha256)}
+repair_config_hash=${quote(configHash)}
 mirror=${quote(f.mirror)};frozen_main=""
 exec 9>"$OPENCLAW_TEAM_LOCK_FILE";flock -n 9
 fail(){ printf '%s\\n' "$*" >&2;return 1; }
@@ -375,7 +391,7 @@ assert_exclusive_owner(){ event owner; }
 recheck_generation(){ event generation; }
 read_pointer(){ printf '%s\\n' ${quote(f.b)}; }
 system_systemctl(){ if [[ "$1" == is-enabled ]];then printf '%s\\n' ${scenario === "timer-active" ? "enabled" : "disabled"};else printf '%s\\n' inactive;fi; }
-freeze_origin_main(){ event fetch;${scenario === "fetch-fails" ? "return 71;" : "frozen_main=$requested_sha;"} }
+freeze_origin_main(){ event fetch;${scenario === "fetch-fails" ? "return 71;" : `/usr/bin/git -C "$mirror" update-ref refs/remotes/origin/main ${quote(fetched)};frozen_main=${quote(fetched)};`} }
 publish_release(){ event publish;${scenario === "build-fails" ? "return 72;" : 'proof validate-release "$releases_root/$1" "$1" "$OPENCLAW_TEAM_ROOT_UID" sealed;'} }
 ${prepareOwner}
 prepare_retained_repair
@@ -386,11 +402,15 @@ prepare_retained_repair
         timeout: 30000,
       });
       const observed = existsSync(trace) ? readFileSync(trace, "utf8") : "";
-      if (scenario === "success") {
+      if (["success", "reviewed-config", "main-advanced", "main-replay"].includes(scenario)) {
         assert.equal(result.status, 0, result.stderr);
         assert.match(result.stdout, /action=prepare-retained-repair restart=0 activation=0/);
+        assert.ok(result.stdout.includes("PREPARED sha=" + expected));
+        const prefix = join(f.serving, "journal", "repair-" + f.request.operation);
+        assert.equal(JSON.parse(readFileSync(prefix + ".build-intent.json")).request.target.sha, expected);
+        assert.equal(JSON.parse(readFileSync(prefix + ".origin.json")).target, expected);
         assert.ok(
-          observed.indexOf("proof retained-repair-build begin") < observed.indexOf("fetch"),
+          observed.indexOf("fetch") < observed.indexOf("proof retained-repair-build begin"),
         );
         assert.ok(
           observed.indexOf("fetch") < observed.indexOf("proof retained-repair-build origin"),
@@ -403,6 +423,7 @@ prepare_retained_repair
         );
       } else {
         assert.notEqual(result.status, 0);
+        if (scenario === "exact-stale") assert.match(result.stderr, /exact freshly frozen official main/);
         assert.doesNotMatch(observed, /proof retained-repair-build finish/);
         if (scenario !== "build-fails") assert.doesNotMatch(observed, /publish/);
       }

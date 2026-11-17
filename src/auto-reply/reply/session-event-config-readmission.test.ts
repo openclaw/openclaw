@@ -18,12 +18,15 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
+  persistCompactionBoundaryWithSessionEntryAsync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
@@ -33,6 +36,7 @@ import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-suppor
 import { runCronSessionTurn } from "../../cron/session-run.js";
 import type { CronStoredJob } from "../../cron/types.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { bindPluginGatewayAccessPolicy } from "../../plugins/gateway-access-policy-registration.js";
 import { createOwnedTestInstance } from "../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import {
@@ -40,6 +44,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -49,7 +54,9 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import * as agentExecution from "./agent-runner-execution.js";
 import * as routedReplies from "./route-reply.js";
+import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -90,6 +97,86 @@ async function attemptRealWrite(
   }
 }
 
+it("continues a resumed turn after compaction and a runtime row notification", async ({
+  signal,
+}) => {
+  await withOpenClawTestState(
+    { label: "restart-runtime-publication", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:dashboard:runtime-recovery" };
+      await replaceSessionEntry(target, {
+        sessionId: "runtime-recovery",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const captured = await captureSessionEventTargetForHost(target.agentId, target.sessionKey);
+      const filePath = path.join(state.workspaceDir, "recovered-after-compaction.txt");
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        const host = await openEventToolHost(params, "resumed turn");
+        try {
+          const scope = {
+            ...target,
+            sessionId: captured.sessionId,
+            storePath: expectDefined(captured.storePath, "captured store path"),
+          };
+          const manager = await SessionManager.openAsync(scope, state.workspaceDir);
+          const kept = await manager.appendMessageAsync({
+            role: "user",
+            content: "retained work",
+            timestamp: 1,
+          });
+          await withSessionCompactionPersistenceAsync(
+            manager,
+            (prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                prepared,
+                transcriptByteCompactionLatch: null,
+              }),
+            () =>
+              manager.appendCompactionAsync(
+                "Continue the recovered work",
+                expectDefined(kept, "retained entry"),
+                100,
+              ),
+          );
+          sessionChanges.emit({ ...scope, scope: "runtime" });
+          await expectDefined(
+            host.tools.find((tool) => tool.name === "write"),
+            "write tool",
+          ).execute("recovery-write", { path: filePath, content: "completed\n" });
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        } finally {
+          host.close();
+        }
+      });
+      try {
+        const receipt = enqueueSessionEventForHost("Resume required work", {
+          ...target,
+          source: "restart",
+          expectedTarget: captured,
+          abortSignal: signal,
+          deliver: false,
+        });
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(await fs.readFile(filePath, "utf8")).toBe("completed\n");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
+
 it("executes a recovery event after its producer's plugin scope closes", async ({ signal }) => {
   await withOpenClawTestState(
     { label: "session-event-plugin-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -122,6 +209,18 @@ it("executes a recovery event after its producer's plugin scope closes", async (
           target.agentId,
           target.sessionKey,
         );
+        using routed = vi
+          .spyOn(routedReplies, "routePreparedReply")
+          .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
+        // A reply drains after its turn's scope closed, like a cron or wake turn's lease.
+        const reply = invocations.run(async () =>
+          (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
+            cfg: config,
+            sessionKey: target.sessionKey,
+            payload: { text: "Process completed" },
+            replyKind: "final",
+          }),
+        );
         receipt = invocations.run(() =>
           enqueueSessionEventForHost("Resume required work", {
             ...target,
@@ -134,6 +233,8 @@ it("executes a recovery event after its producer's plugin scope closes", async (
         );
         invocations.release();
         expect(() => oldCallback()).toThrow("Plugin event-source consumer is closed");
+        await expect(reply).resolves.toMatchObject({ delivered: true });
+        expect(routed).toHaveBeenCalledOnce();
         // Publication before admission forces the rejection handler to re-admit the occurrence.
         setRuntimeConfigSnapshot({ ...config, tools: { deny: ["exec"] } });
         const outcome = await withinTest(receipt.settled, signal);
@@ -147,6 +248,90 @@ it("executes a recovery event after its producer's plugin scope closes", async (
       } finally {
         invocations.release();
         await Promise.allSettled([receipt?.settled]);
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
+
+it("finalizes a failed-before-reply event after its visitor policy scope closes", async ({
+  signal,
+}) => {
+  await withOpenClawTestState(
+    { label: "session-event-visitor-finalization", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:visitor-finalization" };
+      await replaceSessionEntry(target, {
+        sessionId: "visitor-finalization",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const plugin = createOwnedTestInstance("visitor-access");
+      const invocations = new PluginInvocationScope(plugin.owner!.registry!, [plugin]);
+      const execute = agentExecution.executeAgentTurn;
+      using executionScope = vi
+        .spyOn(agentExecution, "executeAgentTurn")
+        .mockImplementation((params) => invocations.run(() => execute(params)));
+      let closed = false;
+      const check = vi.fn(() => {
+        signal.throwIfAborted();
+        return closed;
+      });
+      const policy = bindPluginGatewayAccessPolicy(
+        {
+          authorize: () => ({ signal, assertCurrent: check }),
+        },
+        plugin,
+      );
+      const access = policy.authorize({
+        config,
+        profile: { profileId: "visitor", emails: [], assignedRole: null },
+        requiredByRole: true,
+      })!;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "visitor",
+        scopes: ["operator.write"],
+        signal: access.signal,
+        assertCurrent: access.assertCurrent,
+      });
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        await startEmbeddedTurn(params, "reply admission");
+        invocations.release();
+        closed = true;
+        throw new Error("accepted continuation children could not transfer terminal delivery");
+      });
+      try {
+        const expectedTarget = await captureSessionEventTargetForHost(
+          target.agentId,
+          target.sessionKey,
+          { operatorAuthority },
+        );
+        const receipt = invocations.run(() =>
+          enqueueSessionEventForHost("Resume required work", {
+            ...target,
+            source: "restart",
+            expectedTarget,
+            abortSignal: signal,
+            deliver: false,
+          }),
+        );
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(executionScope).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
+        expect(outcome.error).not.toContain("reloaded or disabled");
+        expect(outcome.error).toContain("couldn't finish this reply");
+        expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
+          true,
+        );
+      } finally {
+        invocations.release();
         await drainGlobalSingletonLifecycleState("restart");
         resetSystemEventsForTest();
       }
@@ -205,10 +390,10 @@ it.for([
         const defaults = expectDefined(config.agents?.defaults, "completion agent defaults");
         if (explicitScheduledModel || scheduledSubagent || gmail) {
           defaults.modelPolicy = {
-            allow:
-              scheduledProvider === "mock-other"
-                ? ["mock-openai/*", "mock-other/*"]
-                : ["mock-openai/*"],
+            allow: [
+              "mock-openai/*",
+              ...(scheduledProvider === "mock-other" ? ["mock-other/*"] : []),
+            ],
           };
           if (scheduledSubagent) {
             defaults.subagents = { model: "mock-openai/gpt-5.6-luna" };
@@ -388,19 +573,11 @@ it.for([
           const payload: Extract<CronStoredJob["payload"], { kind: "agentTurn" }> = {
             kind: "agentTurn",
             message: "Background exec completed",
+            ...(gmail ? { externalContentSource: "gmail" as const } : {}),
+            ...(locked ? { fallbacks: ["mock-openai/gpt-5.6-sol"] } : {}),
+            ...(explicitScheduledModel ? { model: `${scheduledProvider}/gpt-5.6-sol` } : {}),
+            ...(scenario === "scheduled-model-malformed" ? { model: "openai/" } : {}),
           };
-          if (gmail) {
-            payload.externalContentSource = "gmail";
-          }
-          if (locked) {
-            payload.fallbacks = ["mock-openai/gpt-5.6-sol"];
-          }
-          if (explicitScheduledModel) {
-            payload.model =
-              scenario === "scheduled-model-malformed"
-                ? "openai/"
-                : `${scheduledProvider}/gpt-5.6-sol`;
-          }
           completion = enqueueSessionEventForHost("Background exec completed", {
             ...scope,
             source: failure ? "cron" : "exec",
@@ -494,15 +671,8 @@ it.for([
             status: executes && (!failure || transport) ? "completed" : "failed",
             executionStarted: executes || locked,
           });
-          expect(prompts).toHaveLength(
-            failure
-              ? 1
-              : scenario === "scheduled-subagent-default"
-                ? 3
-                : executes || locked
-                  ? 2
-                  : 1,
-          );
+          const promptCount = failure || !(executes || locked) ? 1 : 2;
+          expect(prompts).toHaveLength(scenario === "scheduled-subagent-default" ? 3 : promptCount);
           if (failure) {
             expect(completedOutcome).toMatchObject({
               delivered: false,
@@ -539,8 +709,7 @@ it.for([
             expect(completedOutcome.error).toContain(
               "automation model override 'mock-openai/gpt-5.6-sol' rejected by agents.defaults.modelPolicy.allow",
             );
-          }
-          if (scenario === "scheduled-model-malformed") {
+          } else if (scenario === "scheduled-model-malformed") {
             expect(completedOutcome.error).toContain('Invalid model override "openai/"');
           }
           if (executes && !failure) {
@@ -576,7 +745,7 @@ it.for([
           }
           if (locked) {
             expect(completedOutcome.error).toBe(
-              "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+              "⚠️ This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.",
             );
             expect((await readSessionEntryInWorker(scope))?.modelSelectionLocked).toBe(true);
           }

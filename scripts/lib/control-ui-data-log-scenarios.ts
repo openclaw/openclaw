@@ -232,7 +232,14 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     rowSelector: ".log-row",
     prepare: bufferReady,
     run: async (page, gateway) => {
-      await gateway.setMethodResponse("logs.tail", createDataLogTail(10_000));
+      await gateway.setMethodResponse("logs.tail", {
+        cases: [
+          // Polls before and after the reset must not append the replacement tail again.
+          { match: { cursor: bufferLimit }, response: createDataLogTail(bufferLimit, 0) },
+          { match: { cursor: 10_500 }, response: createDataLogTail(10_500, 0) },
+          { response: createDataLogTail(10_000) },
+        ],
+      });
       const after = (await gateway.getRequests("logs.tail")).length;
       const refresh = page
         .locator("openclaw-logs-page")

@@ -3,8 +3,8 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { resolveCanonicalPath } from "../../infra/package-update-manager-preflight.js";
-import { pathEntryExists } from "../../infra/path-existence.js";
+import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
+import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
@@ -29,6 +29,7 @@ import {
 export async function inspectNpmGlobalDestination(
   root: string,
   installTarget: ResolvedGlobalInstallTarget,
+  dryRun = false,
 ) {
   const destination: Omit<UpdateDestinationFailure, "ownership" | "cause"> = {
     destinationKind: "unknown",
@@ -65,6 +66,19 @@ export async function inspectNpmGlobalDestination(
     destination.destinationKind = "npm-global";
     destination.prefix = prefix;
     destination.packageRoot = packageRoot;
+    // An update killed while replacing this checkout's npm link left the path empty.
+    const interruptedLink = (await pathEntryExists(packageRoot))
+      ? undefined
+      : await restoreInterruptedNpmPackageRootLink(
+          destinationLayout.globalRoot,
+          packageRoot,
+          root,
+          dryRun,
+        );
+    if (interruptedLink && dryRun) {
+      // A dry run moves nothing; the real run inspects the launcher once the link is back.
+      return { kind: "owned" as const, interruptedLink };
+    }
     const { launcher, launcherTarget } = await inspectNpmLauncher(destinationLayout);
     destination.launcher = launcher;
     destination.launcherTarget = launcherTarget;
@@ -83,7 +97,7 @@ export async function inspectNpmGlobalDestination(
     const command = serviceInspection?.command ?? null;
     const ownsPackage =
       packageRootReal !== null &&
-      ((await resolveCanonicalPath(root)) === packageRootReal ||
+      ((await realpathOrResolve(root)) === packageRootReal ||
         (await gatewayServiceCommandUsesRoot({ root: packageRootReal, command })) === true);
     const ownsLauncher =
       !launcherPresent ||
@@ -91,7 +105,7 @@ export async function inspectNpmGlobalDestination(
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
     if (ownsPackage && ownsLauncher) {
-      return { kind: "owned" as const };
+      return { kind: "owned" as const, interruptedLink };
     }
     const layout = await summarizeGatewayServiceLayout(command);
     const wrapper = [

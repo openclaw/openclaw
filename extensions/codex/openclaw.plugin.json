@@ -685,8 +685,8 @@
       "advanced": true
     },
     "supervision.allowRawTranscripts": {
-      "label": "Allow Raw Transcript Tools",
-      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full transcripts and transcript previews.",
+      "label": "Allow Raw Chat History Tools",
+      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full chat history and chat previews.",
       "advanced": true
     },
     "supervision.allowWriteControls": {

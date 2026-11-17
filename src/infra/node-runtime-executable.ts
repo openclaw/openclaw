@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
 
 // Tooling imports this bootstrap directly in Node before a TypeScript loader is available.
@@ -47,7 +48,7 @@ function buildNodeExecutableCandidates(env: NodeJS.ProcessEnv): string[] {
   return [...new Set(candidates)];
 }
 
-/** Resolves a real Node executable, skipping Bun's optional `node` shim. */
+/** Resolves a supported Node executable, skipping Bun's optional `node` shim. */
 export function resolveNodeRuntimeExecutable(options?: {
   env?: NodeJS.ProcessEnv;
   requiredFlag?: string;
@@ -56,6 +57,7 @@ export function resolveNodeRuntimeExecutable(options?: {
   const requiredFlag = options?.requiredFlag;
   if (
     !process.versions.bun &&
+    isSupportedOpenClawNodeVersion(process.versions.node) &&
     (!requiredFlag || process.allowedNodeEnvironmentFlags.has(requiredFlag))
   ) {
     return process.execPath;

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
@@ -11,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -328,5 +330,62 @@ it.each([false, true])(
       const body = await response.text();
       expect(body.includes("private tool result")).toBe(expectedStatus === 200);
     });
+  },
+);
+
+it.each([false, true])(
+  "refuses sandbox-required member standalone tools without named roles (stored=%s)",
+  async (stored) => {
+    await withToolsInvokeTestState(
+      { label: "member-standalone-sandbox", prepareProfileCatalog: true },
+      async () => {
+        const profile = ensureProfileForEmail("member-admin-sandbox@example.test");
+        const principal = {
+          kind: "member" as const,
+          peerKey: "iroh:required-admin",
+          accountId: "required-admin",
+          role: "isolated",
+        };
+        runtime.cfg = {
+          gateway: {
+            roles: {
+              definitions: {
+                isolated: {
+                  sessions: { others: "view" },
+                  agents: "*",
+                  scopes: ["operator.admin"],
+                  sandbox: "required",
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(runtime.cfg);
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        try {
+          const sessionKey = "agent:main:host-tool-target";
+          if (stored) {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              { sessionId: "host-target", updatedAt: 1 },
+            );
+          }
+          const result = await invokeGatewayTool({
+            cfg: runtime.cfg,
+            input: { name: "session_status", sessionKey },
+            openclawIdPrincipal: principal,
+            operatorRoleActor: { kind: "operator", profileId: profile.id },
+            operatorScopes: ["operator.admin"],
+            senderIsOwner: true,
+            toolCallIdPrefix: "http",
+          });
+          expect(result).toMatchObject({ ok: false, status: 403 });
+          expect(JSON.stringify(result)).toContain("requires a sandboxed session");
+          expect(runtime.execute).not.toHaveBeenCalled();
+        } finally {
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+        }
+      },
+    );
   },
 );

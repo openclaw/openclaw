@@ -385,6 +385,14 @@ export function requireCronJobId(id: unknown, accepted = "Pass it positionally."
   return jobId;
 }
 
+/** Ctrl-C cancels a pending read; mutations keep waiting for their receipt. */
+export async function callCronReadFromCli(method: string, opts: GatewayRpcOpts, params: unknown) {
+  const signal = getAsyncWorkSignal();
+  return signal
+    ? await callGatewayFromCli(method, opts, params, { signal })
+    : await callGatewayFromCli(method, opts, params);
+}
+
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
@@ -559,12 +567,6 @@ const formatCell = (value: unknown, width: number) => {
   return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };
 
-const formatIsoMinute = (iso: string) => {
-  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
-  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
-  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
-};
-
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
 
 const formatRelative = (ms: number | null | undefined, nowMs: number) => {
@@ -576,10 +578,17 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) => {
+const formatSchedule = (
+  schedule: CronSchedule | undefined,
+  hasTrigger = false,
+  mode: "summary" | "detail" = "summary",
+) => {
   const suffix = hasTrigger ? "+trigger" : "";
   if (schedule?.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}${suffix}`;
+    const iso = timestampMsToIsoString(parseAbsoluteTimeMs(schedule.at));
+    // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+    const timestamp = iso && mode === "summary" ? `${iso.slice(0, -8)}Z` : iso;
+    return `at ${timestamp?.replace("T", " ") ?? "-"}${suffix}`;
   }
   if (schedule?.kind === "every") {
     return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
@@ -721,7 +730,8 @@ export function printCronShow(
   runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  const schedule = formatSchedule(job.schedule, job.trigger !== undefined, "detail");
+  runtime.log(`schedule: ${showValue(schedule)}`);
   runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
     runtime.log(`stream status: ${showValue(state.streamStatus)}`);

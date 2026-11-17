@@ -6,6 +6,7 @@ import path from "node:path";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { PluginCaptureReclaimCandidate } from "../infra/fs-safe-copy-worker-contract.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -25,6 +26,7 @@ import {
 } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureCustody,
+  reclaimLegacyPluginCapture,
   type NativeCaptureMaintenance,
 } from "./plugin-source-capture-native-loads.js";
 import {
@@ -34,6 +36,7 @@ import {
   PLUGIN_SOURCE_SNAPSHOT_PREFIX,
   PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCaptureFallbackPrefix,
+  resolvePluginSourceCaptureFallbackPrefixAsync,
   resolvePluginSourceCapturesDirectory,
 } from "./plugin-source-capture-path.js";
 
@@ -55,6 +58,7 @@ const {
   instances,
   ownedRoots,
   reclaimInstance,
+  reclaimPluginCaptureSweep,
   isPluginSourceCaptureRetained,
   retainLoadedPluginSourceCapture,
   retainPluginNativeCapturePath,
@@ -150,6 +154,7 @@ async function reclaimInstances(
   legacy = false,
   nativeMaintenance?: NativeCaptureMaintenance,
   fallbackPrefix?: string,
+  collect?: (candidate: PluginCaptureReclaimCandidate) => void,
 ): Promise<void> {
   let entries: fs.Dirent[];
   try {
@@ -206,21 +211,28 @@ async function reclaimInstances(
         if (nativeStat) {
           continue;
         }
-        await nativeMaintenance?.assertCurrent();
-        const current = fs.lstatSync(canonical);
-        if (
-          current.isDirectory() &&
-          current.dev === stat.dev &&
-          current.ino === stat.ino &&
-          current.uid === stat.uid &&
-          (!process.getuid || current.uid === process.getuid())
-        ) {
-          // Legacy producers surviving the grace period are best effort; managed captures retain tokens.
-          await fsPromises.rm(canonical, { recursive: true, force: true });
+        const candidate: PluginCaptureReclaimCandidate = {
+          directory: canonical,
+          identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
+          kind: "legacy",
+        };
+        if (collect) {
+          collect(candidate);
+        } else {
+          await nativeMaintenance?.assertCurrent();
+          await reclaimLegacyPluginCapture(candidate);
         }
         continue;
       }
-      await reclaimInstance(canonical, stat, nativeMaintenance);
+      if (collect) {
+        collect({
+          directory: canonical,
+          identity: { dev: stat.dev, ino: stat.ino, uid: stat.uid },
+          kind: "managed",
+        });
+      } else {
+        await reclaimInstance(canonical, stat, nativeMaintenance);
+      }
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT") && !isSqliteLockError(error)) {
         recordFailure(error);
@@ -303,15 +315,18 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
         firstFailure = error;
       }
     };
-    sweep = reclaimInstances(root, recordFailure)
+    const candidates: PluginCaptureReclaimCandidate[] = [];
+    const collect = (candidate: PluginCaptureReclaimCandidate) => candidates.push(candidate);
+    sweep = reclaimInstances(root, recordFailure, false, undefined, undefined, collect)
       .catch(recordFailure)
-      .then(() =>
+      .then(async () =>
         reclaimInstances(
           tmpdir(),
           recordFailure,
           false,
           undefined,
-          resolvePluginSourceCaptureFallbackPrefix(stateDir),
+          await resolvePluginSourceCaptureFallbackPrefixAsync(stateDir),
+          collect,
         ),
       )
       .catch(recordFailure)
@@ -322,7 +337,7 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
             const directory = await fsPromises.realpath(candidate);
             if (!visited.has(directory)) {
               visited.add(directory);
-              await reclaimInstances(directory, recordFailure, true);
+              await reclaimInstances(directory, recordFailure, true, undefined, undefined, collect);
             }
           } catch (error) {
             if (!hasErrnoCode(error, "ENOENT")) {
@@ -331,6 +346,14 @@ function sweepPluginSourceCaptureDirectories(stateDir: string): Promise<void> {
           }
         }
       })
+      .then(() => reclaimPluginCaptureSweep(candidates))
+      .then((result) => {
+        if (result.failures > 0) {
+          firstFailure ??= result.firstFailure;
+          failures += result.failures;
+        }
+      })
+      .catch(recordFailure)
       .then(() => {
         if (failures === 0) {
           return;

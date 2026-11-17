@@ -10,5 +10,11 @@ export function createDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: isDeepSeekV4ModelRef,
+    resolveReasoningEffort: (level) => {
+      if (level === "minimal" || level === "low") {
+        return "low";
+      }
+      return level === "max" ? "max" : "high";
+    },
   });
 }

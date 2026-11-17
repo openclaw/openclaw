@@ -2253,10 +2253,7 @@ describe("collector result tool across the loopback MCP boundary", () => {
     await startLoopbackServerForTest();
     const scope = await mintCollectorGrant();
 
-    expectMcpResultText(
-      await callStructuredOutput(scope),
-      JSON.stringify({ status: "recorded" }, null, 2),
-    );
+    expectMcpResultText(await callStructuredOutput(scope), JSON.stringify({ status: "recorded" }));
     expect(getSubagentRunByRunId(collectorRunId)?.structuredOutput).toEqual({
       structured: { answer: "ok" },
       invalidAttempts: 0,

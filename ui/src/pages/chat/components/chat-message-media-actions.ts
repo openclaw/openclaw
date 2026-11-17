@@ -8,6 +8,8 @@ export type MessageMediaAction = {
   observeElement?: (element: Element | undefined) => void;
   pending: boolean;
   reason?: string;
+  /** Admitted image pixels a catalog tile may display; absent for documents and unavailable media. */
+  previewUrl?: string;
 };
 
 export type WorkspaceFileSearchTarget = {

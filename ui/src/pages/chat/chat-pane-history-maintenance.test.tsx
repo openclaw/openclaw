@@ -27,9 +27,17 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-it.each(["idle measurement", "end-command measurement", "native end clamp"] as const)(
-  "does not request older history or take reader ownership after %s",
+it.each([
+  "idle measurement",
+  "end-command measurement",
+  "native end clamp",
+  "pending end with wheel",
+  "pending end without input",
+] as const)(
+  "keeps geometry-only changes inert and lets reader input request older history after %s",
   async (movement) => {
+    const pendingEnd =
+      movement === "pending end with wheel" || movement === "pending end without input";
     transcriptDomState.measuredRowHeight = 120;
     // Startup frames and the scroll idle debounce must share the controlled clock.
     vi.useFakeTimers();
@@ -56,14 +64,16 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     const state = (pane as unknown as TestChatPane).state;
     state.sessionKey = pane.sessionKey;
     const request = vi.fn(async () => ({
-      messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+      messages: Array.from({ length: pendingEnd ? 160 : 2 }, (_, index) =>
+        nativeHistoryMessage(index + 1),
+      ),
       hasMore: false,
-      totalMessages: 4,
+      totalMessages: pendingEnd ? 190 : 4,
     }));
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
-    state.chatMessages = Array.from({ length: 12 }, (_, index) => {
-      const message = nativeHistoryMessage(index + 3);
+    state.chatMessages = Array.from({ length: pendingEnd ? 30 : 12 }, (_, index) => {
+      const message = nativeHistoryMessage(index + (pendingEnd ? 161 : 3));
       // A remote image keeps the earlier row measurable for late intrinsic resize.
       return index === 4
         ? {
@@ -75,7 +85,11 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
           }
         : message;
     });
-    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-2", totalMessages: 4 };
+    state.chatHistoryPagination = {
+      hasMore: true,
+      olderCursor: "older-2",
+      totalMessages: pendingEnd ? 190 : 4,
+    };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
     pane.render();
@@ -108,7 +122,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
       }
     });
     let earlier: HTMLElement | undefined;
-    if (movement !== "native end clamp") {
+    if (!pendingEnd && movement !== "native end clamp") {
       // A focused control keeps a previously visited row measurable after
       // Latest deliberately stops mounting speculative history neighbors.
       transcript.scrollToOffset(480);
@@ -162,6 +176,40 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     expect(request).not.toHaveBeenCalled();
     expect(state.chatFollowLocked).toBe(false);
     maximum = 1400;
+
+    if (pendingEnd) {
+      expect(transcript.scrollToEnd({ behavior: "smooth" })).toBe(true);
+      expect(transcript.isProgrammaticScroll).toBe(true);
+      container.scrollTop = 0;
+      container.dispatchEvent(new Event("scroll"));
+      expect(transcript.isProgrammaticScroll).toBe(true);
+      // A wheel at native zero can cancel the journey without another scroll event.
+      if (movement === "pending end with wheel") {
+        container.dispatchEvent(new WheelEvent("wheel", { deltaY: -2000, bubbles: true }));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (movement === "pending end without input") {
+        expect(request).not.toHaveBeenCalled();
+        expect(state.chatMessages).toHaveLength(30);
+      } else {
+        expect(request).toHaveBeenCalledExactlyOnceWith(
+          "chat.history",
+          {
+            sessionKey: state.sessionKey,
+            limit: 1000,
+            maxBytes: 3 * 1024 * 1024,
+            toolResultMaxChars: 2_000,
+            cursor: "older-2",
+          },
+          { signal: expect.any(AbortSignal) },
+        );
+        expect(state.chatMessages).toHaveLength(190);
+        expect(state.chatFollowLocked).toBe(true);
+        expect(state.chatReadingHistory).toBe(true);
+      }
+      return;
+    }
 
     if (movement === "native end clamp") {
       // The browser clamps the current position as the scroll range shrinks,

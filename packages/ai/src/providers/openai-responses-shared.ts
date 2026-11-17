@@ -16,7 +16,10 @@ import {
   type OpenAIResponsesRequestParams,
 } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
-import { createResponsesStreamWithRecovery } from "../transports/openai-responses-replay-internal.js";
+import {
+  createResponsesStreamWithRecovery,
+  createResponsesItemConflictRecovery,
+} from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
@@ -150,6 +153,20 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 }
 
+type ResponsesClient = {
+  responses: {
+    create(
+      params: ResponseCreateParamsStreaming,
+      options: ResponsesRequestOptions,
+    ): {
+      withResponse(): Promise<{
+        data: AsyncIterable<ResponseStreamEvent>;
+        response: Response;
+      }>;
+    };
+  };
+};
+
 export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
@@ -165,19 +182,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     > &
     FirstStreamEventInternalOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
-  createClient: (model: Model<TApi>) => {
-    responses: {
-      create(
-        params: ResponseCreateParamsStreaming,
-        options: ResponsesRequestOptions,
-      ): {
-        withResponse(): Promise<{
-          data: AsyncIterable<ResponseStreamEvent>;
-          response: Response;
-        }>;
-      };
-    };
-  };
+  createClient: (model: Model<TApi>) => ResponsesClient | Promise<ResponsesClient>;
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
@@ -187,9 +192,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
+  let itemRecovery: ReturnType<typeof createResponsesItemConflictRecovery> | undefined;
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
-    const client = params.createClient(model);
+    itemRecovery = createResponsesItemConflictRecovery(output, model, options);
+    const recovery = itemRecovery;
+    const client = await params.createClient(model);
     const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
@@ -232,6 +240,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       model,
       encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
+      buildItemConflictRequest: () => recovery.retry(buildRequest),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
@@ -297,6 +306,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     }
     finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
+    itemRecovery?.reject(error);
     const response = error instanceof ResponsesStreamFailure ? error.response : error;
     const rawError = isRecord(response) && isRecord(response.error) ? response.error : response;
     if (
@@ -320,6 +330,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       error,
     });
   } finally {
+    itemRecovery?.finish();
     firstEventAbort?.dispose();
   }
 }

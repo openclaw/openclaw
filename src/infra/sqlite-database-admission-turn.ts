@@ -3,16 +3,15 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
+import { resolveIdentityPathViaExistingAncestor } from "./boundary-path.js";
 import { isMissingPathError } from "./errno.js";
 import {
   canShareSqliteDatabaseAdmissions,
-  hasSqliteDatabaseSchemaAdmissionForPath,
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+  prepareSqliteDatabaseAdmissionAsync,
 } from "./sqlite-database-admission.js";
-import {
-  inspectDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "./sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 type AdmissionTurnScope = { active: boolean };
 export type PreparedSqliteReadAdmission = {
@@ -20,117 +19,179 @@ export type PreparedSqliteReadAdmission = {
   physicalFamilies?: true;
 };
 
-const pending = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
-  () => new Map<string, Promise<void>>(),
-);
+const turns = resolveGlobalSingleton(Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"), () => ({
+  pending: new Map<string, Promise<void>>(),
+  discovery: Promise.resolve(),
+  discovering: 0,
+}));
 const current = new AsyncContext<AdmissionTurnScope>(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurnContext"),
 );
 
-function reserveAdmissionTurn(
-  locations: string | readonly string[],
-  families: readonly string[],
-  prepared?: PreparedSqliteReadAdmission,
-) {
-  // Nested dispatch belongs to the outer turn; it must not queue behind its own callers.
-  if (current.getStore()?.active || !canShareSqliteDatabaseAdmissions()) {
-    return undefined;
-  }
-  const keys = new Set(
-    families.map(
-      (directory) =>
-        `family:${prepared?.physicalFamilies ? directory : resolveIdentityPathViaExistingAncestorSync(directory)}`,
-    ),
-  );
-  for (const location of typeof locations === "string" ? [locations] : locations) {
-    let identity: ReturnType<typeof inspectDatabasePathIdentitySync>;
-    try {
-      // A native task can request a host writer after publishing its completed schema.
-      if (
-        !prepared?.readIdentities?.has(location) &&
-        hasSqliteDatabaseSchemaAdmissionForPath(location)
-      ) {
-        continue;
-      }
-      identity =
-        prepared?.readIdentities?.get(location) ?? inspectDatabasePathIdentitySync(location);
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-    }
-    // Discovery owns unavailable targets; they still share pathname and family ordering.
-    const canonicalPath =
-      identity?.canonicalPath ?? resolveIdentityPathViaExistingAncestorSync(location);
-    keys.add(`path:${canonicalPath}`);
-    if (identity) {
-      keys.add(`${identity.key}:${identity.birthtime ?? ""}`);
-    }
-    keys.add(`family:${path.dirname(canonicalPath)}`);
-  }
+function hasPublishedSchema(location: string): boolean {
+  const identity = getSqliteDatabaseAdmissionIdentityForPath(location);
+  return identity !== undefined && hasSqliteDatabaseSchemaAdmissionForIdentity(identity);
+}
+
+function reserveAdmissionTurn(keys: ReadonlySet<string>) {
   if (keys.size === 0) {
     return undefined;
   }
-  const predecessors = new Set([...keys].flatMap((key) => pending.get(key) ?? []));
+  const predecessors = new Set([...keys].flatMap((key) => turns.pending.get(key) ?? []));
   const { promise: completion, resolve: completeTurn } = createDeferredCore();
   for (const key of keys) {
-    pending.set(key, completion);
+    turns.pending.set(key, completion);
   }
   const release = () => {
     for (const key of keys) {
-      if (pending.get(key) === completion) {
-        pending.delete(key);
+      if (turns.pending.get(key) === completion) {
+        turns.pending.delete(key);
       }
     }
     completeTurn();
   };
-  const ready = Promise.all(predecessors);
-  return { ready, release };
+  return { ready: Promise.all(predecessors), release };
+}
+
+type AdmissionPreparation =
+  | PreparedSqliteReadAdmission
+  | (() => Promise<PreparedSqliteReadAdmission>);
+
+function prepareAdmissionTurn(
+  locations: readonly string[],
+  families: readonly string[],
+  preparationSource?: AdmissionPreparation,
+  assertCurrent: () => void = () => {},
+) {
+  // Capture invocation order before yielding, but release discovery immediately after enqueue.
+  turns.discovering++;
+  const preparation = turns.discovery.then(async () => {
+    try {
+      assertCurrent();
+      const prepared =
+        typeof preparationSource === "function" ? await preparationSource() : preparationSource;
+      assertCurrent();
+      const keys = new Set<string>();
+      for (const directory of families) {
+        const physical = prepared?.physicalFamilies
+          ? directory
+          : await resolveIdentityPathViaExistingAncestor(directory);
+        assertCurrent();
+        keys.add(`family:${physical}`);
+      }
+      const readIdentities = new Map(prepared?.readIdentities);
+      for (const location of locations) {
+        // Discovery returns physical facts; an explicit read scope still requests FIFO custody.
+        if (
+          (typeof preparationSource === "function" || !prepared?.readIdentities?.has(location)) &&
+          hasPublishedSchema(location)
+        ) {
+          continue;
+        }
+        let identity: DatabasePathIdentity | undefined;
+        try {
+          identity = await prepareSqliteDatabaseAdmissionAsync({
+            location,
+            identity: prepared?.readIdentities?.get(location),
+            assertCurrent,
+          });
+        } catch (error) {
+          if (!isMissingPathError(error)) {
+            throw error;
+          }
+        }
+        const canonicalPath =
+          identity?.canonicalPath ?? (await resolveIdentityPathViaExistingAncestor(location));
+        assertCurrent();
+        keys.add(`path:${canonicalPath}`);
+        if (identity) {
+          readIdentities.set(location, identity);
+          keys.add(`${identity.key}:${identity.birthtime ?? ""}`);
+        }
+        if (!identity || !hasSqliteDatabaseSchemaAdmissionForIdentity(identity)) {
+          keys.add(`family:${path.dirname(canonicalPath)}`);
+        }
+      }
+      return { turn: reserveAdmissionTurn(keys), prepared: { readIdentities } };
+    } finally {
+      turns.discovering--;
+    }
+  });
+  turns.discovery = preparation.then(
+    () => {},
+    () => {},
+  );
+  return preparation;
 }
 
 /** Only cold dispatch waits here; native getters never block the host on a worker's publication. */
 export function acquireSqliteDatabaseAdmissionTurn(
   locations: string | readonly string[],
   families: readonly string[] = [],
+  prepared?: PreparedSqliteReadAdmission,
+  assertCurrent?: () => void,
 ): Promise<() => void> | undefined {
-  const turn = reserveAdmissionTurn(locations, families);
-  return turn?.ready.then(() => turn.release);
+  const paths = typeof locations === "string" ? [locations] : locations;
+  if (
+    current.getStore()?.active ||
+    !canShareSqliteDatabaseAdmissions() ||
+    (!turns.discovering && !prepared && !families.length && paths.every(hasPublishedSchema))
+  ) {
+    return undefined;
+  }
+  return prepareAdmissionTurn(paths, families, prepared, assertCurrent).then(async ({ turn }) => {
+    await turn?.ready;
+    return turn?.release ?? (() => {});
+  });
 }
 
 /** Known database locators are captured by their task owner before dispatch, never inferred from IPC. */
 export function runWithSqliteDatabaseAdmissionTurn<T>(
   locations: readonly string[],
-  operation: () => Promise<T>,
+  operation: (prepared?: PreparedSqliteReadAdmission) => Promise<T>,
   families: readonly string[] = [],
   signal?: AbortSignal,
-  prepared?: PreparedSqliteReadAdmission,
+  prepared?: AdmissionPreparation,
+  assertCurrent?: () => void,
 ): Promise<T> {
-  if (current.getStore()?.active) {
-    return operation();
+  if (current.getStore()?.active || !canShareSqliteDatabaseAdmissions()) {
+    return typeof prepared === "function" ? prepared().then(operation) : operation(prepared);
   }
-  const turn = reserveAdmissionTurn(locations, families, prepared);
-  const run = () => {
+  const run = (
+    turn: ReturnType<typeof reserveAdmissionTurn>,
+    facts: PreparedSqliteReadAdmission | undefined,
+  ) => {
     // Warm dispatch can lose schema admission while queued; nested work still belongs to this turn.
     const scope: AdmissionTurnScope = { active: true };
     return current.run(scope, async () => {
       try {
-        return await operation();
+        return await operation(facts);
       } finally {
         scope.active = false;
         turn?.release();
       }
     });
   };
-  if (!turn) {
-    return run();
+  if (!turns.discovering && !prepared && !families.length && locations.every(hasPublishedSchema)) {
+    return run(undefined, undefined);
   }
-  return racePromiseWithAbortSignal(turn.ready, signal, (aborted) => aborted.reason).then(
-    run,
-    (error: unknown) => {
-      // A cancelled waiter still carries its predecessors for later reservations.
-      void turn.ready.then(turn.release);
-      throw error;
+  const assertPreparing = () => {
+    signal?.throwIfAborted();
+    assertCurrent?.();
+  };
+  return prepareAdmissionTurn(locations, families, prepared, assertPreparing).then(
+    ({ turn, prepared: facts }) => {
+      if (!turn) {
+        return run(undefined, facts);
+      }
+      return racePromiseWithAbortSignal(turn.ready, signal, (aborted) => aborted.reason).then(
+        () => run(turn, facts),
+        (error: unknown) => {
+          // A cancelled waiter still carries its predecessors for later reservations.
+          void turn.ready.then(turn.release);
+          throw error;
+        },
+      );
     },
   );
 }

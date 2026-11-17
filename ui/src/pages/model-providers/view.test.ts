@@ -217,10 +217,9 @@ describe("renderModelProviders", () => {
   });
 
   it("surfaces a provider-usage failure on the provider list", () => {
-    const container = document.createElement("div");
-    mount(props({ providerUsageFailed: true }), container);
-
+    const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
+    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([
@@ -244,9 +243,7 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="status"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await waitForFast(() =>
       expect(
         container.querySelector('.model-providers__catalog-progress[role="alert"] span')
@@ -258,6 +255,31 @@ describe("renderModelProviders", () => {
     );
     expect(retry).not.toBeNull();
     expect(retry?.disabled).toBe(false);
+  });
+
+  it("keeps listing failures quiet until something is set up", async () => {
+    const failure = "Couldn’t load models from acp-opencode, openai. Try again.";
+    const alert = (container: HTMLElement) =>
+      container.querySelector('.model-providers__catalog-progress[role="alert"]');
+    // Providers that failed discovery still get a row; none is connected on a fresh install.
+    const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
+    const fresh = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    const configured = mount(
+      props({
+        cards: [unconnected],
+        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
+        catalogDiscoveryError: failure,
+      }),
+    );
+    await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
+    // Both views settled the same way; only the set-up one reports the failure.
+    expect(alert(fresh)).toBeNull();
   });
 
   it("shows inherited model policy, restores overrides, and preserves advanced thinking", () => {
@@ -281,7 +303,7 @@ describe("renderModelProviders", () => {
     expect(text(fastRow)).not.toContain("Default: Model policy");
     const thinkingHelp = thinkingRow.querySelector('openclaw-tooltip [slot="content"]');
     const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
-    expect(thinkingHelp?.textContent).toContain("model's thinking policy");
+    expect(thinkingHelp?.textContent).toContain("model’s own effort setting");
     expect(fastModeHelp?.textContent).toContain("Unlike Auto");
     expect(thinkingRow.querySelector(".settings-segmented__btn button")).toBeNull();
     expect(fastRow.querySelector(".settings-segmented__btn button")).toBeNull();
@@ -337,7 +359,7 @@ describe("renderModelProviders", () => {
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
     expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
-      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
+      "Handles structured choices and scores. Select a decision model to enable it; chat models are not used as fallback.",
     );
   });
 
@@ -549,7 +571,7 @@ describe("renderModelProviders", () => {
       "Config refresh failed after the model defaults were committed.",
     ]);
     expect(messages[0]?.classList.contains("success")).toBe(true);
-    expect(messages[1]?.classList.contains("warning")).toBe(true);
+    expect(messages[1]?.classList.contains("warn")).toBe(true);
   });
 
   it("keeps model behavior available while provider data loads", () => {

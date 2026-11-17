@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { GATEWAY_WORK_ADMISSION_STATE } from "../process/gateway-work-admission-state.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -30,7 +29,6 @@ export class LegacyPluginSdkResourceHost {
   private readonly failures: unknown[] = [];
   private closing?: Promise<void>;
   private gatewayScheduler?: GatewayScheduler;
-  private gatewayShutdownSignal?: AbortSignal;
 
   get scheduler(): GatewayScheduler {
     this.assertOpen();
@@ -48,7 +46,6 @@ export class LegacyPluginSdkResourceHost {
       throw new Error("Plugin SDK resource host already belongs to another Gateway scheduler");
     }
     this.gatewayScheduler = scheduler;
-    this.gatewayShutdownSignal = GATEWAY_WORK_ADMISSION_STATE.restartDrainController.signal;
   }
 
   assertOpen(): void {
@@ -71,12 +68,9 @@ export class LegacyPluginSdkResourceHost {
     if (parent?.host === this && parent.active) {
       return;
     }
-    if (
-      this.gatewayShutdownSignal?.aborted ||
-      this.gatewayScheduler?.signal.aborted ||
-      this.closing ||
-      this.work.isClosing
-    ) {
+    // Ingress and scheduler cancellation precede accepted finalizers. The close
+    // plan drains those owners before this host fences shared-state work.
+    if (this.closing || this.work.isClosing) {
       throw Object.assign(
         new Error("Gateway is closing; plugin shared-state admission is closed"),
         {

@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SessionDeliveryGenerationRevokedError,
+  SessionDeliveryGenerationUnavailableError,
+} from "../config/sessions/session-delivery-generation-errors.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import {
   decodeSessionTranscriptWorkerReadError,
@@ -20,6 +24,7 @@ import {
   resolveModelFallbackError,
 } from "./failover-error.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
   recordAgentHarnessPreflightOwner,
   SessionControllerAdmissionRequiredError,
@@ -108,6 +113,19 @@ function transportedSessionReadFailure() {
   return decodeSessionTranscriptWorkerReadError(failure);
 }
 it.each([
+  ...[SessionDeliveryGenerationUnavailableError, SessionDeliveryGenerationRevokedError].map(
+    (Failure) =>
+      [
+        Failure.name,
+        () =>
+          new Error("Session target preparation outlived its attempt", {
+            cause: new Error("admitted run authority is no longer active", {
+              cause: new Failure(),
+            }),
+          }),
+        false,
+      ] as const,
+  ),
   [
     "unscoped preflight",
     () =>
@@ -152,6 +170,11 @@ it.each([
     "wrapped transcript conflict",
     () => new Error("worker operation failed", { cause: transcriptConflict() }),
     false,
+  ],
+  [
+    "wrapped deployment denial",
+    () => new Error("run failed", { cause: new AgentHarnessModelRequestPolicyError() }),
+    true,
   ],
   ["cyclic recorded stop", cyclicRecordedStop, true],
   ["recorded supersession", createAgentRunSupersededAbortError, true],

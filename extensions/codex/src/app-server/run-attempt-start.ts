@@ -116,6 +116,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       persistentWebSearchAllowed: toolState.persistentWebSearchAllowed,
       webSearchAllowed: toolState.webSearchAllowed,
       developerInstructions,
+      onDeveloperInstructions: prompt.setThreadDeveloperInstructions,
+      systemPromptReplaced: turnState.promptBuild.systemPromptReplaced,
       refreshableInstructions:
         joinPresentSections(
           context.refreshableInstructions,
@@ -169,6 +171,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    prompt.adoptThreadBaseInstructions(state.thread);
     // Capture native authority only after this exact client's managed-policy
     // preflight succeeds; startup retries may have replaced the initial client.
     await attemptTools.captureCronCreatorToolAllowlist();

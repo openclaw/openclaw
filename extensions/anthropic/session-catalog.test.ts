@@ -1539,7 +1539,7 @@ describe("Claude session catalog", () => {
         expect(page.items[0]?.truncated).toBe(true);
         await expect(
           provider.read({ ...request, cursor: cursor?.replace(/^block:\d+:/u, "block:999:") }),
-        ).rejects.toThrow("transcript cursor is invalid");
+        ).rejects.toThrow("chat history cursor is invalid");
         await fs.appendFile(
           projectFile(home, `${sessionId}.jsonl`),
           `${JSON.stringify(message(sessionId, "assistant", "Appended reply", 5))}\n`,
@@ -1583,7 +1583,7 @@ describe("Claude session catalog", () => {
           cursor,
           limit: 1,
         }),
-      ).rejects.toThrow("transcript cursor is invalid");
+      ).rejects.toThrow("chat history cursor is invalid");
     }
     expect(listNodes).not.toHaveBeenCalled();
   });
@@ -1645,7 +1645,7 @@ describe("Claude session catalog", () => {
     transcriptNextCursor = " ";
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
-    ).rejects.toThrow("Claude node returned an invalid transcript page");
+    ).rejects.toThrow("Claude node returned an invalid chat history page");
   });
 
   it("pages transcripts identically when every reverse-scan read returns short", async () => {
@@ -1668,7 +1668,7 @@ describe("Claude session catalog", () => {
     expect(older.nextCursor).toBeUndefined();
     for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
       await expect(readPage({ threadId: sessionId, cursor, limit: 1 }, home)).rejects.toThrow(
-        "transcript cursor is invalid",
+        "chat history cursor is invalid",
       );
     }
   });
@@ -1684,7 +1684,7 @@ describe("Claude session catalog", () => {
     );
 
     await expect(readPage({ threadId: sessionId, limit: 2 }, home)).rejects.toThrow(
-      "Claude transcript changed while it was being read",
+      "Claude chat history changed while it was being read",
     );
   });
 

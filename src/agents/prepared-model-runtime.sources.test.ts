@@ -25,7 +25,8 @@ import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import { planOpenClawModelsJsonSourceWithInput } from "./models-config.core.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 import * as modelsPlan from "./models-config.plan.js";
 import * as implicitCatalog from "./models-config.providers.implicit.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
@@ -275,7 +276,7 @@ describe("prepared catalog source composition", () => {
         ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
       ).resolves.toEqual({});
       await expect(
-        planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
+        planOpenClawModelsJsonSourceWithInput(facts.input.config, facts.input.agentDir, options),
       ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
       sql.expectIdle();
     } finally {

@@ -117,7 +117,7 @@ suite.define(() => {
               : "Control+f",
           );
           await page
-            .getByRole("textbox", { name: "Search messages", exact: true })
+            .getByRole("textbox", { name: "Search loaded messages", exact: true })
             .fill("looks good");
           expect(await page.locator('[data-entry-id="adjacent-prompt"]').count()).toBe(0);
           await expect
@@ -170,7 +170,7 @@ suite.define(() => {
         const work = page.locator(".chat-work-group");
         await line.waitFor();
         await work.waitFor();
-        await answerGroup.locator(".chat-avatar:visible").waitFor();
+        await answerGroup.getByRole("img", { name: "OpenClaw", exact: true }).waitFor();
         await page
           .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
           .waitFor();

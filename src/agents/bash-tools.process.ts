@@ -31,6 +31,8 @@ import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
   EXEC_RETENTION_CAP_NOTE,
   appendExecTimeoutRetryGuidance,
+  describeExitWake,
+  hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
@@ -89,7 +91,7 @@ function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
   const effectiveLimit =
     typeof limit === "number" && Number.isFinite(limit)
-      ? limit
+      ? Math.max(1, Math.floor(limit))
       : usingDefaultTail
         ? DEFAULT_LOG_TAIL_LINES
         : undefined;
@@ -266,7 +268,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
-      ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
+      ...(hasExitWake(session) ? {} : { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP }),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
       idleMs,
@@ -481,11 +483,14 @@ export function createProcessTool(
             const hasNewOutput = output.length > 0;
             const retryInMs = recordPollRetrySuggestion(sessionId, hasNewOutput);
             const runtime = describeRunningSession(scopedSession);
+            const exitWake = hasNewOutput ? undefined : describeExitWake(scopedSession);
+            const exitWakeHint = exitWake ? ` ${exitWake} instead of polling.` : "";
             const text =
               aggregateOutputNote +
               retainedOutputNote +
               (output || "(no new output)") +
-              (buildInputWaitHint(runtime.waitingForInput) || "\n\nProcess still running.") +
+              (buildInputWaitHint(runtime.waitingForInput) ||
+                `\n\nProcess still running.${exitWakeHint}`) +
               (runtime.followUp ? `\n\n${runtime.followUp}` : "");
             return attachInternalToolResultAcknowledgement(
               textResult(text, {

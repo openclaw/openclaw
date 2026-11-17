@@ -83,9 +83,11 @@ export async function runCronSessionTurn(
       try {
         operator = await restoreCronOperatorSource({
           job,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          entry: expectedTarget,
+          target: {
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sessionId: expectedTarget.sessionId,
+          },
           signal: params.abortSignal,
           deliveryAttemptFence: params.deliveryAttemptFence,
         });
@@ -347,7 +349,9 @@ export async function runCronSessionTurn(
           ? { kind: "aborted" }
           : classification === "timeout"
             ? { kind: "reason", reason: "timeout" }
-            : undefined,
+            : result.errorReason
+              ? { kind: "reason", reason: result.errorReason }
+              : undefined,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isDeliveryRecoveryOwnedRetry,
   isRetryableDeliveryNotSentError,
@@ -9,11 +8,11 @@ import {
 } from "../../infra/delivery-recovery.shared.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
-import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
 import { getGroupThreadParticipant } from "../group-thread-context.js";
 import {
@@ -24,11 +23,7 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { settleReplyPendingFinalDelivery } from "./dispatch-from-config.pending-final.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
-import {
-  normalizeReplyPayloadOutcome,
-  type NormalizeReplyOutcome,
-  type NormalizeReplySkipReason,
-} from "./normalize-reply.js";
+import { normalizeReplyPayloadOutcome, type NormalizeReplyOutcome } from "./normalize-reply.js";
 import {
   composeReplyDispatchBeforeDeliver,
   DEFAULT_BEFORE_DELIVER_TIMEOUT_MS,
@@ -47,18 +42,17 @@ import {
 import {
   mapReplyDispatchCounts,
   type ReplyDispatchBeforeDeliver,
-  type ReplyDispatchBeforeDeliverOptions,
   type ReplyDispatchKind,
   type ReplyDispatchOperation,
   type ReplyDispatchReceipt,
   type ReplyDispatchRuntimeInfo,
   type ReplyDispatcher,
-  type ReplyFollowupAdmissionBarrierTimeoutPolicy,
+  type ReplyDispatcherOptions,
 } from "./reply-dispatcher.types.js";
-import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
+export type { ReplyDispatcherOptions } from "./reply-dispatcher.types.js";
 
 const DEFAULT_RANGE = { min: 800, max: 2500 };
 
@@ -182,54 +176,6 @@ function buildReplyDispatchRuntimeInfo(
   };
 }
 
-export type ReplyDispatcherOptions = {
-  deliver: (payload: ReplyPayload, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
-  /**
-   * Receives a fresh plan after normalization and modifiers. When omitted, prepared
-   * sends fall back to deliver(payload, info), retaining that adapter's raw contract.
-   */
-  deliverPrepared?: (plan: OutboundPayloadPlan, info: ReplyDispatchRuntimeInfo) => Promise<unknown>;
-  /** The delivery callback admits custody before external I/O and owns failure settlement. */
-  pendingFinalDeliveryAdmission?: "deliver";
-  silentReplyContext?: {
-    cfg?: OpenClawConfig;
-    sessionKey?: string;
-    surface?: string;
-    conversationType?: SilentReplyConversationType;
-  };
-  responsePrefix?: string;
-  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
-  responsePrefixContext?: ResponsePrefixContext;
-  /** Dynamic context provider for response prefix template interpolation.
-   * Called at normalization time, after model selection is complete. */
-  responsePrefixContextProvider?: () => ResponsePrefixContext;
-  onHeartbeatStrip?: () => void;
-  onIdle?: () => Promise<void> | void;
-  onError?: (err: unknown, info: ReplyDispatchRuntimeInfo) => Promise<void> | void;
-  /** Let ingress retry proven-unsent work only when outbound recovery holds no delivery. */
-  propagateRetryableNoSendFailure?: boolean;
-  /** Lets channels detect silent/empty drops for their empty-response fallback. */
-  onSkip?: (
-    payload: ReplyPayload,
-    info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
-  ) => void;
-  humanDelay?: HumanDelayConfig;
-  beforeDeliver?: ReplyDispatchBeforeDeliver;
-  /** Owner-declared deadline for the constructor before-delivery callback. */
-  beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
-  onBeforeDeliverCancelled?: (
-    payload: ReplyPayload,
-    info: ReplyDispatchRuntimeInfo,
-  ) => Promise<void> | void;
-  /** Observe each queued payload settling, including cancellation and delivery failure. */
-  onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
-  /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
-  resolveFollowupAdmissionBarrierTimeoutPolicy?: (context: {
-    queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
-    humanDelayBudgetMs: number;
-  }) => ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined;
-};
-
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
@@ -262,6 +208,13 @@ export function prepareReplyPayloadForDispatcher(
 export function createReplyDispatcher(
   options: ReplyDispatcherOptions,
 ): ReplyDispatcher & Required<Pick<ReplyDispatcher, "sendPreparedReply">> {
+  // Delivery belongs to the dispatcher, not a producer lease that may close
+  // before its queued callbacks run. Preserve the original scope's own fences.
+  const invocationContext = pluginInvocationContext.getStore();
+  const runInDispatcherContext = <T>(run: () => T): T =>
+    invocationContext
+      ? runWithAsyncStore(pluginInvocationContext, invocationContext, run)
+      : pluginInvocationContext.exit(run);
   let beforeDeliver = composeReplyDispatchBeforeDeliver(
     options.beforeDeliver
       ? { hook: options.beforeDeliver, options: options.beforeDeliverOptions }
@@ -293,16 +246,17 @@ export function createReplyDispatcher(
       return;
     }
     idleNotified = true;
-    void invokeReplyDispatcherObserver(() => options.onIdle?.());
+    void runInDispatcherContext(() => invokeReplyDispatcherObserver(() => options.onIdle?.()));
   };
-  const scheduleDelivery = <T>(run: () => Promise<T>): Promise<T> => {
-    idleNotified = false;
-    const delivery = sendChain.then(run);
-    sendChain = delivery.then(ignoreResult, ignoreResult);
-    const drained = sendChain;
-    void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
-    return delivery;
-  };
+  const scheduleDelivery = <T>(run: () => Promise<T>): Promise<T> =>
+    runInDispatcherContext(() => {
+      idleNotified = false;
+      const delivery = sendChain.then(run);
+      sendChain = delivery.then(ignoreResult, ignoreResult);
+      const drained = sendChain;
+      void drained.then(() => drained === sendChain && pendingFinalizations > 0 && notifyIdle());
+      return delivery;
+    });
   const waitForIdle = async () => {
     let sent: Promise<void>;
     let settled: Promise<void>;
@@ -588,42 +542,44 @@ export function createReplyDispatcher(
       }
       return attempt;
     });
-    settlementChain = settlementChain.then(async () => {
-      let attempt: Awaited<typeof delivery> | undefined;
-      try {
-        attempt = await delivery;
-        deliveryOutcome = await attempt.settlement;
-        if (
-          deliveryFallback &&
-          !attempt.pendingDelivery &&
-          shouldRetryReplyDispatch(deliveryOutcome)
-        ) {
-          // Deferred providers may need the admitted batch to drain before their
-          // finalization can prove no-send; those alternatives join the next batch.
-          const fallbackInput = deliveryFallback;
-          attempt = await scheduleDelivery(() => deliverOnce(fallbackInput, dispatchInfo));
+    settlementChain = runInDispatcherContext(() =>
+      settlementChain.then(async () => {
+        let attempt: Awaited<typeof delivery> | undefined;
+        try {
+          attempt = await delivery;
           deliveryOutcome = await attempt.settlement;
+          if (
+            deliveryFallback &&
+            !attempt.pendingDelivery &&
+            shouldRetryReplyDispatch(deliveryOutcome)
+          ) {
+            // Deferred providers may need the admitted batch to drain before their
+            // finalization can prove no-send; those alternatives join the next batch.
+            const fallbackInput = deliveryFallback;
+            attempt = await scheduleDelivery(() => deliverOnce(fallbackInput, dispatchInfo));
+            deliveryOutcome = await attempt.settlement;
+          }
+          settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
+        } catch (err: unknown) {
+          settledCounts[kind].failedBeforeSend += 1;
+          await invokeReplyDispatcherObserver(() => options.onError?.(err, dispatchInfo));
+          deliveryOutcome = "failed-before-deliver";
+        } finally {
+          if (deliveryOutcomeTracker) {
+            // Publish pending state before block/final observers consume this exact enqueue's outcome.
+            deliveryOutcomeTracker.pending = attempt?.pendingDelivery === true;
+            deliveryOutcomeTracker.deliveredPayload =
+              deliveryOutcome === "delivered" ? attempt?.payload : undefined;
+            deliveryOutcomeTracker.resolve(deliveryOutcome);
+          }
+          void invokeReplyDispatcherObserver(
+            () => options.onDeliverySettled?.(dispatchInfo),
+            (error) => reportObserverError(error, dispatchInfo),
+          );
+          releasePending();
         }
-        settledCounts[kind][REPLY_DISPATCH_OUTCOME_COUNTS[deliveryOutcome]] += 1;
-      } catch (err: unknown) {
-        settledCounts[kind].failedBeforeSend += 1;
-        await invokeReplyDispatcherObserver(() => options.onError?.(err, dispatchInfo));
-        deliveryOutcome = "failed-before-deliver";
-      } finally {
-        if (deliveryOutcomeTracker) {
-          // Publish pending state before block/final observers consume this exact enqueue's outcome.
-          deliveryOutcomeTracker.pending = attempt?.pendingDelivery === true;
-          deliveryOutcomeTracker.deliveredPayload =
-            deliveryOutcome === "delivered" ? attempt?.payload : undefined;
-          deliveryOutcomeTracker.resolve(deliveryOutcome);
-        }
-        void invokeReplyDispatcherObserver(
-          () => options.onDeliverySettled?.(dispatchInfo),
-          (error) => reportObserverError(error, dispatchInfo),
-        );
-        releasePending();
-      }
-    });
+      }),
+    );
     return true;
   };
 

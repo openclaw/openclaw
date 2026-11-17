@@ -288,7 +288,7 @@ export type ChatComposerState = {
     queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
-  questionTakeoverActive: boolean;
+  questionFocusActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;

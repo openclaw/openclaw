@@ -1,5 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { accessSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +9,7 @@ import {
   formatChildRuntimeSpawnWarning,
   formatMissingChildRuntimeWarning,
   readChildRuntimeViability,
+  prepareChildRuntimeViability,
 } from "./child-runtime-viability.ts";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -42,9 +44,9 @@ it.each([
   { path: "/missing-user-command", code: "ENOENT" },
   { path: process.execPath, code: "ENOENT" },
   { path: process.execPath, code: "EACCES" },
-])("does not mislabel command/cwd/permission failures: $path $code", (fields) => {
+])("does not mislabel command/cwd/permission failures: $path $code", async (fields) => {
   const error = Object.assign(new Error("spawn failed"), fields);
-  expect(formatChildRuntimeSpawnWarning(error)).toBeUndefined();
+  expect(await formatChildRuntimeSpawnWarning(error)).toBeUndefined();
 });
 it.each([
   { execPath: removedCellarPath, code: "ENOENT", available: false },
@@ -106,4 +108,20 @@ it.each([false, true])("probes pre-handshake IPC failures (broken: %s)", (broken
     broken ? expect.objectContaining({ code: "NODE_RUNTIME_UNAVAILABLE" }) : undefined,
   );
   expect(readChildRuntimeViability({ execPath }).available).toBe(!broken);
+});
+
+it("retains prepared refusals across other paths and honors a later same-path failure", async () => {
+  const directory = directories.make("openclaw-runtime-publication-");
+  const missing = path.join(directory, "missing");
+  const refused = await prepareChildRuntimeViability({ execPath: missing });
+  await prepareChildRuntimeViability({ execPath: path.join(directory, "other-missing") });
+  expect(refused.publish()).toEqual({ execPath: missing, available: false });
+
+  const executable = path.join(directory, "executable");
+  writeFileSync(executable, "synthetic runtime", { mode: 0o700 });
+  const prepared = await prepareChildRuntimeViability({ execPath: executable });
+  expect(prepared.publish().available).toBe(true);
+  await fs.unlink(executable);
+  await prepareChildRuntimeViability({ execPath: executable });
+  expect(prepared.publish()).toEqual({ execPath: executable, available: false });
 });

@@ -54,7 +54,7 @@ Do not write a separate permission store or infer consent from successful login.
   the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
   Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
 - **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
-  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }` (equivalent to `runtime`).
   Without the manifest half, the Gateway never refreshes the provider and only
   catalog rows appear.
 - **Row IDs match the listing.** Use the ID the vendor's model list returns.
@@ -159,6 +159,9 @@ token requests and persistence; the listener deadline does not cancel that work.
 By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+Port `0` in `redirectUrl` asks for a free port; read the bound redirect from the
+returned `redirectUrl` and use it in both the authorization URL and the token
+exchange.
 
 ## Declare physical credential ownership
 

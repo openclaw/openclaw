@@ -271,8 +271,8 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")?.textContent).toContain(
-        "Couldn’t finish this reply",
+      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
+        "Couldn't finish this reply.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -280,10 +280,11 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
+    const notice = provider.querySelector(".chat-error.app-toast");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")).toBeNull();
+      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
       expect(provider.querySelector(".chat-error")?.textContent).toContain(
         "Couldn't finish this reply. Check the conversation before trying again.",
       );

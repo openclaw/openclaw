@@ -8,6 +8,10 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type {
+  MessageInjectionRuntimeReason,
+  ReplyMessageInjectionRejectionReason,
+} from "../auto-reply/reply/message-injection-authority.js";
 import type { OriginatingChannelType } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -23,6 +27,11 @@ import type { ReplyBackendTurnStatus } from "./session-controller.turn-status.ty
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
+
+export type {
+  ReplyMessageInjectionRejectionReason,
+  ReplyBackendQueueMessageMismatch,
+} from "../auto-reply/reply/message-injection-authority.js";
 
 export type ReplyBackendQueueMessageOptions = {
   /** Prepared context for this queue item, separate from its transcript and answer text. */
@@ -209,9 +218,9 @@ export type ReplyToolAuthorityPreparation = {
 export type ReplyBackendMessageInjectionV2 = {
   readonly version: 2;
   isAvailable(): boolean;
-  /** Tool-only interruption for an exact message still owned by the steering queue. */
+  /** Tool-only interruption for a captured input; the controller owns queued followup custody. */
   steerNow?: {
-    read(queueIdentity: string): ReplySteerNowState | undefined;
+    read(queueIdentity: string, queuedFollowup?: boolean): ReplySteerNowState | undefined;
     send(queueIdentity: string): ReplySteerNowResult;
   };
   /** @deprecated Use queueMessageAsync with fresh policy preparation. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -310,6 +319,7 @@ export type ReplyBackendHandle = {
 export type ReplyMessageInjectionResolution =
   | {
       reason: ReplyMessageInjectionRejectionReason;
+      runtimeReason?: MessageInjectionRuntimeReason;
       errorMessage?: string;
       backend?: ReplyBackendHandle;
       cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
@@ -320,24 +330,3 @@ export type ReplyMessageInjectionResolution =
       /** Internal FIFO preflight for a released synchronous sink. */
       prepareQueueMessage?: () => Promise<void>;
     };
-
-export type ReplyMessageInjectionRejectionReason =
-  | "no_active_run"
-  | "not_running"
-  | "stale_run"
-  | "injection_unavailable"
-  | "guarded_injection_unsupported"
-  | "requester_origin_mismatch"
-  | "audio_input_unsupported"
-  | "collaborative_steering_disabled"
-  | ReplyBackendQueueMessageMismatch
-  | "runtime_rejected";
-
-export type ReplyBackendQueueMessageMismatch =
-  | "transcript_commit_wait_unsupported"
-  | "input_visibility_mismatch"
-  | "tool_authority_mismatch"
-  | "image_input_unsupported"
-  | "source_reply_delivery_mode_mismatch"
-  | "reply_expectation_mismatch"
-  | "task_suggestion_delivery_mode_mismatch";

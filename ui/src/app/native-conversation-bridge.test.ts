@@ -620,7 +620,7 @@ describe("native conversation contract", () => {
       await flush();
       expect(showToast).toHaveBeenCalledWith({
         severity: "error",
-        message: "Couldn't open that page in the Dashboard",
+        message: "Couldn't open that page",
       });
       expect(f.navigateAndWait).not.toHaveBeenCalled();
       expect(f.data.sessionKey).toBe("agent:main:main");

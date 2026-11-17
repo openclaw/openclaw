@@ -10,6 +10,49 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Gateway connect denial" });
 
 suite.define(() => {
+  it.each(["grant-revoked", "plugin-lifetime-retired"])(
+    "shows a post-connect %s cause and permits only paced transient recovery",
+    async (cause) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(suite.server.baseUrl);
+        await waitForControlUiGatewayReady(page);
+        await page.clock.install();
+        await pauseVirtualClock(page);
+        const attempts = (await gateway.getRequests("connect")).length;
+        const transient = cause === "plugin-lifetime-retired";
+        const message = `Gateway access stopped [access-cause=${cause}]; ${transient ? "retry after policy refresh." : "ask an administrator to restore access."}`;
+        await gateway.closeLatest(4001, message);
+        await page.clock.runFor(1);
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, `post-connect-${cause}.png`), frame.png);
+        await page.clock.runFor(29_000);
+        expect(await gateway.getRequests("connect")).toHaveLength(attempts);
+        if (transient) {
+          await page.getByText("Reconnecting…", { exact: true }).first().waitFor();
+          await page.clock.runFor(7_000);
+        } else {
+          const gate = page.locator(".login-gate");
+          await gate.getByText("No access to this Gateway", { exact: true }).waitFor();
+          await gate.getByText("Show details", { exact: true }).click();
+          await gate.getByText(message, { exact: true }).waitFor();
+          await page.evaluate(() => {
+            window.dispatchEvent(new Event("online"));
+            window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+          });
+          await page.clock.runFor(60_000);
+          expect(await gateway.getRequests("connect")).toHaveLength(attempts);
+          await gate.getByRole("button", { name: "Connect", exact: true }).click();
+        }
+        await page.clock.resume();
+        await waitForControlUiGatewayReady(page);
+        expect(await gateway.getRequests("connect")).toHaveLength(attempts + 1);
+      });
+    },
+  );
+
   it.each(["denied", "unavailable"])(
     "paces %s handshakes at a reachable Gateway",
     async (failure) => {
@@ -45,29 +88,42 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl);
         const gate = page.locator(".login-gate");
-        // Request receipt precedes the queued response and lazy gate rendering.
+        const recovery = denied ? gate : page.locator(".gateway-connection-view");
+        // Request receipt precedes the queued response and recovery-surface rendering.
         await expect
           .poll(async () => {
             await page.clock.runFor(1);
             return {
               attempts: (await gateway.getRequests("connect")).length,
-              visible: await gate.isVisible(),
+              visible: await recovery.isVisible(),
             };
           })
           .toEqual({ attempts: 1, visible: true });
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
+          const attemptsBeforeTick = (await gateway.getRequests("connect")).length;
           await page.clock.runFor(1_000);
           // WebCrypto and fetch use real threads; settle the handshake before advancing again.
           await expect
             .poll(async () => {
-              await page.clock.runFor(1);
-              const socketsClosed = await page.evaluate(() =>
-                (window as MockGatewayWindow)
-                  .openclawControlUiE2eGateway!.socketStates()
-                  .every((socket) => socket.readyState === WebSocket.CLOSED),
-              );
-              return socketsClosed;
+              const handshake = await page.evaluate((previousAttempts) => {
+                const mockGateway = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+                const sockets = mockGateway.socketStates();
+                const requests = mockGateway.requests.filter(
+                  (request) => request.method === "connect",
+                ).length;
+                return {
+                  preparing:
+                    requests === previousAttempts &&
+                    sockets.some((socket) => socket.readyState === WebSocket.OPEN),
+                  settled: sockets.every((socket) => socket.readyState === WebSocket.CLOSED),
+                };
+              }, attemptsBeforeTick);
+              // Closed attempts may never send; only pump an unsettled handshake after signing.
+              if (!handshake.preparing && !handshake.settled) {
+                await page.clock.runFor(1);
+              }
+              return handshake.settled;
             })
             .toBe(true);
         }

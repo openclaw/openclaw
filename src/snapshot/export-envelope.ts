@@ -39,12 +39,28 @@ const postgresEnvelope = z
       tables: z.record(identifier, table),
       allocations: z.record(identifier, allocation),
     }),
-    artifacts: z.strictObject({ "database.sqlite": artifact, "anchor.sqlite": artifact }),
+    /** A schema capture keeps its rows in a frozen copy on the source server. */
+    carrier: z.literal("postgres-schema").optional(),
+    schema: z
+      .string()
+      .regex(/^restore_[a-f0-9]{32}$/)
+      .optional(),
+    artifacts: z.strictObject({
+      "database.sqlite": artifact.optional(),
+      "anchor.sqlite": artifact,
+    }),
     sanitizedDifferences: z.array(identifier),
   })
   .refine((value) => value.profile !== "exact" || value.sanitizedDifferences.length === 0, {
     message: "Exact exports must not contain sanitization differences",
-  });
+  })
+  .refine(
+    (value) =>
+      value.carrier === "postgres-schema"
+        ? value.profile === "exact" && Boolean(value.schema) && !value.artifacts["database.sqlite"]
+        : !value.schema && Boolean(value.artifacts["database.sqlite"]),
+    { message: "Export carrier does not match its artifacts" },
+  );
 
 export type PostgresExportEnvelope = z.infer<typeof postgresEnvelope>;
 export type SnapshotExportEnvelope =
@@ -105,6 +121,10 @@ export async function verifyPostgresExportEnvelope(
   }
   const files = await root(directory);
   for (const name of ["database.sqlite", "anchor.sqlite"] as const) {
+    const expected = manifest.artifacts[name];
+    if (!expected) {
+      continue;
+    }
     assertNoSqliteSidecarsSync(
       path.join(directory, name),
       "PostgreSQL export has unexpected SQLite sidecar",
@@ -113,7 +133,6 @@ export async function verifyPostgresExportEnvelope(
     try {
       const before = await opened.handle.stat({ bigint: true });
       const actual = await sha256File(opened.handle);
-      const expected = manifest.artifacts[name];
       if (actual.digest !== expected.sha256 || actual.bytes !== expected.sizeBytes) {
         throw new Error(`Export artifact verification failed: ${name}`);
       }

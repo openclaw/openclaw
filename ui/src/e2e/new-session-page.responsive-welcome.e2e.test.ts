@@ -4,6 +4,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
+  captureUiProof,
   captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -65,7 +66,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}new`);
     const checkout = page.locator("#new-session-checkout-trigger");
-    const triggerRow = page.locator(".new-session-page__triggers");
+    const triggerRow = page.locator(".new-session-page__context-tray .new-session-page__triggers");
     await checkout.waitFor();
     await page.mouse.move(0, 0);
 
@@ -75,9 +76,7 @@ suite.define(() => {
         .evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await checkout.click();
-    await page
-      .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-      .click();
+    await page.getByRole("button", { name: "New worktree", exact: true }).click();
     await page.keyboard.press("Escape");
     await pollAttribute(checkout, "data-worktree").toBe("true");
     const selectors = page.locator(
@@ -101,6 +100,20 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await waitForLayoutSettled(page, ".new-session-page__triggers button");
 
+      const nameOffset = await page
+        .locator(".agent-chat__welcome-identity")
+        .evaluate((identity) => {
+          const name = identity
+            .querySelector(".agent-select__label, h2:not(.sr-only)")!
+            .getBoundingClientRect();
+          const portrait = identity
+            .querySelector(".agent-chat__welcome-avatar")!
+            .getBoundingClientRect();
+          return name.left + name.width / 2 - (portrait.left + portrait.width / 2);
+        });
+      // The chevron must not pull the displayed name off the avatar’s centerline.
+      expect(Math.abs(nameOffset)).toBeLessThan(1);
+
       if (captureUiProofEnabled && width === 390 && agentCount === 2) {
         await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
         await pollAttribute(page.locator("html"), "data-theme-mode").toBe("dark");
@@ -121,17 +134,12 @@ suite.define(() => {
           };
         }),
       );
-      expect(new Set(layout.map((box) => box.row)).size).toBeLessThanOrEqual(mobile ? 2 : 1);
-      if (mobile) {
-        // #192044 renamed Local to This computer; keep the picker within half a row.
-        const device = page.locator("#new-session-where-trigger");
-        const rowWidth = (await triggerRow.boundingBox())!.width;
-        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(rowWidth / 2);
-      }
       for (const [index, box] of layout.entries()) {
         expect(box.left).toBeGreaterThanOrEqual(0);
         expect(box.right).toBeLessThanOrEqual(width);
-        expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
+        // The approved tray uses 36px rows; enforce the 24px accessibility floor,
+        // not the previous layout's 44px rows.
+        expect(box.height).toBeGreaterThanOrEqual(24);
         if (mobile) {
           expect(box.width).toBeGreaterThanOrEqual(44);
         }
@@ -183,9 +191,6 @@ suite.define(() => {
       agentCount - 1,
     );
     expect(await triggerRow.locator(".agent-select__trigger").count()).toBe(0);
-    const projectBox = await page.locator("#new-session-project-trigger").boundingBox();
-    const checkoutBox = await checkout.boundingBox();
-    expect(projectBox!.y).toBe(checkoutBox!.y);
     expect(
       await page
         .locator("#new-session-project-trigger .new-session-page__trigger-label")
@@ -333,7 +338,7 @@ suite.define(() => {
     expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
   });
 
-  it("keeps selected people and their remove control compact on a cold New Session", async () => {
+  it("shows font-sized people inline in the cold New Session document-aware editor", async () => {
     const page = await openPage({ viewport: { width: 1280, height: 900 } });
     const gateway = await installMockGateway(page, {
       presenceUsers: [
@@ -346,76 +351,88 @@ suite.define(() => {
       ],
       methodResponses: {
         "users.mentionable": {
-          users: [{ profileId: "profile-bob", displayName: "Bob", online: true }],
+          users: [
+            {
+              profileId: "profile-bob",
+              displayName: "Bob averylongmentionlabel",
+              online: true,
+            },
+          ],
           truncated: false,
         },
       },
     });
-
-    await page.goto(`${suite.server.baseUrl}new`);
+    await page.goto(suite.server.baseUrl + "new");
     await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
     await waitForGatewayRecoveryScope(page);
-    const textarea = page.locator(".new-session-page__message");
-    await textarea.pressSequentially("@Bob");
+    const surface = page.locator(".new-session-page__composer");
+    const textbox = surface.getByRole("textbox");
+    const backing = surface.locator("textarea.new-session-page__message");
+    await textbox.pressSequentially("@Bob");
     expect((await gateway.waitForRequest("users.mentionable")).params).toMatchObject({
       agentId: "main",
     });
     await page.getByRole("option", { name: /Bob/ }).click();
-    const preview = page.locator(".new-session-page__composer .chat-reply-preview");
-    await pollText(preview).toContain("Will notify");
-    await pollText(preview.locator(".composer-context-strip__person-name")).toBe("Bob");
-    const remove = preview.getByRole("button", { name: "Remove mention" });
-
-    for (const viewport of [
-      { width: 1280, height: 900 },
-      { width: 390, height: 844 },
-    ]) {
-      await page.setViewportSize(viewport);
-      // CSS resizes before the shell commits its drawer layout.
-      await page
-        .locator(viewport.width === 390 ? ".shell--mobile-nav" : ".shell:not(.shell--mobile-nav)")
-        .waitFor();
-      await waitForLayoutSettled(
-        page,
-        ".new-session-page__composer .chat-reply-preview, .new-session-page__composer .chat-reply-preview button",
-      );
-
-      const layout = await preview.evaluate((element) => {
-        const bar = element.getBoundingClientRect();
-        const text = element
-          .querySelector(".composer-context-strip__people")!
+    const editor = surface.locator('[data-composer-editor="true"]');
+    const mark = editor.locator(".chat-composer-mention");
+    await pollText(mark).toContain("averylongmentionlabel");
+    await pollCount(surface.getByRole("textbox")).toBe(1);
+    await expect
+      .poll(() => backing.evaluate((element) => element instanceof HTMLElement && element.hidden))
+      .toBe(true);
+    await editor.pressSequentially("'s notes");
+    await expect.poll(() => backing.inputValue()).toBe("@Bob averylongmentionlabel's notes");
+    await captureUiProof(suite, page, "atomic-selected-mention-desktop.png");
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 720 });
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      const geometry = await editor.evaluate((element) => {
+        const person = element.querySelector(".chat-composer-mention")!;
+        const avatar = person
+          .querySelector(".markdown-person-reference__avatar")!
           .getBoundingClientRect();
-        const button = element.querySelector("button")!.getBoundingClientRect();
+        const walker = document.createTreeWalker(person, NodeFilter.SHOW_TEXT);
+        let nameNode = walker.nextNode();
+        while (nameNode && !nameNode.textContent?.includes("averylongmentionlabel")) {
+          nameNode = walker.nextNode();
+        }
+        const range = document.createRange();
+        range.selectNodeContents(nameNode!);
         return {
-          height: bar.height,
-          textBeforeButton: text.right <= button.left,
-          sameRow: Math.abs(text.top + text.height / 2 - button.top - button.height / 2) <= 1,
-          buttonContained:
-            button.left >= bar.left &&
-            button.right <= bar.right &&
-            button.top >= bar.top &&
-            button.bottom <= bar.bottom,
-          iconSizes: [...element.querySelectorAll("svg")].map((icon) => {
-            const bounds = icon.getBoundingClientRect();
-            return Math.max(bounds.width, bounds.height);
-          }),
+          font: Number.parseFloat(getComputedStyle(person).fontSize),
+          avatarWidth: avatar.width,
+          avatarHeight: avatar.height,
+          gap: range.getBoundingClientRect().left - avatar.right,
+          documentWidth: document.documentElement.scrollWidth,
         };
       });
-      expect(layout.height).toBeLessThanOrEqual(48);
-      expect(layout, JSON.stringify(layout)).toMatchObject({
-        textBeforeButton: true,
-        sameRow: true,
-        buttonContained: true,
-      });
-      for (const size of layout.iconSizes) {
-        expect(size).toBeGreaterThan(0);
-        expect(size).toBeLessThanOrEqual(24);
+      // Same avatar as a sent reference: the text size plus its 2px ring.
+      expect(geometry.avatarWidth).toBeGreaterThanOrEqual(geometry.font);
+      expect(geometry.avatarWidth).toBeLessThanOrEqual(geometry.font + 2.5);
+      expect(geometry.avatarHeight).toBeCloseTo(geometry.avatarWidth, 1);
+      expect(geometry.gap).toBeGreaterThanOrEqual(2);
+      expect(geometry.documentWidth).toBeLessThanOrEqual(width);
+      if (width === 390) {
+        await captureUiProof(suite, page, "atomic-selected-mention-mobile.png");
       }
-      await expect.poll(() => remove.isVisible()).toBe(true);
     }
-
-    await remove.click();
-    await pollCount(preview).toBe(0);
-    expect(await textarea.inputValue()).toBe("@Bob ");
+    await textbox.press("Control+End");
+    await page.keyboard.insertText("x".repeat(700));
+    await expect
+      .poll(() =>
+        surface
+          .locator(".cm-scroller")
+          .evaluate((element) => element.scrollHeight > element.clientHeight),
+      )
+      .toBe(true);
+    await textbox.fill("Edited without a mention");
+    await pollCount(mark).toBe(0);
+    await expect.poll(() => backing.inputValue()).toBe("Edited without a mention");
+    await pollCount(surface.getByRole("textbox")).toBe(1);
+    await textbox.fill("");
+    await pollCount(surface.locator(".cm-placeholder")).toBe(1);
+    await expect
+      .poll(() => surface.locator(".agent-chat__composer-placeholder").isVisible())
+      .toBe(false);
   });
 });

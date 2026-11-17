@@ -68,7 +68,7 @@ jobs:
           retention-days: 30
 
   verify:
-    name: Join publication and verify ClawHub downloads
+    name: Join and verify core publication
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.request != ''
     runs-on: ubuntu-latest
@@ -97,7 +97,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-button-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-button/clawhub-public-verification/evidence.json
+          path: ${{ runner.temp }}/release-button/core-postpublish-verification
           if-no-files-found: warn
           retention-days: 30
       - name: Report publication state
@@ -112,7 +112,7 @@ jobs:
             echo "Publisher: https://github.com/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID"
             echo
             if [[ "$VERIFICATION_OUTCOME" == success ]]; then
-              echo 'Publication and canonical ClawHub downloads verified.'
+              echo 'Core publication verified. ClawHub publishes independently and does not gate activation or closeout.'
             else
               echo 'Publication may already be visible. If the original publisher succeeded, rerun only failed verification jobs. If it failed, inspect child outcomes before a new button run with the same prepared_artifact and openclaw_npm_resume_run_id when core npm succeeded. A published core version without a successful child requires core-owner reconciliation. Do not rebuild or repeat an uncertain dispatch to fix a failed download.'
             fi

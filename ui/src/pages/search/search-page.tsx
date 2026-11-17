@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -63,8 +64,8 @@ import {
   SearchTestStatus,
   type SearchTestOutcomeProps,
 } from "./search-results.tsx";
-import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 import "./search-page.css";
+import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 
 registerRouteSubtitlesEnglish();
 
@@ -218,7 +219,7 @@ export function SearchPage() {
     invalidateTest();
     loadingActive = true;
     const selected = selection(modelValue);
-    let requestedConfigRevision = configRevision;
+    const requestedConfigRevision = configRevision;
     const current = () =>
       active() &&
       gateway.isCurrent(scope) &&
@@ -231,22 +232,21 @@ export function SearchPage() {
         .then(() => runtime.ensureSchemaLoaded())
         .catch(() => undefined);
     }
+    // Model choices are supplementary; they must not hold the settings page open.
+    void loadModelCatalog(scope.client, { agentId: selected.agentId })
+      .then((catalog) => {
+        if (active() && gateway.isCurrent(scope) && selected.agentId === selection().agentId) {
+          setModels(catalog?.models ?? []);
+        }
+      })
+      .catch(() => undefined);
     const request = (async () => {
       try {
-        const catalog = await loadModelCatalog(scope.client, { agentId: selected.agentId }).catch(
-          () => null,
-        );
-        // Search config scopes the status request, not the agent's catalog read.
-        requestedConfigRevision = configRevision;
-        if (!current()) {
-          return;
-        }
         const status = await scope.client.request("webSearch.status", selected);
         if (current()) {
           if (!isSearchStatus(status)) {
             throw new UserFacingError(t("searchPage.statusNotReady"));
           }
-          setModels(catalog?.models ?? []);
           setResult(status);
           if (!setupDecided) {
             setupDecided = true;
@@ -448,10 +448,10 @@ export function SearchPage() {
               <Errored
                 fallback={(error) =>
                   gateway.connected ? (
-                    <div role="alert" class="callout danger">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}
                       <RetryAction onRetry={() => void load()} />
-                    </div>
+                    </InlineAlert>
                   ) : undefined
                 }
               >
@@ -465,10 +465,10 @@ export function SearchPage() {
             )}
           </Show>
           {configState().lastError ? (
-            <div role="alert" class="callout danger">
+            <InlineAlert tone="danger" role="alert">
               {configState().lastError}
               <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
-            </div>
+            </InlineAlert>
           ) : undefined}
           <Loading>
             <Show when={result()}>

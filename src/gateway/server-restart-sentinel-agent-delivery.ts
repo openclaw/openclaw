@@ -6,6 +6,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveDeliveryQueueMediaDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -111,7 +112,10 @@ async function persistQueuedGeneratedMedia(params: {
           },
         ],
         stateDir,
-        localRoots: [getMediaDir()],
+        localRoots: [
+          getMediaDir(),
+          ...(entry.reviewedTaskId ? [resolveDeliveryQueueMediaDir(stateDir)] : []),
+        ],
       });
       if (
         !blocks.some(
@@ -289,30 +293,29 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       params.queueContext,
     );
   }
-  const assertRequesterIdle = () => {
-    if (
-      isSessionControllerWorkActive(
-        params.storePath,
-        [params.canonicalKey, sessionEntry?.sessionId],
-        params.agentId,
-      )
-    ) {
-      throw new SessionDeliveryDeferredError(
-        "queued generated-media completion is waiting for its requester to finish",
-      );
-    }
-  };
-  try {
-    // The originating turn can still own terminal persistence after its model
-    // has stopped; the produced media follows its transcript.
-    assertRequesterIdle();
-  } catch (error) {
-    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
-    throw error;
-  }
-
   if (mediaUrls.length > 0) {
+    // The media task enqueues only after its originating turn settles, so an
+    // external send needs no session gate. A transcript append still waits for
+    // any running turn: it must not land inside that turn's transcript writes.
     if (route.channel === INTERNAL_MESSAGE_CHANNEL) {
+      if (
+        isSessionControllerWorkActive(
+          params.storePath,
+          [params.canonicalKey, sessionEntry?.sessionId],
+          params.agentId,
+        )
+      ) {
+        await deferSessionDelivery(
+          entry.id,
+          AGENT_DELIVERY_OWNERSHIP_RETRY_MS,
+          params.queueContext,
+        );
+        throw new SessionDeliveryDeferredError(
+          "queued generated-media transcript write is waiting for the running turn",
+        );
+      }
+      // The queue arbitrates exact-task correction before preparing the visible write.
+      await markSessionDeliveryAttemptStarted(entry, params.queueContext);
       await persistQueuedGeneratedMedia({
         ...params,
         entry,

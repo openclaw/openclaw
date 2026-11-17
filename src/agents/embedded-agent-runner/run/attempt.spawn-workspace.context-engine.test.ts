@@ -309,8 +309,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps newly generated thinking after repairing rejected Anthropic replay", async () => {
-    const { SessionManager: ActualSessionManager } =
-      await vi.importActual<typeof import("../../sessions/index.js")>("../../sessions/index.js");
+    const { SessionManager: ActualSessionManager } = await vi.importActual<
+      typeof import("../../sessions/session-manager.js")
+    >("../../sessions/session-manager.js");
     const staleAssistant = signedAssistant(
       "historical stale thinking",
       "stale-signature",
@@ -336,8 +337,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const providerContexts: AgentMessage[][] = [];
     const afterTurn = vi.fn(async (_params: { messages: AgentMessage[] }) => {});
 
-    hoisted.sessionManagerOpenMock.mockReturnValue(sessionManager);
-
     await runAttempt({
       contextEngine: {
         ...createContextEngineBootstrapAndAssemble(),
@@ -346,6 +345,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
       sessionMessages,
       attemptOverrides: {
+        sessionManager,
         provider: "anthropic",
         modelId: "claude-sonnet-4-6",
         model: {

@@ -154,6 +154,7 @@ export async function buildCommandsListResult(params: {
               COMMAND_NAME_MAX_LENGTH,
             ),
             skillModelVisible: skill.modelVisible !== false,
+            skillReferenceable: !skill.promptTemplate,
           }
         : {}),
     });

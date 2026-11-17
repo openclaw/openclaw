@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
+import { parseRecallGate, RecallGateConfig, type RecallGatePolicy } from "./recall-gate.js";
 import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
 
@@ -68,6 +69,7 @@ export const PluginConfig = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    recallGate: Type.Optional(RecallGateConfig),
   },
   { additionalProperties: false },
 );
@@ -84,6 +86,8 @@ export type Policy = {
   writesEnabled: boolean;
   hubPercentile: number;
   maintenance: MaintenanceSettings;
+  /** Decision-model recall gate; undefined when not configured or off. */
+  recallGate?: RecallGatePolicy;
 };
 const DEFAULT_MAINTENANCE_SCHEDULE = "30 3 * * *";
 
@@ -97,6 +101,7 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
     throw new Error("Knowledge configuration is invalid; review plugins.entries.knowledge.config.");
   }
   const maintenance = value.maintenance ?? {};
+  const recallGate = parseRecallGate(value.recallGate);
   return {
     operatorRead: value.operatorRead ?? true,
     writesEnabled: value.writesEnabled ?? true,
@@ -106,6 +111,7 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
       timezone: maintenance.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
+    ...(recallGate ? { recallGate } : {}),
   };
 }
 

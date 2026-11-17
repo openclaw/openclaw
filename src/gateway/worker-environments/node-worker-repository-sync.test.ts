@@ -251,7 +251,11 @@ it.each([
           >[0]
         | undefined;
       let revision = 0;
-      const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+      const capture = async (
+        active = actions,
+        directory = first.remoteWorkspaceDir,
+        beforeAcceptance?: () => Promise<void>,
+      ) => {
         const firstCapture = manifestCaptures.length;
         const phases: string[] = [];
         const result = await active.reconcileWorkspace({
@@ -303,17 +307,16 @@ it.each([
         });
         expect(phases).toEqual([
           "repositoryCheckpointUpload",
-          "repositoryVerification",
           "repositoryPublicationUpload",
-          "repositoryVerification",
           "repositoryCheckpointStage",
         ]);
+        await beforeAcceptance?.();
         await verifyReconciledWorkspaceFinal(result, {
           assertActive: async () => {},
           resume: async () => {},
         });
         const captures = manifestCaptures.slice(firstCapture);
-        expect(captures).toHaveLength(4);
+        expect(captures).toHaveLength(2);
         expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
         expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
         return captures;
@@ -435,6 +438,13 @@ it.each([
           mode: "100644",
           sha: null,
         });
+        const accepted = checkpoint;
+        await expect(
+          capture(replacement, restored.remoteWorkspaceDir, () =>
+            fs.writeFile(path.join(restored.remoteWorkspaceDir, "second.txt"), "late edit\n"),
+          ),
+        ).rejects.toThrow("Repository workspace changed during checkpoint capture");
+        expect(checkpoint).toBe(accepted);
       }
     } finally {
       await server.close();

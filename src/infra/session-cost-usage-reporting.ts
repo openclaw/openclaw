@@ -36,7 +36,7 @@ import {
   loadCapturedSessionCostSummariesFromCache,
   runUsageReportAfterRefresh,
 } from "./session-cost-usage-cache-runtime.js";
-import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
+import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -178,11 +178,13 @@ export async function loadSessionUsageTimeSeries(
 
     let points: Array<Omit<SessionUsageTimePoint, "cumulativeTokens" | "cumulativeCost">> = [];
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     // Copied history stays charted in its source session, as in the usage rollups.
     for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
-      const entry = await parseUsageCostTranscriptEntryAsync(record, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(record, prepareCost);
       const timestamp = entry?.timestamp?.getTime();
       if (!entry?.usage || !timestamp) {
         continue;
@@ -252,7 +254,9 @@ export async function loadSessionLogs(
     const limit = scoped.limit ?? 50;
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
-    const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
+    let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
+    const prepareCost = () =>
+      (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
 
     for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
       let role: SessionLogEntry["role"];
@@ -347,7 +351,7 @@ export async function loadSessionLogs(
 
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
-      const entry = await parseUsageCostTranscriptEntryAsync(parsed, resolveCost, scoped.config);
+      const entry = await parseUsageCostTranscriptEntryAsync(parsed, prepareCost);
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
@@ -412,8 +416,9 @@ async function* readTranscriptRecords(
       );
     }
     const records = events.filter(isRecord);
-    const visible = selectVisibleTranscriptEvents(records);
-    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
+    yield* options.countedOnly
+      ? selectBilledTranscriptEvents(records)
+      : selectVisibleTranscriptEvents(records);
     return;
   }
   // Diagnostic history and durable scans decode archives without plaintext files.

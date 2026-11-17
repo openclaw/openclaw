@@ -4,6 +4,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
   AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
@@ -16,6 +17,7 @@ import {
   type RecoveryReport,
   type AgentDeletionRecoveryHoldPredicate,
 } from "./agent-deletion-journal-recovery.kernel.js";
+import { invalidateAgentDeletionDiscovery } from "./agent-deletion-journal-status.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
 import {
@@ -136,6 +138,8 @@ export function recordAgentDeletionRecoveryHolds(
     reportJson: JSON.stringify(report),
     upsert: true,
   });
+  invalidateAgentDeletionDiscovery(database.db);
+  sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   return decodeHolds(database, report.held);
 }
 
@@ -173,6 +177,8 @@ export function resolveAgentDeletionRecoveryHolds(
         .set({ report_json: JSON.stringify({ ...report, held, missingJournal }) })
         .where("source_key", "=", SOURCE_KEY),
     );
+    invalidateAgentDeletionDiscovery(database.db);
+    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return removed;
 }

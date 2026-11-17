@@ -3467,14 +3467,14 @@ struct OnboardingAISetupTests {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Finish"] == false &&
+                        return ax.actions["Next"] == false &&
                             ax.actions.contains { $0.key.contains("API Keys") && $0.value }
                     }
                     try await pressOnboardingEntryButton("API Keys", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
-                            ax.actions["Finish"] == false
+                            ax.actions["Next"] == false
                     }
                     #expect(events.persistenceCalls == 4)
                 }
@@ -3623,6 +3623,8 @@ struct OnboardingAISetupTests {
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
         #expect(view.aiSetup.verifiedExistingInference)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(handoffs == [.dashboard])
     }
 

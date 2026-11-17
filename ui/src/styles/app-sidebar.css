@@ -19,7 +19,8 @@
     --session-row-actions-reserve: var(--sidebar-session-menu-size);
   }
 
-  :is([data-sidebar-session-pin], [data-sidebar-session-archive]) {
+  [data-sidebar-session-pin],
+  [data-sidebar-session-archive] {
     display: none;
   }
 

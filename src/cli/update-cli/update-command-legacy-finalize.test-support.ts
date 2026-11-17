@@ -1,7 +1,7 @@
 // Only external plugin work, disposable service discovery/policy and network health are fixtures. Keep
 // the migrated worker, finishUpdate, ledger, native client/receiver and effects real.
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import { registerUpdateFixtureModuleOverrides } from "./update-module-overrides.test-support.js";
 
 const scratch = process.env.OPENCLAW_STATE_DIR!;
 const source = (relative: string) =>
@@ -104,19 +104,6 @@ const completeOverrides = new Set([
   source("./update-command-convergence.ts"),
   source("./update-command-restart-context.ts"),
 ]);
-registerHooks({
-  load(url, context, nextLoad) {
-    const replacement = overrides.get(url);
-    return replacement === undefined
-      ? nextLoad(url, context)
-      : {
-          format: "module",
-          source: completeOverrides.has(url)
-            ? replacement
-            : `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
-          shortCircuit: true,
-        };
-  },
-});
+registerUpdateFixtureModuleOverrides(overrides, completeOverrides);
 fs.writeFileSync(scratch + "/finalizer-pid", String(process.pid));
 await import("../../infra/update-migrated-finalize.worker.js");

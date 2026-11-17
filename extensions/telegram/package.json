@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.11.1",
+  "version": "2026.11.3",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -8,6 +8,7 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "abort-controller": "3.0.0",
     "grammy": "1.46.0",
+    "quickjs-wasi": "3.6.3",
     "typebox": "1.4.3",
     "undici": "8.12.3",
     "zod": "4.6.7"
@@ -17,7 +18,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.11.1"
+    "openclaw": ">=2026.11.3"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,7 +27,7 @@
   },
   "openclaw": {
     "compat": {
-      "pluginApi": ">=2026.11.1"
+      "pluginApi": ">=2026.11.3"
     },
     "extensions": [
       "./index.ts"
@@ -34,7 +35,14 @@
     "setupEntry": "./setup-entry.ts",
     "build": {
       "workerEntries": [
-        "./src/telegram-ingress-worker.runtime.ts"
+        "./src/telegram-ingress-worker.runtime.ts",
+        "./src/widgets/widget-check.worker.ts"
+      ],
+      "staticAssets": [
+        {
+          "source": "./node_modules/quickjs-wasi/quickjs.wasm",
+          "output": "assets/quickjs.wasm"
+        }
       ]
     },
     "setupFeatures": {

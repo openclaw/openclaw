@@ -489,6 +489,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     const immediateRejection = {
       status: "rejected" as const,
       reason: resolved.reason,
+      ...(resolved.runtimeReason ? { runtimeReason: resolved.runtimeReason } : {}),
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =

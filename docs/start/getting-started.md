@@ -34,7 +34,10 @@ usable AI access is already available: OpenClaw
 finds an existing Claude Code or Codex CLI login or API key, verifies it with a
 real completion, saves the config, and opens the web dashboard.
 
-The Gateway runs in this terminal until you press **Ctrl+C**; your config stays
+Quick start then asks **Keep OpenClaw running in the background?** Yes installs
+a copy of the same OpenClaw version under `~/.openclaw` and runs the Gateway as a
+background service from it, so clearing the npx cache does not stop it. No keeps
+the Gateway in this terminal until you press **Ctrl+C**; your config stays
 saved. If no detected route works, onboarding opens manual provider setup.
 Choose **Custom setup** to walk through all guided options instead.
 

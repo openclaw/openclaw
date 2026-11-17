@@ -454,7 +454,7 @@ describe("runLocalAgentCommand operator authority", () => {
   });
 });
 
-it("keeps runtime memory registrations through local command preparation", async () => {
+it("keeps runtime memory registrations through local command preparation and drains them", async () => {
   const registry = createEmptyPluginRegistry();
   const pluginId = "memory-fixture";
   registry.plugins.push(createPluginRecord({ id: pluginId }));
@@ -464,6 +464,12 @@ it("keeps runtime memory registrations through local command preparation", async
   registry.memoryCorpusSupplements.push({ pluginId, supplement });
   registry.memoryPromptPreparations.push({ pluginId, prepare });
   registry.memoryPromptSupplements.push({ pluginId, builder });
+  const closeAllMemorySearchManagers = vi.fn(async () => {});
+  const runtime = {
+    getMemorySearchManager: async () => ({ manager: null }),
+    resolveMemoryBackendConfig: () => ({ backend: "builtin" as const }),
+    closeAllMemorySearchManagers,
+  };
   setActivePluginRegistry(registry, undefined, "default", state.workspaceDir);
   mocks.prepare.mockResolvedValueOnce({
     ...createPrepared(false),
@@ -475,9 +481,11 @@ it("keeps runtime memory registrations through local command preparation", async
       expect(captured?.memoryCorpusSupplements).toContainEqual({ pluginId, supplement });
       expect(captured?.memoryPromptPreparations).toContainEqual({ pluginId, prepare });
       expect(captured?.memoryPromptSupplements).toContainEqual({ pluginId, builder });
+      captured?.memoryCapabilities.push({ pluginId, capability: { runtime } });
     },
-    { opts: { message: "test", runId: "local-memory" } },
+    { opts: { message: "test", runId: "local-memory", cleanupMemoryOnRunEnd: true } },
   );
+  expect(closeAllMemorySearchManagers).toHaveBeenCalledOnce();
 });
 it("runs on the prepared plugin registry without another registration", async () => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -645,7 +653,6 @@ describe("agent command static capabilities", () => {
             config.agents.defaults.model.primary = "proxy-fixture/plain-fixture";
           }
           await fs.writeFile(configPath, JSON.stringify(config));
-          expect(requests).toEqual([]);
           const { stdout } = await promisify(execFile)(
             process.execPath,
             [

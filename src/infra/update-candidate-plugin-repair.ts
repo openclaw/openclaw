@@ -15,6 +15,7 @@ import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
+import { selectUpdateCandidatePluginFileAssets } from "./update-candidate-plugin-file-assets.js";
 import {
   inspectUpdateCandidatePluginSourceAsync,
   resolveUpdateCandidatePluginSourceEntries,
@@ -186,6 +187,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     targetStateDir: privateRoot,
     candidateRoot,
   });
+  const normalizedAssets = selectUpdateCandidatePluginFileAssets(plan);
   const missing: typeof plan.entries = [];
   for (const entry of plan.entries) {
     const destination = project(entry.path);
@@ -196,7 +198,9 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     } else if (
       (entry.kind === "directory" && !existing.isDirectory()) ||
       (entry.kind === "file" && !existing.isFile()) ||
-      (entry.kind === "symlink" && !existing.isSymbolicLink())
+      (entry.kind === "symlink" &&
+        !existing.isSymbolicLink() &&
+        !(normalizedAssets.has(entry.path) && existing.isFile()))
     ) {
       throw new Error(
         `Plugin dependency conflicts with the existing update snapshot: ${destination}`,
@@ -204,13 +208,16 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     }
   }
   if (missing.length > 0) {
-    await copyUpdateCandidatePluginTrees(
-      { ...plan, entries: missing },
-      {
-        targetStateDir: privateRoot,
-        candidateRoot,
-      },
-    );
+    await copyUpdateCandidatePluginTrees(plan, {
+      targetStateDir: privateRoot,
+      candidateRoot,
+      onlyPaths: new Set(missing.map((entry) => entry.path)),
+    });
   }
-  return { copiedFiles: missing.filter((entry) => entry.kind === "file").length, warnings };
+  return {
+    copiedFiles: missing.filter(
+      (entry) => entry.kind === "file" || normalizedAssets.has(entry.path),
+    ).length,
+    warnings,
+  };
 }

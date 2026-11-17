@@ -61,6 +61,7 @@ const dependencies = [
         "acorn",
         "chalk",
         "commander",
+        "croner",
         "dotenv",
         "execa",
         "hosted-git-info",

@@ -15,6 +15,7 @@ import { CronCliError } from "./cron-cli-error.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import {
+  callCronReadFromCli,
   enrichCronJsonWithStatus,
   formatCronLookupMiss,
   handleCronCliError,
@@ -118,7 +119,8 @@ export function registerCronSimpleCommands(cron: Command) {
         .argument("<id>", "Job id")
         .action(async (id, opts) => {
           try {
-            const res = await callGatewayFromCli(method, opts, {
+            const call = method === "cron.get" ? callCronReadFromCli : callGatewayFromCli;
+            const res = await call(method, opts, {
               id: requireCronJobId(id),
               ...(method === "cron.update" ? { patch: { enabled: name === "enable" } } : {}),
             });
@@ -211,7 +213,7 @@ export function registerCronSimpleCommands(cron: Command) {
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }
-          const res = await callGatewayFromCli("cron.runs", opts, {
+          const res = await callCronReadFromCli("cron.runs", opts, {
             ...(opts.all ? { scope: "all" } : { id }),
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
             ...(typeof opts.status === "string" ? { status: opts.status } : {}),

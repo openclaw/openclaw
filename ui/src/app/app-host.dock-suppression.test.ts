@@ -253,7 +253,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   context.gateway.snapshot.hello = { ...acceptedHello };
   await expectHomeAvailable(true);
   context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
-  await expectHomeAvailable(false, false);
+  await expectHomeAvailable(true);
   context.gateway.snapshot.phase = "offline";
-  await expectHomeAvailable(false, false);
+  await expectHomeAvailable(true);
 });
