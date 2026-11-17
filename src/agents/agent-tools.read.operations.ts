@@ -116,7 +116,7 @@ async function assertSandboxFileExists(
 }
 
 export function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
-  const error = new Error(`Sandbox FS error (${code}): ${filePath}`) as NodeJS.ErrnoException;
+  const error: NodeJS.ErrnoException = new Error(`Sandbox FS error (${code}): ${filePath}`);
   error.code = code;
   return error;
 }
