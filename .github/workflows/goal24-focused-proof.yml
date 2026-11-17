@@ -213,3 +213,47 @@ jobs:
           path: proof-output/
           if-no-files-found: error
           retention-days: 7
+
+  audio-package:
+    name: audio-installed-package
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Checkout reviewed proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+      - name: Checkout exact audio candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d51696b32be02844d1801dd31819912401859b88
+          path: source
+          persist-credentials: false
+      - name: Checkout retained native proof source without executing it
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a9a084486e3df10193dfa9ac5ab9faa9f53a4619
+          path: prior
+          persist-credentials: false
+      - name: Install pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Prepare pnpm without shared caches
+        uses: ./tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: source/package.json
+          node-version: 24.22.1
+          cache-mode: off
+      - name: Prove installed TTS fallback and recording adapter dispatch
+        run: node tooling/scripts/goal24-audio-package-proof.mjs
+      - name: Preserve synthetic package evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: goal24-audio-package-${{ github.run_id }}
+          path: proof-output/
+          if-no-files-found: error
+          retention-days: 7
