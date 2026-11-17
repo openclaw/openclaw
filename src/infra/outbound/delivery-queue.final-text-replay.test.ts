@@ -14,10 +14,10 @@ import {
 } from "./delivery-queue.test-helpers.js";
 
 const resolveAdapter = vi.hoisted(() => vi.fn());
-vi.mock("./channel-resolution.js", () => ({
+vi.mock("./channel-resolution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-resolution.js")>()),
   resolveOutboundChannelMessageAdapter: resolveAdapter,
 }));
-vi.mock("../../utils/sleep.js", () => ({ sleep: vi.fn(async () => undefined) }));
 
 describe("final text replay after a crash mid-send", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
