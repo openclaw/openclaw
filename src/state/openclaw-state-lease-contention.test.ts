@@ -242,6 +242,10 @@ it("retries real SQLite BUSY renewal before the next heartbeat without surrender
       vi.useRealTimers();
       commands.mockRestore();
       writer.close();
+    }
+  });
+});
+
 it("releases a lease after another writer holds the lock longer than two seconds (#197083)", async () => {
   await withOpenClawTestState({ label: "lease-long-writer-release" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
