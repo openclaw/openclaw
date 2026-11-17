@@ -602,7 +602,9 @@ export async function executeSessionsSend(
           sourceOrigin: sameSession ? requesterOrigin : undefined,
           sessionKey: resolvedKey,
           sessionStoreTarget: targetSession,
-          allowActiveRunQueueDelivery: !sameSession && timeoutSeconds === 0,
+          // A parent's guidance belongs in its busy child's current run; a queued turn would
+          // start after that run finished and redo its work. Other targets steer only zero-wait.
+          allowActiveRunQueueDelivery: !sameSession && (timeoutSeconds === 0 || ownChild),
           expectedSessionId,
           preparedTargetSessionId: targetSessionEntry?.sessionId,
           assertSendCurrent: communication.assertCurrent,

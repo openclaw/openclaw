@@ -83,9 +83,6 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   "runOutsideAdmittedGenerationScopes",
 );
 
-/** Policy publications an accepted occurrence may outlive before it settles as failed. */
-const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
-
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
@@ -289,6 +286,7 @@ function enqueueSessionEventAttempt(
     }
     options.scheduledAutomation?.onStarted?.();
     ownership.start();
+    configPolicy.start();
     started = true;
     accept();
   };
@@ -331,7 +329,7 @@ function enqueueSessionEventAttempt(
       const retainForConfigChange = () =>
         configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
-      if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+      if (retainForConfigChange() && configPolicy.canReadmit(attempt)) {
         // Reuse this occurrence's bounded readmission, yielding before fresh authority.
         await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
           (error: unknown) => {
@@ -342,7 +340,7 @@ function enqueueSessionEventAttempt(
         );
       }
       settlement = "finished";
-      const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
+      const canReadmit = retainForConfigChange() && configPolicy.canReadmit(attempt);
       const terminal = resolveSessionEventTerminalOutcome({
         operation,
         signal,

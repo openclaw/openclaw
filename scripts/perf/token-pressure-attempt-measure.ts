@@ -367,6 +367,7 @@ contextGuards.checkMidTurnPrecheck = async (request) => {
 };
 const streamGuards = installEmbeddedAttemptStreamGuards(input, {
   onRejectedProviderReplayRepaired: () => assert.fail("unexpected replay repair"),
+  isToolBoundarySafe: () => false,
   onIdleTimeout: (error) => {
     throw error;
   },

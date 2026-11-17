@@ -615,6 +615,13 @@ export const tailLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
   }),
+  liveLane("gbrain", {
+    command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gbrain",
+    e2eImageKind: false,
+    provider: "openai",
+    resources: ["npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
+  }),
   liveLane("live-plugin-tool", {
     command:
       "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",

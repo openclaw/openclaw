@@ -433,15 +433,18 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   return params.current().projection_path;
 }
 
+export type LocalWorkspaceCheckpointUpdate = (
+  patch: Parameters<LocalWorkspaceStore["update"]>[1],
+  manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
+  publicationPack?: Uint8Array<ArrayBuffer>,
+) => Promise<void>;
+
 export function applyLocalWorkspaceCheckpoint(params: {
   selected: Pick<LocalWorkspaceProjection, "worktree_id" | "pending_ref" | "base_commit">;
   reason: import("../../agents/sandbox/local-workspace-quiescence.js").LocalWorkspacePauseReason;
   application: Omit<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
   current: () => LocalWorkspaceProjection;
-  update: (
-    patch: Parameters<LocalWorkspaceStore["update"]>[1],
-    manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
-  ) => Promise<void>;
+  update: LocalWorkspaceCheckpointUpdate;
   replaceBaseline: (
     raw: string,
     ref: string,
@@ -459,11 +462,15 @@ export function applyLocalWorkspaceCheckpoint(params: {
   const acceptance = {
     journal: {
       load: async () => undefined,
-      begin: async (journal) => {
-        await params.update({
-          journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
-          journal_pack: journal.basePack,
-        });
+      begin: async (journal, publicationPack) => {
+        await params.update(
+          {
+            journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+            journal_pack: journal.basePack,
+          },
+          undefined,
+          publicationPack,
+        );
       },
       abort: async () => {
         await params.update({ journal_json: null, journal_pack: null });

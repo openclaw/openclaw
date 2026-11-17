@@ -458,71 +458,87 @@ it.each(["2026.10.33", "2026.11.5"])(
   },
 );
 
-it("admits only the authorized 2026.11.5 Telegram package failure", async () => {
-  const name = "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
-  const telegram = {
-    ...child,
-    key: "releaseChecksCandidate",
-    jobs: [{ ...failedJob, id: 133430641645, name }],
-  };
-  expect(terminalPolicyPass(telegram, "2026.11.5")).toBe(true);
-  expect(telegram.jobs).toMatchObject([{ conclusion: "failure" }]);
-  expect(terminalPolicyPass(telegram, "2026.11.6")).toBe(false);
-  expect(terminalPolicyPass({ ...telegram, key: "normalCi" }, "2026.11.5")).toBe(false);
-  expect(releaseQualificationExemptions("2026.11.5", "stable")).toEqual([]);
-  for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
+it.each(["2026.10.33", "2026.11.5"])(
+  "admits only the authorized %s Telegram package failure",
+  async (targetVersion) => {
+    const name = "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
+    const telegram = {
+      ...child,
+      key: "releaseChecksCandidate",
+      jobs: [{ ...failedJob, id: 133430641645, name }],
+    };
+    expect(terminalPolicyPass(telegram, targetVersion)).toBe(true);
+    expect(telegram.jobs).toMatchObject([{ conclusion: "failure" }]);
+    expect(terminalPolicyPass(telegram, "2026.11.6")).toBe(false);
+    expect(terminalPolicyPass({ ...telegram, key: "normalCi" }, targetVersion)).toBe(false);
+    expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
+    for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
+      expect(
+        terminalPolicyPass(
+          { ...telegram, jobs: [{ ...failedJob, name, conclusion }] },
+          targetVersion,
+        ),
+      ).toBe(false);
+    }
     expect(
-      terminalPolicyPass({ ...telegram, jobs: [{ ...failedJob, name, conclusion }] }, "2026.11.5"),
+      terminalPolicyPass(
+        {
+          ...telegram,
+          jobs: [
+            ...telegram.jobs,
+            {
+              ...failedJob,
+              name: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+            },
+          ],
+        },
+        targetVersion,
+      ),
     ).toBe(false);
-  }
-  expect(
-    terminalPolicyPass(
+    const aggregates = [
       {
-        ...telegram,
-        jobs: [
-          ...telegram.jobs,
-          {
-            ...failedJob,
-            name: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
-          },
-        ],
+        ...gate,
+        id: 11,
+        name: "Run package acceptance / Verify package acceptance",
+        steps: [{ name: "Verify package acceptance results", conclusion: "failure" }],
       },
-      "2026.11.5",
-    ),
-  ).toBe(false);
-  const aggregates = [
-    {
-      ...gate,
-      id: 11,
-      name: "Run package acceptance / Verify package acceptance",
-      steps: [{ name: "Verify package acceptance results", conclusion: "failure" }],
-    },
-    {
-      ...gate,
-      name: "Verify release checks",
-      steps: [{ name: "Verify release check results", conclusion: "failure" }],
-    },
-  ];
-  const allJobs = [...telegram.jobs, ...aggregates];
-  const policy = evaluateReleaseChildPolicy({
-    child: { ...telegram, jobs: allJobs },
-    targetVersion: "2026.11.5",
-  });
-  await expect(
-    validateReleaseWaiverAggregates({
-      policy,
-      jobs: allJobs,
-      getJobLog: (id) =>
-        id === 11
-          ? "##[error]package_telegram ended with failure"
-          : "##[error]package_acceptance_release_checks ended with failure",
-    }),
-  ).resolves.toBeUndefined();
-  await expect(
-    validateReleaseWaiverAggregates({
-      policy,
-      jobs: allJobs,
-      getJobLog: () => "##[error]unrelated_integrity ended with failure",
-    }),
-  ).rejects.toThrow();
-});
+      {
+        ...gate,
+        name: "Verify release checks",
+        steps: [{ name: "Verify release check results", conclusion: "failure" }],
+      },
+    ];
+    const allJobs = [...telegram.jobs, ...aggregates];
+    const policy = evaluateReleaseChildPolicy({
+      child: { ...telegram, jobs: allJobs },
+      targetVersion,
+    });
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: (id) =>
+          id === 11
+            ? "##[error]package_telegram ended with failure"
+            : "##[error]package_acceptance_release_checks ended with failure",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: () => "##[error]unrelated_integrity ended with failure",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: (id) =>
+          id === 11
+            ? "##[error]package_telegram ended with failure"
+            : "##[error]package_acceptance_release_checks ended with failure\n##[error]cross_os_release_checks ended with failure",
+      }),
+    ).rejects.toThrow();
+  },
+);

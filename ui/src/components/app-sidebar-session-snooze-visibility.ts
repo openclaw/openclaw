@@ -11,6 +11,7 @@ type SidebarSnoozeVisibilityHost = {
   readonly sessionData: SessionDataOwner;
   readonly sessionDataContext: Pick<ApplicationContext, "sessions"> | undefined;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
+  readonly sessionsShowSystem: boolean;
   readonly hiddenSessionCatalogIds: ReadonlySet<string>;
   expandedAgentId(): string;
 };
@@ -42,6 +43,7 @@ export function projectSidebarSnoozeCatalogs(
     sourceRows: host.sessionData.resultForAgent(selectedAgentId)?.sessions ?? [],
     selectedAgentId,
     statusFilter: host.sessionsStatusFilter,
+    showSystem: host.sessionsShowSystem,
     now: Date.now(),
     deletionState: (key, agentId) => host.sessionDataContext?.sessions.deletionState(key, agentId),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),

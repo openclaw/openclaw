@@ -141,8 +141,12 @@ The checksum gate prints both digests and rejects mismatches before starting
 the update. The download action's `digest-mismatch: error` input configures its
 archive verification policy; that input line is not a reported mismatch.
 
-The published driver version is resolved once from npm. Its installed prefix is
-cached as an archive keyed by that version, runner platform, and the pinned
+The published driver version is resolved once. Main uses npm `latest`; frozen
+`extended-stable/` targets use the existing release upgrade-baseline resolver and
+the captured qualification baselines when supplied. This prevents a newer driver
+from creating state that the frozen candidate cannot read. Database compatibility
+admission remains unchanged. The driver's installed prefix is cached as an
+archive keyed by that version, runner platform, and the pinned
 Docker recipe. PRs only restore this exact key and mount the seed read-only;
 the update runs against a private extraction. Only upstream main push,
 scheduled, and manual runs prepare and save missing seeds, before any candidate
@@ -156,7 +160,7 @@ running-build, and readiness assertions are unchanged.
 The cell reserves termination and diagnostic time within its twenty-minute budget.
 Its command deadline returns a failed step with the active phase recorded,
 instead of cancelling the workflow through a job-level timeout. The shared bare
-Docker runner installs the latest stable npm package as the driver and supplies
+Docker runner installs the selected published npm package as the driver and supplies
 a disposable OS account for managed-service ownership. A private Docker volume
 holds the disposable npm installation and retained runtime on one native
 filesystem, avoiding OverlayFS's forced full-runtime copies. The runner removes

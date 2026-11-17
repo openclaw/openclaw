@@ -1140,6 +1140,7 @@ src/infra/home-display.ts
 src/infra/host-env-security-policy.js
 src/infra/host-env-security-policy.json
 src/infra/host-env-security.ts
+src/infra/host-memory.ts
 src/infra/http-body.ts
 src/infra/http-request-lifecycle.ts
 src/infra/http-response-body-timeout.ts
@@ -1241,6 +1242,7 @@ src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
+src/infra/runtime-worker-loader.mjs
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -2020,6 +2022,7 @@ src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
+src/shared/assertion.ts
 src/shared/assistant-error-format.ts
 src/shared/async-context.ts
 src/shared/async-store.ts
