@@ -55,6 +55,7 @@ export type WorkspaceManifestValueInputs = {
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.document": WorkspaceManifestValueInputs["workspace.manifest.capture"];
+  "workspace.manifest.initial": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.reference": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.file": {
     path: string;
@@ -84,6 +85,7 @@ export type WorkspaceManifestValueInputs = {
     stagingRoot: string;
     baseEntries: WorkerWorkspaceManifestEntry[];
     appliedEntries: WorkerWorkspaceManifestEntry[];
+    publicationCopy?: boolean;
   };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
@@ -125,6 +127,9 @@ export type WorkspaceManifestValueOutputs = {
   "workspace.manifest.document": WorkspaceComputationHashResult<
     Omit<WorkspaceManifestSnapshot, "manifest">
   >;
+  "workspace.manifest.initial": WorkspaceComputationHashResult<
+    Omit<WorkspaceManifestSnapshot, "manifest"> & { projectionFingerprints: Uint8Array | null }
+  >;
   "workspace.manifest.reference": WorkspaceComputationHashResult<string>;
   "workspace.manifest.file": WorkspaceComputationHashResult<
     Awaited<ReturnType<typeof readWorkspaceFileSnapshotWithLimit>>
@@ -137,6 +142,7 @@ export type WorkspaceManifestValueOutputs = {
     patch: Uint8Array<ArrayBuffer>;
     baseTree: string;
     basePack: Uint8Array<ArrayBuffer>;
+    publicationPack?: Uint8Array<ArrayBuffer>;
     basePackSha256: string;
   };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{
@@ -200,8 +206,10 @@ export type WorkspaceManifestComputationOperations = {
     };
     "workspace.manifest.base-refresh": {
       input: {
-        beforeRoot: string;
-        afterRoot: string;
+        root: string;
+        beforeTree: string;
+        afterTree: string;
+        temporaryRoot: string;
         baseCommit: string;
         baseRaw: Uint8Array<ArrayBuffer>;
         baseRef: string;

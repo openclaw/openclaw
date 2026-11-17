@@ -5,6 +5,7 @@ import {
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   evaluateReleaseChildPolicy,
+  releaseQualificationExemptions,
   validateReleaseWaiverAggregates,
 } from "../../scripts/lib/release-validation-waivers.mjs";
 
@@ -125,102 +126,6 @@ const stableInput = { child: stableChild, targetVersion: stableVersion, targetSh
 const stableLog = stableCauses
   .map((cause) => "2026-11-15T04:00:00.0000000Z ::error title=CI job did not succeed::" + cause)
   .join("\n");
-
-describe("2026.11.4 native-live exact-candidate exceptions", () => {
-  const nativeSha = "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74";
-  const nativeJobs = ["Native live gateway core", "Native live test harnesses"].map(
-    (suite, id) => ({
-      status: "completed",
-      conclusion: "failure",
-      id,
-      name: `Run repo/live E2E validation / Native live suites (${suite})`,
-    }),
-  );
-  const aggregate = {
-    ...gate,
-    name: "Verify release checks",
-    steps: [{ name: "Verify release check results", conclusion: "failure" }],
-  };
-  const nativeChild = {
-    ...child,
-    key: "releaseChecksIndependent",
-    runId: "43719709063",
-    runAttempt: 1,
-    jobs: [...nativeJobs, aggregate],
-  };
-  const input = { child: nativeChild, targetVersion: stableVersion, targetSha: nativeSha };
-
-  it("admits only the exact candidate's two failed leaves, preserving raw evidence", () => {
-    expect(terminalPolicyPass(nativeChild, stableVersion, nativeSha)).toBe(true);
-    expect(nativeChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
-    for (const run of [
-      { runId: "43719709063", runAttempt: 1 },
-      { runId: "999", runAttempt: 2 },
-    ]) {
-      expect(
-        evaluateReleaseChildPolicy({ ...input, child: { ...nativeChild, ...run } }).waivers,
-      ).toHaveLength(2);
-    }
-    const rejected = [
-      ...[undefined, targetSha, "a".repeat(40)].map((sha) =>
-        Object.assign({}, input, { targetSha: sha }),
-      ),
-      { ...input, targetVersion: "2026.11.5" },
-      { ...input, child: { ...nativeChild, key: "releaseChecksCandidate" } },
-      ...["skipped", "cancelled", "timed_out", "neutral", "success"].map((conclusion) =>
-        Object.assign({}, input, {
-          child: {
-            ...nativeChild,
-            jobs: nativeJobs.map((job) => Object.assign({}, job, { conclusion })),
-          },
-        }),
-      ),
-      {
-        ...input,
-        child: {
-          ...nativeChild,
-          jobs: nativeJobs.map((job) => Object.assign({}, job, { status: "in_progress" })),
-        },
-      },
-    ];
-    for (const value of rejected) {
-      expect(evaluateReleaseChildPolicy(value).waivers).toEqual([]);
-    }
-    expect(
-      terminalPolicyPass(
-        {
-          ...nativeChild,
-          jobs: [...nativeJobs, { ...aggregate, name: "Seal artifact producer receipt" }],
-        },
-        stableVersion,
-        nativeSha,
-      ),
-    ).toBe(false);
-  });
-
-  it("authenticates the existing live aggregate cause and rejects unrelated failures", async () => {
-    const policy = evaluateReleaseChildPolicy(input);
-    expect(policy.waivers).toHaveLength(2);
-    for (const [log, passes] of [
-      ["##[error]live_repo_e2e_release_checks ended with failure", true],
-      [
-        "##[error]live_repo_e2e_release_checks ended with failure\n##[error]package integrity failed",
-        false,
-      ],
-    ] as const) {
-      const result = validateReleaseWaiverAggregates({
-        policy,
-        jobs: nativeChild.jobs,
-        getJobLog: () => log,
-      });
-      if (passes) {
-        await expect(result).resolves.toBeUndefined();
-      } else {
-        await expect(result).rejects.toThrow("unwaived failure");
-      }
-    }
-  });
-});
 
 describe("2026.11.4 exact-candidate exceptions", () => {
   it.each(stableNames)("admits only the executed failure of %s on the fixed candidate", (name) => {
@@ -357,3 +262,283 @@ describe("2026.11.4 exact-candidate exceptions", () => {
     }
   });
 });
+
+// Grant entries share the matching and rejection contract exercised above.
+it.each([
+  {
+    sha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
+    role: "releaseChecksIndependent",
+    names: ["Native live gateway core", "Native live test harnesses"].map(
+      (suite) => `Run repo/live E2E validation / Native live suites (${suite})`,
+    ),
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
+  {
+    sha: "d843d6af39a42cd3c30084edbeabeece732fd93a",
+    role: "normalCi",
+    names: ["checks-node-agentic-gateway-server-isolated-4"],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+  },
+  {
+    sha: "d843d6af39a42cd3c30084edbeabeece732fd93a",
+    role: "releaseChecksIndependent",
+    names: ["Run repo/live E2E validation / Native live suites (Native live gateway core)"],
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
+])("admits $role grants on $sha", async ({ sha, role, names, aggregate, step, cause }) => {
+  const currentChild = {
+    ...child,
+    key: role,
+    jobs: [
+      ...names.map((name, id) => ({ ...failedJob, id, name })),
+      { ...gate, name: aggregate, steps: [{ name: step, conclusion: "failure" }] },
+    ],
+  };
+  const policy = evaluateReleaseChildPolicy({
+    child: currentChild,
+    targetVersion: stableVersion,
+    targetSha: sha,
+  });
+  expect(policy.waivers.map((waiver) => waiver.jobName)).toEqual(names);
+  expect(terminalPolicyPass(currentChild, stableVersion, sha)).toBe(true);
+  expect(() =>
+    validateReleaseManifestAdvisoryJobs({
+      targetSha: sha,
+      validationInputs: { targetVersion: stableVersion },
+      childEvidence: { [role]: currentChild },
+    }),
+  ).not.toThrow();
+  await expect(
+    validateReleaseWaiverAggregates({
+      policy,
+      jobs: currentChild.jobs,
+      getJobLog: () => "##[error]" + cause,
+    }),
+  ).resolves.toBeUndefined();
+});
+
+describe("2026.10.33 mobile validation exception", () => {
+  const names = [
+    "ios-screenshots-iphone",
+    "ios-screenshots-ipad-13",
+    "ios-screenshots",
+    "ios-screenshot-evidence",
+    "ios-build (release)",
+    "ios-build (tests)",
+    "ios-build (smoke)",
+    "ios-release-e2e / qualify",
+    "android-release-e2e / qualify",
+    "android-test-play",
+    "android-test-third-party",
+    "android-test-wear",
+    "android-build-play",
+    "android-build-wear",
+    "android-ktlint",
+    "android-screenshots",
+    "android-access-native (4096, google_apis)",
+    "android-access-native (16384, google_apis_ps16k)",
+  ];
+  const causes = [
+    "ios-screenshot-shard",
+    "ios-screenshot-capture",
+    "ios-screenshot-evidence",
+    "ios-build",
+    "ios-release-e2e",
+    "android-release-e2e",
+    "android",
+    "android-screenshots",
+    "android-access-native",
+  ].map((name) => name + " finished with failure (selected=true)");
+  const mobileJobs = names.map((name, id) => ({ ...failedJob, id: id + 100, name }));
+  const mobileChild = { ...child, jobs: [...mobileJobs, gate] };
+  const input = { child: mobileChild, targetVersion: "2026.10.33" };
+
+  it("accepts the authorized mobile jobs only, preserving raw failures and required execution", () => {
+    const policy = evaluateReleaseChildPolicy(input);
+    expect(policy.waivers.map((row) => row.jobName)).toEqual(names);
+    expect(terminalPolicyPass(mobileChild, input.targetVersion)).toBe(true);
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        validationInputs: { targetVersion: input.targetVersion },
+        childEvidence: { normalCi: mobileChild },
+      }),
+    ).not.toThrow();
+    expect(mobileChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(releaseQualificationExemptions(input.targetVersion, "stable")).toEqual([]);
+    expect(evaluateReleaseChildPolicy({ ...input, targetVersion: "2026.10.34" }).waivers).toEqual(
+      [],
+    );
+    expect(
+      evaluateReleaseChildPolicy({
+        ...input,
+        child: { ...mobileChild, key: "releaseChecksCandidate" },
+      }).waivers,
+    ).toEqual([]);
+    for (const name of [
+      "macos-node",
+      "macos-swift (tests)",
+      "docker-seed-e2e",
+      "Seal artifact producer receipt",
+    ]) {
+      expect(
+        terminalPolicyPass(
+          { ...mobileChild, jobs: [...mobileChild.jobs, { ...failedJob, name }] },
+          input.targetVersion,
+        ),
+      ).toBe(false);
+    }
+    for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
+      const incomplete = {
+        ...mobileChild,
+        jobs: [{ ...failedJob, name: "ios-build (tests)", conclusion }],
+      };
+      expect(evaluateReleaseChildPolicy({ ...input, child: incomplete }).waivers).toEqual([]);
+      if (conclusion !== "skipped") {
+        expect(terminalPolicyPass(incomplete, input.targetVersion)).toBe(false);
+      }
+    }
+  });
+
+  it("requires the exact mobile aggregate cause union without excusing other failures", async () => {
+    const policy = evaluateReleaseChildPolicy(input);
+    const log = causes.map((cause) => "::error title=CI job did not succeed::" + cause).join("\n");
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: mobileChild.jobs, getJobLog: () => log }),
+    ).resolves.toBeUndefined();
+    for (const invalid of [
+      "",
+      causes
+        .slice(1)
+        .map((cause) => "##[error]" + cause)
+        .join("\n"),
+      log + "\n##[error]docker-seed-e2e finished with failure (selected=true)",
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: mobileChild.jobs,
+          getJobLog: () => invalid,
+        }),
+      ).rejects.toThrow("unwaived failure");
+    }
+  });
+});
+
+it.each(["2026.10.33", "2026.11.5"])(
+  "admits only the authorized %s Kova failure without skipping qualification",
+  (targetVersion) => {
+    const kova = {
+      ...child,
+      key: "productPerformance",
+      jobs: [{ ...failedJob, id: 133410712957, name: "Kova mock provider performance" }],
+    };
+    expect(terminalPolicyPass(kova, targetVersion)).toBe(true);
+    expect(kova.conclusion).toBe("failure");
+    expect(kova.jobs).toMatchObject([{ conclusion: "failure" }]);
+    expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
+    expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
+    expect(terminalPolicyPass({ ...kova, key: "normalCi" }, targetVersion)).toBe(false);
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      expect(
+        terminalPolicyPass({ ...kova, jobs: [{ ...kova.jobs[0], conclusion }] }, targetVersion),
+      ).toBe(false);
+    }
+    expect(
+      terminalPolicyPass(
+        { ...kova, jobs: [...kova.jobs, { ...failedJob, id: 2, name: "Build candidate" }] },
+        targetVersion,
+      ),
+    ).toBe(false);
+  },
+);
+
+it.each(["2026.10.33", "2026.11.5"])(
+  "admits only the authorized %s Telegram package failure",
+  async (targetVersion) => {
+    const name = "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
+    const telegram = {
+      ...child,
+      key: "releaseChecksCandidate",
+      jobs: [{ ...failedJob, id: 133430641645, name }],
+    };
+    expect(terminalPolicyPass(telegram, targetVersion)).toBe(true);
+    expect(telegram.jobs).toMatchObject([{ conclusion: "failure" }]);
+    expect(terminalPolicyPass(telegram, "2026.11.6")).toBe(false);
+    expect(terminalPolicyPass({ ...telegram, key: "normalCi" }, targetVersion)).toBe(false);
+    expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
+    for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
+      expect(
+        terminalPolicyPass(
+          { ...telegram, jobs: [{ ...failedJob, name, conclusion }] },
+          targetVersion,
+        ),
+      ).toBe(false);
+    }
+    expect(
+      terminalPolicyPass(
+        {
+          ...telegram,
+          jobs: [
+            ...telegram.jobs,
+            {
+              ...failedJob,
+              name: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+            },
+          ],
+        },
+        targetVersion,
+      ),
+    ).toBe(false);
+    const aggregates = [
+      {
+        ...gate,
+        id: 11,
+        name: "Run package acceptance / Verify package acceptance",
+        steps: [{ name: "Verify package acceptance results", conclusion: "failure" }],
+      },
+      {
+        ...gate,
+        name: "Verify release checks",
+        steps: [{ name: "Verify release check results", conclusion: "failure" }],
+      },
+    ];
+    const allJobs = [...telegram.jobs, ...aggregates];
+    const policy = evaluateReleaseChildPolicy({
+      child: { ...telegram, jobs: allJobs },
+      targetVersion,
+    });
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: (id) =>
+          id === 11
+            ? "##[error]package_telegram ended with failure"
+            : "##[error]package_acceptance_release_checks ended with failure",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: () => "##[error]unrelated_integrity ended with failure",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: allJobs,
+        getJobLog: (id) =>
+          id === 11
+            ? "##[error]package_telegram ended with failure"
+            : "##[error]package_acceptance_release_checks ended with failure\n##[error]cross_os_release_checks ended with failure",
+      }),
+    ).rejects.toThrow();
+  },
+);

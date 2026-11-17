@@ -4,6 +4,7 @@ import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { isRailSectionPin } from "../../app-navigation.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
@@ -163,8 +164,10 @@ it.each([
   drag(source, target);
   await sidebar.updateComplete;
   expect(onUpdate).toHaveBeenCalled();
+  // The saved order follows the drop; plugin pins still render below section pins.
+  expect(sidebar.sidebarEntries).toEqual(["plugin:logbook/logbook", "route:cron"]);
   const ordered = entryOrder(sidebar, ".sidebar-rail [data-sidebar-entry]");
-  expect(ordered.indexOf("plugin:logbook/logbook")).toBeLessThan(ordered.indexOf("route:cron"));
+  expect(ordered.indexOf("route:cron")).toBeLessThan(ordered.indexOf("plugin:logbook/logbook"));
   zoneEntry(sidebar, "plugin:logbook/logbook").querySelector<HTMLAnchorElement>("a")?.click();
   const location = new URL(href, window.location.origin);
   expect(navigate).toHaveBeenCalledWith("plugin", {
@@ -237,7 +240,10 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
     expect(rail.attr("a", "aria-label")).toBe(id);
     expect(rail.present(".nav-item__children")).toEqual([false]);
   }
-  expect(entryOrder(sidebar, ".sidebar-rail__pin")).toEqual(sidebar.sidebarEntries);
+  expect(entryOrder(sidebar, ".sidebar-rail__pin")).toEqual([
+    ...pins.filter(isRailSectionPin),
+    ...pins.filter((entry) => !isRailSectionPin(entry)),
+  ]);
   expect(sidebar.sidebarEntries).toEqual(pins);
 });
 

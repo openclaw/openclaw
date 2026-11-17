@@ -299,6 +299,15 @@ type SessionEntryCore = SessionEntryProvenance &
       };
       configured?: { planDigest: string; sourceIntegrity: string };
     };
+    /** Creation is finished; Retry continues only this hidden Template setup turn. */
+    templateSetup?: {
+      source: { packageName: string; version?: string };
+      report: import("../../templates/conversation.js").TemplateSetupReport;
+      /** Workspace is ready; dependency installation can overlap the first conversation turn. */
+      dependenciesPending?: true;
+      /** Avoid replaying the greeting when Retry only needs to report dependency results. */
+      openingComplete?: true;
+    };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
     /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -719,6 +728,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Written only by committed graceful shutdown, consumed by the next startup. */
   resumeAfterRestart?: {
     queuedInputIds: string[];
+    /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
+    operatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
     /** Original per-input limits, restored only after current source revalidation. */
     queuedInputSources?: Record<
       string,

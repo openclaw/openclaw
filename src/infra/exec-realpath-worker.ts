@@ -4,7 +4,11 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 
-export type ExecRealpathInput = { path: string; mode: FsSafeNativeMode };
+export type ExecRealpathInput = {
+  path: string;
+  mode: FsSafeNativeMode;
+  ordinary?: boolean;
+};
 type ExecRealpathPool = WorkerTaskPool<ExecRealpathInput, string | undefined>;
 
 /** Bun's native canonicalizer is synchronous; only this worker performs that lookup. */
@@ -12,6 +16,22 @@ export async function resolveExecRealpathInWorker(
   filePath: string,
   mode: FsSafeNativeMode,
 ): Promise<string> {
+  const resolved = await resolveRealpathInWorker({ path: filePath, mode });
+  if (resolved === undefined) {
+    throw new Error("Exec path could not be resolved under the filesystem policy");
+  }
+  return resolved;
+}
+
+/** Preserve ordinary symlink expansion without synchronous filesystem work on the caller. */
+export function resolveOrdinaryRealpathInWorker(
+  filePath: string,
+  mode: FsSafeNativeMode,
+): Promise<string | undefined> {
+  return resolveRealpathInWorker({ path: filePath, mode, ordinary: true });
+}
+
+async function resolveRealpathInWorker(input: ExecRealpathInput): Promise<string | undefined> {
   const source = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("execRealpath"));
   const pools = resolveGlobalMap<string, ExecRealpathPool>(
     Symbol.for("openclaw.execRealpathPools"),
@@ -31,9 +51,5 @@ export async function resolveExecRealpathInWorker(
       pools.delete(key);
     });
   }
-  const resolved = await pool.run({ path: filePath, mode }, {});
-  if (resolved === undefined) {
-    throw new Error("Exec path could not be resolved under the filesystem policy");
-  }
-  return resolved;
+  return pool.run(input, {});
 }

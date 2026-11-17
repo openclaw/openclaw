@@ -54,7 +54,7 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   const pages = sidebar.locator(".sidebar-pages");
   const pluginLink = pages.getByRole("link", { name: "UI fixture", exact: true });
   await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-  const builtInLink = pages.getByRole("link", { name: "Plugins", exact: true });
+  const builtInLink = pages.getByRole("link", { name: "Customize", exact: true });
   const selected = async (active: boolean, navigation: Promise<unknown>) => {
     await navigation;
     await (active ? revisionOne : plugins).waitFor();

@@ -6,6 +6,7 @@ import {
   type ControlUiHost,
   type ControlUiView,
 } from "openclaw/plugin-sdk/control-ui";
+import { createSignal } from "solid-js";
 import { PeoplePage } from "./people-page.js";
 import type { StatusResult } from "./types.js";
 import "./control-ui.css";
@@ -14,8 +15,9 @@ import "./control-ui.css";
 export const ACCESS_PAGE_ID = "access";
 
 const mountAccess: ControlUiView = (container, context) => {
-  const dispose = render(() => <PeoplePage host={context.host} />, container);
-  return { dispose };
+  const [params, setParams] = createSignal(context.props, { ownedWrite: true });
+  const dispose = render(() => <PeoplePage host={context.host} params={params()} />, container);
+  return { dispose, update: (next) => setParams(next.props) };
 };
 
 // The Gateway owns the flag and whether this connection may read people.
@@ -25,15 +27,18 @@ async function canSeePeople(host: ControlUiHost): Promise<boolean> {
   }
   try {
     const status = await host.request<StatusResult>("openclawId.status", {});
-    return status.status.state !== "off" && status.owner === true;
+    return (
+      status.status.state !== "off" &&
+      (status.owner === true || status.connection?.kind === "member")
+    );
   } catch {
     return false;
   }
 }
 
 /**
- * Registers the owner-only Access page and its sidebar destination while enabled.
- * Connection changes recheck the Gateway-owned flag and owner admission.
+ * Registers the Access page and its sidebar destination while enabled.
+ * Connection changes recheck the Gateway-owned flag and owner/member admission.
  */
 export default defineControlUiPlugin({
   id: "openclaw-id-access",
@@ -56,7 +61,7 @@ export default defineControlUiPlugin({
           id: ACCESS_PAGE_ID,
           label: "Access",
           page: { id: ACCESS_PAGE_ID },
-          icon: "users",
+          icon: "access",
           defaultVisible: false,
         });
         disposePage = () => {

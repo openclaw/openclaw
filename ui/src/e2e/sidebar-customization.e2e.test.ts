@@ -154,9 +154,11 @@ suite.define(() => {
           });
           await seedChatSettings(page, suite.server.baseUrl, {
             sidebarAgentsMode: "roster",
+            // Workboard moves up within the pins below the rail separator.
             railShortcuts: [
               "route:sessions",
               "route:systems",
+              "person:ada",
               "plugin:workboard/workboard",
               "route:cron",
             ],
@@ -370,6 +372,14 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-rail__pin[data-sidebar-entry^="route:"] .nav-item',
       );
+      // A rail without saved shortcuts starts with the default pins; clear them to start empty.
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Automations", "Customize", "Usage"]);
+      for (const entry of ["route:cron", "route:plugins", "route:usage"]) {
+        const menu = await openSidebarPinMenu(page, entry);
+        await menu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
+      }
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
@@ -611,8 +621,9 @@ suite.define(() => {
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
       // Collapsing the list retains the personal icon rail; its view buttons
-      // provide the matching expand controls.
-      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
+      // provide the matching expand controls. The panel owns collapse: the
+      // Sessions avatar opens the agent menu while its panel is open.
+      const collapseButton = sidebar.getByRole("button", { name: "Collapse sidebar", exact: true });
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -750,7 +761,7 @@ suite.define(() => {
           .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
           .getByRole("button", { name: "Pin", exact: true })
           .click();
-        await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
 

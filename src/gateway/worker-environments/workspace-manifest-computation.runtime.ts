@@ -5,7 +5,11 @@ import { zstdDecompressSync } from "node:zlib";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
+import {
+  createLocalWorkspaceManifestTree,
+  type LocalWorkspaceManifestRecord,
+} from "./local-workspace-manifest-tree.js";
 import {
   pruneWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
@@ -154,22 +158,15 @@ export async function executeWorkspaceManifestComputation(
       return result;
     }
     case "workspace.manifest.base-refresh": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const { readWorkspaceBaseRefreshTrees } = await import("./workspace-base-refresh-trees.js");
       const input = command.input;
       return await withHashes(input.hashes, async () => {
-        const { manifest: before } = await readActualWorkspaceManifestImpl({
-          root: input.beforeRoot,
-          baseCommit: input.baseCommit,
-        });
-        const { manifest: after } = await readActualWorkspaceManifestImpl({
-          root: input.afterRoot,
-          baseCommit: input.baseCommit,
-        });
         const accepted = parseWorkerWorkspaceManifest(
           decodeUtf8(input.baseRaw),
           input.baseRef,
           input.buildCacheInputs,
         );
+        const [before, after] = await readWorkspaceBaseRefreshTrees(input, accepted);
         const current = applyWorkspaceSourceOverlay(before, accepted, after);
         current.buildCacheInputs = [
           ...new Set([...input.buildCacheInputs, ...after.entries.map((entry) => entry.path)]),
@@ -287,21 +284,48 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.document":
+    case "workspace.manifest.initial":
     case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
+      const empty =
+        command.type === "workspace.manifest.initial"
+          ? createLocalWorkspaceManifestTree([])
+          : undefined;
+      const fingerprints = empty
+        ? prepareLocalWorkspaceFingerprints(empty, empty.get("")!.treeRef, null, Date.now())
+        : undefined;
       const result = await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl({
-          ...input,
-          includePaths: input.includePaths && new Set(input.includePaths),
-          gitIgnore: input.gitIgnore && {
-            paths: new Set(input.gitIgnore.paths),
-            retainedPaths: new Set(input.gitIgnore.retainedPaths),
+        readActualWorkspaceManifestImpl(
+          {
+            ...input,
+            includePaths: input.includePaths && new Set(input.includePaths),
+            gitIgnore: input.gitIgnore && {
+              paths: new Set(input.gitIgnore.paths),
+              retainedPaths: new Set(input.gitIgnore.retainedPaths),
+            },
+            buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
+            preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
           },
-          buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
-          preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
-        }),
+          undefined,
+          fingerprints?.observe,
+        ),
       );
+      if (fingerprints) {
+        const { manifest, rawManifest, manifestRef } = result.value;
+        const records = createLocalWorkspaceManifestTree([
+          ...manifest.entries,
+          ...(manifest.directories ?? []).map((path) => ({ path, type: "directory" as const })),
+        ]);
+        return {
+          ...result,
+          value: {
+            rawManifest,
+            manifestRef,
+            projectionFingerprints: fingerprints.encode(records, records.get("")!.treeRef),
+          },
+        };
+      }
       if (command.type === "workspace.manifest.document") {
         const { manifestRef, rawManifest } = result.value;
         return { ...result, value: { manifestRef, rawManifest } };

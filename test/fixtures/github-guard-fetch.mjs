@@ -44,8 +44,16 @@ globalThis.fetch = async (url, options = {}) => {
       ? responseRoute.responses.shift()
       : responseRoute.responses[0]
     : responseRoute;
+  if (value?.expectedToken) {
+    if (options.headers?.authorization !== `Bearer ${value.expectedToken}`) {
+      throw new Error(`Wrong credential for fixture request: ${key}`);
+    }
+    value = value.response;
+  }
   if (value?.advanceMs !== undefined) {
-    if (!advanceClock) throw new Error("Elapsed response fixtures require the isolated clock.");
+    if (!advanceClock) {
+      throw new Error("Elapsed response fixtures require the isolated clock.");
+    }
     advanceClock(value.advanceMs);
     value = value.response;
   }
@@ -57,7 +65,9 @@ globalThis.fetch = async (url, options = {}) => {
     expire();
     return new Promise(() => {});
   }
-  if (value?.recordStatusBeforeError) recordStatus();
+  if (value?.recordStatusBeforeError) {
+    recordStatus();
+  }
   if (value?.recordCommentBeforeError) {
     publishedComments.set(parsed.pathname, {
       id: 321,

@@ -36,6 +36,14 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
     levels: ["off", "minimal", "low", "medium", "high"],
     defaultLevel: "high",
   },
+  "tencent-tokenhub/hy4-flash": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
+  "tencent-tokenplan/hy4-flash": {
+    levels: ["off", "minimal", "low", "medium", "high"],
+    defaultLevel: "high",
+  },
   "xai/grok-4.7": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
   "xai/grok-4.6": { levels: ["low", "medium", "high", "xhigh"], defaultLevel: "high" },
   "xai/grok-4.5": { levels: ["low", "medium", "high"], defaultLevel: "high" },

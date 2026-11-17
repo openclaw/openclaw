@@ -4,7 +4,6 @@ import type { BoardReadOperations } from "../../boards/sqlite-board-operations.j
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.types.js";
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -67,11 +66,10 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
-  SessionCompactionPlanRequest,
-  SessionCompactionSourceRequest,
-  SessionCompactionSourceConsumer,
-  SessionCompactionSourceReply,
-} from "./session-compaction-source.types.js";
+  SessionPreparedCompactionInput,
+  SessionPreparedCompactionValue,
+  SessionPreparedCompactionWireValue,
+} from "./session-compaction-prepared.types.js";
 import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
@@ -131,6 +129,11 @@ import type {
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
+import type {
+  TranscriptActiveFactsBackfillCursor,
+  TranscriptActiveFactsBackfillProbe,
+  TranscriptActiveFactsBackfillSession,
+} from "./session-transcript-active-facts-backfill.worker.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type {
   SessionTranscriptHydrationWorkerInput,
@@ -193,7 +196,6 @@ export type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
-  SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-hydration.types.js";
 
@@ -288,7 +290,17 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
-  | SessionCompactionSourceRequest
+  | {
+      kind: "transcript-facts-discover";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+    }
+  | {
+      kind: "transcript-facts-probe";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      cursor: TranscriptActiveFactsBackfillCursor;
+    }
   | AgentToolUsageReadInput
   | AgentToolUsageImportReadInput
   | SessionRetirementReadWorkerInput
@@ -314,6 +326,7 @@ export type SessionHistoryWorkerInput =
   | SessionColdMetadataWorkerInput
   | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
+  | SessionPreparedCompactionInput
   | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
@@ -378,18 +391,6 @@ export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
-export type SessionHistoryWorkerRequestRunner = <
-  Request extends SessionHistoryWorkerPreparedInput,
-  TResult,
->(
-  prepare: () => Request,
-  inputBytes: number,
-  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
-  signal?: AbortSignal,
-  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  options?: SessionHistoryWorkerRequestOptions,
-) => Promise<TResult>;
-
 /** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
 export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
 
@@ -398,7 +399,15 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
-    "compaction-source": { kind: "compaction-source"; reply: SessionCompactionSourceReply };
+    "transcript-facts-discover": {
+      kind: "transcript-facts-discover";
+      result: { supported: boolean; sessions: TranscriptActiveFactsBackfillSession[] };
+    };
+    "transcript-facts-probe": {
+      kind: "transcript-facts-probe";
+      result: TranscriptActiveFactsBackfillProbe;
+    };
+    "compaction-preparation": SessionPreparedCompactionWireValue;
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -578,13 +587,13 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
-    withCompactionSource: (
-      input: Omit<SessionCompactionPlanRequest, "kind" | "database" | "phase">,
-      consume: SessionCompactionSourceConsumer,
+    readPreparedCompaction: (
+      input: Omit<SessionPreparedCompactionInput, "kind" | "database">,
       signal?: AbortSignal,
-      timeoutMs?: number,
-    ) => Promise<string | undefined>;
+    ) => Promise<SessionPreparedCompactionValue>;
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
+    discoverTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-discover", "result">;
+    probeTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-probe", "result">;
     readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;
@@ -625,6 +634,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     searchTranscripts: (
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+      filterCandidates?: import("./session-transcript-search.types.js").SessionTranscriptSearchFilter,
     ) => Promise<SessionTranscriptSearchResult>;
     assertCurrent: () => void;
     run: (

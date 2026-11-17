@@ -10,12 +10,17 @@ import type { SessionCreatedActor } from "../config/sessions/session-entry-prove
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../shared/immutable-data.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
@@ -26,6 +31,15 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 
 const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const reportedUnknownAssignments = new Set<string>();
+const githubAssignmentKeys = memoizeFrozenPlainDataProjection(
+  (assignments: Record<string, string>) => {
+    const keys: Record<string, string> = Object.create(null);
+    for (const key of Object.keys(assignments)) {
+      keys[key.trim().toLowerCase()] ??= key;
+    }
+    return keys;
+  },
+);
 type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string; roleOnly: boolean }
   | { kind: "config"; context: object };
@@ -120,14 +134,15 @@ export function resolveOperatorRoleSelection(
   const login = githubLogin?.toLowerCase();
   const assignments = roles.assignments?.byGithubLogin;
   if (login && assignments) {
-    for (const configuredLogin of Object.keys(assignments)) {
-      if (
-        configuredLogin.trim().toLowerCase() === login &&
-        // SAFETY: Object.keys enumerates the validated string-valued assignment map.
-        Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
-      ) {
-        return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
-      }
+    // Config validation rejects duplicate normalized logins; exact keys need no roster scan.
+    const key = Object.hasOwn(assignments, login)
+      ? login
+      : isDeeplyFrozenPlainData(assignments)
+        ? githubAssignmentKeys(assignments)[login]
+        : Object.keys(assignments).find((candidate) => candidate.trim().toLowerCase() === login);
+    const role = key === undefined ? undefined : assignments[key];
+    if (role && Object.hasOwn(roles.definitions, role)) {
+      return { effectiveRole: role, roleSource: "githubLogin" };
     }
   }
   return { effectiveRole: roles.default, roleSource: "default" };
@@ -194,11 +209,23 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
+  creation:
+    | {
+        actor?: SessionCreatedActor;
+        openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+      }
+    | undefined,
 ): "required" | undefined {
+  const principal = creation?.openclawIdPrincipal;
+  if (principal?.kind === "member") {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new OpenClawIdPrincipalChangedError();
+    }
+    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
   const actor = creation?.actor;
   return actor?.type === "human" &&
     actor.id &&
@@ -286,6 +313,21 @@ export function resolveOperatorRolePolicy(
     );
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+}
+
+/** Administrator members use membership, while other callers keep their profile policy. */
+export function resolveAdministratorMemberRolePolicy(
+  client: GatewayClient | null | undefined,
+  cfg: OpenClawConfig,
+): GatewayOperatorRoleDefinition | undefined {
+  const principal =
+    client?.internal?.openclawIdPrincipal ??
+    client?.internal?.operatorRunAuthority?.openclawIdPrincipal;
+  if (!client || principal?.kind !== "member" || !client.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return undefined;
+  }
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  return policy?.scopes.includes(ADMIN_SCOPE) ? policy : deniedOperatorRole;
 }
 
 /** A retained caller cannot keep grants removed by the current named role. */

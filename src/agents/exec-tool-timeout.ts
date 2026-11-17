@@ -1,5 +1,5 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -27,7 +27,7 @@ export function resolveExecTimeoutDefaults(
   const timeoutSec = defaults?.timeoutSec;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(timeoutSec);
   const runKey = defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey;
-  const oneShotKey = isSubagentSessionKey(runKey) || isCronRunSessionKey(runKey);
+  const oneShotKey = isOneShotRunSessionKey(runKey);
   return [
     defaultTimeoutSec,
     (hiddenSubagent) =>

@@ -11,7 +11,10 @@ import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
 } from "./agent-tools.before-tool-call.js";
-import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
+import {
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { resolveAgentHarnessToolResultPresentation } from "./harness/tool-result-facts.js";
@@ -298,15 +301,6 @@ export class ToolSearchRuntime {
       compactToolSearchCatalogEntry(entry),
     );
 
-  namespaceEntries = () =>
-    // Snapshot host metadata without rendering hints or retaining the executable tool.
-    resolveCatalog(this.ctx).entries.map(
-      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
-        entry.parameters ??= {};
-        return entry;
-      },
-    );
-
   describe = async (
     id: string,
     options?: CatalogVisibilityOptions & UnknownToolErrorOptions & { parentToolCallId?: string },
@@ -413,7 +407,14 @@ export class ToolSearchRuntime {
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
-    const normalizedInput = input ?? {};
+    const validateInput = this.options.validateInput && entry.source === "openclaw";
+    const normalizedInput = validateInput
+      ? coerceToolExecutionArguments(
+          entry,
+          resolveAgentToolExecutionSchema(entry.tool, entry.parameters),
+          input ?? {},
+        )
+      : (input ?? {});
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const scope = this.options.callIdScope
       ? `${sanitizeToolCallIdPart(this.options.callIdScope)}:`
@@ -494,7 +495,6 @@ export class ToolSearchRuntime {
       acceptedSnapshot = snapshot;
       return snapshot;
     };
-    const validateInput = this.options.validateInput && entry.source === "openclaw";
     const validateExecution = validateInput || outputVariants !== undefined;
     const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
       ...this.options,

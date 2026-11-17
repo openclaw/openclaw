@@ -17,8 +17,8 @@ import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
-import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isSessionStoreTopologyChange,
   sessionChangeScopeAffectsStoredRows,
@@ -35,10 +35,7 @@ import {
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
-import type {
-  SessionEntryCreationOperation,
-  SessionSharingEntry,
-} from "./session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
@@ -54,11 +51,7 @@ import {
   createSessionGenerationReadBatch,
   type GenerationRead,
 } from "./session-delivery-generation-read-batch.js";
-import type {
-  SessionDeliveryGeneration,
-  SessionGenerationEntry,
-  SessionGenerationFacts,
-} from "./session-delivery-generation.types.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
 import {
@@ -73,35 +66,33 @@ import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-
 
 export { isSessionDeliveryGenerationRevokedError } from "./session-delivery-generation-errors.js";
 
-function isSessionGenerationFacts(value: unknown): value is SessionGenerationFacts {
+function isLeaseFacts(value: unknown): value is LeaseFacts {
   return (
     isRecord(value) &&
     [value.agentId, value.storePath, value.sessionKey].every(
       (field) => typeof field === "string" && field.length > 0 && field === field.trim(),
     ) &&
-    (value.sessionId === null ||
+    (value.sessionId == null ||
       (typeof value.sessionId === "string" &&
         value.sessionId.length > 0 &&
         value.sessionId === value.sessionId.trim())) &&
     typeof value.storePath === "string" &&
     path.isAbsolute(value.storePath) &&
-    (value.lifecycleRevision === null ||
+    (value.lifecycleRevision == null ||
       (typeof value.lifecycleRevision === "string" && value.lifecycleRevision.length > 0))
   );
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
 async function prepareSessionGenerationLease(
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
   initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
 ): Promise<{
   assertCurrent: SessionSourceAssertion;
   assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
-  readSessionSettings: () =>
-    | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
-    | undefined;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
   prepareRead: () => Promise<void> | undefined;
   release: () => void;
   bindCreation: (
@@ -112,7 +103,7 @@ async function prepareSessionGenerationLease(
   ) => SessionSourceAssertion;
   isCreationAdopted: () => boolean;
 }> {
-  if (!isSessionGenerationFacts(input)) {
+  if (!isLeaseFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
   const memory = captureSessionActorStorageOwner(
@@ -195,6 +186,9 @@ async function prepareSessionGenerationLease(
     return entry;
   };
   const changed = (change: SessionRowChange) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
         // Registration changes do not retarget an in-flight delivery. Its selected
@@ -208,21 +202,12 @@ async function prepareSessionGenerationLease(
         if (change.scope.storePath && !paths.has(path.resolve(change.scope.storePath))) {
           return;
         }
-      } else if (
-        // Runtime and automation still invalidate this retained authority.
-        !sessionChangeScopeAffectsStoredRows(change) &&
-        change.scope !== "runtime" &&
-        change.scope !== "automation"
-      ) {
-        return;
       }
       diag.flip("row-invalidated");
       invalidated = true;
       return;
     }
     if (
-      change.scope === "automation" ||
-      change.scope === "acp" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||
@@ -519,18 +504,19 @@ async function prepareSessionGenerationLease(
       assertActive();
       return retained?.prepareRead()?.then(assertActive);
     };
-    if (generation.sessionId !== null && source) {
+    if (generation.sessionId != null && source) {
       workerSource = captureSessionEntrySourceAssertion({
         scope: { ...generation, storePath: source.path },
         expected: {
           sessionId: generation.sessionId,
           lifecycleRevision: generation.lifecycleRevision ?? undefined,
         },
-        fields: generation.exactTranscript
-          ? ["sessionId", "lifecycleRevision"]
-          : generation.lifecycleRevision === null
-            ? []
-            : ["lifecycleRevision"],
+        fields:
+          generation.exact === "transcript"
+            ? ["sessionId", "lifecycleRevision"]
+            : generation.exact === "lifecycle"
+              ? ["lifecycleRevision"]
+              : [],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertActive,
         refuse: () => {
@@ -672,54 +658,52 @@ async function prepareSessionGenerationLease(
   }
 }
 
-/** Session lifecycle owners compose these facts with their own admitted mutation authority. */
-export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertDeliveryCurrent: _delivery, ...facts } = await prepareSessionGenerationLease(input);
+/** Only the chat and transcript lease owners pass raw facts. */
+export async function prepareLeaseFacts(input: LeaseFacts, onRevoked?: (reason: unknown) => void) {
+  const { assertDeliveryCurrent: _delivery, ...facts } = await prepareSessionGenerationLease(
+    input,
+    onRevoked,
+  );
   return facts;
 }
 
-/** Share initial worker reads while each generation retains its own live lease and checks. */
-export async function prepareSessionGenerationFactsBatch(
-  inputs: readonly SessionGenerationFacts[],
-) {
-  type Facts = Awaited<ReturnType<typeof prepareSessionGenerationFacts>>;
+const chatFacts = (chat: ChatRef, options: ChatLeaseOptions = {}): LeaseFacts => ({
+  agentId: chat.agentId,
+  storePath: chat.storePath,
+  sessionKey: chat.sessionKey,
+  env: options.env,
+  ...(options.absent ? { sessionId: null } : {}),
+});
+
+type ChatLeaseOptions = { absent?: true; env?: NodeJS.ProcessEnv };
+
+/**
+ * Follows a chat by key to its current transcript. Session lifecycle owners compose it with
+ * their own admitted mutation authority. `absent` leases a chat that does not exist yet.
+ */
+export async function prepareChatLease(chat: ChatRef, options?: ChatLeaseOptions) {
+  return await prepareLeaseFacts(chatFacts(chat, options));
+}
+
+export type ChatLease = Awaited<ReturnType<typeof prepareChatLease>>;
+
+/** Share initial worker reads while each chat retains its own live lease and checks. */
+export async function prepareChatLeaseBatch(chats: readonly ChatRef[]) {
   const batch = createSessionGenerationReadBatch();
   // File leases register publication listeners synchronously before queuing the first read.
-  const prepared = inputs.map((input) =>
-    prepareSessionGenerationLease(input, undefined, batch.read).then(
-      ({ assertDeliveryCurrent: _delivery, ...facts }): Result<Facts, unknown> => ok(facts),
-      (error: unknown): Result<Facts, unknown> => err(error),
+  const prepared = chats.map((chat) =>
+    prepareSessionGenerationLease(chatFacts(chat), undefined, batch.read).then(
+      ({ assertDeliveryCurrent: _delivery, ...facts }): Result<ChatLease, unknown> => ok(facts),
+      (error: unknown): Result<ChatLease, unknown> => err(error),
     ),
   );
   await batch.flush();
   return Promise.all(prepared);
 }
 
-/** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
-export async function prepareCronRootSessionGeneration(
-  input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
-  onRevoked?: (reason: unknown) => void,
-) {
-  if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
-    return undefined;
-  }
-  const { assertCurrent, release } = await prepareSessionGenerationLease(
-    {
-      ...input,
-      lifecycleRevision: input.lifecycleRevision ?? null,
-      exactTranscript: true,
-    },
-    onRevoked,
-  );
-  return { assertCurrent, release };
-}
-
-/** Delivery remains unavailable while any lifecycle mutation owns the session. */
-export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGeneration) {
-  if (!isSessionGenerationFacts(input) || input.sessionId === null) {
-    throw new SessionDeliveryGenerationUnavailableError();
-  }
-  const lease = await prepareSessionGenerationLease(input);
+/** Delivery remains unavailable while any lifecycle mutation owns the chat. */
+export async function prepareChatDeliveryLease(chat: ChatRef) {
+  const lease = await prepareSessionGenerationLease(chatFacts(chat));
   try {
     lease.assertDeliveryCurrent();
     return { assertCurrent: lease.assertDeliveryCurrent, release: lease.release };

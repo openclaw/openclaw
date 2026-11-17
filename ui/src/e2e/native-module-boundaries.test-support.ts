@@ -102,8 +102,10 @@ export function defineNativeModuleBoundaryTests(
       } else if (action === "Escape") {
         await page.keyboard.press("Escape");
       } else {
-        const toggle = page.locator('[data-navigation-view="sessions"]');
-        await toggle.click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
         await expect.poll(() => page.locator(".sidebar-shell").isVisible()).toBe(false);
         // The native event does not generate an outside pointer that could
         // accidentally dismiss an Inbox resurrected by the old import.

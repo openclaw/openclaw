@@ -681,7 +681,7 @@ describe("update.run prepared foreground handoff", () => {
     const { delivered: notice, started: noticeStarted } = deferNotice();
     const parking = handoff.beforePark?.();
     await noticeStarted.promise;
-    claimHandoff.mockReturnValue(false);
+    claimHandoff.mockResolvedValue(false);
     notice.resolve(true);
     await expect(parking).rejects.toThrow("authority changed");
     expect(scheduleRestart).not.toHaveBeenCalled();

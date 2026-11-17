@@ -583,19 +583,11 @@ span.new-session-page__select {
   width: anchor-size(width);
 }
 
-.new-session-page__project-status,
 .new-session-page__project-error {
+  color: var(--danger);
   padding: 5px 8px;
   font-size: 11px;
   line-height: 1.4;
-}
-
-.new-session-page__project-status {
-  color: var(--muted);
-}
-
-.new-session-page__project-error {
-  color: var(--danger);
 }
 
 .new-session-page__menu-field {
@@ -824,7 +816,8 @@ span.new-session-page__select {
   );
 }
 
-.new-session-page__composer::after {
+/* Tint the message surface without taking dictation’s ::after border. */
+.new-session-page__composer > .agent-chat__input::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -836,7 +829,7 @@ span.new-session-page__select {
   transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.new-session-page__composer[data-attachment-drop-active]::after {
+.new-session-page__composer[data-attachment-drop-active] > .agent-chat__input::before {
   opacity: 0.1;
 }
 
@@ -890,12 +883,6 @@ span.new-session-page__select {
   font-size: 12px;
   color: var(--text);
   outline: none;
-}
-
-.new-session-page__browser-loading {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .new-session-page__browser-list {
@@ -2090,6 +2077,7 @@ span.new-session-page__select {
     flex: 0 0 14px;
     width: 14px;
     height: 14px;
+    margin-inline-start: auto;
     color: var(--muted);
     stroke-width: 1.5px;
   }

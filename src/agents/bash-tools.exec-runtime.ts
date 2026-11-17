@@ -60,6 +60,7 @@ import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exe
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
+  EXEC_OUTPUT_FILE_MAX_BYTES,
   joinExecFailureOutput,
   type ExecProcessOutcome,
   renderExecUpdateText,
@@ -72,6 +73,7 @@ import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.j
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -612,6 +614,10 @@ export async function runExecProcess({
       }
     });
 
+  // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
+  if (!opts.sandbox && !opts.durable) {
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+  }
   try {
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();

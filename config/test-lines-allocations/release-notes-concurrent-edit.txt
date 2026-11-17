@@ -1,0 +1,3 @@
+# Real-CLI regression for preserving concurrent editorial changes during release-note discovery.
+# Exact net test growth; split entry, index, and contribution record must retain their bytes.
+41

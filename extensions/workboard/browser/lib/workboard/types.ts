@@ -42,6 +42,7 @@ export type WorkboardDependencyState = {
 };
 
 export type WorkboardDispatchSummary = {
+  firstFailure: string | null;
   started: number;
   failures: number;
   promoted: number;

@@ -21,20 +21,11 @@ import {
 } from "../../src/infra/runtime-process-manifest.ts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
-const fullAgentCoreWorkspace = allExportsKnipConfig.workspaces["packages/agent-core"];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
 const fullUiWorkspace = allExportsKnipConfig.workspaces.ui;
 const scriptRootWorkspace = scriptExportsKnipConfig.workspaces["."];
-if (
-  !fullRootWorkspace ||
-  !fullAgentCoreWorkspace ||
-  !fullExtensionWorkspace ||
-  !fullUiWorkspace ||
-  !scriptRootWorkspace
-) {
-  throw new Error(
-    "deadcode Knip configs must define root, agent-core, extension, and UI workspaces",
-  );
+if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !scriptRootWorkspace) {
+  throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
 }
 
 function expectEntries(entries: readonly string[], required: string[]) {
@@ -114,9 +105,6 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.workspaces["."].entry).not.toContain(
       "test/scripts/service-relay-artifact.test-support.mjs!",
     );
-    expectEntries(fullAgentCoreWorkspace.entry, [
-      "src/harness/compaction/compaction-floor.retention.test-support.ts!",
-    ]);
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       expect(isEntry(knipConfig.workspaces["."].entry, `scripts/perf/x.${extension}`)).toBe(
         extension !== "tsx",
@@ -270,6 +258,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
     ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyReleaseEvidenceChecksum",
+      "../../scripts/lib/stable-release-closeout.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyStablePublishRecovery",
+      "../../scripts/lib/stable-publish-recovery.mjs",
+    ],
   ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
     const source = fs.readFileSync(file, "utf8");
     const compile = knipConfig.compilers[kind];
@@ -278,7 +278,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     }
     expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
     const remaining = compile(
-      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      source.replace(new RegExp(`^\\s*(?:import|const) \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
       file,
     );
     expect(remaining).not.toContain(symbol);
@@ -286,6 +286,31 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
+  });
+
+  it("models the workflow planner without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers.yml;
+    const compiled = compile(source, file);
+    expect(compiled).toContain('"../../scripts/lib/plugin-prerelease-test-plan.mts"');
+    expect(compiled).toContain("planner.resolvePluginPrereleaseExtensionRuntimes");
+    const withoutConsumer = replaceFixture(
+      source,
+      `            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
+            }`,
+      "",
+    );
+    const remaining = compile(withoutConsumer, file);
+    expect(remaining).not.toContain("resolvePluginPrereleaseExtensionRuntimes");
+    expect(remaining).toContain("planner.assertPluginPrereleaseTestPlanComplete");
+    expect(
+      compile(
+        replaceFixture(source, 'targetPlanPath("plugin-prerelease-test-plan")', '"other"'),
+        file,
+      ),
+    ).not.toContain("plugin-prerelease-test-plan.mts");
   });
 
   it("models named Solid lazy consumers without retaining a deleted loader", () => {
@@ -809,7 +834,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
     expect(compiled).toMatch(
-      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0, materializeRuntimeProcessScriptFileAsync as __dynamic\d+_1 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
     );
     expect(compiled).toMatch(
       /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
@@ -827,7 +852,7 @@ function other(lineageCompletion: typeof lineageWriter) {
         [
           [
             "scripts/generate-runtime-script-assets.mjs",
-            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            'import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";',
             "",
           ],
           [

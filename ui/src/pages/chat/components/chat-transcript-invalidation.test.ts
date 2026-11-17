@@ -233,6 +233,7 @@ describe("chat transcript invalidation", () => {
     let container: HTMLDivElement;
 
     beforeEach(() => {
+      vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
       vi.spyOn(videoPoster, "requestVideoPoster").mockResolvedValue(new Blob(["poster"]));
       onOpenSidebar.mockClear();
       revokeObjectURL.mockClear();
@@ -269,7 +270,7 @@ describe("chat transcript invalidation", () => {
       await flushDeferredRowPrune();
     }
 
-    it("places mixed user media above text and opens the video in Files without inline playback", async () => {
+    it("places mixed user media above text and starts inline playback only on activation", async () => {
       await renderPreview();
       const bubble = find(container, ".chat-bubble--with-images");
       const gallery = bubble?.querySelector(":scope > .chat-message-images");
@@ -277,9 +278,11 @@ describe("chat transcript invalidation", () => {
       expect(gallery?.nextElementSibling?.textContent).toContain("Check this recording.");
       expect(find(container, "video, openclaw-chat-video-player")).toBeNull();
       gallery?.querySelector<HTMLButtonElement>(".chat-video-preview button")?.click();
-      expect(onOpenSidebar).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "attachment", attachmentKind: "video", src: videoUrl }),
+      await waitForSolid(() =>
+        expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
       );
+      expect(find(container, ".chat-video-preview--active")).not.toBeNull();
+      expect(onOpenSidebar).not.toHaveBeenCalled();
     });
 
     it.each(["video", "image"])(
@@ -299,10 +302,11 @@ describe("chat transcript invalidation", () => {
         expect(frame?.querySelector(".chat-assistant-attachment-card--compact")).toBeInstanceOf(
           HTMLElement,
         );
-        frame?.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
-        expect(onOpenSidebar).toHaveBeenCalledWith(
-          expect.objectContaining({ kind: "attachment", src: videoUrl }),
+        required(container, '.chat-video-preview button[aria-label^="Play:"]').click();
+        await waitForSolid(() =>
+          expect(find(container, "openclaw-chat-video-player")).not.toBeNull(),
         );
+        expect(onOpenSidebar).not.toHaveBeenCalled();
       },
     );
 
