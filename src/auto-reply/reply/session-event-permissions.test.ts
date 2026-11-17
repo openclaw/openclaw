@@ -505,7 +505,9 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly ? "completed\n" : "original\n",
+        change === "new-session" || remapped || toolOnly || change === "retained-config-downgrade"
+          ? "completed\n"
+          : "original\n",
       );
       expect(runEmbeddedAgentMock, evidence).toHaveBeenCalledOnce();
       expect(observedMode, evidence).toBe(
@@ -522,7 +524,9 @@ it.for([
       expect(attempted, evidence).toBe(
         change === "new-session" || retainedDowngrade || remapped || toolOnly,
       );
-      expect(retainedWriteRejected).toBe(retainedDowngrade);
+      expect(retainedWriteRejected).toBe(
+        retainedDowngrade && change !== "retained-config-downgrade",
+      );
       if (change === "new-session") {
         expect(loadSessionEntry(scope)?.sessionId).toBe(target.sessionId);
       } else {

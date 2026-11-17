@@ -192,6 +192,13 @@ own plugin settings still follows its plugin reload policy.
 Overlapping model or credential changes use the newer write's runtime application;
 superseding an earlier publication does not itself require a Gateway restart.
 
+A session event that has started, including a subagent completion or scheduled
+turn, finishes under its admission configuration. Configuration edits apply to
+the next turn. Stop, cancellation, revoked source authority, session permission
+changes, and agent deletion still end affected work. Before execution starts,
+a changed configuration publication can re-admit the same occurrence under
+current policy, with at most two retries.
+
 After a transient connection failure, an in-flight turn using a directly configured
 provider can retry with an endpoint whose hot reload has completed. It keeps the same
 model, permissions, prompt, conversation history, and model limits while resolving

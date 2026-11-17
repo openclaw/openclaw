@@ -188,11 +188,12 @@ function enqueueSessionEventAttempt(
   const assertEffectCurrent = () => {
     assertCurrent();
     if (
-      getSessionEventRuntimeConfig() !== cfg ||
-      getRuntimeConfigSnapshotMetadata() !== configPublication
+      !started &&
+      (getSessionEventRuntimeConfig() !== cfg ||
+        getRuntimeConfigSnapshotMetadata() !== configPublication)
     ) {
-      // The dispatched run holds the config captured at enqueue; it must never execute
-      // under a superseded policy. finish() re-admits an unstarted occurrence instead.
+      // Started turns retain their admission config; live authority checks above still apply.
+      // finish() re-admits only an unstarted occurrence under the new publication.
       configPublicationChanged = true;
       throw new Error("Session event configuration changed; retry under the current policy");
     }
