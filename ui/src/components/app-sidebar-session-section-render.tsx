@@ -264,11 +264,7 @@ export function renderSessionSection(params: {
                 }
               : undefined
           }
-          draggable={!derivedSection()}
-          disabledReason={(() => {
-            const access = groupWriteAccess();
-            return access.allowed || pinned() ? undefined : access.reason;
-          })()}
+          draggable={!derivedSection() && groupWriteAccess().allowed}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
           onContextMenu={(() => {

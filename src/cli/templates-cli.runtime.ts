@@ -294,13 +294,18 @@ async function runTemplatesAddFromSource(
     diagnostics: result.diagnostics,
     context: {
       config,
+      resolvePreferredModel: async (requested) => {
+        const { resolveLocalTemplatePreferredModel } =
+          await import("../templates/preferred-model-runtime.js");
+        return resolveLocalTemplatePreferredModel(requested, config);
+      },
       agentId: opts.agentId,
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
       existingAgentIds,
       existingWorkspacePaths: existingAgentIds.map((agentId) =>
         resolveAgentWorkspaceDir(config, agentId),
       ),
-      existingMcpServers: listedMcpServers.mcpServers,
+      existingMcpServers: listedMcpServers.authoredConfig?.mcp?.servers ?? {},
       packagePreflight: (pkg, workspace, sourceContext) =>
         preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },

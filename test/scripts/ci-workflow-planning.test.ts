@@ -120,19 +120,19 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
-  it("runs three balanced shards independently under the existing aggregate gate", () => {
+  it("runs four balanced shards independently under the existing aggregate gate", () => {
     const workflow = readCiWorkflow();
     const job = workflow.jobs["postgres-conformance"];
     expect(job.strategy["fail-fast"]).toBe(false);
-    expect(job.strategy["max-parallel"]).toBe(3);
-    expect(job.strategy.matrix.shard).toEqual(["1/3", "2/3", "3/3", "pg16-smoke"]);
+    expect(job.strategy["max-parallel"]).toBe(4);
+    expect(job.strategy.matrix.shard).toEqual(["1/4", "2/4", "3/4", "4/4", "pg16-smoke"]);
     expect(evaluateWorkflow(job.strategy.matrix.exclude)).toEqual([]);
     for (const eventName of ["push", "schedule", "workflow_dispatch"] as const) {
       expect(evaluateWorkflow(job.strategy.matrix.exclude, { eventName })).toEqual([
         { shard: "pg16-smoke" },
       ]);
     }
-    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "1/3" } })).toBe(30);
+    expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "1/4" } })).toBe(30);
     expect(evaluateWorkflow(job["timeout-minutes"], { matrix: { shard: "pg16-smoke" } })).toBe(15);
     expect(evaluateWorkflow(job["runs-on"])).toBe("ubuntu-24.04");
     const conformance = requiredWorkflowStep(job.steps, "Run PostgreSQL conformance");
@@ -182,7 +182,7 @@ describe("PostgreSQL conformance selection", () => {
     },
   );
 
-  it("qualifies pg17 daily and pg16/pg18 weekly in three shards each on main", () => {
+  it("qualifies pg17 daily and pg16/pg18 weekly in four shards each on main", () => {
     const workflow = parse(
       readFileSync(".github/workflows/postgres-conformance-weekly.yml", "utf8"),
     );
@@ -197,7 +197,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(versions.default).toBe("all");
     expect(versions.options).toEqual(["all", "pg16", "pg17", "pg18"]);
     const job = workflow.jobs["postgres-conformance"];
-    expect(job.strategy["max-parallel"]).toBe(3);
+    expect(job.strategy["max-parallel"]).toBe(4);
     expect(job.strategy["fail-fast"]).toBe(false);
     for (const [eventName, schedule, input, expected] of [
       ["schedule", "17 7 * * *", undefined, ["pg17"]],
@@ -215,7 +215,7 @@ describe("PostgreSQL conformance selection", () => {
         }),
       ).toEqual(expected);
     }
-    expect(job.strategy.matrix.shard).toEqual(["1/3", "2/3", "3/3"]);
+    expect(job.strategy.matrix.shard).toEqual(["1/4", "2/4", "3/4", "4/4"]);
     expect(job["timeout-minutes"]).toBe(50);
     expect(job.name).toBe("PostgreSQL conformance (${{ matrix.version }}, ${{ matrix.shard }})");
     for (const [repository, ref, admitted] of [
@@ -615,6 +615,12 @@ function runRunnerProfileFixture(options: {
       ].join("\n"),
       "utf8",
     );
+    const harnessScripts = path.join(root, ".ci-harness", "scripts");
+    mkdirSync(harnessScripts, { recursive: true });
+    copyFileSync(
+      "scripts/ci-resolve-runner-profile.sh",
+      path.join(harnessScripts, "ci-resolve-runner-profile.sh"),
+    );
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -639,6 +645,8 @@ function runRunnerProfileFixture(options: {
         REQUESTED_RUNNER_PROFILE: options.requestedProfile ?? "default",
         QUALIFICATION_DISPATCH: String(options.qualificationDispatch ?? false),
         CI_SHAPE: options.ciShape ?? "default",
+        BOAT_API_KEY: "",
+        BOAT_ORG: "",
       },
     });
     const outputs = Object.fromEntries(
@@ -822,6 +830,7 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
+  reportCommand?: string;
   task?:
     | "guards"
     | "guards-architecture"
@@ -933,6 +942,9 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     );
   }
   const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
+  if (options.reportCommand) {
+    scripts["deadcode:report"] = options.reportCommand;
+  }
   if (options.types?.compose) {
     // The full-path root-coverage probe must see the actual package alias.
     scripts["tsgo:test"] = (
@@ -2814,8 +2826,10 @@ describe("ci workflow guards", () => {
       ) as Array<{
         vitest_max_workers: number;
       }>;
-      expect(controlRows).toHaveLength(release ? 12 : 6);
-      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(24);
+      expect(controlRows).toHaveLength(release ? 12 : 9);
+      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(
+        release ? 24 : 36,
+      );
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
@@ -3564,7 +3578,7 @@ describe("ci workflow guards", () => {
         },
         { eventName: "pull_request" },
       );
-      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(4);
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(5);
       expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
     });
 
@@ -5956,6 +5970,7 @@ describe("ci workflow guards", () => {
       { name: "admin", permission: "admin", admitted: true },
       { name: "maintainer", permission: "maintain", admitted: true },
       { name: "writer", permission: "write", admitted: true },
+      { name: "default PR hybrid", requestedProfile: "hybrid", admitted: true },
       { name: "main hybrid", ciShape: "main", requestedProfile: "hybrid", admitted: true },
       {
         name: "main configured backend",
@@ -6162,15 +6177,16 @@ describe("ci workflow guards", () => {
       ...scenario,
     });
     expect(result.status, result.output).toBe(0);
+    const fullBoat = "qualificationDispatch" in scenario && scenario.qualificationDispatch;
     expect(result.outputs).toMatchObject({
       runner_profile: scenario.admitted ? "hybrid" : "github",
-      node_runner_backend: scenario.admitted ? "boat" : "github",
-      effective_runner_backend: scenario.admitted ? "boat" : "github",
+      node_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
+      effective_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
       placement_runner_backend: scenario.admitted ? "hybrid" : "github",
     });
   });
 
-  it("routes general Boat jobs and retained retries without pilot exceptions", () => {
+  it("routes retained Boat plans and retries without pilot exceptions", () => {
     const admitted = runRunnerProfileFixture({
       configuredProfile: "boat",
       eventName: "pull_request",
@@ -6184,7 +6200,12 @@ describe("ci workflow guards", () => {
       runnerBackend: "boat" as const,
       runAttempt: 1,
       runnerEnvironment: "self-hosted" as const,
-      preflightOutputs: admitted.outputs,
+      // Already-emitted plans and explicit qualifications keep the full Boat route.
+      preflightOutputs: {
+        ...admitted.outputs,
+        node_runner_backend: "boat",
+        effective_runner_backend: "boat",
+      },
     };
     for (const [name, runner] of [
       ["checks-fast-core", "ubuntu-24.04"],
@@ -8746,6 +8767,29 @@ describe("ci workflow guards", () => {
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
+  it.each([false, true])(
+    "uses combined finding coverage only with the exact target capability (frozen=%s)",
+    (frozenTarget) => {
+      const scripts = ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"];
+      const combined = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
+      });
+      expect(combined.status, combined.output).toBe(0);
+      expect(combined.calls).toEqual(["deadcode:report"]);
+      const oldReport = runCheckShardFixture({
+        task: "dependencies",
+        frozenTarget,
+        scripts,
+        reportCommand: "pnpm deadcode:full && pnpm deadcode:exports",
+      });
+      expect(oldReport.status, oldReport.output).toBe(0);
+      expect(oldReport.calls.toSorted()).toEqual(scripts.toSorted());
+    },
+  );
+
   it.each([false, true])("uses all three stable deadcode checks for frozen=%s", (frozenTarget) => {
     const result = runCheckShardFixture({
       task: "dependencies",
@@ -8807,6 +8851,65 @@ describe("ci workflow guards", () => {
     expect(incompleteCurrent.output).toContain(
       "Target does not provide a supported deadcode check.",
     );
+  });
+
+  it.each(["bun-all", "dual-all"])("schedules independent required %s runtime jobs", (policy) => {
+    const targets = ["src/cli/cli-process-diagnostics.test.ts", "src/utils/fixture.test.ts"];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      bunTestRuntime: true,
+      bunUiTestRuntime: true,
+      runtimeJobs: true,
+      targetFiles: ["ui/src/pages/chat/chat-pane-retention.test.ts"],
+      historicalCompatibility: false,
+      releaseGate: false,
+      eventName: "workflow_dispatch",
+      scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      nodeTestShards: [
+        {
+          checkName: "checks-node-runtime-proof",
+          shardName: "runtime-proof",
+          configs: ["fixture-bun.config.ts"],
+          targets,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          timeoutMinutes: 20,
+        },
+      ],
+      changedPaths: [
+        "scripts/lib/ci-node-test-plan.mts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+      ],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
+      "checks-node-runtime-proof (node)",
+      "checks-node-runtime-proof (bun)",
+    ]);
+    expect(rows.map((row: { base_check_name: string }) => row.base_check_name)).toEqual([
+      "checks-node-runtime-proof",
+      "checks-node-runtime-proof",
+    ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({ targets, timeout_minutes: 20, test_runtime_policy: policy });
+      expect(row.requires_bun).toBe(row.test_runtime === "bun");
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      expect(job.strategy["fail-fast"]).toBe(false);
+      const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+      expect(
+        evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME, {
+          matrix: row,
+          repository: "openclaw/openclaw",
+          eventName: "workflow_dispatch",
+          runAttempt: 1,
+        }),
+      ).toBe(row.test_runtime);
+    }
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(3);
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    expect(gate.needs).toContain("checks-node-core-test-nondist-shard");
+    expect(gate.needs).toContain("checks-ui");
   });
 
   it.each([
@@ -8877,7 +8980,7 @@ describe("ci workflow guards", () => {
       bun: true,
     },
   ] as const)(
-    "routes test runtimes without adding jobs ($eventName, capability=$capability)",
+    "routes legacy test runtimes without adding jobs ($eventName, capability=$capability)",
     (scenario) => {
       const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
       const manifest = runCiManifestFixture({
@@ -11644,15 +11747,15 @@ describe("ci workflow guards", () => {
       }
       const rows = readJsonOutput(manifest.outputs, "ui_e2e_matrix").include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
-        ...(control ? [1, 2, 3, 4, 5, 6] : []),
+        ...(control ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : []),
         ...(browser && manifest.outputs.reuse_browser_extension_build !== "true"
-          ? [control ? 7 : 1]
+          ? [control ? 10 : 1]
           : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
-          shard_count: control ? 7 : 1,
-          vitest_shard_count: control ? 6 : 0,
+          shard_count: control ? 10 : 1,
+          vitest_shard_count: control ? 9 : 0,
           vitest_max_workers: 4,
         });
       }
@@ -11975,7 +12078,7 @@ describe("ci workflow guards", () => {
     const expectedUiE2eMatrices = (
       [
         [8, 3],
-        [6, 4],
+        [9, 4],
         [12, 2],
       ] as const
     ).map(([vitestShardCount, workers]) => ({
@@ -13423,6 +13526,7 @@ describe("ci workflow guards", () => {
     const normalEnv = {
       CI: "true",
       GITHUB_ACTIONS: "true",
+      OPENCLAW_CI_TEST_RUNTIME: "node",
       OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
       // The enclosing test runner owns these filters; ordinary CI shards do not inherit them.
       OPENCLAW_VITEST_INCLUDE_FILE: "",
@@ -13431,6 +13535,16 @@ describe("ci workflow guards", () => {
     };
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
+      nodeTestShards: createNodeTestShardBundles({
+        changedPaths: targets,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+        compactMode: "pull-request",
+        runnerBackend: "blacksmith",
+      }),
       historicalCompatibility: false,
       eventName: "pull_request",
       changedPaths: targets,

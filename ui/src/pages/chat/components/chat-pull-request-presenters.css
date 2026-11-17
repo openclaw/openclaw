@@ -101,7 +101,7 @@
   text-align: start;
 }
 
-.chat-pr-branch-menu .chat-pr__create:hover {
+.chat-pr-branch-menu .chat-pr__create:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 

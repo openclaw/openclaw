@@ -43,6 +43,7 @@ import {
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { prepareDeviceTokenBindingLookup } from "../openclaw-id/device-token-binding.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
@@ -303,11 +304,23 @@ export const pushHandlers = {
       await respondUnavailableOnThrow(respond, async () => {
         try {
           const requester = createWebPushRequestGuard(options);
+          const principal = client?.internal?.openclawIdPrincipal;
+          const devicePeer = principal ? await prepareDeviceTokenBindingLookup() : undefined;
+          const guard = requester.prepareMutation();
+          const assertCurrent = () => {
+            guard.assertCurrent();
+            if (principal && devicePeer?.(deviceId, "operator") !== principal.peerKey) {
+              throw new Error(
+                "OpenClaw ID browser binding is unavailable; reconnect before subscribing",
+              );
+            }
+          };
+          assertCurrent();
           const subscription = await registerWebPushSubscription({
             endpoint: params.endpoint,
             keys: params.keys,
             binding: { deviceId, userProfileId: userProfileId ?? null },
-            guard: requester.prepareMutation(),
+            guard: { ...guard, assertCurrent },
           });
           respond(true, { subscriptionId: subscription.subscriptionId }, undefined);
         } catch (error) {

@@ -1,9 +1,13 @@
 /** Regular-agent client for the OpenClaw system agent. */
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { Type, type Static } from "typebox";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   createRuntimeConfigReader,
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
   selectLiveRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -15,11 +19,13 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { formatOperatorMcpOAuthLinkResult } from "../agent-bundle-mcp-requester-connect.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { ResolvedExecDefaults } from "../exec-defaults.js";
 import { resolveExecDefaultsLegacy } from "../exec-defaults.legacy.js";
 import { withPreparedExecDefaults } from "../exec-defaults.preparation.js";
 import { hasUnrestrictedGatewayExecution } from "../execution-authority.js";
+import { startOperatorMcpOAuthLink } from "../mcp-oauth-link.js";
 import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedToolConstruction } from "../tool-construction-preparation.js";
@@ -32,6 +38,9 @@ import { callInProcessGatewayTool } from "./in-process-gateway.js";
 const OpenClawDelegateSchema = Type.Object({
   message: Type.String({ description: "What system must do." }),
   sessionId: Type.Optional(Type.String({ description: "Continue prior OpenClaw talk." })),
+  connectMcpServer: Type.Optional(
+    Type.String({ description: "Start shared MCP sign-in for this server after setup finishes." }),
+  ),
 });
 
 const OpenClawDelegateOutputSchema = Type.Object(
@@ -70,6 +79,10 @@ type DelegateToolOptions = Pick<
   | "delegationExecAuthority"
   | "assertInvocationCurrent"
   | "abortSignal"
+  | "senderIsOwner"
+  | "currentChatType"
+  | "isTurnTainted"
+  | "preparedModelRuntime"
 > & { sessionAgentId: string };
 
 function execDefaultsParams(options: DelegateToolOptions) {
@@ -218,6 +231,8 @@ export function createOpenClawDelegateToolsForRun(
       "Gateway restart, config, channels, plugins, published ClawHub Template review/install, agents, models/providers, API keys. " +
       "Supports multiple named custom/local model endpoints; provider IDs can be user-defined, while api selects the protocol. " +
       "Setup flows use masked entry, which keeps keys out of model context; if the user already gave a key or token in chat, pass it along and OpenClaw stores it without echoing it. " +
+      "For shared MCP OAuth, set connectMcpServer to the server name to return its sign-in link after setup in this same call; only the owner in an untainted direct chat can start it. Sign-in still needs the human's consent. " +
+      "Report each requested part separately; unsupported, unperformed, or pending parts are not done. " +
       `Changes wait for the user to approve ${approvalLocation} unless current Full Access or a standing delegation grant permits application without asking for approval. Returns the final outcome.`,
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
@@ -225,6 +240,7 @@ export function createOpenClawDelegateToolsForRun(
       const params = (args ?? {}) as Record<string, unknown>;
       const message = readToolStringParam(params, "message", { required: true });
       const sessionId = readToolStringParam(params, "sessionId") ?? defaultSessionId;
+      const connectMcpServer = readToolStringParam(params, "connectMcpServer");
       let fullPermission = false;
       try {
         assertAutoApproveChangesCurrent();
@@ -270,8 +286,65 @@ export function createOpenClawDelegateToolsForRun(
           ),
         ),
       );
+      let reply = result.reply;
+      if (connectMcpServer) {
+        let connectReply: string;
+        if (
+          options.senderIsOwner !== true ||
+          options.isTurnTainted?.() !== false ||
+          options.currentChatType !== "direct"
+        ) {
+          connectReply =
+            "MCP sign-in was not started. Only the owner can connect shared accounts, and only in an untainted direct chat. Ask in a direct chat.";
+        } else {
+          try {
+            signal?.throwIfAborted();
+            options.assertInvocationCurrent?.();
+            // The delegated write commits before hot reload applies it; sign in against
+            // the applied runtime so the link uses the same server identity agents load.
+            const deadline = Date.now() + 15_000;
+            for (;;) {
+              const snapshot = await readConfigFileSnapshot();
+              if (
+                snapshot.exists &&
+                snapshot.valid &&
+                hashRuntimeConfigValue(snapshot.sourceConfig) === getRuntimeConfigAppliedHash()
+              ) {
+                break;
+              }
+              if (Date.now() >= deadline) {
+                throw new Error("Settings are saved but not active yet. Try connecting again.");
+              }
+              await sleep(250);
+              signal?.throwIfAborted();
+            }
+            const cfg = readConfig();
+            if (!cfg) {
+              throw new Error("The committed Gateway configuration is unavailable.");
+            }
+            const connected = formatOperatorMcpOAuthLinkResult(
+              await startOperatorMcpOAuthLink({
+                cfg,
+                metadata: options.preparedModelRuntime?.metadataSnapshot,
+                serverName: connectMcpServer,
+                assertCurrent: () => {
+                  signal?.throwIfAborted();
+                  options.assertInvocationCurrent?.();
+                },
+              }),
+            );
+            connectReply = connected.content
+              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+              .join("\n");
+          } catch (error) {
+            signal?.throwIfAborted();
+            connectReply = `MCP sign-in for "${connectMcpServer}" was not started: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        }
+        reply = `${reply}\n\n${connectReply}`;
+      }
       return jsonResult({
-        reply: result.reply,
+        reply,
         ...(result.action && result.action !== "none" ? { action: result.action } : {}),
       });
     },

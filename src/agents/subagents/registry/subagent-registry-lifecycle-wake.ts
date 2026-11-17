@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -546,12 +547,15 @@ export function scheduleRequesterSettleWake(
               });
               return;
             }
+            // A policy outage refuses this attempt without revoking its source: the finished
+            // result stays owed and the next lifecycle event retries it.
             const retryPreparation =
               !settleObserved &&
               ((error instanceof AgentDatabaseAdmissionError &&
                 error.refusal.code === "agent-database-inspection-pending") ||
                 error instanceof SubagentAnnouncePreparationConflictError ||
-                (error instanceof WorkerTaskError && error.code === "overloaded"));
+                (error instanceof WorkerTaskError && error.code === "overloaded") ||
+                isOperatorAuthorityUnavailable(error));
             const safeError = buildSafeLifecycleErrorMeta(error);
             if (retryPreparation) {
               // No delivery was admitted. Retain the exact cohort and its counters;
@@ -607,8 +611,6 @@ export function scheduleRequesterSettleWake(
                   agentId: entry.requesterAgentId,
                   sessionKey: requesterSessionKey,
                   storePath: entry.requesterStorePath,
-                  expectedSessionId: entry.completionRequesterSessionId,
-                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
                   idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
                   text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
                   assertCurrent: () => {

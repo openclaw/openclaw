@@ -383,6 +383,14 @@ export function materializeSessionRow(
   // Snooze shares the pin root-session rule.
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
+  const classification = sessionClassificationForRow(cfg, key, input.agentId, entry);
+  // Custody identifiers stay in storage for recovery; clients receive their friendly display name.
+  // Explicit human labels and ordinary conversations retain normal label precedence.
+  const generatedPublicationLabel =
+    classification.classification === "github-publication" &&
+    /^github-publication-(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+      entry?.label ?? "",
+    );
 
   const row = omitUndefinedFields<GatewaySessionRow>({
     key,
@@ -422,7 +430,7 @@ export function materializeSessionRow(
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: resolveGatewaySessionKind(key, entry),
-    label: entry?.label,
+    label: generatedPublicationLabel ? undefined : entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
     color: entry?.color,
@@ -432,8 +440,10 @@ export function materializeSessionRow(
     category: entry?.category,
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,
-    ...sessionClassificationForRow(cfg, key, input.agentId, entry),
-    displayName: input.displayName,
+    ...classification,
+    displayName: generatedPublicationLabel
+      ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
+      : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
     lastAssistantMessage: input.lastAssistantMessage,

@@ -39,10 +39,22 @@ export type TranscriptActiveFactsBackfillBatch = {
   elapsedMs: number;
 };
 
+export type TranscriptActiveFactsBackfillProbe = {
+  /** Last covered position before the first uncovered row, or the window end when none was found. */
+  afterPosition: number;
+  /** True once no uncovered row remains after the cursor. */
+  done: boolean;
+  /** True when an uncovered row starts right after `afterPosition`. */
+  uncovered: boolean;
+  elapsedMs: number;
+};
+
 const MAX_IDENTITY_ROWS = 512;
 const MAX_PAYLOAD_ROWS = 16;
 const MAX_PAYLOAD_BYTES = 128 * 1024;
 const MAX_BATCH_MS = 10;
+// Index-only probes run outside the writer, so they can cover a much wider window.
+const MAX_PROBE_ROWS = 8_192;
 
 /** Prioritize recent long paths using only small index-state rows, without counting coverage. */
 export function discoverTranscriptActiveFactsBackfillSessions(
@@ -83,6 +95,70 @@ export function discoverTranscriptActiveFactsBackfillSessions(
       .orderBy("state.updated_at", "desc")
       .orderBy("state.session_id"),
   ).rows;
+}
+
+/**
+ * Skip already covered stretches without a writer reservation. The process cursor is
+ * lost on restart, so without this a large database replays every covered session
+ * through 512-row write batches before reaching new work.
+ */
+export function probeTranscriptActiveFactsBackfill(
+  database: EngineConnection,
+  cursor: TranscriptActiveFactsBackfillCursor,
+): TranscriptActiveFactsBackfillProbe {
+  const started = performance.now();
+  const db = getNodeSqliteKysely<DB>(database);
+  const active = () =>
+    db
+      .selectFrom("session_transcript_active_events as active")
+      .where("active.session_id", "=", cursor.sessionId)
+      .where("active.active_position", ">", cursor.afterPosition);
+  // Bound the anti-join to a fixed index window so one long session stays cheap per probe.
+  const windowEnd = executeSqliteQueryTakeFirstSync(
+    database,
+    active()
+      .select("active.active_position")
+      .orderBy("active.active_position")
+      .limit(1)
+      .offset(MAX_PROBE_ROWS - 1),
+  )?.active_position;
+  let firstUncoveredQuery = active()
+    .leftJoin("session_transcript_active_event_facts as facts", (join) =>
+      join
+        .onRef("facts.session_id", "=", "active.session_id")
+        .onRef("facts.seq", "=", "active.event_seq"),
+    )
+    .select("active.active_position")
+    .where("facts.seq", "is", null);
+  if (windowEnd !== undefined) {
+    firstUncoveredQuery = firstUncoveredQuery.where("active.active_position", "<=", windowEnd);
+  }
+  const firstUncovered = executeSqliteQueryTakeFirstSync(
+    database,
+    firstUncoveredQuery.orderBy("active.active_position").limit(1),
+  )?.active_position;
+  if (firstUncovered === undefined) {
+    return {
+      afterPosition: windowEnd ?? cursor.afterPosition,
+      done: windowEnd === undefined,
+      uncovered: false,
+      elapsedMs: performance.now() - started,
+    };
+  }
+  const lastCovered = executeSqliteQueryTakeFirstSync(
+    database,
+    active()
+      .select("active.active_position")
+      .where("active.active_position", "<", firstUncovered)
+      .orderBy("active.active_position", "desc")
+      .limit(1),
+  )?.active_position;
+  return {
+    afterPosition: lastCovered ?? cursor.afterPosition,
+    done: false,
+    uncovered: true,
+    elapsedMs: performance.now() - started,
+  };
 }
 
 /** Source reads and publication share the worker's nonblocking immediate transaction. */
@@ -208,6 +284,7 @@ export type TranscriptActiveFactsBackfillOperations = {
     input: undefined;
     output: { supported: boolean; sessions: TranscriptActiveFactsBackfillSession[] };
   };
+  probe: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillProbe };
   batch: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillBatch };
 };
 
@@ -224,6 +301,11 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
       }
       if (isPostgresSqlConnection(database)) {
         throw new Error("Transcript facts background backfill currently supports SQLite only");
+      }
+      if (command.type === "probe") {
+        // Read-only WAL snapshot: never contends with the writer. The write batch
+        // rechecks coverage inside its transaction, so a stale probe only costs a visit.
+        return probeTranscriptActiveFactsBackfill(database, command.input);
       }
       context.admit("transaction");
       context.admit("commit");

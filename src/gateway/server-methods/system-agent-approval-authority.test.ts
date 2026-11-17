@@ -276,6 +276,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       const proposal = { operation: { kind: "gateway-restart" as const }, hash: "f".repeat(64) };
       const session = {
         engine: {
+          getPendingOperatorProposal: () => null,
           resolveOperatorApproval: async (
             decision: ExecApprovalDecision | null,
             _hash: string,
@@ -374,6 +375,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       const proposal = { operation: { kind: "gateway-restart" as const }, hash: "w".repeat(64) };
       const session = {
         engine: {
+          getPendingOperatorProposal: () => null,
           resolveOperatorApproval: async (
             decision: ExecApprovalDecision | null,
             _hash: string,

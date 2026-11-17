@@ -112,8 +112,20 @@ const agentIdentitySchema = z
   })
   .strict();
 
+/**
+ * A preferred model is an exact `provider/model` ref. Host-local aliases, bare model
+ * names and `@profile` account pins are not portable between hosts.
+ */
+const preferredModel = nonEmptyString
+  .max(200)
+  .regex(
+    /^[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/u,
+    "Model must be an exact provider/model reference, such as anthropic/claude-sonnet-4-5.",
+  );
+
 const agentSettingsSchema = z
   .object({
+    model: preferredModel.optional(),
     groupChat: z
       .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
       .strict()
@@ -576,6 +588,19 @@ const manifestSchema = z
       }
       cronIds.add(job.id);
     });
+  })
+  .transform((manifest) => {
+    // Avatars match their destination portably; store the declared path the runtime resolves.
+    const avatar = manifest.agent.identity?.avatar;
+    const declared =
+      avatar &&
+      manifest.workspace.files.find(
+        (file) => portableTemplatePathKey(file.path) === portableTemplatePathKey(avatar),
+      )?.path;
+    if (declared && manifest.agent.identity) {
+      manifest.agent.identity.avatar = declared;
+    }
+    return manifest;
   });
 
 type TemplateDependencyReference = z.output<typeof dependencyReferenceSchema>;

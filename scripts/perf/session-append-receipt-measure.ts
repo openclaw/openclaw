@@ -14,9 +14,11 @@
  * Use --sessions 2 --rows 4 for resident and --sessions 100 --rows 4 for evicted entries.
  * Each replay arm warms 8192 appends; compare timing and allocation separately, >=2000 measured appends/arm.
  * --compare-metrics-file <baseline> runs AB/BA plus A/A in one process on the same captured frames.
- * The saved baseline exports recordWorkerAuthorityMessage as the original counter call returning false.
+ * The saved baseline must export the same recordWorkerAuthorityMessage contract.
  * --extra-pair runs only one additional AB pair after a mixed-sign result.
  * Authority acceptance: unchanged frames, <=3% added main/worker CPU per append.
+ * --sample-all measures the sampled path on every replay operation. Component census
+ * always samples all captured frames and reports byte deltas, never payload content.
  */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -47,6 +49,7 @@ const { values } = parseArgs({
     authority: { type: "boolean", default: false },
     "compare-metrics-file": { type: "string" },
     "extra-pair": { type: "boolean", default: false },
+    "sample-all": { type: "boolean", default: false },
   },
 });
 assert(values.output && ["census", "timing", "allocation"].includes(values.mode));
@@ -399,6 +402,47 @@ try {
 function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
 }
+const componentCensus = [];
+for (const [operation, frames] of authorityFrames.entries()) {
+  for (const [arm, metrics] of [
+    ["base", baselineMetrics],
+    ["candidate", workerMetrics],
+  ] as const) {
+    if (!metrics) {
+      continue;
+    }
+    const read = () =>
+      metrics
+        .getWorkerMessageMetrics()
+        .find((row) => row.kind === "authority" && row.direction === "from_worker")
+        ?.payloadComponents?.["session.actor.appendTranscriptEvent"];
+    const before = read();
+    for (const frame of frames) {
+      metrics.recordWorkerAuthorityMessage(frame, "session.actor.appendTranscriptEvent", true);
+    }
+    componentCensus.push({
+      operation,
+      arm,
+      payloadBytes: frames.reduce(
+        (sum, frame) => sum + (typeof frame.payloadBytes === "number" ? frame.payloadBytes : 0),
+        0,
+      ),
+      components: Object.fromEntries(
+        Object.entries(read() ?? {}).map(([component, sample]) => {
+          const previous = Object.entries(before ?? {}).find(([key]) => key === component)?.[1];
+          return [
+            component,
+            {
+              bytes: (sample?.bytes ?? 0) - (previous?.bytes ?? 0),
+              samples: (sample?.samples ?? 0) - (previous?.samples ?? 0),
+              unmeasured: (sample?.unmeasured ?? 0) - (previous?.unmeasured ?? 0),
+            },
+          ];
+        }),
+      ),
+    });
+  }
+}
 const replays: Record<string, unknown>[] = [];
 async function measureReplay(arm: string): Promise<Record<string, unknown>> {
   const replayMetrics = arm === "base" ? baselineMetrics : workerMetrics;
@@ -452,7 +496,7 @@ async function measureReplay(arm: string): Promise<Record<string, unknown>> {
           samplePayload = replayMetrics.recordWorkerAuthorityMessage(
             message,
             requestClass,
-            samplePayload,
+            samplePayload ?? (values["sample-all"] ? true : undefined),
           );
           if (message.kind !== "native-settlement") {
             return;
@@ -558,6 +602,8 @@ const result = {
   receiptBytes,
   evictions,
   authority: values.authority,
+  sampleAll: values["sample-all"],
+  componentCensus,
   authorityFrameCounts: authorityFrames.map((frames) => frames.length),
   census,
   replay,

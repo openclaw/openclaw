@@ -1230,6 +1230,8 @@ describe("frozen admission workflow barriers", () => {
         [
           "scripts/runtime-postbuild.mts",
           "src/cli/update-cli/update-command-plugin-preflight.ts",
+          "src/cli/update-cli/update-command-target.ts",
+          "src/infra/update-global.ts",
           "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
           "scripts/lib/upgrade-survivor-scenarios.json",
           "extensions/codex/package.json",
@@ -6068,39 +6070,34 @@ esac
     }
   });
 
-  it.each([
-    ["aggregate", runReleasePublishPreflightConsumerGuard],
-    ["core npm", runOpenClawNpmPreflightConsumerGuard],
-  ] as const)(
-    "binds %s historical preflight consumption to independent producer provenance",
-    async (_name, run) => {
-      const producerSha = "a".repeat(40);
-      const producerTag = `release-publish/${producerSha.slice(0, 12)}-123`;
-      const publisherSha = "b".repeat(40);
-      const params = {
-        currentRef: `refs/tags/release-publish/${publisherSha.slice(0, 12)}-456`,
-        currentWorkflowSha: publisherSha,
-        preflightHeadBranch: producerTag,
-        preflightHeadSha: producerSha,
-      };
-      const valid = await run(params);
-      expect(valid.status, valid.stderr).toBe(0);
+  it("binds aggregate historical artifact acquisition to independent producer provenance", async () => {
+    const run = runReleasePublishPreflightConsumerGuard;
+    const producerSha = "a".repeat(40);
+    const producerTag = `release-publish/${producerSha.slice(0, 12)}-123`;
+    const publisherSha = "b".repeat(40);
+    const params = {
+      currentRef: `refs/tags/release-publish/${publisherSha.slice(0, 12)}-456`,
+      currentWorkflowSha: publisherSha,
+      preflightHeadBranch: producerTag,
+      preflightHeadSha: producerSha,
+    };
+    const valid = await run(params);
+    expect(valid.status, valid.stderr).toBe(0);
 
-      for (const rejected of [
-        { preflightHeadBranch: `${producerTag}-wrong` },
-        { preflightHeadSha: "c".repeat(40) },
-        { producerTagSha: "c".repeat(40) },
-        { producerTagType: "tag" },
-        { producerBranches: [{ ref: `refs/heads/${producerTag}` }] },
-        { mainComparisonStatus: "diverged" },
-        { publisherComparisonStatus: "behind" },
-      ]) {
-        const result = await run({ ...params, ...rejected });
-        expect(result.status, JSON.stringify(rejected)).toBe(1);
-        expect(result.stderr).toMatch(/protected|reachable/u);
-      }
-    },
-  );
+    for (const rejected of [
+      { preflightHeadBranch: `${producerTag}-wrong` },
+      { preflightHeadSha: "c".repeat(40) },
+      { producerTagSha: "c".repeat(40) },
+      { producerTagType: "tag" },
+      { producerBranches: [{ ref: `refs/heads/${producerTag}` }] },
+      { mainComparisonStatus: "diverged" },
+      { publisherComparisonStatus: "behind" },
+    ]) {
+      const result = await run({ ...params, ...rejected });
+      expect(result.status, JSON.stringify(rejected)).toBe(1);
+      expect(result.stderr).toMatch(/protected|reachable/u);
+    }
+  });
 
   it("rejects a protected tooling tag moved after request validation and environment approval", async () => {
     const workflowSha = "a".repeat(40);
@@ -6128,11 +6125,9 @@ esac
 
   it.each([
     ["aggregate", runReleasePublishPreflightConsumerGuard, false],
-    ["core npm", runOpenClawNpmPreflightConsumerGuard, false],
     ["aggregate with independent producer", runReleasePublishPreflightConsumerGuard, true],
-    ["core npm with independent producer", runOpenClawNpmPreflightConsumerGuard, true],
   ] as const)(
-    "admits only the exact selected FRV producer in %s publication",
+    "resolves only the exact selected FRV producer for %s artifact acquisition",
     async (_name, run, independentProducer) => {
       const params = {
         currentRef: "refs/heads/main",
@@ -6244,35 +6239,37 @@ esac
     ]);
   });
 
-  it.each([false, true])(
-    "keeps FRV tooling ancestry mandatory for extended-stable npm publication (independent=%s)",
-    async (independentProducer) => {
-      const params = {
-        currentRef: "refs/heads/main",
-        currentWorkflowSha: "b".repeat(40),
-        fullReleasePreflight: true,
-        independentProducer,
-        npmDistTag: "extended-stable",
-        expectedExtendedStableBranch: "extended-stable/2026.6.33",
-        preflightHeadBranch: `release-ci/${"a".repeat(12)}-111`,
-        preflightHeadSha: "a".repeat(40),
-      };
-      const accepted = await runOpenClawNpmPreflightConsumerGuard(params);
-      expect(accepted.status, accepted.stderr).toBe(0);
-      for (const preflightHeadBranch of [
-        params.preflightHeadBranch,
-        params.expectedExtendedStableBranch,
-      ]) {
-        const rejected = await runOpenClawNpmPreflightConsumerGuard({
-          ...params,
-          preflightHeadBranch,
-          publisherComparisonStatus: "diverged",
-        });
-        expect(rejected.status, rejected.stderr).toBe(1);
-        expect(rejected.stderr).toContain("selected publisher lineage");
-      }
+  // Acquisition is not publication authority. The admitted success and producer
+  // binding proofs live in release-ci-summary.qualification.test.ts; Q ancestry
+  // cannot replace authenticated P admission.
+  it.each([
+    {
+      name: "historical protected-tag preflight",
+      preflightHeadBranch: `release-publish/${"a".repeat(12)}-123`,
     },
-  );
+    {
+      name: "direct FRV preflight",
+      fullReleasePreflight: true,
+      preflightHeadBranch: `release-ci/${"a".repeat(12)}-111`,
+    },
+    {
+      name: "independent FRV preflight on the extended-stable branch",
+      fullReleasePreflight: true,
+      independentProducer: true,
+      npmDistTag: "extended-stable",
+      expectedExtendedStableBranch: "extended-stable/2026.6.33",
+      preflightHeadBranch: "extended-stable/2026.6.33",
+    },
+  ])("rejects $name without P admission at the core npm boundary", async ({ name, ...mode }) => {
+    const result = await runOpenClawNpmPreflightConsumerGuard({
+      ...mode,
+      currentRef: "refs/heads/main",
+      currentWorkflowSha: "b".repeat(40),
+      preflightHeadSha: "a".repeat(40),
+    });
+    expect(result.status, name).toBe(1);
+    expect(result.stderr).toContain("Publication requires authenticated P admission");
+  });
 
   it.each([
     {
@@ -6611,8 +6608,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(step.run).toContain("^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$");
       expect(step.run).toContain('trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"');
       expect(step.run).toContain('git rev-parse "${trusted_publisher_ref}^{commit}")" != "${');
-      expect(step.run).toContain('"+refs/heads/main:${trusted_main_ref}"');
-      expect(step.run).toContain('TRUSTED_MAIN_REF="${trusted_main_ref}"');
+      // Ancestry is authenticated by the shared evidence reader, not local Git plumbing.
+      expect(step.run).not.toContain("TRUSTED_MAIN_REF");
       if (workflowPath === RELEASE_PUBLISH_WORKFLOW) {
         expect(step.env?.VALIDATOR_FILE).toBe(
           "${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs",
@@ -9466,7 +9463,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "release_execution_plan",
     ];
     expect(decision.uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df",
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85",
     );
     expect(drain.uses).toBe(decision.uses);
     expect(decision.with?.mode).toBe("decision");
@@ -10765,7 +10762,7 @@ describe("package artifact reuse", () => {
       ),
     ).toMatchObject({
       command:
-        "OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+        "OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
       profiles: "stable full",
     });
     expect(workflow).toContain("suite_id: native-live-src-agents-zai-coding");
@@ -15030,7 +15027,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
-      EXPECTED_WORKFLOW_BRANCH: "${{ github.ref_name }}",
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
       PUBLISH_DOCKER_ONLY: "${{ inputs.publish_docker_only }}",
@@ -16038,7 +16034,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ) =>
       timeoutForProfile(
         workflow.jobs?.[job]?.uses ===
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df"
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85"
           ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
           : workflow.jobs?.[job]?.["timeout-minutes"],
         profile,
@@ -16416,7 +16412,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "Only the helper creates the immutable",
       "Never raw-dispatch, manually create its ref, or mint",
       "A new explicit main/protected route is diagnostic",
-      "cannot replace this admitted Q=C publish proof",
+      "cannot replace this admitted C/Q/P publish proof",
     ]);
     expectTextToIncludeAll(releaseCi, [
       "Current all-group FRV also owns read-only core and selected-plugin npm",

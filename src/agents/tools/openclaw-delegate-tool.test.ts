@@ -2,10 +2,15 @@ import { setImmediate as yieldToScheduler } from "node:timers/promises";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import {
   clearRuntimeConfigSnapshot,
+  hashRuntimeConfigValue,
+  setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -17,6 +22,7 @@ import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { startOperatorMcpOAuthLink } from "../mcp-oauth-link.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
@@ -28,13 +34,47 @@ import { createOpenClawDelegateToolsForRun as createTools } from "./openclaw-del
 // mock-isolation: Observe delegated Gateway calls without executing privileged Gateway operations.
 vi.mock("./in-process-gateway.js", () => ({ callInProcessGatewayTool: vi.fn() }));
 
-const callGateway = vi.mocked(callInProcessGatewayTool);
+// mock-isolation: The delegate owns routing and authority, not the OAuth provider.
+vi.mock("../mcp-oauth-link.js", () => ({ startOperatorMcpOAuthLink: vi.fn() }));
 
-afterEach(() => resetGlobalHookRunner());
+// mock-isolation: The committed file is the Gateway writer's output, observed here without disk.
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  readConfigFileSnapshot: vi.fn(),
+}));
+
+const callGateway = vi.mocked(callInProcessGatewayTool);
+const startOperatorLink = vi.mocked(startOperatorMcpOAuthLink);
+const readCommittedConfig = vi.mocked(readConfigFileSnapshot);
+
+afterEach(() => {
+  resetGlobalHookRunner();
+  setRuntimeConfigAppliedHash(null);
+});
 
 beforeEach(() => {
   callGateway.mockReset();
+  startOperatorLink.mockReset();
+  // Default: the delegated commit is already the applied runtime revision.
+  readCommittedConfig.mockReset();
+  readCommittedConfig.mockResolvedValue(committedSnapshot({}));
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue({}));
 });
+
+function committedSnapshot(config: OpenClawConfig) {
+  return createConfigFileSnapshot({
+    path: "/synthetic/openclaw.json",
+    exists: true,
+    raw: JSON.stringify(config),
+    parsed: config,
+    sourceConfig: config,
+    runtimeConfig: config,
+    valid: true,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
+}
 
 type Options = Omit<Parameters<typeof createTools>[0], "sessionAgentId">;
 const runSessionKey = "agent:main:main";
@@ -42,6 +82,113 @@ function delegate(options: Options = {}) {
   const [tool] = createTools({ sessionAgentId: "main", runSessionKey, ...options });
   return tool ?? expect.fail("expected OpenClaw delegation tool");
 }
+
+it("returns the sign-in link only after the Gateway applies the committed server", async () => {
+  const cfg = {};
+  const committed = {
+    mcp: {
+      servers: {
+        linear: {
+          url: "https://mcp.linear.example/mcp",
+          transport: "streamable-http" as const,
+          auth: "oauth" as const,
+        },
+      },
+    },
+  };
+  const authorizationUrl = "https://linear.example/authorize?state=opaque";
+  setRuntimeConfigSnapshot(cfg);
+  setRuntimeConfigAppliedHash(hashRuntimeConfigValue(cfg));
+  // The delegated write returns once the file commits; hot reload applies it only
+  // after the delegate has already observed the unapplied commit once.
+  let reads = 0;
+  callGateway.mockImplementation(async () => {
+    readCommittedConfig.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 2) {
+        setRuntimeConfigSnapshot(committed);
+        setRuntimeConfigAppliedHash(hashRuntimeConfigValue(committed));
+      }
+      return committedSnapshot(committed);
+    });
+    return { reply: "[openclaw] done: config.set", action: "none" };
+  });
+  startOperatorLink.mockResolvedValue({
+    status: "redirect",
+    serverName: "linear",
+    authorizationUrl,
+    redirectUrl: "https://gateway.example/oauth/mcp/callback",
+    usesPublicOrigin: true,
+  });
+  try {
+    const result = await delegate({
+      config: cfg,
+      senderIsOwner: true,
+      currentChatType: "direct",
+      isTurnTainted: () => false,
+    }).execute("add-and-connect", {
+      message: "Add Linear's MCP and connect it.",
+      connectMcpServer: "linear",
+    });
+    expect(result.details).toMatchObject({
+      reply: expect.stringContaining("[openclaw] done: config.set"),
+    });
+    expect(result.details).toMatchObject({ reply: expect.stringContaining(authorizationUrl) });
+    expect(result.details).toMatchObject({
+      reply: expect.stringContaining("After the page says you're connected, send any message"),
+    });
+    expect(startOperatorLink).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cfg: committed, serverName: "linear" }),
+    );
+  } finally {
+    setRuntimeConfigAppliedHash(null);
+    clearRuntimeConfigSnapshot();
+  }
+});
+
+it.each([
+  { senderIsOwner: false },
+  { senderIsOwner: undefined },
+  { currentChatType: "group" as const },
+  { currentChatType: "channel" as const },
+  { currentChatType: undefined },
+  { isTurnTainted: () => true },
+  { isTurnTainted: undefined },
+])("does not deliver shared sign-in links without direct owner authority: %j", async (denied) => {
+  callGateway.mockResolvedValue({ reply: "Configuration checked." });
+  const result = await delegate({
+    config: {},
+    senderIsOwner: true,
+    currentChatType: "direct",
+    isTurnTainted: () => false,
+    ...denied,
+  }).execute("refused-connect", { message: "Connect Linear.", connectMcpServer: "linear" });
+  expect(result.details).toMatchObject({
+    reply: expect.stringContaining("MCP sign-in was not started."),
+  });
+  expect(startOperatorLink).not.toHaveBeenCalled();
+});
+
+it("reports sign-in as not done when the delegated setup did not commit the server", async () => {
+  callGateway.mockResolvedValue({ reply: "The requested export is unsupported and was not done." });
+  startOperatorLink.mockRejectedValue(new Error('Unknown MCP server "linear".'));
+  const result = await delegate({
+    config: {},
+    senderIsOwner: true,
+    currentChatType: "direct",
+    isTurnTainted: () => false,
+  }).execute("partial-connect", {
+    message: "Export my setup and connect Linear.",
+    connectMcpServer: "linear",
+  });
+  expect(result.details).toMatchObject({
+    reply: expect.stringContaining("The requested export is unsupported and was not done."),
+  });
+  expect(result.details).toMatchObject({
+    reply: expect.stringContaining('MCP sign-in for "linear" was not started: Unknown MCP server'),
+  });
+});
+
 function expectUnscoped() {
   expect(modelScope.getPreparedModelRuntimePluginGeneration()).toBeUndefined();
   expect(runtimeScope.getPluginRuntimeGenerationRegistry()).toBeUndefined();

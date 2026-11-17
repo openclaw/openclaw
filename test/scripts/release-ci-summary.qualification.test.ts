@@ -36,7 +36,7 @@ function consumers(
       verifyNpmPreflightPublicationLineage({
         manifest: f.manifest,
         repository: f.repository,
-        sourceSha: f.q,
+        sourceSha: f.c,
         toolingSha: f.q,
         publisherSha: f.p,
         publisherFullRef: f.publisherFullRef,
@@ -82,9 +82,6 @@ function publicationEvidenceOptions(f: ReturnType<typeof candidatePublicationFix
     expectedCoreNpmPublication: { npmDistTag: "beta" },
     verifierSourceSha: f.p,
     verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-    isTrustedMainAncestor: () => {
-      throw new Error("Q must not require main ancestry");
-    },
   };
 }
 
@@ -106,6 +103,15 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it("verifies independent Q through the immutable plan, npm and Docker consumers", async () => {
+    const f = candidatePublicationFixture({ qualificationSha: "c".repeat(40) });
+    const evidence = await validateReleaseRunEvidence(verifier(f), f.client);
+    expect(evidence.manifest.targetSha).toBe(f.c);
+    expect(evidence.manifest.workflowSha).toBe(f.q);
+    expect(f.c).not.toBe(f.q);
+    await expect(consumers(f).npm()).resolves.toBeDefined();
+    await expect(consumers(f).docker()).resolves.toBeDefined();
+  });
   it.each([
     "same qualification",
     "candidate-bound same qualification",
@@ -113,6 +119,7 @@ describe("candidate-owned publish consumer chain", () => {
     "candidate-bound execution-plan descendant",
     "changelog descendant",
     "execution-plan descendant",
+    "independent Q change on changelog descendant",
     "changed candidate",
     "changed input",
     "changed P",
@@ -192,7 +199,9 @@ describe("candidate-owned publish consumer chain", () => {
     const descendant = scenario.endsWith("descendant");
     const candidateSha = scenario === "changed candidate" || descendant ? "d".repeat(40) : root.q;
     const targetSha = descendant ? "d".repeat(40) : root.q;
-    const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
+    const qualificationSha =
+      scenario === "independent Q change on changelog descendant" ? "f".repeat(40) : candidateSha;
+    const workflowRef = "release-ci/" + qualificationSha.slice(0, 12) + "-456";
     const inputs = structuredClone(root.plan.qualificationInputs);
     inputs.ref = candidateSha;
     inputs.expected_sha = candidateSha;
@@ -204,16 +213,18 @@ describe("candidate-owned publish consumer chain", () => {
     envelope.trustedWorkflow = {
       ref: workflowRef,
       fullRef: "refs/heads/" + workflowRef,
-      sha: candidateSha,
+      sha: qualificationSha,
     };
     inputs.trusted_workflow_json = JSON.stringify(envelope);
     const current = admissionFixture(true, {
       inputs,
       candidateSha,
+      qualificationSha,
       transportRef: workflowRef,
       candidateVersion: version,
       policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
       workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+      baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
     });
     envelope.qualificationAdmission = current.descriptor;
     inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -263,7 +274,7 @@ describe("candidate-owned publish consumer chain", () => {
             }),
         qualificationReuse: {
           candidateSha,
-          qualificationSha: candidateSha,
+          qualificationSha,
           workflowRef,
           descriptor: current.descriptor,
           inputs,
@@ -273,7 +284,10 @@ describe("candidate-owned publish consumer chain", () => {
     );
     if (candidateBound && descendant) {
       await expect(result).rejects.toThrow("candidate-bound release waiver");
-    } else if (scenario.endsWith("same qualification") || descendant) {
+    } else if (
+      scenario.endsWith("same qualification") ||
+      (descendant && scenario !== "independent Q change on changelog descendant")
+    ) {
       const evidence = await result;
       expect(evidence).toMatchObject({
         valid: true,
@@ -293,17 +307,17 @@ describe("candidate-owned publish consumer chain", () => {
       );
     } else {
       await expect(result).rejects.toThrow(
-        scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q/P",
+        scenario === "revoked P" ? "qualification authority" : "exact admitted C/Q",
       );
     }
   });
 
-  it.each(["newer main P", "diverged main P"])(
-    "admits a changelog descendant through a %s only on main lineage",
+  it.each(["newer main P", "diverged main P", "same candidate newer P"])(
+    "reuses unchanged qualification with independently trusted %s",
     async (scenario) => {
       const root = candidatePublicationFixture({ protectedTag: false });
       const newerP = "c".repeat(40);
-      const candidateSha = "d".repeat(40);
+      const candidateSha = scenario === "same candidate newer P" ? root.q : "d".repeat(40);
       const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
       const inputs = structuredClone(root.plan.qualificationInputs);
       inputs.ref = candidateSha;
@@ -323,6 +337,7 @@ describe("candidate-owned publish consumer chain", () => {
         candidateVersion: "2026.8.28-beta.1",
         policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
         workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+        baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
         publisherSha: newerP,
       });
       envelope.qualificationAdmission = current.descriptor;
@@ -381,16 +396,12 @@ describe("candidate-owned publish consumer chain", () => {
         },
         client,
       );
-      if (scenario === "newer main P") {
-        await expect(result).resolves.toMatchObject({
-          valid: true,
-          directRoot: true,
-          root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
-          current: { conclusion: "success" },
-        });
-      } else {
-        await expect(result).rejects.toThrow("exact admitted C/Q/P");
-      }
+      await expect(result).resolves.toMatchObject({
+        valid: true,
+        directRoot: true,
+        root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
+        current: { conclusion: "success" },
+      });
     },
   );
 
@@ -523,10 +534,10 @@ describe("candidate-owned publish consumer chain", () => {
       if (mode === "changelog") {
         const staleArtifacts = consumers({ ...root, manifest: current.manifest }, client);
         await expect(staleArtifacts.npm()).rejects.toThrow(
-          "Candidate-owned artifact source and qualification SHA differ",
+          "Publication artifact is not bound to authenticated candidate qualification",
         );
         await expect(staleArtifacts.docker()).rejects.toThrow(
-          "Candidate-owned artifact source and qualification SHA differ",
+          "Publication artifact is not bound to authenticated candidate qualification",
         );
       }
     },
@@ -548,9 +559,6 @@ describe("candidate-owned publish consumer chain", () => {
       },
       {
         ...f.client,
-        verifyRetainedPublicationArtifacts() {
-          throw new Error("Qualification fixture does not recover publication artifacts");
-        },
         downloadArtifactArchive() {
           throw new Error("Qualification fixture does not download artifact archives");
         },
@@ -625,9 +633,6 @@ describe("candidate-owned publish consumer chain", () => {
         },
         {
           ...f.client,
-          verifyRetainedPublicationArtifacts() {
-            throw new Error("Qualification fixture does not recover publication artifacts");
-          },
           downloadArtifactArchive() {
             throw new Error("Qualification fixture does not download artifact archives");
           },
@@ -655,7 +660,7 @@ describe("candidate-owned publish consumer chain", () => {
         failure === "revoked after wait"
           ? /qualification authority/
           : failure === "qualification"
-            ? /source and qualification SHA differ/
+            ? /not bound to authenticated candidate qualification/
             : /Npm producer differs/,
       );
       expect(manifestReads).toBe(1);
