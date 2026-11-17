@@ -283,6 +283,9 @@ suite.define(() => {
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await sidebar.locator('[data-navigation-view="sessions"]').click();
+        // The rail opens the last chat; resume the roster before measuring its reads.
+        await evaluateControlUiContext(page, (context) => context.navigate("sessions"));
+        await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);
