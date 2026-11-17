@@ -10,6 +10,7 @@ describe("session transcript search protocol", () => {
     for (const value of [
       search(),
       search({ scope: {} }),
+      search({ recall: { requesterAgentId: "work", requesterSessionKey: "agent:work:main" } }),
       search({
         scope: {
           agentId: "work",
@@ -29,6 +30,15 @@ describe("session transcript search protocol", () => {
     }
     for (const value of [
       search({ scope: {}, agentId: "work" }),
+      search({
+        recall: { requesterAgentId: "work", requesterSessionKey: "agent:work:main" },
+        scope: {},
+      }),
+      search({
+        recall: { requesterAgentId: "work", requesterSessionKey: "agent:work:main" },
+        sessionKeys: ["agent:work:main"],
+      }),
+      search({ recall: { requesterAgentId: "work" } }),
       search({ scope: {}, sessionKeys: ["agent:work:main"] }),
       search({ scope: { limit: 1 } }),
       search({ scope: { offset: 1 } }),

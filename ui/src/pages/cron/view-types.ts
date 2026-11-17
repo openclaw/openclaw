@@ -10,7 +10,6 @@ type OptionalViewProp =
   | "channelLabels"
   | "channelMeta"
   | "highlightedRunId"
-  | "onViewRunTranscript"
   | "onRunMount";
 
 export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &

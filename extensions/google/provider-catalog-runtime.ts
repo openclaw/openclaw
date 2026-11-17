@@ -83,12 +83,6 @@ type GoogleLiveCatalogParams = {
   discoveryApiKey?: string;
 };
 
-export async function buildGoogleLiveCatalogProvider(
-  params: GoogleLiveCatalogParams,
-): Promise<ModelProviderConfig> {
-  return (await loadGoogleLiveCatalog(params)).provider;
-}
-
 /** The provider config plus every model id the account listing returned, including hidden rows. */
 export async function loadGoogleLiveCatalog(params: GoogleLiveCatalogParams): Promise<{
   provider: ModelProviderConfig;

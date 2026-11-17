@@ -343,12 +343,14 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     use the edited value. Older transcripts without those bytes use the recovery
     above when rejected. Unaffected sessions keep their prompt prefix and continuation.
     Gateway logs record `item_conflict_recovery`, a session hash, and the outcome
-    (`started`, `recovered`, `failed`, or `deferred`). If both requests fail, the reply offers
-    retry, `/compact`, and model-switch guidance. A response that already produced
-    output is not automatically replayed, because tools may have done work; its
-    repair is saved for the next request (`deferred`), including a new run or an
-    internal session-effects fork of that history. Successful requests that apply
-    a saved repair also log `recovered`. Subagent completion deliveries with a
+    (`started`, `recovered`, `failed`, or `deferred`). If recovery fails, the reply offers
+    retry, `/compact`, and model-switch guidance. After output starts, the transport
+    saves the repair for the next request (`deferred`). The active runtime retries
+    once in the same turn only when its execution evidence proves the entire run
+    is replay-safe, with no potential tool side effects and no pending or committed delivery.
+    Otherwise the visible failure remains, and the saved repair applies to a later
+    request, including a new run or an internal session-effects fork of that history.
+    Successful requests that apply a saved repair also log `recovered`. Subagent completion deliveries with a
     deferred repair retry automatically, up to three delivery attempts, without
     waiting for another user message. Encrypted checkpoints remain bound to their
     original session.

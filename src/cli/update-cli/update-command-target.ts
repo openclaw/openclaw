@@ -129,6 +129,7 @@ export async function resolveUpdateCommandTarget(
       if (prepared.nodeSecurityWarning) {
         recordNodeSecurityWarning(prepared.nodeSecurityWarning);
       }
+      prepared.packageActivationSteps?.forEach(recordPreflightStep);
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         if (malformedConfig) {
           return updateInstallKind === "git" ? "git" : "unknown";
@@ -458,11 +459,7 @@ export async function resolveUpdateCommandTarget(
             packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
           }
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(
-              root,
-              packageInstallTarget,
-              opts.dryRun,
-            );
+            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget, opts);
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
@@ -471,6 +468,10 @@ export async function resolveUpdateCommandTarget(
               warn(
                 `${opts.dryRun ? "Would restore" : "Restored"} the npm package link an interrupted update left at ${destination.interruptedLink}.`,
               );
+            }
+            if (destination.kind === "owned" && destination.releaseBoundService) {
+              warn(destination.releaseBoundService.warning);
+              packageInstallTarget = destination.releaseBoundService.installTarget;
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);

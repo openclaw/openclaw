@@ -190,23 +190,27 @@ runs:
         command -v gdbus
 
     - name: Normalize container toolcache
+      id: local-node
       shell: bash
+      env:
+        NODE_TOOLCHAIN_RESTORE_ELIGIBLE: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' && runner.environment != 'github-hosted' }}
+        REQUESTED_NODE_VERSION: ${{ runner.environment == 'github-hosted' && inputs.node-version == '24.x' && startsWith(env.NODE_VERSION, '24.') && env.NODE_VERSION || inputs.node-version }}
       run: |
         set -euo pipefail
         if [[ -d /__t && ! -e /opt/hostedtoolcache ]]; then
           mkdir -p /opt
           ln -s /__t /opt/hostedtoolcache
         fi
+        if [[ "$NODE_TOOLCHAIN_RESTORE_ELIGIBLE" == 'true' ]]; then
+          source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
+          if ! openclaw_select_local_node "$REQUESTED_NODE_VERSION"; then
+            echo "restore=true" >> "$GITHUB_OUTPUT"
+          fi
+        fi
 
-    # Blacksmith's image tracks an older runner-images snapshot whose toolcache
-    # Node patches sit just under this repo's engines floor (measured 2026-08-16:
-    # 20.20.0/22.22.0/24.13.0 below the supported release floors), so every job
-    # falls through to a nodejs.org download. That is ~2.6s normally but tail-
-    # spikes past 110s when the mirror throttles our ~46 simultaneous fetches,
-    # and it lands on every job at once. Keep the payload in the Actions cache,
-    # which Blacksmith serves from its colocated backend. A stale or corrupt
-    # entry is self-healing: ensure-node probes each candidate's version and
-    # falls back to the download when none satisfies the floor.
+    # Images with a compatible local Node need no remote toolchain lookup.
+    # Older images still restore a candidate; ensure-node validates it and
+    # falls back to a download when it does not satisfy the requested version.
     # Restore by prefix, never by exact key: cache entries are immutable and an
     # exact key would pin the first Node it ever saw. Once the floor advances
     # past it every job would restore the rejected payload and re-download
@@ -216,7 +220,7 @@ runs:
     # resolve from /opt/hostedtoolcache and would only ever miss here. Scope the
     # restore to self-hosted runners.
     - name: Restore Node toolchain cache
-      if: inputs.cache-mode != 'off' && runner.os != 'Windows' && runner.environment != 'github-hosted'
+      if: steps.local-node.outputs.restore == 'true'
       id: node-toolchain-restore
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

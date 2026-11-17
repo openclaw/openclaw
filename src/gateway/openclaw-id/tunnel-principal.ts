@@ -122,6 +122,15 @@ export function setOpenClawIdTunnelPrincipalLookup(
   notifyOpenClawIdTunnelPrincipalsChanged();
 }
 
+/** Background delivery reads current membership without recording device activity. */
+export async function prepareOpenClawIdTunnelPrincipalLookup(): Promise<OpenClawIdTunnelPrincipalLookup> {
+  await prepareLookup?.();
+  return (peerKey) => {
+    const principal = lookup?.(peerKey);
+    return isOpenClawIdTunnelPrincipalAdmitted(principal) ? principal : undefined;
+  };
+}
+
 /**
  * True while the membership authority still admits `principal` as it did at
  * admission: same kind, account and role. A removed device, a role change, or

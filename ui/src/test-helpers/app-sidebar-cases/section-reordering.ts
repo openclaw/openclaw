@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { installTitleTooltips } from "../../components/tooltip-title.ts";
+import { dispatchMousePointer } from "../../components/tooltip.test-support.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   catalogPage,
@@ -91,7 +93,6 @@ describe("AppSidebar section reordering", () => {
     const row = sidebar.querySelector('[data-session-key="agent:main:plain"]')!;
 
     expect(source.getAttribute("draggable")).toBe("false");
-    expect(source.getAttribute("title")).toBeTruthy();
     expect(row.getAttribute("draggable")).toBe("true");
     expect(row.hasAttribute("title")).toBe(false);
 
@@ -108,6 +109,46 @@ describe("AppSidebar section reordering", () => {
     expect(harness.sessions.patch).not.toHaveBeenCalled();
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
+
+  it.each(["hover", "focus"] as const)(
+    "keeps read-only section names usable without a permission hint on %s",
+    async (input) => {
+      const { sidebar, harness, header } = await mountWithGroups(["Alpha"], [], {
+        scopes: ["operator.read"],
+        withCatalog: true,
+      });
+      onTestFinished(installTitleTooltips(document));
+
+      for (const id of ["work", "category:Alpha", "catalog:codex"]) {
+        const source = header(id);
+        const toggle = source.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!;
+        if (input === "hover") {
+          dispatchMousePointer(toggle, "pointerover");
+        } else {
+          toggle.focus();
+          expect(document.activeElement).toBe(toggle);
+        }
+        expect(
+          [...document.querySelectorAll("openclaw-tooltip")].some((tooltip) =>
+            tooltip.anchor?.contains(toggle),
+          ),
+        ).toBe(false);
+        expect(source.getAttribute("draggable")).toBe("false");
+
+        const expanded = toggle.getAttribute("aria-expanded");
+        toggle.click();
+        await sidebar.updateComplete;
+        expect(toggle.getAttribute("aria-expanded")).toBe(expanded === "true" ? "false" : "true");
+        toggle.click();
+        await sidebar.updateComplete;
+        expect(toggle.getAttribute("aria-expanded")).toBe(expanded);
+        toggle.blur();
+        dispatchMousePointer(source, "pointerleave");
+      }
+      expect(harness.groupsPut).not.toHaveBeenCalled();
+      expect(harness.sessions.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("reorders personal pins around a row without changing other navigation entries", async () => {
     const { sidebar, harness, section } = await mountWithGroups(["Alpha"], [], {
@@ -160,7 +201,9 @@ describe("AppSidebar section reordering", () => {
   });
 
   it("drags a section from its label toggle without a dedicated grip", async () => {
-    const { sidebar, header, harness } = await mountWithGroups(["Alpha", "Beta"]);
+    const { sidebar, header, harness } = await mountWithGroups(["Alpha", "Beta"], [], {
+      scopes: ["operator.read", "operator.write"],
+    });
     const source = header("category:Beta");
     const toggle = source.querySelector(".sidebar-session-group-toggle")!;
     const dataTransfer = createDataTransferStub();
