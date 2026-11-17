@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "./openclaw-schema-versions.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
@@ -15,6 +22,102 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("startup retained deletion", () => {
+  it.each([
+    { cleanupCompleted: true, upgradeShared: false },
+    { cleanupCompleted: true, upgradeShared: true },
+    { cleanupCompleted: false, upgradeShared: false },
+  ])(
+    "preserves deletion ownership ($cleanupCompleted, shared upgrade=$upgradeShared)",
+    async ({ cleanupCompleted, upgradeShared }) => {
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-retained-"));
+      dirs.push(stateDir);
+      const env = {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+      const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const retainedDir = path.join(stateDir, "agents", "retired", "agent");
+      const retainedPath = path.join(retainedDir, "openclaw-agent.sqlite");
+      const activePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      for (const file of [statePath, retainedPath, activePath]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+      }
+      {
+        using state = new DatabaseSync(statePath);
+        state.exec(OPENCLAW_STATE_SCHEMA_SQL);
+        // Only the shared version stamp is behind in the copy-scope control.
+        state.exec(
+          `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - Number(upgradeShared)}`,
+        );
+        state
+          .prepare(`INSERT INTO agent_deletion_journal
+        (agent_id, operation_id, phase, agent_dir, workspace_dir, sessions_dir,
+         database_paths_json, created_at, cleanup_completed, delete_files)
+        VALUES ('retired', 'delete-retired', 'retiring', ?, ?, ?, ?, 1, ?, 0)`)
+          .run(
+            retainedDir,
+            path.join(stateDir, "workspace-retired"),
+            path.join(stateDir, "agents", "retired", "sessions"),
+            JSON.stringify([retainedPath]),
+            Number(cleanupCompleted),
+          );
+      }
+      {
+        using active = new DatabaseSync(activePath);
+        active.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+      }
+      {
+        using retained = new DatabaseSync(retainedPath, { allowExtension: true });
+        retained.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        retained.exec(`PRAGMA user_version = 26;
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 26, 'retired', '2026.9.9', 1, 1);
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:retired:main', 'archived-session', '{"sessionId":"archived-session"}', 1);`);
+        loadSqliteVec(retained);
+        retained.exec(`CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(embedding float[3]);
+        INSERT INTO memory_index_chunks_vec(rowid, embedding) VALUES (1, '[1, 0, 0]');`);
+      }
+      const bytes = fs.readFileSync(retainedPath);
+      const activeBytes = fs.readFileSync(activePath);
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const upgrade = upgradeStateDirectory({
+        env,
+        log,
+        runChain: async ({ stateDir: shadow }) => {
+          if (upgradeShared) {
+            expect(fs.existsSync(path.join(shadow, "agents", "retired"))).toBe(false);
+            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+            state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+          }
+          // Doctor leaves deleted agents to the deletion owner, including their old schemas.
+          return { warnings: [] };
+        },
+      });
+      if (cleanupCompleted) {
+        await expect(upgrade).resolves.toMatchObject(
+          upgradeShared ? { status: "upgraded", mode: "chain" } : { status: "current" },
+        );
+        expect(isStateUpgradePending(env)).toBe(false);
+      } else {
+        await expect(upgrade).rejects.toThrow("no such module: vec0");
+        expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("failed at agent-schema"));
+        expect(isStateUpgradePending(env)).toBe(true);
+      }
+      expect(fs.readFileSync(retainedPath)).toEqual(bytes);
+      expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
+      expect(fs.readFileSync(activePath)).toEqual(activeBytes);
+    },
+  );
 });
 
 describe("upgradeStateDirectory version zero", () => {

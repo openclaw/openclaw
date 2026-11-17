@@ -13,6 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -100,6 +101,7 @@ it("binds and loads an asynchronously prepared dependency graph without synchron
   });
   await withArtifactPreservingStateReads(() =>
     withStorage(root, async () => {
+      using observedFs = observeMainThreadFs();
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
       const instance = new PluginInstance("prepared-fixture");
       const wait = vi.spyOn(Atomics, "wait");
@@ -118,6 +120,69 @@ it("binds and loads an asynchronously prepared dependency graph without synchron
         await instance.dispose();
         await prepared.artifact.disposeAsync();
       }
+      expect(
+        observedFs
+          .stacks()
+          .filter(
+            ({ api, stack }) =>
+              api === "readFileSync" && stack.includes("plugin-package-metadata-capture"),
+          ),
+      ).toEqual([]);
+    }),
+  );
+});
+
+it("retains optional malformed metadata through asynchronous preparation without reopening it", async () => {
+  const { root, source, entry } = sourceFixture();
+  writeTree(source, {
+    "package.json": {
+      name: "fixture",
+      type: "commonjs",
+      imports: {
+        "#selected": { "module-sync": "invalid-dependency", default: "valid-dependency" },
+      },
+    },
+    "index.js": 'exports.value = 42; exports.read = () => require("#selected").value;',
+    "node_modules/invalid-dependency/package.json": "invalid JSON",
+    "node_modules/invalid-dependency/index.js": "exports.value = 42;",
+    "node_modules/valid-dependency/package.json": { main: "index.js" },
+    "node_modules/valid-dependency/index.js": "exports.value = 42;",
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      using observedFs = observeMainThreadFs();
+      const prepared = await preparePluginGenerationArtifact({
+        rootDir: source,
+        source: entry,
+        standalone: true,
+      });
+      const instance = new PluginInstance("prepared-optional-metadata");
+      try {
+        bindPluginInstanceModuleLoader({
+          instance,
+          origin: "config",
+          rootDir: source,
+          source: entry,
+          standalone: true,
+          preparedArtifact: prepared,
+        });
+        const plugin = instance.loadModule(entry) as { value: number; read(): unknown };
+        expect(plugin.value).toBe(42);
+        expect(() => plugin.read()).toThrow(
+          expect.objectContaining({ code: "ERR_INVALID_PACKAGE_CONFIG" }),
+        );
+      } finally {
+        await instance.dispose();
+        await prepared.artifact.disposeAsync();
+      }
+      expect(
+        observedFs
+          .stacks()
+          .filter(
+            ({ api, stack }) =>
+              api === "readFileSync" && stack.includes("plugin-package-metadata-capture"),
+          ),
+      ).toEqual([]);
     }),
   );
 });

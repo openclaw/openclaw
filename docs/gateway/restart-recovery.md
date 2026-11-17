@@ -621,7 +621,9 @@ stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
 conversation. The resume input inherits no old browser connection, approval, or
 requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device.
+revalidated authority of the person's recorded device. A resumed Control UI task
+can update pinned dashboard widgets under that admitted authority without a
+connected browser. Inline widgets still require a connected capable client.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash

@@ -86,6 +86,7 @@ vi.mock("../operator-role-policy.js", () => {
   };
   return {
     operatorSessionCap: () => mocks.sessionCap,
+    resolveAdministratorMemberRolePolicy: () => null,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,

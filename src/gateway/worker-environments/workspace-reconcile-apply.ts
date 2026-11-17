@@ -43,7 +43,7 @@ import {
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
 
-export async function applyStagedWorkerWorkspace(params: {
+type WorkspaceApplyParameters = {
   root: string;
   stagingRoot: string;
   baseManifestRef: string;
@@ -66,9 +66,23 @@ export async function applyStagedWorkerWorkspace(params: {
           conflictPaths: string[];
         }) => Promise<void>;
       }
-    | { kind: "exact-target"; verify: () => Promise<void> };
-}): Promise<WorkerWorkspaceApplyResult> {
-  return await withWorkspaceHashContext(async (): Promise<WorkerWorkspaceApplyResult> => {
+    | { kind: "exact-target"; verify: () => Promise<void> }
+    | { kind: "checkpoint"; publish: (conflictPaths: string[]) => Promise<void> };
+};
+
+export function applyStagedWorkerWorkspace(
+  params: WorkspaceApplyParameters & { acceptance: { kind: "checkpoint" } },
+): Promise<Pick<WorkerWorkspaceApplyResult, "conflictPaths">>;
+export function applyStagedWorkerWorkspace(
+  params: WorkspaceApplyParameters & { acceptance: { kind: "reconcile" | "exact-target" } },
+): Promise<WorkerWorkspaceApplyResult>;
+export function applyStagedWorkerWorkspace(
+  params: WorkspaceApplyParameters,
+): Promise<Pick<WorkerWorkspaceApplyResult, "conflictPaths">>;
+export async function applyStagedWorkerWorkspace(
+  params: WorkspaceApplyParameters,
+): Promise<Pick<WorkerWorkspaceApplyResult, "conflictPaths">> {
+  return await withWorkspaceHashContext(async () => {
     const target =
       params.workerAuthority?.workspaceEvidence?.find(
         (evidence) => evidence.workspaceDir === params.root,
@@ -156,9 +170,20 @@ export async function applyStagedWorkerWorkspace(params: {
     };
     const preflight = await inspectPaths();
     const acceptReconciled = async (
-      reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
+      reconcile: Extract<typeof acceptance, { kind: "reconcile" | "checkpoint" }>,
       preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
     ) => {
+      if (reconcile.kind === "checkpoint") {
+        // The checkpoint already owns the accepted tree. Only fresh conflicts are
+        // consumed here; capturing and verifying another manifest would discard it.
+        const finalPreflight = preparedPreflight ?? (await inspectPaths());
+        params.assertCurrent?.();
+        const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+        await reconcile.publish(conflictPaths);
+        params.assertCurrent?.();
+        await params.journal.commit(params.currentManifestRef);
+        return { conflictPaths };
+      }
       params.onPhase?.("capture");
       const actual = await captureWorkspaceManifest({
         root,

@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess, type SendHandle } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
@@ -141,14 +141,7 @@ export class SpawnBrokerHost {
       });
     }
     void this.readiness.promise.catch(() => {});
-    try {
-      this.start();
-    } catch (error) {
-      if (this.resourceDirectory) {
-        rmSync(this.resourceDirectory, { recursive: true, force: true });
-      }
-      throw error;
-    }
+    this.start();
     this.unregisterExitCleanup = registerProcessExitCleanup(this.onParentExit);
   }
 
@@ -725,8 +718,8 @@ export class SpawnBrokerHost {
       try {
         await this.waitForCleanup();
       } finally {
-        if (this.resourceDirectory) {
-          rmSync(this.resourceDirectory, { recursive: true, force: true });
+        if (this.resourceDirectory && this.hasBeenReady) {
+          await rm(this.resourceDirectory, { recursive: true, force: true });
         }
       }
     } finally {

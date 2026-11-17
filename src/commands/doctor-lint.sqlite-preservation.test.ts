@@ -179,7 +179,7 @@ it.each([
               "store",
             ).status,
           ).toBe("missing");
-          const auth = prepareAgentAuthProfileRowsRead({
+          const auth = await prepareAgentAuthProfileRowsRead({
             databasePath: agentPath,
             agentId: "main",
             env: state.env,

@@ -8,13 +8,7 @@ import {
   resolveOpaqueSessionFirstKeptEntryId,
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
-import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
-import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import {
-  captureSessionTranscriptTargetBinding,
-  sameSessionTranscriptTargetBinding,
-} from "../../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   buildSessionTree,
@@ -36,8 +30,6 @@ import {
   captureSessionManagerIncognitoBinding,
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
-import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
-import { consumeSessionManagerReload } from "./session-manager-reload.js";
 import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
@@ -55,7 +47,6 @@ import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContext,
   SessionManagerBoundedView,
-  SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
 import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 
@@ -82,7 +73,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   protected sessionId = "";
   protected transcriptVersion: SessionTranscriptContextVersion | undefined;
   private transcriptViewFailure: Error | undefined;
-  private hydrationRevision = 0;
+  protected hydrationRevision = 0;
   protected cwd: string;
   protected fileEntries: FileEntry[] = [];
   protected pendingWritableTranscriptEntries = new Set<object>();
@@ -127,6 +118,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
+  /** The source snapshot's version, including writes beyond a selected admission prefix. */
+  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
+    return this.transcriptVersion;
+  }
+
   /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
@@ -154,104 +150,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** Prepare off-thread and publish the entire view only while this manager is unchanged. */
-  async setSessionTargetAsync(
-    target: SessionTranscriptRuntimeTarget,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    await this.hydrateSessionTarget(target, false, signal);
-  }
-
-  private async hydrateSessionTarget(
-    target: SessionTranscriptRuntimeTarget,
-    preserveCwd: boolean,
-    signal?: AbortSignal,
-    complete = false,
-    cohort?: SessionManagerTranscriptCohort,
-  ): Promise<boolean> {
-    this.assertTranscriptViewAvailable();
-    const capturedTarget = captureSessionTranscriptTargetBinding(target);
-    const hydration = prepareSessionManagerHydration(capturedTarget, {
-      caller: complete ? "model-complete" : "model-reload",
-      limits: complete ? undefined : this.boundedContextLimits,
-      signal,
-      manager: this,
-      retarget:
-        !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
-      lane: preserveCwd ? sessionStoreLane : undefined,
-    });
-    if (cohort && !hydration.readCohort) {
-      return false;
-    }
-    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
-    const revision = ++this.hydrationRevision;
-    const prior = this.captureTranscriptView();
-    const entryCount = this.fileEntries.length;
-    const opaqueCount = this.opaqueFileEntries.length;
-    assertOwned();
-    const publish = (prepared: PreparedSessionTranscriptReload) => {
-      signal?.throwIfAborted();
-      assertOwned();
-      hydration.assertCurrent();
-      const current = this.captureTranscriptView();
-      if (
-        revision !== this.hydrationRevision ||
-        this.fileEntries.length !== entryCount ||
-        this.opaqueFileEntries.length !== opaqueCount ||
-        Object.keys(prior).some((key) => Reflect.get(prior, key) !== Reflect.get(current, key))
-      ) {
-        throw new Error("Session manager changed during transcript hydration");
-      }
-      this.adoptPreparedTranscriptReload(prepared, undefined, hydration.target);
-      installSessionManagerIncognitoBinding(this, hydration.incognitoBinding);
-      if (!preserveCwd) {
-        this.cwd = this.fileEntries.find((entry) => entry.type === "session")?.cwd ?? this.cwd;
-      }
-      this.hydrationRevision++;
-      consumeSessionManagerReload(
-        prepared,
-        cohort?.consume,
-        () => this.captureTranscriptView(),
-        () => {
-          assertOwned();
-          hydration.assertCurrent();
-        },
-      );
-    };
-    if (cohort && hydration.readCohort) {
-      await hydration.readCohort(cohort.selection, publish);
-    } else {
-      publish(
-        await hydration.read().catch((error: unknown) => {
-          assertOwned();
-          throw error;
-        }),
-      );
-    }
-    return true;
-  }
-
-  [sessionManagerReloadTranscriptCohort](
-    selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
-    consume: (prepared: PreparedSessionTranscriptReload, assertView: () => void) => void,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    return this.persistenceTarget && this.boundedContextLimits
-      ? this.hydrateSessionTarget(this.persistenceTarget, true, signal, false, {
-          selection,
-          consume,
-        })
-      : Promise.resolve(false);
-  }
-
-  /** Reload an existing view without changing the runtime working directory. */
-  async reloadPersistedTranscriptAsync(signal?: AbortSignal): Promise<void> {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    await this.hydrateSessionTarget(this.persistenceTarget, true, signal);
-  }
-
   /** Active-only loads can omit sibling rows even when they fit the context limits. */
   protected ensureCompletePersistedHistory(): void {
     this.assertTranscriptViewAvailable();
@@ -262,13 +160,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.boundedContextLimits = undefined;
     this.setSessionTargetSync(this.persistenceTarget);
     this.boundedContextLimits = limits;
-  }
-
-  protected async ensureCompletePersistedHistoryAsync(): Promise<void> {
-    this.assertTranscriptViewAvailable();
-    if (this.persistenceTarget && this.boundedContextIncomplete) {
-      await this.hydrateSessionTarget(this.persistenceTarget, true, undefined, true);
-    }
   }
 
   protected setLoadedSessionTarget(

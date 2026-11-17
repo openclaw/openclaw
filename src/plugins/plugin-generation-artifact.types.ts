@@ -9,6 +9,10 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
+  executionAliases: ReadonlyMap<string, string>;
+  executionSources: ReadonlyMap<string, string>;
+  executionAlias: (filename: string) => string | undefined;
+  sourceText: (filename: string) => string | undefined;
   sourceSnapshotFacts?: PluginSourceSnapshotFacts;
   frozenSource?: true;
   assertFrozenModule?: (filename: string) => void;
