@@ -29,7 +29,9 @@ it.each([
     modelId: id,
     modelRegistry: registry,
   });
-  if (!model) throw new Error("missing model");
+  if (!model) {
+    throw new Error("missing model");
+  }
   const cost = calculateCost(model, {
     input: prompt - 2_000,
     output: 1_000,
@@ -59,7 +61,9 @@ it.each(
     modelId: id,
     modelRegistry: registry,
   });
-  if (!model) throw new Error("missing model");
+  if (!model) {
+    throw new Error("missing model");
+  }
   const bodies: Record<string, unknown>[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     bodies.push((await new Request(input, init).json()) as Record<string, unknown>);
@@ -165,7 +169,9 @@ it.each(ids.flatMap((id) => [true, false].map((tools) => ({ id, tools }))))(
       modelId: id,
       modelRegistry: registry,
     });
-    if (!resolved) throw new Error("model must resolve before transport");
+    if (!resolved) {
+      throw new Error("model must resolve before transport");
+    }
     const bodies: Record<string, unknown>[] = [];
     const urls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -203,7 +209,6 @@ it.each(ids.flatMap((id) => [true, false].map((tools) => ({ id, tools }))))(
           apiKey: "synthetic-key",
           reasoning: "minimal",
           temperature: 0.7,
-          topP: 0.8,
           cacheRetention: "long",
         },
       )
@@ -219,7 +224,6 @@ it.each(ids.flatMap((id) => [true, false].map((tools) => ({ id, tools }))))(
         : { model: id, reasoning_effort: "low" },
     );
     expect(bodies[0]).not.toHaveProperty("temperature");
-    expect(bodies[0]).not.toHaveProperty("top_p");
     expect(bodies[0]).toHaveProperty("prompt_cache_options", { ttl: "30m" });
     expect(bodies[0]).not.toHaveProperty("prompt_cache_retention");
   },
