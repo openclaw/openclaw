@@ -680,18 +680,18 @@ Images come from the current turn's attachments and explicit image references, i
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
 
-Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Pure tool-result records
-hand payloads to consumers without retaining them, so those payloads do not count
-toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
-records and cumulative snapshots still count. Forwarded subagent assistant
+Claude streaming limits count what the parser keeps: text, thinking, and
+tool-input payloads, assistant content blocks, block headers, and tool ids. Frames
+whose content the parser discards (tool-result payloads, message and request
+metadata, block and message stops, thinking signatures and progress ticks) pay a
+fixed allowance each, so the 8 MiB output limit also bounds how many frames a turn
+can stream. Mixed user records still count in full. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
 allowance for their parent progress id. Child attribution alone does not earn
 that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Discarded stream control frames (thinking signatures and progress
-ticks, block and message stops, message deltas) are charged a fixed allowance,
-and progress ticks and stops also skip the frame count like partial-message
-envelopes. Single-line limits and bounded frame counts remain active.
+output limit. The 20,000-frame limit counts only frames that leave more than
+1 KiB of their raw line uncharged, such as large tool results. Single-line limits
+remain active.
 
 Input modes:
 
