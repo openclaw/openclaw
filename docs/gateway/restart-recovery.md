@@ -605,9 +605,16 @@ call. Later model requests can contain the text as conversation history. The
 agent checks the transcript and current state before continuing; effects are not
 guaranteed exactly once.
 
-For a session with a human owner, the input uses that recorded principal's current
-role, scopes, and session access, narrowed by the session's current permission mode
-and tool policy. When no owner is set, the human creator is used. On a Gateway
+For a captured interrupted turn, the input revalidates the original requester's
+authentication source and current session access, bounded by that source's original
+scopes, model limits, and current policy. Its accepted access-grant custody is
+resumed rather than requested anew. A revoked or unavailable captured source
+prevents resume; the session owner or a later participant cannot replace it.
+
+For older markers without a captured source, a session with a human owner uses
+that recorded principal's current role, scopes, and session access, narrowed by the
+session's current permission mode and tool policy. When no owner is set, the human
+creator is used. On a Gateway
 without `gateway.roles`, a profile has no authority of its own: the input uses the
 authenticated connection the person last sent from in that session (its device,
 sign-in method and scopes), revalidated against current pairing, auth and profile
@@ -626,9 +633,11 @@ a needed capability, the agent must ask for an authorized input.
 WebChat uses the same session and transcript. An unanswered accepted user prompt
 stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
-conversation. The resume input inherits no old browser connection, approval, or
-requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device. A resumed Control UI task
+conversation. The resume input does not replay an old browser connection or
+unfinished tool approval. Captured source facts are a revalidation basis, not a
+portable grant; markers without those facts use the legacy principal policy above.
+On a Gateway without roles, recovery still requires the current, revalidated
+authority of the recorded device. A resumed Control UI task
 can update pinned dashboard widgets under that admitted authority without a
 connected browser. Inline widgets still require a connected capable client.
 

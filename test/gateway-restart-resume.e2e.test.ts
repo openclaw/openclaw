@@ -9,17 +9,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
-import { assignSessionOwner } from "../src/config/sessions/session-accessor.sqlite-owner.js";
 import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { removePairedDevice } from "../src/infra/device-pairing.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { closeOpenClawAgentDatabasesAsync } from "../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
-import { setUserProfileRole } from "../src/state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../src/state/user-profiles.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
@@ -585,7 +584,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "records a visible outcome when a marked run loses principal authority before restart",
+  "records a visible outcome when a marked run loses requester authority before restart",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
@@ -615,8 +614,17 @@ it.skipIf(process.platform === "win32")(
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        const deniedDevice = loadOrCreateDeviceIdentity({
+          path: instance.state.path("denied-client", "credentials.sqlite"),
+        });
         for (const cycle of [0, 1]) {
+          client = await connectRestartClient(
+            instance,
+            cycle === 0
+              ? { deviceIdentity: deniedDevice, clientDisplayName: "restart-revoked" }
+              : {},
+            signal,
+          );
           await client.request("sessions.create", { key: key(cycle, "stream"), agentId: "other" });
           const accepted = await client.request<{ runId: string }>("chat.send", {
             sessionKey: key(cycle, "stream"),
@@ -627,6 +635,10 @@ it.skipIf(process.platform === "win32")(
             deniedRunId = accepted.runId;
           }
           await provider.wait(`ready:${cycle}:stream`);
+          if (cycle === 0) {
+            await client.stopAndWait();
+            client = undefined;
+          }
         }
         const child = instance.child;
         assert(child?.pid, "Owned Gateway process unavailable");
@@ -650,17 +662,14 @@ it.skipIf(process.platform === "win32")(
         }
         const denied = rows.find((row) => row.sessionKey === key(0, "stream"))?.entry;
         assert(denied);
-        // Only the stopped synthetic Gateway is mutated; exercise real principal admission.
-        const profile = ensureProfileForEmail("restart-denied@example.test", { env: instance.env });
-        setUserProfileRole(profile.id, "reader", { env: instance.env });
-        assignSessionOwner(
-          { ...scope, sessionKey: key(0, "stream") },
-          {
-            owner: { type: "human", id: profile.id },
-            assignedBy: { type: "human", id: "gateway-owner" },
-            expectedSessionId: denied.sessionId,
-          },
+        expect(denied).toHaveProperty(
+          "resumeAfterRestart.operatorSource.snapshot.device.deviceId",
+          deniedDevice.deviceId,
         );
+        // Revoke the captured requester, not a different session owner; keep the sibling valid.
+        expect(await removePairedDevice(deniedDevice.deviceId, instance.stateDir)).toEqual({
+          deviceId: deniedDevice.deviceId,
+        });
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         const started = performance.now();
@@ -689,7 +698,7 @@ it.skipIf(process.platform === "win32")(
           [1],
         );
         expect(instance.logs()).toContain(key(0, "stream"));
-        expect(instance.logs()).toContain("Session principal has no current run authority");
+        expect(instance.logs()).toContain("Restart recovery operator authority changed");
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
         expect(instance.logs()).toContain('"admissionStage":"principal"');
