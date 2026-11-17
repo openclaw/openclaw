@@ -15,19 +15,17 @@ function readCommandWithServiceMarker(pid: number) {
     if (!(cause instanceof ProcSafeError) || cause.code !== "incomplete") {
       throw cause;
     }
-    // macOS 27 omits envp for hardened executables, including /bin/zsh children
-    // that inherited the marker. As on Linux, only a JS runtime needs the marker
-    // to classify; its unreadable environment stays unknown custody.
+    // macOS 27 omits envp for hardened executables, and a JS runtime that set
+    // process.title (the Gateway, every OpenClaw CLI) leaves no terminated
+    // environment on earlier releases. As on Linux, only a JS runtime needs the
+    // marker; its argv still classifies, and only a marker decision stays unknown.
     const command = readProcessCommand(pid);
-    if (
-      command &&
+    return command &&
       [command.executable, command.argv[0] ?? ""].some(
         (value) => isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx",
       )
-    ) {
-      throw cause;
-    }
-    return command;
+      ? { ...command, serviceMarkerUnavailable: true as const }
+      : command;
   }
 }
 
@@ -50,6 +48,7 @@ export function readDarwinProcessCommand(
       argv: [...command.argv],
       executable: command.executable,
       ...(serviceMarker === undefined ? {} : { serviceMarker }),
+      ...("serviceMarkerUnavailable" in command ? { serviceMarkerUnavailable: true } : {}),
     };
   } catch (cause) {
     if (!(cause instanceof ProcSafeError)) {
