@@ -693,6 +693,21 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
+  const { signal } = owner.listeners;
+  // Keyboard dismissal is ready before focus enters the menu, independent of paint.
+  listen(
+    document,
+    "keydown",
+    (nextEvent) => {
+      if (nextEvent.key === "Escape") {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      }
+    },
+    { signal },
+  );
   mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
@@ -703,18 +718,8 @@ export function handleTranscriptContextMenu(
         removeReplyContextMenu();
       }
     };
-    const handleKeydown = (nextEvent: KeyboardEvent) => {
-      if (nextEvent.key === "Escape") {
-        nextEvent.preventDefault();
-        nextEvent.stopPropagation();
-        removeReplyContextMenu();
-        props.onFocusComposer?.();
-      }
-    };
-    const { signal } = owner.listeners;
     listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
     listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
-    listen(document, "keydown", handleKeydown, { signal });
   });
 }
