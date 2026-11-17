@@ -8,7 +8,10 @@ import {
   formatIosSimulatorSelectionSummary,
   resolveIosSimulatorTestSelection,
 } from "./lib/ci-ios-smoke-plan.mjs";
-import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
+import {
+  BOAT_HOSTED_PREPARED_WORKSPACE,
+  resolveBoatNodeTestCapacity,
+} from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
 import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
@@ -504,6 +507,15 @@ let runUiRealGateway =
   (fullUiPullRequest || !ordinaryPullRequest) && selectUiE2eFamily("real-gateway");
 let runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
 const nodeRunnerBackend = process.env.OPENCLAW_CI_NODE_RUNNER_BACKEND || runnerProfile;
+const boatNodeJobLimit = process.env.OPENCLAW_CI_BOAT_NODE_JOB_LIMIT;
+let remainingBoatNodeJobs = boatNodeJobLimit ? Number(boatNodeJobLimit) : 0;
+if (
+  !Number.isSafeInteger(remainingBoatNodeJobs) ||
+  remainingBoatNodeJobs < 0 ||
+  remainingBoatNodeJobs > 20
+) {
+  throw new Error("Invalid Boat Node job allowance");
+}
 const usesHostedRunnerProfile = runnerProfile === "github" || runnerProfile === "hybrid";
 const supportsUiE2eProjects =
   existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
@@ -1538,7 +1550,14 @@ const nodeTestShards = targetNodeTestShards
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
     const capacity =
-      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat"
+      process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat" ||
+      (remainingBoatNodeJobs > 0 &&
+        !shard.requiresDist &&
+        ![
+          ...(shard.includePatterns ?? []),
+          ...(shard.targets ?? []),
+          ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
+        ].includes(BOAT_HOSTED_PREPARED_WORKSPACE))
         ? resolveBoatNodeTestCapacity(shard.runner, shard.checkName, minTotalMemoryBytes, [
             ...(shard.includePatterns ?? []),
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
@@ -1660,6 +1679,17 @@ const nodeTestShards = targetNodeTestShards
           }),
         )
       : [row];
+    if (boatNodeJobLimit && capacity) {
+      for (const runtimeRow of rows) {
+        if (remainingBoatNodeJobs > 0) {
+          remainingBoatNodeJobs -= 1;
+        } else {
+          runtimeRow.runner = shard.runner;
+          runtimeRow.runner_label = blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes);
+          runtimeRow.cpu_budget = shard.cpuBudget;
+        }
+      }
+    }
     if (packedGroups) {
       packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
