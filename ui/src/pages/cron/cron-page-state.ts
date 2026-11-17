@@ -622,7 +622,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       deliveryDirectory.afterSave(cronState, connectionScope, editorGeneration, stillEditing);
       if (editing) {
         // A saved edit returns to the automation's prompt and history, unless another one is open.
-        if (cronState === cron && cronState.cronEditingJob?.id === editedJobId) {
+        if (
+          cronState === cron &&
+          cronState.cronEditingJob?.id === editedJobId &&
+          deliveryDirectory.generation === editorGeneration &&
+          connectionScope &&
+          gateway.isCurrent(connectionScope)
+        ) {
           showDetailTab("history");
         }
         return;
@@ -658,6 +664,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onCancelEdit: () => {
       if (cron.cronEditingJob && canManageJob(cron.cronEditingJob)) {
         startCronEdit(cron, cron.cronEditingJob);
+        deliveryDirectory.reconcileRoute(cron, gateway.capture(), deliveryDirectory.generation);
         publishCronState();
       }
       showDetailTab("history");

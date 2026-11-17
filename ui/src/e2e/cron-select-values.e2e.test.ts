@@ -70,8 +70,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}cron`);
         await editAutomation(page, job.id);
         await page.locator("#cron-name").fill("Renamed garden summary");
+        await page.locator(".cron-form-status__link").filter({ hasText: "Mode:" }).click();
         const mode = page.locator("#cron-delivery-mode");
-        await mode.scrollIntoViewIfNeeded();
+        expect(await mode.evaluate((element) => document.activeElement === element)).toBe(true);
         await page.evaluate(() => document.fonts.ready);
         expect(
           await readPickerValue(page.locator("openclaw-select-picker:has(#cron-delivery-mode)")),

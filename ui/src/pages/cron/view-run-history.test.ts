@@ -135,13 +135,22 @@ describe("cron view run history", () => {
     expect(entryText(unknown, "facts")).not.toContain("n/a");
   });
 
-  it("renders run summaries as sanitized markdown", async () => {
+  it("only exposes links and sanitized Markdown after expanding a run summary", async () => {
     const container = await renderView({
-      runs: [createRun({ summary: "**bold** <script>alert(1)</script>" })],
+      runs: [
+        createRun({
+          summary: "**bold** [Report](https://example.com/report) <script>alert(1)</script>",
+        }),
+      ],
     });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.querySelector("strong")?.textContent).toBe("bold");
-    expect(body.querySelector("script")).toBeNull();
+    const body = () => getElement(container, ".cron-run-entry__summary", HTMLDivElement);
+    expect(body().textContent).toContain("bold Report");
+    expect(body().querySelector("a")).toBeNull();
+
+    getElement(container, ".cron-run-entry__header", HTMLButtonElement).click();
+    await vi.waitFor(() => expect(body().querySelector("strong")?.textContent).toBe("bold"));
+    expect(body().querySelector("a")?.getAttribute("href")).toBe("https://example.com/report");
+    expect(body().querySelector("script")).toBeNull();
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", async () => {

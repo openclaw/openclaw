@@ -1,3 +1,4 @@
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
@@ -595,14 +596,30 @@ function Run(props: {
           </div>
         }
       >
-        <SanitizedHtml
-          tag="div"
-          class={[
-            "cron-run-entry__body cron-run-entry__summary chat-text",
-            { "cron-run-entry__summary--empty": !props.entry.summary },
-          ]}
-          html={toSanitizedMarkdownHtml(props.entry.summary || t("cron.runEntry.noSummary"))}
-        />
+        <Show
+          when={expanded()}
+          fallback={
+            <div
+              class={[
+                "cron-run-entry__body cron-run-entry__summary",
+                { "cron-run-entry__summary--empty": !props.entry.summary },
+              ]}
+            >
+              {props.entry.summary
+                ? flattenMarkdownToPlainText(props.entry.summary)
+                : t("cron.runEntry.noSummary")}
+            </div>
+          }
+        >
+          <SanitizedHtml
+            tag="div"
+            class={[
+              "cron-run-entry__body cron-run-entry__summary chat-text",
+              { "cron-run-entry__summary--empty": !props.entry.summary },
+            ]}
+            html={toSanitizedMarkdownHtml(props.entry.summary || t("cron.runEntry.noSummary"))}
+          />
+        </Show>
         <Show when={error()}>
           <RunError error={error()} />
         </Show>

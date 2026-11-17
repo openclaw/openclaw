@@ -1,4 +1,4 @@
-import { createSignal, createUniqueId, Show, untrack } from "solid-js";
+import { createSignal, createUniqueId, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
@@ -7,14 +7,10 @@ import { createMsFormatter } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 /** Saved-job diagnostics remain available even when the run is no longer retained. */
-export function FailureDetails(props: {
-  job: CronJob;
-  fullCause?: boolean;
-  onReviewRun?: () => void;
-}) {
+export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }) {
   const causeId = createUniqueId();
   // Raw errors are diagnostics: collapsed unless the reader asks for them.
-  const [open, setOpen] = createSignal(untrack(() => props.fullCause === true));
+  const [open, setOpen] = createSignal(false);
   const formatTimestamp = () => createMsFormatter(undefined, t("common.na"));
   const cause = () => {
     const error = formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));

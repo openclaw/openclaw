@@ -220,7 +220,8 @@ function SavedPrompt(props: CronProps & { job: CronJob }) {
             data-test-id="cron-edit"
             onClick={() => props.onDetailTabChange("settings")}
           >
-            <Icon name="pencil" /> {t("cron.detail.edit")}
+            <Icon name={props.canManage ? "pencil" : "settings"} />{" "}
+            {t(props.canManage ? "cron.detail.edit" : "cron.detail.settingsTab")}
           </button>
         </div>
       </div>

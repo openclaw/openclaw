@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -186,15 +186,12 @@ export function Advanced(
   const hasAdvancedError = createMemo(() =>
     ADVANCED_FIELDS.some((field) => Boolean(props.fieldErrors[field])),
   );
-  createEffect(hasAdvancedError, (hasError) => {
-    if (hasError) {
-      setOpen(true);
-    }
-  });
   return (
     <details
       class="cron-advanced"
-      open={open()}
+      // A validation change can reveal the section. Native toggles keep the user's
+      // choice while the same error remains.
+      open={hasAdvancedError() || open()}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary class="cron-advanced__summary" data-test-id="cron-advanced">

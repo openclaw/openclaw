@@ -139,6 +139,37 @@ it("keeps account and topic routing operator-authored without rediscovering cach
   expect(page.cron.cronForm).toMatchObject(workRoute);
 });
 
+it("restores saved recipient suggestions when canceling an edit with a directory read pending", async () => {
+  const pending = pendingDirectory();
+  const request = directoryRequest((params) =>
+    (params as { agentId: string }).agentId === "temporary"
+      ? pending.promise
+      : directoryResult(conversationTarget("-100saved")),
+  );
+  const { page } = await mountPage(request, { render: true });
+  page.selectJob(
+    digestJob("saved-route", {
+      agentId: "writer",
+      delivery: { mode: "announce", channel: "telegram", to: "-100saved" },
+    }),
+  );
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
+  await waitForTargets(page, ["-100saved"]);
+
+  page.patchForm({ agentId: "temporary" });
+  expect(request).toHaveBeenCalledWith("conversations.list", {
+    agentId: "temporary",
+    channel: "telegram",
+    limit: 100,
+  });
+  (await waitForElement(page, '[data-test-id="cron-cancel"]')).click();
+  pending.resolve(directoryResult(conversationTarget("-100discarded")));
+
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
+  await waitForTargets(page, ["-100saved"]);
+  expect(inputValue(page, "#cron-delivery-to")).toBe("-100saved");
+});
+
 it("drops an in-flight directory response after administrator access is lost", async () => {
   const pending = pendingDirectory();
   const request = directoryRequest(() => pending.promise);
