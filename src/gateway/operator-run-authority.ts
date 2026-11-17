@@ -30,6 +30,7 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  bindGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -313,6 +314,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
             return inherited.modelPolicy;
           },
         });
+    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
     return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
@@ -693,6 +695,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&
