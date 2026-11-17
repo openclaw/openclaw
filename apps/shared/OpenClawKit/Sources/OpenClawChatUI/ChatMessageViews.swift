@@ -1131,14 +1131,11 @@ struct ChatStreamingAssistantTextBody: View {
     }
 
     var body: some View {
-        Group {
-            if self.reduceMotion || self.pendingUntil == nil {
-                self.render(now: nil)
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
-                    self.render(now: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            }
+        // One identity whether or not a reveal is pending: swapping a plain render for a
+        // TimelineView rebuilt the subtree, so every streaming list item restarted its reveal.
+        let idle = self.reduceMotion || self.pendingUntil == nil
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: idle)) { timeline in
+            self.render(now: idle ? nil : timeline.date.timeIntervalSinceReferenceDate)
         }
         .onChange(of: self.inputSnapshot.sourceText) { _, _ in
             self.updateSnapshot()
