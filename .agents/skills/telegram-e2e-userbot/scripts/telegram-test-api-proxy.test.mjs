@@ -389,6 +389,35 @@ test("rejects only the selected matching request before forwarding and then resu
   );
 });
 
+test("hangs matching requests until the client gives up", async (t) => {
+  let forwarded = 0;
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async () => {
+      forwarded += 1;
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => proxy.close());
+  proxy.rejectNextRequest({ method: "getFile", reset: "hang", times: 2 });
+  const getFile = (signal) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getFile`, { method: "POST", body: "{}", signal });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(getFile(AbortSignal.timeout(100)), { name: "TimeoutError" });
+  }
+  assert.equal((await getFile()).status, 200);
+  assert.equal(forwarded, 1);
+  assert.deepEqual(
+    proxy.getRequestRejectionEvents().map(({ upstreamForwarded, hang }) => ({
+      upstreamForwarded,
+      hang,
+    })),
+    [
+      { upstreamForwarded: false, hang: true },
+      { upstreamForwarded: false, hang: true },
+    ],
+  );
+});
+
 test("injects repeated flood waits with retry_after before forwarding", async (t) => {
   // Chat ID digits may also appear in legitimate timing fields.
   t.mock.method(Date, "now", () => 1790301001001);

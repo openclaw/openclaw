@@ -30,6 +30,7 @@ const ACTION_KEYS = {
     "bodyIncludes",
     "times",
     "retryAfter",
+    "reset",
   ]),
   telegramApiWaitHeld: new Set(["type", "atMs", "method", "timeoutMs"]),
   telegramApiRelease: new Set(["type", "atMs"]),
@@ -197,6 +198,12 @@ export function parseScenario(value) {
       };
     }
     if (action.type === "telegramApiHold" || action.type === "telegramApiReject") {
+      if (
+        action.reset !== undefined &&
+        (action.reset !== "hang" || action.retryAfter !== undefined)
+      ) {
+        throw new Error(`${label}.reset must be hang and cannot combine with retryAfter.`);
+      }
       return {
         type: action.type,
         atMs,
@@ -208,6 +215,7 @@ export function parseScenario(value) {
         ...(action.type === "telegramApiReject"
           ? {
               times: positiveInteger(action.times, `${label}.times`, 1),
+              ...(action.reset ? { reset: action.reset } : {}),
               ...(action.retryAfter !== undefined
                 ? { retryAfter: nonNegativeInteger(action.retryAfter, `${label}.retryAfter`) }
                 : {}),
