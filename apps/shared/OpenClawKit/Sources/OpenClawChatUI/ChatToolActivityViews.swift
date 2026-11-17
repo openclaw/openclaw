@@ -293,6 +293,7 @@ private struct ChatToolActivityRowContent: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(self.display.title)
                     .accessibilityValue(self.accessibilityValue)
+                    .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             }
 
             if self.expanded, self.expandable {

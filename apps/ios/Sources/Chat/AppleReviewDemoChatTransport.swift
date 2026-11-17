@@ -1505,6 +1505,40 @@ extension LocalFixtureChatStore {
         // Let the send acknowledgment establish run ownership before publishing work.
         try? await Task.sleep(for: .seconds(2))
         guard self.activeRunID == runId else { return }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-fold-events") {
+            self.emitDuplicateAgentEvent(
+                runId: runId,
+                seq: 1,
+                stream: "tool",
+                timestamp: now + 1,
+                data: [
+                    "phase": "start",
+                    "name": "read",
+                    "toolCallId": "fold-read-1",
+                    "args": ["path": "README.md"],
+                ])
+            try? await Task.sleep(for: .seconds(8))
+            self.emitDuplicateAgentEvent(
+                runId: runId,
+                seq: 2,
+                stream: "assistant",
+                timestamp: now + 2,
+                data: ["text": "Checking the files", "phase": "commentary", "itemId": "msg_proof"])
+            try? await Task.sleep(for: .seconds(5))
+            self.emitDuplicateAgentEvent(
+                runId: runId,
+                seq: 3,
+                stream: "assistant",
+                timestamp: now + 3,
+                data: ["text": "Checking the files first.", "phase": "commentary", "itemId": "msg_proof"])
+            try? await Task.sleep(for: .seconds(5))
+            self.emitDuplicateAgentEvent(
+                runId: runId,
+                seq: 4,
+                stream: "tool",
+                timestamp: now + 4,
+                data: ["phase": "result", "name": "read", "toolCallId": "fold-read-1", "result": "ready"])
+        }
         self.messages += [OpenClawChatMessage(
             role: "assistant",
             content: [.init(

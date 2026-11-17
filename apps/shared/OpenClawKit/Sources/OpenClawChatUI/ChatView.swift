@@ -629,7 +629,8 @@ extension OpenClawChatView {
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         return ChatAssistantRunGroup.build(
             transcript.rows,
-            tools: self.collapsesCompletedWork && !self.isSearchPresented ? [] : self.viewModel.toolActivities,
+            tools: ChatTranscriptRow.fallbackTools(self.viewModel.toolActivities)(
+                self.displayOptions, self.collapsesCompletedWork && !self.isSearchPresented),
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
@@ -1115,7 +1116,8 @@ extension OpenClawChatView {
                 rows,
                 runWorking: runWorking,
                 activeRunIDs: activeRunIDs,
-                searchActive: self.isSearchPresented)
+                searchActive: self.isSearchPresented,
+                isMessageVisible: self.shouldDisplayMessage)
         }
         rows = rows.compactMap { row in
             switch row {
@@ -1470,10 +1472,7 @@ extension OpenClawChatView {
         }
 
         if !primaryText.isEmpty {
-            if message.role.lowercased() == "user" {
-                return true
-            }
-            if AssistantTextParser.hasVisibleContent(
+            if message.role.lowercased() == "user" || AssistantTextParser.hasVisibleContent(
                 in: primaryText,
                 includeThinking: self.displayOptions.contains(.reasoning))
             {

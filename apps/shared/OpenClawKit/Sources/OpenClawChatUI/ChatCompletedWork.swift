@@ -36,11 +36,13 @@ extension ChatTranscriptRow {
         _ rows: [Self],
         runWorking: Bool,
         activeRunIDs: Set<String> = [],
-        searchActive: Bool = false) -> [Self]
+        searchActive: Bool = false,
+        isMessageVisible: (OpenClawChatMessage) -> Bool = { _ in true }) -> [Self]
     {
         guard !searchActive else { return rows }
         var turns: [[Self]] = []
         for row in rows {
+            if let message = row.workMessage, !isMessageVisible(message) { continue }
             if turns.isEmpty || row.startsTurn {
                 turns.append([])
             }
@@ -116,7 +118,9 @@ extension ChatTranscriptRow {
                 guard let last = messages.last else { return [] }
                 // History prepends change the first work row, but not the visible
                 // boundary that follows it (including a continuing steer turn).
-                let anchor = isLive ? (Self.liveAnchor(for: messages) ?? last.presentationID) :
+                let boundary = chunks.prefix(chunkIndex).last?.parts.last?.row.id ??
+                    (start > 0 ? turn[start - 1].id : nil)
+                let anchor = isLive ? (Self.liveAnchor(for: messages, boundary: boundary) ?? last.presentationID) :
                     (chunks.dropFirst(chunkIndex + 1).first?.parts.first?.row.id ??
                         continuations[index].flatMap { turns[$0].first?.id } ?? last.presentationID)
                 let summary = ownsRollup && !isLive ? allWork : nil
@@ -228,7 +232,8 @@ extension OpenClawChatMessage {
     }
 
     var isCollapsibleWork: Bool {
-        (!self.hasWorkReplyContent || self.workPhase == "commentary") && !self.isForwardedTurnBoundary && !self
+        !self.hasWorkMedia && (!self.hasWorkReplyContent || self.workPhase == "commentary") && !self
+            .isForwardedTurnBoundary && !self
             .isRealtimeVoiceTranscript &&
             (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
                 (self.role.lowercased() == "assistant" &&
@@ -271,8 +276,13 @@ extension ChatTranscriptRow {
 
     /// A live section must keep its disclosure identity when the first recorded
     /// row replaces the pending projection, so anchor on the call's stable key.
-    private static func liveAnchor(for messages: [OpenClawChatMessage]) -> UUID? {
+    private static func liveAnchor(for messages: [OpenClawChatMessage], boundary: UUID?) -> UUID? {
         guard let first = messages.first else { return nil }
+        // Canonical history can prepend work or replace the first pending row.
+        // The preceding user/reply boundary does not change during that handoff.
+        if let boundary {
+            return Self.pendingCallID(runID: first.workRunID, callID: "segment:\(boundary)")
+        }
         if let block = first.content.first(where: { $0.isToolCall }), let callID = block.id {
             return Self.pendingCallID(runID: first.workRunID, callID: callID)
         }
@@ -290,19 +300,30 @@ extension ChatTranscriptRow {
             }
         })
         for tool in tools.sorted(by: {
-            if $0.startedAt == $1.startedAt { return $0.id < $1.id }
+            if $0.startedAt == $1.startedAt {
+                if $0.runID == $1.runID, let left = $0.startSequence, let right = $1.startSequence,
+                   left != right { return left < right }
+                return $0.id < $1.id
+            }
             return ($0.startedAt ?? .infinity) < ($1.startedAt ?? .infinity)
         }) {
             guard !recorded.contains("\(tool.runID ?? ""):\(tool.id)") else { continue }
-            let message = OpenClawChatMessage(
+            var message = OpenClawChatMessage(
                 id: Self.pendingCallID(runID: tool.runID, callID: tool.id),
                 role: "assistant",
                 content: [.init(type: "tool_use", id: tool.id, name: tool.name, arguments: tool.args)],
                 timestamp: tool.startedAt,
                 transcriptRunID: tool.runID,
                 activity: tool.activity.map { [$0] })
+            message.liveEventSequence = tool.startSequence
             let position = tool.startedAt.flatMap { start in
-                projectedBase.firstIndex { ($0.timestamp.map { $0 > start }) == true }
+                projectedBase.firstIndex { row in
+                    guard let timestamp = row.timestamp else { return false }
+                    if timestamp != start { return timestamp > start }
+                    guard row.workRunID == tool.runID,
+                          let left = tool.startSequence, let right = row.liveEventSequence else { return false }
+                    return left < right
+                }
             } ?? projectedBase.endIndex
             projectedBase.insert(message, at: position)
         }
@@ -320,5 +341,13 @@ extension ChatTranscriptRow {
                 ? self.projectingLiveTools(in: base, tools: tools) : base
             return self.build(from: self.mergeToolResults(in: projected))
         }
+    }
+}
+
+extension ChatTranscriptRow {
+    static func fallbackTools(_ tools: [OpenClawChatPendingToolCall])
+        -> (OpenClawChatDisplayOptions, Bool) -> [OpenClawChatPendingToolCall]
+    {
+        { options, folding in options.contains(.toolActivity) && !folding ? tools : [] }
     }
 }

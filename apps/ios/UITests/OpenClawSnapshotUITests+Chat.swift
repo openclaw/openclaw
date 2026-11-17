@@ -580,6 +580,40 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
     }
 
+    func testLiveToolFoldPendingEvents() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            additionalArguments: ["--openclaw-live-tool-fold-fixture", "--openclaw-live-tool-fold-events"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Inspect the files.")
+        app.buttons["chat-send-message"].tap()
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        let working = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-"))
+            .firstMatch
+        XCTAssertTrue(working.waitForExistence(timeout: 7))
+        XCTAssertEqual(working.label, "README.md")
+        self.attachScreenshot(named: "events-pending-collapsed")
+        working.tap()
+        let calls = app.descendants(matching: .any).matching(identifier: "chat-tool-activity-fold-read-1")
+        XCTAssertTrue(calls.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(calls.count, 1)
+        self.attachScreenshot(named: "events-pending-expanded")
+        XCTAssertTrue(app.staticTexts["Checking the files"].waitForExistence(timeout: 12))
+        self.attachScreenshot(named: "events-commentary-initial")
+        XCTAssertTrue(app.staticTexts["Checking the files first."].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["Checking the files"].exists)
+        self.attachScreenshot(named: "events-commentary-updated")
+        XCTAssertTrue(app.buttons["chat-tool-activity-fold-read-2"].waitForExistence(timeout: 12))
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Checking the files first.").count, 1)
+        self.attachScreenshot(named: "events-history-replaced")
+        XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 40))
+    }
+
     func testLiveToolFoldSegments() throws {
         try self.checkLiveToolFoldShape(unphased: false)
     }
