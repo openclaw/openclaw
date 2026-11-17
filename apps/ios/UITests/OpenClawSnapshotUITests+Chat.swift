@@ -539,13 +539,15 @@ extension OpenClawSnapshotUITests {
         let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(work.waitForExistence(timeout: 5))
         work.tap()
-        for (command, expectedStatus) in [
-            ("printf ready", "Outcome unknown"),
-            ("printf missing", "No result"),
-            ("printf complete", "Finished"),
+        // A command row names what ran: "Ran" once it finished, "Run" while its outcome is unknown
+        // (web chat-tool-card-row.solid.tsx:128-139).
+        for (command, expectedStatus, verb) in [
+            ("printf ready", "Outcome unknown", "Run"),
+            ("printf missing", "No result", "Run"),
+            ("printf complete", "Finished", "Ran"),
         ] {
             let row = app.descendants(matching: .any).matching(NSPredicate(
-                format: "label CONTAINS %@ AND value CONTAINS %@", "Exec", command)).firstMatch
+                format: "label == %@ AND value CONTAINS %@", verb, command)).firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 5), "Missing tool row: \(command)")
             XCTAssertTrue(
                 (row.value as? String)?.hasPrefix(expectedStatus) == true,
@@ -558,7 +560,7 @@ extension OpenClawSnapshotUITests {
             try VNImageRequestHandler(cgImage: image, options: [:]).perform([recognition])
             let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
                 .joined(separator: " ").lowercased()
-            XCTAssertTrue(text.contains("exec"), "Rendered tool title was not recognized: \(text)")
+            XCTAssertTrue(text.contains(verb.lowercased()), "Rendered command verb was not recognized: \(text)")
             XCTAssertEqual(
                 text.contains("outcome unknown"),
                 command == "printf ready",

@@ -98,9 +98,12 @@ struct ChatWorkChunksTests {
         #expect(visible.map { ChatMessageVisibleText.visibleText(in: $0) } == [
             "First finding.", "Second finding.", "Final answer.",
         ])
-        try #require(work.count == 3)
+        // The answer's own reasoning and tool parts gather in one disclosure above its text.
+        try #require(work.count == 1)
+        try #require(work[0].messages.count == 3)
         #expect(work[0].messages[0].content[0].type == "thinking")
-        #expect(work[1].messages[0].content.map(\.type) == ["toolCall", "tool_result"])
+        #expect(work[0].messages[1].content.map(\.type) == ["toolCall", "tool_result"])
+        #expect(work[0].messages[2].content.map(\.type) == ["toolCall", "tool_result"])
         #expect(visible.allSatisfy { $0.id == source.id })
         #expect(Set(rows.map(\.id)).count == rows.count)
         #expect(rows.map(\.id) == ChatTranscriptRow.collapseCompletedWork(

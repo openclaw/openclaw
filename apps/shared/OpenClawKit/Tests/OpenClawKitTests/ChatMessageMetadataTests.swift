@@ -200,6 +200,18 @@ struct ChatMessageMetadataTests {
         #expect(ChatMessageTimestampPresentation.make(timestamp: .infinity) == nil)
     }
 
+    @Test
+    func `a completed reply footer carries the working time of its own run`() throws {
+        let reply = try self.message(fields: #""__openclaw":{"runId":"run-1"}"#)
+        let metadata = ChatTranscriptRow.footerMetadata(
+            in: ChatTranscriptRow.build(from: [reply]),
+            activeRunIDs: [],
+            runWorking: false,
+            runDurations: ["run-1": 91000, "run-2": 5000],
+            isMessageVisible: { _ in true })
+        #expect(metadata[reply.id]?.durationMilliseconds == 91000)
+    }
+
     private func footers(
         _ messages: [OpenClawChatMessage],
         hiddenIDs: Set<UUID> = []) -> [UUID: ChatMessageMetadata]

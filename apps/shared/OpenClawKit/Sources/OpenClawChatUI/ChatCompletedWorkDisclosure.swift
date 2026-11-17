@@ -15,7 +15,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
             }
             .padding(.top, 8)
         } label: {
-            Text(self.label)
+            Text(ChatCompletedWorkSummary.label(work: self.work))
                 .font(OpenClawChatTypography.caption)
                 .fixedSize(horizontal: false, vertical: true)
                 #if os(iOS)
@@ -30,10 +30,6 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         #endif
         .accessibilityIdentifier("chat-completed-work-\(self.work.anchorID)")
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
     }
 }
 

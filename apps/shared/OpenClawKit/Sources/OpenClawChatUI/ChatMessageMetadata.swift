@@ -5,6 +5,8 @@ import Synchronization
 struct ChatMessageMetadata: Equatable {
     let timestamp: Double?
     let model: String?
+    /// The reply run's working time (web chat-message-group-frame.ts:122-125).
+    var durationMilliseconds: Double?
 }
 
 extension ChatTranscriptRow {
@@ -13,6 +15,7 @@ extension ChatTranscriptRow {
         in rows: [Self],
         activeRunIDs: Set<String>,
         runWorking: Bool,
+        runDurations: [String: Double] = [:],
         isMessageVisible: (OpenClawChatMessage) -> Bool) -> [UUID: ChatMessageMetadata]
     {
         var result: [UUID: ChatMessageMetadata] = [:]
@@ -35,8 +38,14 @@ extension ChatTranscriptRow {
             let model = role == "assistant" ? group.reversed().compactMap {
                 ChatPayloadDecoding.trimmedNonEmptyString($0.model)
             }.first { $0 != "gateway-injected" } : nil
-            guard first.timestamp?.isFinite == true || model != nil else { return }
-            result[last.id] = ChatMessageMetadata(timestamp: first.timestamp, model: model)
+            // Forwarded replies belong to another session's run; their duration is not this turn's.
+            let duration = role == "assistant" && !first.isForwardedTurnBoundary
+                ? first.workRunID.flatMap { runDurations[$0] } : nil
+            guard first.timestamp?.isFinite == true || model != nil || duration != nil else { return }
+            result[last.id] = ChatMessageMetadata(
+                timestamp: first.timestamp,
+                model: model,
+                durationMilliseconds: duration)
         }
         for row in rows {
             guard case let .message(message) = row else {
@@ -150,35 +159,98 @@ struct ChatMessageTimestampPresentation: Equatable {
     }
 }
 
-struct ChatMessageMetadataView: View {
-    let metadata: ChatMessageMetadata
+/// Reply footer (web chat-message-timestamp-view.tsx:105-148,262-330): the relative time stays visible;
+/// run duration, exact time, tokens, cost, context and model open from a tap on the time.
+struct ChatMessageFooter: View {
+    let metadata: ChatMessageMetadata?
+    let usage: ChatMessageUsagePresentation?
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
+    @State private var showsDetails = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            if let time = ChatMessageTimestampPresentation.make(
-                timestamp: self.metadata.timestamp, locale: self.locale, timeZone: self.timeZone)
-            {
-                Text(time.label)
-                    .accessibilityLabel(time.exact)
-                    #if os(macOS)
-                    .help(time.exact)
-                    #endif
+        let time = ChatMessageTimestampPresentation.make(
+            timestamp: self.metadata?.timestamp, locale: self.locale, timeZone: self.timeZone)
+        let duration = ChatCompletedWorkSummary.workedFor(self.metadata?.durationMilliseconds)
+        Button {
+            self.showsDetails = true
+        } label: {
+            Group {
+                if let time {
+                    Text(time.label)
+                } else {
+                    Image(systemName: "info.circle")
+                }
             }
-            if let model = self.metadata.model {
-                Text(model.split(separator: "/").last.map(String.init) ?? model)
-                    .truncationMode(.middle)
-                    .accessibilityLabel(String(format: String(localized: "Model: %@"), model))
-                    #if os(macOS)
-                    .help(model)
-                    #endif
-            }
+            .font(OpenClawChatTypography.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .contentShape(Rectangle())
         }
-        .font(OpenClawChatTypography.caption2)
-        .monospacedDigit()
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .accessibilityLabel(time?.exact ?? String(localized: "Message details"))
+        .accessibilityHint(String(localized: "Shows usage and model"))
+        .accessibilityIdentifier("chat-message-footer")
+        .popover(isPresented: self.$showsDetails) {
+            ChatMessageFooterDetails(
+                duration: duration,
+                exactTime: time?.exact,
+                usage: self.usage,
+                model: self.metadata?.model)
+                #if os(iOS)
+                    .presentationCompactAdaptation(.popover)
+                #endif
+        }
+    }
+}
+
+private struct ChatMessageFooterDetails: View {
+    let duration: String?
+    let exactTime: String?
+    let usage: ChatMessageUsagePresentation?
+    let model: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let duration {
+                Text(duration)
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.primary)
+            }
+            Group {
+                if let exactTime {
+                    Text(exactTime)
+                }
+                if let usage {
+                    Text(usage.text)
+                        .monospacedDigit()
+                        .foregroundStyle(usage.pressure.tint)
+                        .accessibilityLabel(String(localized: "Message usage"))
+                        .accessibilityValue(usage.accessibilityValue)
+                }
+                if let model {
+                    // The full provider/model id: the footer no longer abbreviates it.
+                    Text(model)
+                        .accessibilityLabel(String(format: String(localized: "Model: %@"), model))
+                }
+            }
+            .font(OpenClawChatTypography.caption)
+            .foregroundStyle(.secondary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(14)
+        .frame(minWidth: 200, maxWidth: 320, alignment: .leading)
+    }
+}
+
+extension ChatMessageUsagePresentation.Pressure {
+    fileprivate var tint: Color {
+        switch self {
+        case .normal: OpenClawChatTheme.muted
+        case .warning: OpenClawChatTheme.warning
+        case .danger: OpenClawChatTheme.danger
+        }
     }
 }

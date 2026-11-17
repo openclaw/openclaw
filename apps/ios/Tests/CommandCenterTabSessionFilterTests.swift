@@ -217,4 +217,14 @@ struct CommandCenterTabSessionFilterTests {
                 entry(key: nodeKey, displayName: "Compare session naming", label: manualLabel, autoLabel: autoLabel))
                 == manualLabel)
     }
+
+    @Test func `a key copied into the label or display name never becomes the session title`() throws {
+        let sessions = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:work","label":"agent:main:work","displayName":"Release prep"},
+          {"key":"agent:main:fresh","displayName":"agent:main:fresh","autoLabel":"Fix the flaky test"}
+        ]
+        """.utf8))
+        #expect(sessions.map(CommandCenterTab.sessionTitle) == ["Release prep", "Fix the flaky test"])
+    }
 }

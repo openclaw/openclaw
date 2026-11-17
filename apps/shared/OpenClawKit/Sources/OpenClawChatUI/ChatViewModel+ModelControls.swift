@@ -283,12 +283,44 @@ extension OpenClawChatViewModel {
 
     public var composerInlineModelLabel: String {
         let selectionID = self.canonicalModelSelectionID
-        let label = if selectionID == Self.defaultModelSelectionID {
-            self.defaultModelLabel.replacingOccurrences(of: "Default: ", with: "")
+        let defaults = self.modelPickerDefault
+        let resolvedID: String? = if selectionID == Self.defaultModelSelectionID {
+            self.normalizedModelSelectionID(defaults.model, provider: defaults.provider)
         } else {
-            self.modelChoices.first { $0.selectionID == selectionID }?.displayLabel ?? selectionID
+            selectionID
         }
-        return label.split(separator: "/").last.map(String.init) ?? label
+        guard let resolvedID else { return "Default" }
+        guard let choice = self.modelChoices.first(where: {
+            $0.selectionID == resolvedID || $0.modelID == resolvedID
+        }) else {
+            return resolvedID.split(separator: "/").last.map(String.init) ?? resolvedID
+        }
+        return Self.shortModelLabel(name: choice.name, provider: choice.provider, modelID: choice.modelID)
+    }
+
+    /// Catalog name without a repeated provider, like web `formatModelLabel`
+    /// (ui/src/pages/chat/components/chat-model-picker-options.ts:92-110, provider-icon-data.ts:174-180).
+    /// Catalog rows without a real name fall back to the bare model id.
+    nonisolated static func shortModelLabel(name: String, provider: String, modelID: String) -> String {
+        let bareID = modelID.split(separator: "/").last.map(String.init) ?? modelID
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != modelID, trimmed != bareID, trimmed != "\(provider)/\(bareID)" else {
+            return bareID
+        }
+        let providerLabel = provider
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+        guard !providerLabel.isEmpty else { return trimmed }
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix(providerLabel.lowercased() + " ") {
+            return String(trimmed.dropFirst(providerLabel.count + 1))
+        }
+        let suffix = " (\(providerLabel.lowercased()))"
+        if lowered.hasSuffix(suffix) {
+            return String(trimmed.dropLast(suffix.count))
+        }
+        return trimmed
     }
 
     public var canonicalModelSelectionID: String {

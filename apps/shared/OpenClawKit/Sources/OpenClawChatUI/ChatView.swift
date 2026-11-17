@@ -20,10 +20,6 @@ public struct OpenClawChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openClawChatIsObscured) private var isObscured
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.verticalSizeClass) private var verticalSizeClass
-    #endif
     @State private var contentWidth: CGFloat = 0
     @State private var scrollerBottomID = UUID()
     @State private var scrollCommand = ChatScrollCommand()
@@ -33,6 +29,7 @@ public struct OpenClawChatView: View {
     @State private var lastTurnStartID: UUID?
     #if os(iOS)
     @State private var readerHistorySnapshot: ChatReaderHistorySnapshot?
+    @State private var olderHistory = ChatOlderHistoryReader()
     #endif
     @State private var isKeyboardVisible = false
     @State private var hoveredMessageID: UUID?
@@ -77,29 +74,22 @@ public struct OpenClawChatView: View {
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
-        static let outerPaddingHorizontal: CGFloat = 6
         static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
         static let liveEdgeThreshold: CGFloat = 48
         #if os(macOS)
         static let outerPaddingVertical: CGFloat = 0
-        static let composerPaddingHorizontal: CGFloat = 0
-        static let swarmPaddingHorizontal: CGFloat = 12
         static let swarmPaddingVertical: CGFloat = 8
         static let stackSpacing: CGFloat = 0
         static let messageSpacing: CGFloat = 6
         static let messageListPaddingTop: CGFloat = 12
         static let messageListPaddingBottom: CGFloat = 16
-        static let messageListPaddingHorizontal: CGFloat = 6
         #else
         static let outerPaddingVertical: CGFloat = 6
-        static let composerPaddingHorizontal: CGFloat = 6
-        static let swarmPaddingHorizontal: CGFloat = 6
         static let swarmPaddingVertical: CGFloat = 0
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 12
         static let messageListPaddingTop: CGFloat = 10
         static let messageListPaddingBottom: CGFloat = 6
-        static let messageListPaddingHorizontal: CGFloat = 8
         #endif
     }
 
@@ -213,6 +203,13 @@ public struct OpenClawChatView: View {
 extension OpenClawChatView {
     private var content: some View {
         let transcript = self.transcriptPresentation
+        let column = self.columnLayout
+        // The width rule owns horizontal geometry only; macOS keeps its window's bottom inset.
+        #if os(macOS)
+        let composerBottom: CGFloat = self.isDesktopLayout ? 12 : Layout.outerPaddingVertical
+        #else
+        let composerBottom = column.margin / 2
+        #endif
         return VStack(spacing: 0) {
             self.messageList(transcript: transcript)
                 #if os(macOS)
@@ -234,45 +231,39 @@ extension OpenClawChatView {
                         if wasPresented, !isPresented { self.composerFocusRequest += 1 }
                     }
                 #endif
-                    .padding(.horizontal, self.usesExpandedLayout ? 0 : Layout.outerPaddingHorizontal)
             if !self.usesInlineProgressCard {
+                // The composer draws its surface on the column, so the card shares its edges.
                 self.progressCard
-                    // The composer draws its surface this far inside its frame; share its edges.
-                        .padding(
-                            .horizontal,
-                            self.showsComposer
-                                ? OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
-                                : 0)
-                        .frame(maxWidth: self.readingColumnWidth)
-                        .padding(.horizontal, self.composerHorizontalMargin)
-                        .padding(.top, Layout.stackSpacing)
+                    .chatColumn(column)
+                    .padding(.top, Layout.stackSpacing)
             }
             if self.showsComposer {
                 self.turnRecapRow
-                    .frame(maxWidth: self.readingColumnWidth)
+                    .chatColumn(column)
             }
             self.swarmProgress
-                .frame(maxWidth: self.readingColumnWidth)
-                .padding(
-                    .horizontal,
-                    self.usesExpandedLayout ? self.expandedHorizontalMargin : Layout.swarmPaddingHorizontal)
+                .chatColumn(column)
                 .padding(.vertical, Layout.swarmPaddingVertical)
                 .padding(.top, Layout.stackSpacing)
             if self.showsComposer {
                 self.composer
                     .chatBehaviorProbe(.composer)
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.composerHorizontalMargin)
+                    .chatColumn(
+                        column,
+                        inset: OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome))
                     .padding(.top, Layout.stackSpacing)
-                    .padding(
-                        .bottom,
-                        self.usesExpandedLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
+                    .padding(.bottom, composerBottom)
             }
         }
         .padding(.top, Layout.outerPaddingVertical)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
-        .environment(\.openClawAssistantUsesReadingColumn, self.usesExpandedLayout)
+        .environment(\.openClawChatColumn, column)
+        .environment(
+            \.openClawOpenChatSession,
+            ChatOpenSessionAction(owner: ObjectIdentifier(self.viewModel)) { [viewModel = self.viewModel] in
+                viewModel.switchSession(to: $0)
+            })
     }
 
     @ViewBuilder
@@ -354,7 +345,6 @@ extension OpenClawChatView {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 4)
         }
     }
 
@@ -365,7 +355,6 @@ extension OpenClawChatView {
            let turnRecap
         {
             ChatTurnRecapRow(recap: turnRecap)
-                .padding(.horizontal, Layout.outerPaddingHorizontal + Layout.messageListPaddingHorizontal)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -399,19 +388,17 @@ extension OpenClawChatView {
         return Group {
             #if os(iOS)
             List {
-                self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .frame(maxWidth: .infinity)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(
-                        top: 0,
-                        leading: Layout.messageListPaddingHorizontal,
-                        bottom: 0,
-                        trailing: Layout.messageListPaddingHorizontal))
-                if self.usesInlineProgressCard { self.progressCard }
-                if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
-                self.subagentWaitRow
+                ChatOlderHistoryBoundaryRow(viewModel: self.viewModel, load: self.loadOlderHistory)
+                Group {
+                    self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                    if self.usesInlineProgressCard { self.progressCard }
+                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
+                    self.subagentWaitRow
+                }
+                .chatColumn(self.columnLayout)
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
                 Color.clear
                     .frame(height: Layout.messageListPaddingBottom + 1)
                     .id(self.scrollerBottomID)
@@ -422,6 +409,11 @@ extension OpenClawChatView {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 0)
+            .chatOlderHistoryTrigger(
+                self.olderHistory,
+                viewModel: self.viewModel,
+                scroll: self.scroll,
+                load: self.loadOlderHistory)
             #else
             ScrollView {
                 LazyVStack(spacing: spacing) {
@@ -445,12 +437,7 @@ extension OpenClawChatView {
                         .id(self.scrollerBottomID)
                 }
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
-                .frame(maxWidth: self.readingColumnWidth)
-                .padding(
-                    .horizontal,
-                    self.usesExpandedLayout ? self.expandedHorizontalMargin :
-                        (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
-                .frame(maxWidth: .infinity)
+                .chatColumn(self.columnLayout)
             }
             #endif
         }
@@ -574,6 +561,7 @@ extension OpenClawChatView {
     private func resetTranscriptSession() {
         #if os(iOS)
         self.readerHistorySnapshot = nil
+        self.olderHistory.reset()
         self.scroll.isKeyboardTransitioning = false
         self.scroll.transcriptScroller = nil
         #endif
@@ -586,6 +574,13 @@ extension OpenClawChatView {
         self.scroll.hasNewerContentBelow = false
         self.lastTurnStartID = nil
     }
+
+    #if os(iOS)
+    /// Older page from the reader's top sentinel or the retry row; the reading position stays put.
+    private func loadOlderHistory() {
+        self.olderHistory.load(self.viewModel)
+    }
+    #endif
 
     private func handleTranscriptScrollPhase(_ phase: ScrollPhase) {
         guard self.hasPerformedInitialScroll else { return }
@@ -671,7 +666,6 @@ extension OpenClawChatView {
                         assistantAvatarText: self.assistantAvatarText,
                         assistantAvatarTint: self.assistantAvatarTint,
                         showsAssistantAvatar: self.showsAssistantAvatars,
-                        isClean: self.composerChrome == .clean,
                         joinsAbove: cell.joinsAbove,
                         joinsBelow: cell.joinsBelow)
                     {
@@ -709,8 +703,7 @@ extension OpenClawChatView {
                     assistantName: self.assistantName,
                     assistantAvatarText: self.assistantAvatarText,
                     assistantAvatarTint: self.assistantAvatarTint,
-                    showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean)
+                    showsAssistantAvatar: self.showsAssistantAvatars)
                 {
                     parts
                     if group.includesLive { self.liveAssistantContent }
@@ -764,11 +757,12 @@ extension OpenClawChatView {
                     scroll: self.scroll,
                     messageID: row.startsTurn ? row.id : nil,
                     anchor: Layout.newTurnAnchor))
+                .chatOlderHistoryRow(self.olderHistory, id: row.id)
                 #endif
                 .chatBehaviorProbe(.row(row))
         case let .tool(tool):
             ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
-                .padding(4)
+                .padding(.vertical, 4)
         }
     }
 
@@ -832,8 +826,7 @@ extension OpenClawChatView {
                         assistantName: self.assistantName,
                         assistantAvatarText: self.assistantAvatarText,
                         assistantAvatarTint: self.assistantAvatarTint,
-                        showsAssistantAvatar: self.showsAssistantAvatars,
-                        isClean: self.composerChrome == .clean)
+                        showsAssistantAvatar: self.showsAssistantAvatars)
                         .equatable()
                         #if os(iOS)
                         .environment(\.openClawReaderAnchor, self.liveReaderAnchor)
@@ -848,12 +841,10 @@ extension OpenClawChatView {
         ChatRunStatusContent {
             if self.showsWorkingIndicator {
                 ChatTypingIndicatorBubble(
-                    style: self.style,
                     assistantName: self.assistantName,
                     assistantAvatarText: self.assistantAvatarText,
                     assistantAvatarTint: self.assistantAvatarTint,
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean,
                     runIdentity: self.viewModel.workingIndicatorIdentity,
                     outputTokens: self.viewModel.liveRunOutputTokens,
                     status: self.viewModel.runStartupStatus)
@@ -911,7 +902,6 @@ extension OpenClawChatView {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
-            isClean: self.composerChrome == .clean,
             contextWindowTokens: contextWindowTokens,
             userMessageExpanded: self.expandedUserMessageIDs.contains(msg.id),
             onToggleUserMessageExpanded: {
@@ -1101,18 +1091,22 @@ extension OpenClawChatView {
         var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
+        // One duration map serves the reply footers and the "Worked for" summaries.
+        let runDurations = ChatTranscriptRow.runDurations(in: rows, activeRunIDs: activeRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
         let metadata = ChatTranscriptRow.footerMetadata(
             in: rows,
             activeRunIDs: activeRunIDs,
             runWorking: runWorking,
+            runDurations: runDurations,
             isMessageVisible: self.shouldDisplayMessage)
         if self.collapsesCompletedWork {
             rows = ChatTranscriptRow.collapseCompletedWork(
                 rows,
                 runWorking: runWorking,
                 activeRunIDs: activeRunIDs,
-                searchActive: self.isSearchPresented)
+                searchActive: self.isSearchPresented,
+                runDurations: runDurations)
         }
         rows = rows.compactMap { row in
             switch row {
@@ -1120,8 +1114,7 @@ extension OpenClawChatView {
                 return self.shouldDisplayMessage(message) ? row : nil
             case let .completedWork(work):
                 let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
+                return visible.isEmpty ? nil : .completedWork(work.replacingMessages(visible))
             default:
                 return row
             }
@@ -1464,7 +1457,7 @@ extension OpenClawChatView {
         }
 
         if message.isToolResult {
-            return self.displayOptions.contains(.toolActivity)
+            return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
         }
 
         if !primaryText.isEmpty {
@@ -1479,8 +1472,7 @@ extension OpenClawChatView {
             }
         }
 
-        return self.displayOptions.contains(.toolActivity) &&
-            message.content.contains { $0.isToolCall || $0.isToolResult }
+        return self.displayOptions.contains(.toolActivity) && message.hasDisplayableToolActivity
     }
 
     @ViewBuilder
@@ -1572,33 +1564,47 @@ extension OpenClawChatView {
 }
 
 extension OpenClawChatView {
-    private var usesExpandedLayout: Bool {
-        #if os(iOS)
-        self.horizontalSizeClass == .regular && self.verticalSizeClass == .regular
-        #else
-        false
-        #endif
-    }
-
     /// Measure the detail pane, not the screen: a visible sidebar and window resizing
     /// change the space available to chat independently of device orientation.
-    private var expandedHorizontalMargin: CGFloat {
-        min(24, max(12, (self.contentWidth - 480) / 20 + 12))
+    private var columnLayout: ChatColumnLayout {
+        ChatColumnLayout(paneWidth: self.contentWidth)
+    }
+}
+
+/// The one width rule of the chat pane: a margin and a centred reading column derived from the
+/// measured pane width, shared by transcript rows, cards and the composer.
+struct ChatColumnLayout: Equatable {
+    static let maxColumnWidth: CGFloat = 768
+
+    let margin: CGFloat
+    let columnWidth: CGFloat
+
+    /// An unmeasured pane (width 0, before its first layout) assumes the widest column.
+    init(paneWidth: CGFloat) {
+        let width = paneWidth > 0 ? paneWidth : .infinity
+        self.margin = width < 700 ? 16 : 24
+        self.columnWidth = max(0, min(Self.maxColumnWidth, width - 2 * self.margin))
     }
 
-    private var composerHorizontalMargin: CGFloat {
-        self.usesExpandedLayout ? self.expandedHorizontalMargin :
-            (self.isDesktopLayout ? 16 : Layout.composerPaddingHorizontal)
+    /// Phone columns give a long user message most of the line; wide ones keep a short measure.
+    var userBubbleMaxWidth: CGFloat {
+        (self.columnWidth < 600 ? 0.82 : 0.68) * self.columnWidth
     }
+}
 
-    private var readingColumnWidth: CGFloat {
-        #if os(macOS)
-        self.isDesktopLayout ? 760 : .infinity
-        #elseif os(iOS)
-        self.usesExpandedLayout ? 760 : .infinity
-        #else
-        .infinity
-        #endif
+extension EnvironmentValues {
+    @Entry var openClawChatColumn = ChatColumnLayout(paneWidth: 0)
+}
+
+extension View {
+    /// Centres content on the reading column. `inset` widens the frame for chrome that draws its
+    /// visible surface that far inside it (the composer), so the surface itself spans the column.
+    /// Padding by the margin, rather than framing to the measured column, never collapses the
+    /// column while the pane is still unmeasured.
+    func chatColumn(_ layout: ChatColumnLayout, inset: CGFloat = 0) -> some View {
+        self.frame(maxWidth: ChatColumnLayout.maxColumnWidth + 2 * inset)
+            .padding(.horizontal, layout.margin - inset)
+            .frame(maxWidth: .infinity)
     }
 }
 

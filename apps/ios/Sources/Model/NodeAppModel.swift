@@ -816,6 +816,9 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
+    var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
+    var agentIdentitiesOwnerID: String?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -3422,8 +3425,15 @@ extension NodeAppModel {
             defaultAgentID: self.gatewayDefaultAgentId)
     }
 
+    /// Chat speaks as the agent's resolved identity (`agent.identity.get`), like web
+    /// `assistantIdentity.name` (ui/src/app/assistant-identity.ts:41-58); the roster name
+    /// or id labels it until that identity arrives.
     var chatAgentName: String {
-        self.agentDisplayName(for: self.chatAgentId)
+        self.chatAgentDisplayName(for: self.chatAgentId)
+    }
+
+    func chatAgentDisplayName(for agentID: String) -> String {
+        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {

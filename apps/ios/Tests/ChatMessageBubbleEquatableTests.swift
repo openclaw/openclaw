@@ -96,7 +96,6 @@ struct ChatMessageBubbleEquatableTests {
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
             showsAssistantAvatar: false,
-            isClean: true,
             contextWindowTokens: contextWindowTokens,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},

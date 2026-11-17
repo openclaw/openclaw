@@ -242,7 +242,6 @@ private final class WidgetLifecycleFixture {
             assistantAvatarText: nil,
             assistantAvatarTint: nil,
             showsAssistantAvatar: false,
-            isClean: false,
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
@@ -294,7 +293,10 @@ private final class WidgetLifecycleFixture {
         self.titleObservation = nil
         self.webView = current
         self.loadedWebView = nil
-        self.titleObservation = current?.observe(\.title, options: [.initial, .new]) { @Sendable [weak self, weak current] _, _ in
+        self.titleObservation = current?.observe(\.title, options: [
+            .initial,
+            .new,
+        ]) { @Sendable [weak self, weak current] _, _ in
             Task { @MainActor in
                 guard let self, let current, self.webView === current else { return }
                 if current.title == "Widget fixture" { self.loadedWebView = current }

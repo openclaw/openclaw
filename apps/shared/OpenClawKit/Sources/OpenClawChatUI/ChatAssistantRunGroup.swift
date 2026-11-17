@@ -81,6 +81,8 @@ struct ChatAssistantRunGroup: Identifiable {
             return ($0.startedAt ?? .infinity) < ($1.startedAt ?? .infinity)
         }) {
             if let runID = tool.runID, recordedCalls.contains("\(runID):\(tool.id)") { continue }
+            // Live yield context is never a tool row either (web chat-sessions-yield.ts:290-293).
+            if ChatToolActivityItem(live: tool).isYieldContext { continue }
             let index = tool.startedAt.flatMap { startedAt in
                 parts.firstIndex { ($0.timestamp.map { $0 > startedAt }) == true }
             } ?? parts.endIndex
@@ -167,7 +169,6 @@ struct ChatAssistantRunFrame<Content: View>: View {
     let assistantAvatarText: String?
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
-    let isClean: Bool
     var joinsAbove = false
     var joinsBelow = false
     @ViewBuilder let content: () -> Content
@@ -195,13 +196,9 @@ struct ChatAssistantRunFrame<Content: View>: View {
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
                 .environment(\.openClawAssistantRunContent, true)
-                .padding(.horizontal, self.isClean ? 4 : 12)
-                .padding(.top, self.joinsAbove ? 4 : (self.isClean ? 4 : 12))
-                .padding(.bottom, self.joinsBelow ? 4 : (self.isClean ? 4 : 12))
-                .assistantBubbleContainerStyle(
-                    isClean: self.isClean,
-                    joinsAbove: self.joinsAbove,
-                    joinsBelow: self.joinsBelow)
+                .padding(.top, self.joinsAbove ? 0 : 4)
+                .padding(.bottom, self.joinsBelow ? 0 : 4)
+                .focusable(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Include disclosure and action rows in the container's accessibility bounds.
@@ -220,8 +217,8 @@ struct ChatAssistantRunFrame<Content: View>: View {
             }
             VStack(alignment: .leading, spacing: 8, content: self.content)
                 .environment(\.openClawAssistantRunContent, true)
-                .padding(self.isClean ? 4 : 12)
-                .assistantBubbleContainerStyle(isClean: self.isClean)
+                .padding(.vertical, 4)
+                .focusable(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // Include disclosure and action rows in the container's accessibility bounds.

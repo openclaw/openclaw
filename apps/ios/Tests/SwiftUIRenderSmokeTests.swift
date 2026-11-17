@@ -175,7 +175,6 @@ struct SwiftUIRenderSmokeTests {
                 assistantAvatarText: "OC",
                 assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: nil,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
@@ -239,7 +238,6 @@ struct SwiftUIRenderSmokeTests {
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
             showsAssistantAvatar: true,
-            isClean: false,
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
@@ -287,8 +285,7 @@ struct SwiftUIRenderSmokeTests {
             assistantName: "OpenClaw",
             assistantAvatarText: "OC",
             assistantAvatarTint: nil,
-            showsAssistantAvatar: true,
-            isClean: false)
+            showsAssistantAvatar: true)
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
     }
@@ -325,7 +322,6 @@ struct SwiftUIRenderSmokeTests {
                 assistantAvatarText: "OC",
                 assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: 1_000_000,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},

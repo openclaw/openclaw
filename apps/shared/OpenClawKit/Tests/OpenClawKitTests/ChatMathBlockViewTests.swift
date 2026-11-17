@@ -31,7 +31,6 @@ struct ChatMathBlockViewTests {
                     assistantAvatarText: "OC",
                     assistantAvatarTint: nil,
                     showsAssistantAvatar: usesSplitView,
-                    isClean: true,
                     contextWindowTokens: nil,
                     userMessageExpanded: false,
                     onToggleUserMessageExpanded: {},

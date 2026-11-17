@@ -150,6 +150,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public internal(set) var arguments: AnyCodable?
     public internal(set) var details: AnyCodable?
     public let isError: Bool?
+    /// Exec outcome from the block's own `exitCode`/`exit_code`, else its `details` (web `tool-cards.ts:132-141`).
+    public internal(set) var exitCode: Int?
 
     var isToolCall: Bool {
         ["toolcall", "tool_call", "tooluse", "tool_use"].contains(self.type?.lowercased() ?? "") ||
@@ -209,7 +211,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         arguments: AnyCodable? = nil,
         details: AnyCodable? = nil,
         isError: Bool? = nil,
-        runId: String? = nil)
+        runId: String? = nil,
+        exitCode: Int? = nil)
     {
         self.runId = runId
         self.type = type
@@ -235,6 +238,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.arguments = arguments
         self.details = details
         self.isError = isError
+        self.exitCode = exitCode
     }
 
     private struct AttachmentEnvelope: Decodable {
@@ -277,6 +281,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case details
         case isError
         case is_error
+        case exitCode
+        case exit_code
     }
 
     public init(from decoder: Decoder) throws {
@@ -318,9 +324,18 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
         self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
             container.decodeIfPresent(Bool.self, forKey: .is_error)
+        self.exitCode = (try? container.decode(AnyCodable.self, forKey: .exitCode))?.intValue
+            ?? (try? container.decode(AnyCodable.self, forKey: .exit_code))?.intValue
+            ?? Self.exitCode(in: self.details)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
 
         self.content = try container.decodeIfPresent(AnyCodable.self, forKey: .content)
+    }
+
+    /// Integer `exitCode`/`exit_code` of a tool result's details record.
+    static func exitCode(in details: AnyCodable?) -> Int? {
+        guard let record = details?.dictionaryValue else { return nil }
+        return (record["exitCode"] ?? record["exit_code"])?.intValue
     }
 
     private static func managedArtifactId(
@@ -490,6 +505,17 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var transport: AnyCodable?
         var media: [MediaFact?]?
         var mediaImageLayout: MediaImageLayout?
+        /// Transcript sequence: the fallback history row identity when `id` is absent
+        /// (web `lib/chat/history-message-identity.ts:57-73`).
+        var seq: Int?
+        /// When the Gateway recorded the row; run durations end here (web `chat-turn-presentation.ts:198-249`).
+        var recordTimestampMs: Double?
+        /// What woke a row that resumes this session's own work (web `chat-turn-boundary.ts:91-99`).
+        var continuation: Continuation?
+
+        struct Continuation: Codable, Hashable, Sendable {
+            let source: String?
+        }
     }
 
     var sourceMetadata: OpenClawMetadata?
@@ -536,6 +562,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public internal(set) var isError: Bool?
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
+    /// Top-level marker of `role: "custom"` rows, e.g. `run-failed-before-reply`.
+    public internal(set) var customType: String?
+    /// The owner stopped this reply: top-level `openclawAbort.aborted == true` (web `chat-assistant-reply.ts:35-44`).
+    public internal(set) var isOwnerAborted = false
 
     var isToolResult: Bool {
         ["toolresult", "tool_result"].contains(self.role.lowercased())
@@ -596,6 +626,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         #endif
         case isError
         case is_error
+        case customType
+        case openclawAbort
         case mediaPath = "MediaPath"
         case mediaPaths = "MediaPaths"
         case mediaType = "MediaType"
@@ -625,7 +657,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         turnBoundary: Bool? = nil,
         steerTargetRunID: String? = nil,
         streamFallback: OpenClawChatStreamFallback? = nil,
-        activity: [OpenClawAgentActivityItem]? = nil)
+        activity: [OpenClawAgentActivityItem]? = nil,
+        customType: String? = nil)
     {
         self.id = id
         self.transcriptMessageID = transcriptMessageID
@@ -650,6 +683,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.isError = isError
         self.provenance = provenance
         self.historyMarker = historyMarker
+        self.customType = customType
     }
 
     public init(from decoder: Decoder) throws {
@@ -683,6 +717,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
         self.sourceMetadata = decodedOpenClaw
         self.phase = try container.decodeIfPresent(String.self, forKey: .phase)
+        self.customType = ChatPayloadDecoding.trimmedNonEmptyString(
+            try? container.decode(String.self, forKey: .customType))
+        self.isOwnerAborted = (try? container.nestedContainer(keyedBy: AbortKeys.self, forKey: .openclawAbort))
+            .flatMap { try? $0.decode(Bool.self, forKey: .aborted) } == true
         self.activity = try? container.decodeIfPresent([OpenClawAgentActivityItem].self, forKey: .activity)
         self.turnBoundary = decodedOpenClaw?.turnBoundary
         self.steerTargetRunID = decodedOpenClaw?.steerTargetRunId
@@ -813,7 +851,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                     senderName: self.sourceMetadata?.senderName,
                     senderUsername: self.sourceMetadata?.senderUsername,
                     senderProfileAvatarUrl: self.sourceMetadata?.senderProfileAvatarUrl,
-                    transport: self.sourceMetadata?.transport),
+                    transport: self.sourceMetadata?.transport,
+                    seq: self.sourceMetadata?.seq,
+                    recordTimestampMs: self.sourceMetadata?.recordTimestampMs,
+                    continuation: self.sourceMetadata?.continuation),
                 forKey: .openClaw)
         }
         try container.encodeIfPresent(self.provenance, forKey: .provenance)
@@ -828,7 +869,16 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         try container.encodeIfPresent(self.runFailureNotice, forKey: .runFailureNotice)
         #endif
         try container.encodeIfPresent(self.isError, forKey: .isError)
+        try container.encodeIfPresent(self.customType, forKey: .customType)
+        if self.isOwnerAborted {
+            var abort = container.nestedContainer(keyedBy: AbortKeys.self, forKey: .openclawAbort)
+            try abort.encode(true, forKey: .aborted)
+        }
         try container.encode(self.content, forKey: .content)
+    }
+
+    private enum AbortKeys: String, CodingKey {
+        case aborted
     }
 }
 
@@ -859,6 +909,9 @@ extension OpenClawChatMessage.OpenClawMetadata {
         self.mediaImageLayout = try? container.decode(
             OpenClawChatMessage.MediaImageLayout.self,
             forKey: .mediaImageLayout)
+        self.seq = (try? container.decode(AnyCodable.self, forKey: .seq))?.intValue
+        self.recordTimestampMs = (try? container.decode(AnyCodable.self, forKey: .recordTimestampMs))?.doubleValue
+        self.continuation = try? container.decode(Continuation.self, forKey: .continuation)
     }
 }
 
@@ -935,6 +988,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let activity: [OpenClawChatHistoryActivity]?
     public let kind: String?
     public let deltaCursor: String?
+    /// Page cursor for the rows before this page; absent once the session start is loaded.
+    public let olderCursor: String?
+    public let hasMore: Bool?
 
     public init(
         sessionKey: String,
@@ -946,7 +1002,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         inputConsumptions: [InputConsumption]? = nil,
         activity: [OpenClawChatHistoryActivity]? = nil,
         kind: String? = nil,
-        deltaCursor: String? = nil)
+        deltaCursor: String? = nil,
+        olderCursor: String? = nil,
+        hasMore: Bool? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -958,6 +1016,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.activity = activity
         self.kind = kind
         self.deltaCursor = deltaCursor
+        self.olderCursor = olderCursor
+        self.hasMore = hasMore
     }
 
     public init(from decoder: any Decoder) throws {
@@ -976,6 +1036,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inputConsumptions = try values.decodeIfPresent([InputConsumption].self, forKey: .inputConsumptions)
         self.activity = try values.decodeIfPresent([OpenClawChatHistoryActivity].self, forKey: .activity)
         self.deltaCursor = try values.decodeIfPresent(String.self, forKey: .deltaCursor)
+        self.olderCursor = ChatPayloadDecoding.trimmedNonEmptyString(
+            try? values.decode(String.self, forKey: .olderCursor))
+        self.hasMore = try? values.decode(Bool.self, forKey: .hasMore)
     }
 }
 

@@ -3,8 +3,67 @@ import OpenClawKit
 
 extension OpenClawChatMessage {
     /// Normalize embedded assistant results and expand user result carriers from CLI history.
-    /// Expand those rows before they reach turn ownership or presentation.
+    /// Expand those rows before they reach turn ownership or presentation. A confirmed
+    /// `sessions_yield` receipt's public acknowledgment follows it as visible assistant text
+    /// (web chat-sessions-yield.ts:200-230); the yield card itself never shows.
     var ingestedMessages: [OpenClawChatMessage] {
+        self.expandedMessages.flatMap { message in
+            message.yieldAcknowledgment.map { [message, $0] } ?? [message]
+        }
+    }
+
+    private var yieldAcknowledgment: OpenClawChatMessage? {
+        let receipts: [OpenClawChatMessageContent]
+        if self.isToolResult {
+            guard self.toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "sessions_yield"
+            else { return nil }
+            receipts = [.init(
+                type: "tool_result",
+                text: ChatMessageVisibleText.displayText(in: self, includeThinking: false),
+                details: self.details,
+                isError: self.isError)]
+        } else if self.role.lowercased() == "assistant" {
+            let yieldCalls = Set(self.content.filter { $0.isToolCall && $0.name == "sessions_yield" }.compactMap(\.id))
+            receipts = self.content.filter { block in
+                block.isToolResult && (block.name == "sessions_yield" || block.id.map(yieldCalls.contains) == true)
+            }
+        } else {
+            return nil
+        }
+        for receipt in receipts.reversed() where !ChatToolActivity.resultIsError(receipt.isError, text: receipt.text) {
+            guard let facts = ChatToolActivity.handoffReceipt(details: receipt.details, text: receipt.text),
+                  facts["status"]?.stringValue == "yielded",
+                  let acknowledgment = ChatPayloadDecoding.trimmedNonEmptyString(facts["acknowledgment"]?.stringValue)
+            else { continue }
+            // Derived from the receipt row, so the pair keeps distinct, related identities and
+            // history dedupe (by transcript ID) drops both together.
+            var bytes = self.id.uuid
+            bytes.1 ^= 0x80
+            let receiptID = receipt.id ?? self.toolCallId ?? ""
+            return OpenClawChatMessage(
+                id: UUID(uuid: bytes),
+                role: "assistant",
+                content: [.init(type: "text", text: acknowledgment)],
+                timestamp: self.timestamp,
+                transcriptMessageID: self.transcriptMessageID.map { "\($0):yield-acknowledgment:\(receiptID)" },
+                transcriptRunID: self.workRunID,
+                // The run stopped at its yield call: this line closes the handoff, never the run's
+                // recorded final reply, so a resumed final still settles in place.
+                stopReason: "toolUse")
+        }
+        return nil
+    }
+
+    private var expandedMessages: [OpenClawChatMessage] {
+        // A custom message with tool blocks carries a nested call (`openclaw.nested-tool.v1`: the
+        // tool a `dispatch_action` wrapper ran, with its result and activity item). Web treats such
+        // messages as tool messages; present it as the assistant's call in the same run, so the
+        // inner tool gets its own row instead of an empty cell.
+        if self.role.lowercased() == "custom", self.content.contains(where: { $0.isToolCall || $0.isToolResult }) {
+            var carrier = self
+            carrier.role = "assistant"
+            return carrier.expandedMessages
+        }
         if self.role.lowercased() == "assistant", self.content.contains(where: \.isToolResult) {
             var message = self
             message.content = self.content.map { block in

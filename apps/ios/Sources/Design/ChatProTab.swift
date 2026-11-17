@@ -85,7 +85,9 @@ struct ChatProTab: View {
                 // The shared canvas supplies color for the native blur. Automatic
                 // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
-                .navigationTitle("")
+                // The bar's title slot shows the session like web's header; toolbar items collapse to
+                // their icon on iOS 26+ (and move to the side bar in landscape), so the title lives here.
+                .navigationTitle(self.headerSessionTitle ?? "")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if #available(iOS 27.1, *) {
@@ -179,8 +181,6 @@ struct ChatProTab: View {
                         !self.appModel.talkMode.hasActivePushToTalkSession &&
                         !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
                 })
-                // iMessage-style grey bubbles for agent replies in the clean chrome.
-                .environment(\.openClawAssistantBubblesInCleanChrome, true)
                 .environment(
                     \.openClawEmbeddedBrowserUnavailableReason,
                     self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
@@ -266,13 +266,10 @@ struct ChatProTab: View {
                     self.expandedGatewayStatusLabel
                         .transition(.opacity.combined(with: .move(edge: .leading)))
                 } else {
-                    Text(self.agentDisplayName)
+                    Text(verbatim: self.agentDisplayName)
                         .font(OpenClawType.headline)
                         .lineLimit(1)
                         .transition(.opacity)
-                }
-                if let session = self.coloredHeaderSession {
-                    self.headerSessionTitle(session)
                 }
             }
         } icon: {
@@ -280,20 +277,12 @@ struct ChatProTab: View {
         }
     }
 
-    private var coloredHeaderSession: OpenClawChatSessionEntry? {
-        guard let session = viewModel?.currentSessionEntry(),
-              OpenClawSessionColor(name: session.color) != nil
-        else { return nil }
-        return session
-    }
-
-    private func headerSessionTitle(_ session: OpenClawChatSessionEntry) -> some View {
-        HStack(spacing: 5) {
-            OpenClawSessionColorDot(color: session.color)
-            Text(verbatim: CommandCenterTab.sessionTitle(session))
-                .font(OpenClawType.captionMedium)
-                .lineLimit(1)
-        }
+    /// The sidebar's title owner, so the header and the session list never disagree. A raw key
+    /// never headlines: the title stays empty until the session is named (web `titlePending`).
+    private var headerSessionTitle: String? {
+        guard let session = self.viewModel?.currentSessionEntry() else { return nil }
+        let title = CommandCenterTab.sessionTitle(session)
+        return title.isEmpty || title == session.key ? nil : title
     }
 
     private var gatewayStatusIsHealthy: Bool {
@@ -304,8 +293,8 @@ struct ChatProTab: View {
 
     private var headerAgentAccessibilityLabel: String {
         let identity = "\(voiceAvatarAccessibilityLabel). \(gatewayAccessibilityLabel)"
-        guard let session = coloredHeaderSession else { return identity }
-        return "\(identity). \(CommandCenterTab.sessionTitle(session))"
+        guard let title = self.headerSessionTitle else { return identity }
+        return "\(identity). \(title)"
     }
 
     private func handleHeaderAgentIdentityTap() {
@@ -707,8 +696,9 @@ struct ChatProTab: View {
         return ChatModelMenuPresentation.qualifiedModelReference(modelID: modelID, providerID: providerID)
     }
 
+    /// Identity name first (`NodeAppModel.chatAgentName`), then the roster name or id.
     private var currentAgentDisplayName: String {
-        self.currentActiveAgent?.name?.trimmedNonEmpty ?? self.appModel.chatAgentName
+        self.appModel.chatAgentName
     }
 
     private var agentDisplayName: String {

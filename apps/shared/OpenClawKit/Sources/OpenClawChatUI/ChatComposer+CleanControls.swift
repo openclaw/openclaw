@@ -255,10 +255,13 @@ extension OpenClawChatComposer {
                 .font(OpenClawChatTypography.captionSemiBold)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
+                // Hug short names; long catalog names stop at a cap instead of crowding Send.
+                .padding(.horizontal, 6)
                 .frame(
-                    width: CleanChatComposerMetrics.regularModelWidth,
-                    height: CleanChatComposerMetrics.controlTouchSize)
+                    minWidth: CleanChatComposerMetrics.controlTouchSize,
+                    maxWidth: CleanChatComposerMetrics.regularModelMaxWidth,
+                    minHeight: CleanChatComposerMetrics.controlTouchSize)
                 .contentShape(Rectangle())
         }
         #endif

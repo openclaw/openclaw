@@ -1,10 +1,10 @@
-import UIKit
-import Vision
 import XCTest
 
 @MainActor
 final class CommandPurposeUITests: XCTestCase {
-    func testCommandStepShowsSuppliedPurposeTitle() throws {
+    /// The row names what ran; the agent's stated purpose stays in inspection
+    /// (web ui/src/pages/chat/components/chat-tool-purpose.test.ts:32-63).
+    func testCommandStepKeepsSuppliedPurposeInInspection() {
         let app = XCUIApplication()
         setupSnapshot(app)
         app.launchArguments += [
@@ -31,18 +31,12 @@ final class CommandPurposeUITests: XCTestCase {
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "value CONTAINS %@", "printf ready")).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertFalse(row.label.contains("Check local readiness"), "Purpose replaced the command: \(row.label)")
+        row.tap()
+        XCTAssertTrue(app.staticTexts["Check local readiness"].waitForExistence(timeout: 5))
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "command-purpose-expanded"
         screenshot.lifetime = .keepAlways
         add(screenshot)
-        XCTAssertTrue(row.label.contains("Check local readiness"), "Supplied command purpose is missing: \(row.label)")
-        let recognition = VNRecognizeTextRequest()
-        recognition.recognitionLevel = .accurate
-        recognition.recognitionLanguages = ["en-US"]
-        try VNImageRequestHandler(cgImage: XCTUnwrap(row.screenshot().image.cgImage), options: [:])
-            .perform([recognition])
-        let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-            .joined(separator: " ").lowercased()
-        XCTAssertTrue(text.contains("check local readiness"), "Rendered purpose missing: \(text)")
     }
 }

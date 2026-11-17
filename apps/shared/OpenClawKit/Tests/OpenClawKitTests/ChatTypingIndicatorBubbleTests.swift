@@ -14,12 +14,10 @@ struct ChatTypingIndicatorBubbleTests {
 
     private static func bubble(tint: Color?) -> ChatTypingIndicatorBubble {
         ChatTypingIndicatorBubble(
-            style: .standard,
             assistantName: "Assistant",
             assistantAvatarText: "A",
             assistantAvatarTint: tint,
             showsAssistantAvatar: true,
-            isClean: true,
             runIdentity: "synthetic-run",
             outputTokens: nil)
     }
