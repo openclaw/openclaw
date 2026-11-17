@@ -85,7 +85,8 @@ When `memory-lancedb` owns the memory slot, it answers the Gateway
 `openclaw memory status`, and the Control UI Memory overview report it as the
 memory provider. Operator searches and owner-private sessions can read that
 agent's memories. Other session audiences receive no stored hits. The plugin's
-`memory_recall` tool and automatic recall keep their existing paths.
+own tools and automatic recall follow the same rule; see
+[Who can read stored memories](#who-can-read-stored-memories).
 
 The Control UI Memories tab does not search or open LanceDB memories yet. It
 sends the unversioned `memory.search` request, which this provider answers with
@@ -100,6 +101,47 @@ embedding service.
 
 If embedding credentials are unavailable, inspect the Gateway log, resolve the
 secret-provider failure, run `openclaw secrets reload`, and retry memory search.
+
+## Who can read stored memories
+
+Stored memories belong to the agent's owner. `memory_recall`, `memory_forget`,
+and automatic recall use them only in sessions the Gateway gives an
+owner-private memory audience for that agent: the owner's direct chats, the
+sessions spawned from them, and scheduled runs linked to one of them. The owner
+is whoever `commands.ownerAllowFrom` lists, plus Control UI and local WebChat
+clients with `operator.admin`. A channel's `allowFrom` lets someone talk to the
+agent but does not make them the owner; pairing records the first approved
+sender as the owner, and `openclaw doctor` warns when no owner is configured.
+
+Every other session is refused: group chats and channels (including the owner's
+own messages there), direct chats with anyone else, and sessions with no chat,
+such as unlinked scheduled jobs, hook runs, Gateway `tools.invoke` calls, and
+`openclaw agent --session-key` runs on a key that names no chat.
+The tools return a result that names the reason and the next step, and
+automatic recall skips the turn before its prompt reaches the embedding
+provider. `memory_store` and automatic capture still save from every session
+except incognito ones, and operators can still list and search the store with
+`openclaw ltm`.
+
+To let every session recall and forget the agent's memories, as before, turn off
+`ownerOnly`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-lancedb": {
+        config: {
+          ownerOnly: false,
+        },
+      },
+    },
+  },
+}
+```
+
+Replies in a group are visible to everyone in it, so this shares whatever the
+agent recalls there with the whole group.
 
 ## Embedding config
 

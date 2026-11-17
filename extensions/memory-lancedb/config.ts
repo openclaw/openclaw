@@ -7,7 +7,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
-type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall" | "ownerOnly";
 type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
 export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
   Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
@@ -105,6 +105,7 @@ export const memoryConfigSchema = {
         "autoRecall",
         "captureMaxChars",
         "customTriggers",
+        "ownerOnly",
         "recallMaxChars",
         "storageOptions",
       ],
@@ -194,6 +195,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars,
+      ownerOnly: cfg.ownerOnly !== false,
       ...(customTriggers ? { customTriggers } : {}),
       recallMaxChars,
       ...(storageOptions ? { storageOptions } : {}),

@@ -19,7 +19,7 @@ import { createEmbeddings, isMemoryRecallTimeoutError } from "./embeddings.js";
 import memoryPlugin from "./index.js";
 import { looksLikeEnvelopeSludge } from "./memory-capture-sanitization.js";
 import { detectCategory, normalizeRecallQuery, shouldCapture } from "./memory-policy.js";
-import { installTmpDirHarness } from "./test-helpers.js";
+import { installTmpDirHarness, withOwnerChat } from "./test-helpers.js";
 
 const moduleMocks = vi.hoisted(() => ({
   createOpenAiClient: vi.fn<(...args: unknown[]) => object>(),
@@ -95,7 +95,7 @@ const withAllowedMemoryRecallAuthority = (ctx: Record<string, unknown> = {}) => 
     allows: (toolName: string) => toolName === "memory_recall",
     assertActive: () => undefined,
   },
-  ...ctx,
+  ...withOwnerChat(ctx),
 });
 type MemoryPluginTestConfig = Partial<Omit<MemoryConfig, "embedding">> & {
   embedding?: Partial<MemoryConfig["embedding"]>;
@@ -139,7 +139,7 @@ function materializeRegisteredTool(
   context: Record<string, unknown> = {},
 ): any {
   return typeof toolOrFactory === "function"
-    ? toolOrFactory({ agentId: "main", config: {}, ...context })
+    ? toolOrFactory(withOwnerChat({ agentId: "main", config: {}, ...context }))
     : toolOrFactory;
 }
 

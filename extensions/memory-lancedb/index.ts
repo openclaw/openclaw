@@ -32,6 +32,7 @@ import {
   MemoryRecallEmbeddingError,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
+import { resolveStoredMemoryDenial, storedMemoriesUnavailableResult } from "./memory-access.js";
 import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
@@ -287,6 +288,10 @@ export default definePluginEntry({
         const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
 
         const currentCfg = resolveCurrentHookConfig();
+        const denial = resolveStoredMemoryDenial(ctx.memoryAudience, agentId, currentCfg);
+        if (denial) {
+          return storedMemoriesUnavailableResult(ctx.memoryAudience, denial);
+        }
         const recallMaxChars = currentCfg.recallMaxChars;
         const cooldown = readMemoryRecallCooldown(agentId);
         if (cooldown) {
@@ -424,6 +429,11 @@ export default definePluginEntry({
       parameters: memoryForgetSchema,
       async execute(_toolCallId, params) {
         assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
+        const currentCfg = resolveCurrentHookConfig();
+        const denial = resolveStoredMemoryDenial(ctx.memoryAudience, agentId, currentCfg);
+        if (denial) {
+          return storedMemoriesUnavailableResult(ctx.memoryAudience, denial);
+        }
         const { query, memoryId } = params as { query?: string; memoryId?: string };
 
         if (memoryId) {
@@ -438,7 +448,6 @@ export default definePluginEntry({
         }
 
         if (query) {
-          const currentCfg = resolveCurrentHookConfig();
           const recallMaxChars = currentCfg.recallMaxChars;
           const vector = await embeddings.embed(
             agentId,
@@ -517,6 +526,11 @@ export default definePluginEntry({
         if (!agentId || !event.prompt || event.prompt.length < 5) {
           return undefined;
         }
+        const denial = resolveStoredMemoryDenial(ctx.memoryAudience, agentId, currentCfg);
+        if (denial) {
+          api.logger.debug?.(`memory-lancedb: auto-recall skipped: ${denial}`);
+          return undefined;
+        }
         // One hung embedding request must not stall both automatic and explicit recall.
         // Keep the breaker per agent so unrelated memory namespaces still probe.
         const cooldown = readMemoryRecallCooldown(agentId);
@@ -537,6 +551,7 @@ export default definePluginEntry({
             return undefined;
           }
           toolAuthority.assertActive();
+          ctx.assertMemoryAudienceCurrent?.();
           const recallOperation = startMemoryRecall({
             timeoutMs: AUTO_RECALL_TIMEOUT_MS,
             embed: (timeoutMs) =>

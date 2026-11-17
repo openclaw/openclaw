@@ -72,6 +72,10 @@
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
     },
+    "ownerOnly": {
+      "label": "Owner Only",
+      "help": "Use stored memories only in the owner's direct chats. Off: group, channel and other chats can also recall and forget them."
+    },
     "dreaming": {
       "label": "Dreaming",
       "help": "Optional dreaming config consumed when this plugin owns the memory slot"
@@ -122,7 +126,7 @@
       "id": "memory-recall",
       "title": "Memory recall",
       "order": 40,
-      "properties": ["autoRecall", "recallMaxChars"]
+      "properties": ["autoRecall", "ownerOnly", "recallMaxChars"]
     },
     {
       "id": "dreaming",
@@ -166,6 +170,9 @@
         "type": "boolean"
       },
       "autoRecall": {
+        "type": "boolean"
+      },
+      "ownerOnly": {
         "type": "boolean"
       },
       "dreaming": {
