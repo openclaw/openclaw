@@ -75,7 +75,9 @@ const suite = createControlUiE2eSuite({
         saveProof,
       );
     try {
-      instance = await createWaitClockInstance(provider.port, uiRoot);
+      instance = await createWaitClockInstance(provider.port, uiRoot, {
+        visibleReplies: "message_tool",
+      });
       await instance.startGateway();
       return { baseUrl: "http://127.0.0.1:" + instance.port + "/", close: cleanup };
     } catch (error) {
@@ -150,11 +152,10 @@ suite.define(() => {
             .filter({ hasText: fixture.updateReply });
           await expect.poll(() => updateReply.count()).toBe(1);
           await provider.check();
-          // The provider asserts each real tool result, including the actual already_pending.
+          // The yield's real already_pending result ends the turn, so the model never receives it.
           expect(provider.receipts.map((receipt) => receipt.tool)).toEqual([
             "sessions_spawn",
             "message",
-            "sessions_yield",
           ]);
           const history = await call<ChatHistoryResult>("chat.history", {
             sessionKey: fixture.key,
@@ -190,12 +191,22 @@ suite.define(() => {
           const updatedEndedAt = await parentEndedAt();
           provider.releaseChild();
           await expect.poll(parentEndedAt).toBeGreaterThan(updatedEndedAt);
-          const resumedReply = parent
-            .getByRole("paragraph")
-            .filter({ hasText: fixture.resumedReply });
-          await expect.poll(() => resumedReply.count()).toBe(1);
+          // Message-tool-only replies keep the resumed text in the transcript, not as a delivery.
+          await expect
+            .poll(async () =>
+              JSON.stringify(
+                (
+                  await call<ChatHistoryResult>("chat.history", {
+                    sessionKey: fixture.key,
+                    limit: 50,
+                  })
+                ).messages,
+              ),
+            )
+            .toContain(fixture.resumedReply);
           await provider.check();
           expect(provider.parentRequests()).toBe(5);
+          expect(provider.trailingNarrationRequests()).toBe(0);
           expect(await narration.count()).toBe(0);
           proof.complete = true;
           proof.stage = "complete";

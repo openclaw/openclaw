@@ -29,7 +29,11 @@ export const waitClockFixture = {
  */
 export type WaitClockUpdateVia = "reply" | "message-tool";
 
-export async function createWaitClockInstance(port: number, controlUiRoot: string) {
+export async function createWaitClockInstance(
+  port: number,
+  controlUiRoot: string,
+  options: { visibleReplies?: "message_tool" } = {},
+) {
   const instance = await createChatGatewayInstance({
     name: "wait-clock",
     provider: "wait-fixture",
@@ -46,6 +50,7 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
       update: { checkOnStart: false },
       gateway: { controlUi: { enabled: true, root: controlUiRoot } },
       tools: { profile: "full", codeMode: false, toolSearch: false },
+      ...(options.visibleReplies ? { messages: { visibleReplies: options.visibleReplies } } : {}),
     },
   });
   instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
@@ -53,7 +58,7 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
 }
 
 type ProviderInput = { type?: string; name?: string; call_id?: string; output?: string };
-function toolResult(input: ProviderInput[] | undefined, toolName: string) {
+function toolOutput(input: ProviderInput[] | undefined, toolName: string) {
   // Responses replay normalizes tool-call IDs; match the actual emitted call, not our wire ID.
   const call = input?.findLast((item) => item.type === "function_call" && item.name === toolName);
   expect(call?.call_id, "the real transcript must retain the tool call").toBeTruthy();
@@ -61,11 +66,16 @@ function toolResult(input: ProviderInput[] | undefined, toolName: string) {
     (item) => item.type === "function_call_output" && item.call_id === call?.call_id,
   )?.output;
   expect(typeof output, "the real runtime must deliver this tool result").toBe("string");
+  return output!;
+}
+
+function toolResult(input: ProviderInput[] | undefined, toolName: string) {
+  const output = toolOutput(input, toolName);
   const result: {
     status?: string;
     childSessionKey?: string;
     pendingChildren?: unknown[];
-  } = JSON.parse(output!);
+  } = JSON.parse(output);
   return result;
 }
 
@@ -105,6 +115,11 @@ export async function startWaitClockProvider(options: { updateVia?: WaitClockUpd
           const body: { model: string; tools?: Array<{ name?: string }>; input?: ProviderInput[] } =
             JSON.parse((await buffer(request)).toString("utf8"));
           if (body.model === "child") {
+            if (childReleased && updateVia === "message-tool") {
+              // A message-tool-only child may take one more model turn after its held reply.
+              writeReply(response, waitClockFixture.childReply, "child_followup");
+              return;
+            }
             expect(childResponse, "the child must not retry while held").toBeUndefined();
             childResponse = response;
             childStarted.resolve();
@@ -145,8 +160,9 @@ export async function startWaitClockProvider(options: { updateVia?: WaitClockUpd
               writeToolCall(response, "sessions_yield", {});
             }
           } else if (step === 3 && updateVia === "message-tool") {
-            const result = toolResult(body.input, "message");
-            receipts.push({ step, tool: "message", result });
+            // The message tool returns its human-readable delivery receipt, not JSON.
+            expect(toolOutput(body.input, "message")).toMatch(/^Sent\b/u);
+            receipts.push({ step, tool: "message", result: { status: "sent" } });
             expect(childReleased).toBe(false);
             writeToolCall(response, "sessions_yield", {});
           } else if (step === 3 || (step === 4 && updateVia === "message-tool" && !childReleased)) {
