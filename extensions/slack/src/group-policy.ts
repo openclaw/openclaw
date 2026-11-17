@@ -1,7 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
-  resolveScopeRequireMention,
   resolveScopeToolsPolicy,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
@@ -118,12 +117,17 @@ function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
     channelName,
     normalizeHyphenSlug(channelName),
   );
-  return buildSlackChannelPolicyScope({ channels, candidates });
+  return {
+    ...buildSlackChannelPolicyScope({ channels, candidates }),
+    defaultRequireMention: slack.requireMention,
+  };
 }
 
 export function resolveSlackGroupRequireMention(params: ChannelGroupContext): boolean {
-  // The adapter intentionally ignores root requireMention; the monitor resolves that default.
-  return resolveScopeRequireMention(resolveSlackGroupPolicyScope(params));
+  const { entry, wildcardEntry, defaultRequireMention } = resolveSlackGroupPolicyScope(params);
+  // Mention policy follows message ingress (resolveSlackChannelConfig): exact channel, then
+  // wildcard, then the root/account default. Tool policy keeps whole-entry selection.
+  return entry?.requireMention ?? wildcardEntry?.requireMention ?? defaultRequireMention ?? true;
 }
 
 export function resolveSlackGroupToolPolicy(

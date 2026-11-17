@@ -67,6 +67,7 @@ import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
   resolveSessionStatusEntry,
+  resolveSessionStatusGroupActivation,
   resolveStoreScopedRequesterKey,
 } from "./session-status-session-resolve.js";
 import {
@@ -618,11 +619,11 @@ export function createSessionStatusTool(opts?: {
             providerForCard && defaultModelForCard
               ? `${providerForCard}/${defaultModelForCard}`
               : defaultModelForCard;
-          const isGroup =
-            statusSessionEntry.chatType === "group" ||
-            statusSessionEntry.chatType === "channel" ||
-            scopedResolved.key.includes(":group:") ||
-            scopedResolved.key.includes(":channel:");
+          const { isGroup, defaultActivation } = await resolveSessionStatusGroupActivation({
+            cfg,
+            entry: statusSessionEntry,
+            sessionKey: scopedResolved.key,
+          });
           // Tool status may read persisted/configured facts, but must not start provider discovery.
           const thinkingCatalog = await loadPublishedPreparedModelCatalog({
             config: cfg,
@@ -662,7 +663,7 @@ export function createSessionStatusTool(opts?: {
                 catalog: thinkingCatalog,
               }),
             isGroup,
-            defaultGroupActivation: () => "mention",
+            defaultGroupActivation: () => defaultActivation,
             primaryModelLabelOverride: primaryModelLabel,
             ...(providerForCard ? {} : { modelAuthOverride: undefined }),
             includeTranscriptUsage: true,
