@@ -67,7 +67,7 @@ cleanup() {
   compose logs --no-color >"$WORK/logs/compose.log" 2>&1 || true
   redact <"$WORK/logs/compose.log" >"$WORK/logs/compose.redacted.log" && rm -f "$WORK/logs/compose.log"
   compose down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -f "$WORK/e2e/openai.key" "$WORK/state/openai.key" "$WORK/probe-state/openai.key"
+  rm -f "$WORK/e2e/openai.key" "$WORK/state/openai.key"
   echo "results: $WORK (failed=$FAILED)"
 }
 trap cleanup EXIT
@@ -122,15 +122,15 @@ codeword() {
 pglite_holders() {
   compose exec -T -u 1000 gbrain sh -c 'for p in /proc/[0-9]*; do ls -l "$p/fd" 2>/dev/null | grep -q brain.pglite && echo "${p#/proc/}"; done' 2>/dev/null | sort -u | wc -l | tr -d ' '
 }
-# `mcp probe` is offline-only. Probe from a copy of the state on the project network: the copy
-# drops the live owner lease and waits out the copied owner heartbeat (90 s stale window).
-probe_copy() {
-  rm -rf "$WORK/probe-state" && cp -R "$WORK/state" "$WORK/probe-state" && rm -rf "$WORK/probe-state/tmp" &&
-    chmod -R a+rwX "$WORK/probe-state"
-  sleep 130
-  docker run --rm --network "${PROJECT}_default" -e HOME=/home/node \
-    -e OPENCLAW_STATE_DIR=/probe -e OPENCLAW_CONFIG_PATH=/probe/openclaw.json -v "$WORK/probe-state:/probe" \
-    "$OPENCLAW_IMAGE" node dist/index.js mcp probe gbrain
+# `mcp probe` is offline-only: stop the Gateway container, probe from a one-off CLI container
+# on the project network (GBrain keeps running in its own container), start the Gateway again.
+probe_offline() {
+  compose stop openclaw-gateway >/dev/null 2>&1 &&
+    compose run --rm --no-deps -T openclaw-gateway node dist/index.js mcp probe gbrain
+  local code=$?
+  compose start openclaw-gateway >/dev/null 2>&1
+  gateway_ready 240
+  return "$code"
 }
 installed_index_has_gbrain() {
   oc plugins list --json 2>/dev/null | node -e '
@@ -188,7 +188,7 @@ install_plugin() {
 step plugin-install install_plugin || fail "plugins.install"
 step connect wait_connected 300 || fail "plugin did not connect"
 step inspect-runtime inspect_loaded || fail "inspect"
-step mcp-probe probe_copy || fail "mcp probe"
+step mcp-probe probe_offline || fail "mcp probe"
 
 # 3. Codeword no session has seen; restart the Gateway container; recall without saying where to look.
 CW1="$(codeword)"
