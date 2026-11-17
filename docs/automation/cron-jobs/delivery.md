@@ -11,6 +11,8 @@ sidebarTitle: "Delivery"
 
 Where a finished run sends its output, what happens when a run or a delivery fails, and how to pin the reply language. Part of the [Automations](/automation/cron-jobs) guide.
 
+In the Control UI automation editor, **To** offers named loaded conversations when a channel and sending account are selected. Choices show thread identifiers where needed and keep each exact recipient/thread pair together. The directory is bounded; **Enter another recipient…** preserves custom addresses. Choosing an item changes the draft only until **Save changes**. An unspecified account, the last-used channel, webhooks, and separate failure-alert targets retain their existing entry behavior.
+
 ## Delivery and output
 
 | Mode       | What happens                                                       |

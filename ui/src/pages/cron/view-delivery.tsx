@@ -6,6 +6,7 @@ import { SettingsSection, SettingsRow } from "../../components/solid/settings-ui
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { CronSelect, CronInput, ToggleRow, FieldRow, errorIdForField } from "./view-fields.tsx";
+import { CronRecipientPicker } from "./view-recipient.tsx";
 import { DurationRow } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
@@ -78,16 +79,7 @@ export function DeliverySection(
             options={channelOptions()}
             channel
           />
-          {props.form.deliveryTarget !== "owner" ? (
-            <CronInput
-              {...props}
-              field="deliveryTo"
-              label={t("cron.form.to")}
-              help={t("cron.form.toHelp")}
-              list="cron-delivery-to-suggestions"
-              placeholder={t("cron.form.toPlaceholder")}
-            />
-          ) : undefined}
+          {props.form.deliveryTarget !== "owner" ? <CronRecipientPicker {...props} /> : undefined}
         </>
       ) : undefined}
       {props.selectedDeliveryMode === "webhook" ? (
