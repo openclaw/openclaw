@@ -1213,7 +1213,9 @@ select.settings-select:not([multiple]) {
         border: 0;
         border-radius: var(--menu-radius);
         background: var(--menu-surface);
-        box-shadow: var(--menu-shadow);
+        box-shadow:
+          0 0 0 1px var(--control-edge-hover),
+          0 8px 16px -4px rgb(0 0 0 / 12.16%);
         backdrop-filter: var(--menu-backdrop);
         color: var(--text);
         corner-shape: superellipse(1.5);
@@ -1252,11 +1254,11 @@ select.settings-select:not([multiple]) {
 
       & option:is(:hover, :focus-visible):not(:disabled) {
         outline: 0;
-        background: var(--menu-hover);
+        background: var(--control-surface-hover);
       }
 
       & option:checked {
-        background: var(--menu-selected);
+        background: var(--control-surface-hover);
         font-weight: var(--control-ui-font-weight-semibold);
       }
 
