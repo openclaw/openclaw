@@ -230,6 +230,131 @@ describe("projectSettledCodexMessages", () => {
     });
   });
 
+  it("projects a historical media-only user turn as a bounded placeholder", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "user",
+          content: "",
+          __openclaw: {
+            media: [{ kind: "image", contentType: "image/jpeg" }],
+          },
+        }),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "[User media attachment unavailable in this context: image/jpeg]",
+        },
+      ],
+    });
+  });
+
+  it("still prefers upstream user text over the media placeholder", () => {
+    expect(
+      projectSettledCodexMessages([
+        attachUpstreamUserText(
+          message({
+            role: "user",
+            content: "",
+            __openclaw: { media: [{ kind: "image", contentType: "image/jpeg" }] },
+          }),
+          "Look at this photo.",
+        ),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Look at this photo." }],
+    });
+  });
+
+  it("still rejects an empty user turn without well-formed media facts", () => {
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "" }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media: ["jpeg", 42] } }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media: [{}] } }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+    expect(() =>
+      projectSettledCodexMessages([
+        message({ role: "user", content: "", __openclaw: { media: [{ kind: "unknown" }] } }),
+        toolCall(),
+        toolResult(),
+      ]),
+    ).toThrowError(new CodexHistoryRejection("invalid_content"));
+  });
+
+  it("labels a reference-backed media fact without a type as unknown type", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "user",
+          content: "",
+          __openclaw: { media: [{ path: "/attachments/photo.bin" }] },
+        }),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "[User media attachment unavailable in this context: unknown type]",
+        },
+      ],
+    });
+  });
+
+  it("bounds the media placeholder to the first entries", () => {
+    expect(
+      projectSettledCodexMessages([
+        message({
+          role: "user",
+          content: "",
+          __openclaw: {
+            media: Array.from({ length: 10 }, () => ({ kind: "image" })),
+          },
+        }),
+        toolCall(),
+        toolResult(),
+      ])[0],
+    ).toEqual({
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "[User media attachment unavailable in this context: image; image; image; image; image; image; image; image; +2 more]",
+        },
+      ],
+    });
+  });
+
   it("rejects upstream user text above the projection limit", () => {
     expect(() =>
       projectSettledCodexMessages([
