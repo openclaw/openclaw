@@ -117,7 +117,7 @@ struct ClientCredentialStartupTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.capture.path))
     }
 
-    private struct Fixture {
+    struct Fixture {
         let root: URL
         let app: URL
         let bundle: Bundle

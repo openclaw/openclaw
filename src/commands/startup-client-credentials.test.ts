@@ -451,35 +451,20 @@ describe("automatic client credential preparation", () => {
     await expectCredentials(fixture);
   });
 
-  it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
-    const fixture = await bootstrap();
-    restoreLegacyBootstrapReceipt(fixture.env);
-    const before = fs.readFileSync(fixture.local);
-    const serving = acquireGatewayStateOwner({
-      databasePath: fixture.shared,
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        role: "gateway",
-        createdAt: new Date().toISOString(),
-        configPath: fixture.env.OPENCLAW_CONFIG_PATH,
-        stateDir: fixture.root,
-      },
-    });
-    try {
-      await fixture.prepare();
-      expect(fs.readFileSync(fixture.local)).toEqual(before);
-      await expectCredentials(fixture);
-    } finally {
-      serving.release();
-    }
-  });
-
-  it.each(["gateway", "agent-embedded"] as const)(
-    "attributes a required migration refusal to the Gateway only when a %s holds state",
-    async (role) => {
+  it.each([
+    ["gateway", false],
+    ["gateway", true],
+    ["agent-embedded", true],
+  ] as const)(
+    "preserves credentials while %s owns state (maintenance required=%s)",
+    async (role, required) => {
       const fixture = await bootstrap();
-      changeRecordedDevice(fixture.env);
+      if (required) {
+        changeRecordedDevice(fixture.env);
+      } else {
+        restoreLegacyBootstrapReceipt(fixture.env);
+      }
+      const before = fs.readFileSync(fixture.local);
       const owner = acquireGatewayStateOwner({
         databasePath: fixture.shared,
         payload: {
@@ -492,12 +477,18 @@ describe("automatic client credential preparation", () => {
         },
       });
       try {
-        const failure = await fixture.prepare().then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        expect(failure instanceof ClientCredentialGatewayHeldError).toBe(role === "gateway");
-        expect(failure).toBeInstanceOf(Error);
+        if (required) {
+          const failure = await fixture.prepare().then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure instanceof ClientCredentialGatewayHeldError).toBe(role === "gateway");
+        } else {
+          await fixture.prepare();
+          await expectCredentials(fixture);
+        }
+        expect(fs.readFileSync(fixture.local)).toEqual(before);
       } finally {
         owner.release();
       }

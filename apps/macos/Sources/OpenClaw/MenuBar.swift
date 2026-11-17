@@ -182,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
     private var credentialStartupTask: Task<Void, Never>?
+    private let credentialRecoveryAlerts = DashboardAlertPresenter()
     private var credentialsReady = false
     private var pendingOpenURLs: [URL] = []
     private var pendingDashboardOpen = false
@@ -413,9 +414,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.showCredentialStartupFailure()
                 return true
             }
-            if await self.retryAfterExcludedGatewayFailure(excludedGateway, detail: held.detail) {
-                return Task.isCancelled
-            }
+            let retry = await self.retryAfterExcludedGatewayFailure(excludedGateway, detail: held.detail)
+            guard !Task.isCancelled else { return true }
+            if retry { return false }
             self.pendingOpenURLs.removeAll()
             self.pendingDashboardOpen = false
             Self.requestTermination()
@@ -440,7 +441,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = recovery.message
         alert.addButton(withTitle: "Retry")
         alert.addButton(withTitle: "Quit OpenClaw")
-        return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
+        let response = await withCheckedContinuation { continuation in
+            self.credentialRecoveryAlerts.present(alert, over: nil) { response in
+                continuation.resume(returning: response)
+            }
+        }
+        return response == .alertFirstButtonReturn
     }
 
     private func showCredentialStartupFailure() {
@@ -589,6 +595,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
         let credentialStartup = self.credentialStartupTask
         credentialStartup?.cancel()
+        // Settle the suspended startup before awaiting it; do not leave a modal
+        // run loop or unanswered continuation blocking termination cleanup.
+        self.credentialRecoveryAlerts.dismissAll()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
             // Settle the migration child before releasing credentials; a late
             // startup completion must not reacquire custody during shutdown.
