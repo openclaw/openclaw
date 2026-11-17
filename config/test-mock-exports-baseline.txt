@@ -2113,7 +2113,6 @@
 ["src/auto-reply/reply.stage-sandbox-media.ssh.test.ts","../agents/sandbox/context.js","f02360546bf15ad42f0570944525700707d40abd7503389735242ccf58fd1fd0",1]
 ["src/auto-reply/reply.test-harness.ts","../agents/auth-profiles/session-override.js","2fb23be1743dcc57abff43279aefbd74ed554a0188f63baae0010308c93ebd57",1]
 ["src/auto-reply/reply.test-harness.ts","../agents/model-catalog.runtime.js","b34a50126e009a02eabe52277eca3bcd1bffc2e9e23ddd56cc23bef161afe114",1]
-["src/auto-reply/reply.test-harness.ts","../plugins/runtime/runtime-web-channel-plugin.js","f4fb243297352c7c22c80338b916063485014352265875e9ca5dda6615a838bb",1]
 ["src/auto-reply/reply.test-harness.ts","../skills/discovery/chat-commands.runtime.js","ddfd21e3d1a81b516fd5308f499e4bbb6963ded24481138ad984190e10a439fc",1]
 ["src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts","../agents/sandbox-paths.js","5d7879b6cfe366f225932280fbf91099922b098a117fe0e197d887c13ef07615",1]
 ["src/auto-reply/reply.triggers.trigger-handling.stages-inbound-media-into-sandbox-workspace.test.ts","../media/channel-inbound-roots.js","a566d678dd195c324861b6b41c833038a235b0b23afe519088c248f90dda6b01",1]
