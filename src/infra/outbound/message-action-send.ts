@@ -55,7 +55,6 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -609,26 +608,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
-      // Host-bound (in-process) callers own destination-history recording for
-      // Gateway-executed sends; external CLI/transport callers must not write to
-      // the Gateway's SQLite transcript from outside the Gateway process.
-      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery && ctx.gateway?.request) {
-        await recordGatewayActionSend({
-          cfg,
-          channel,
-          to,
-          accountId: ctx.accountId ?? undefined,
-          route: outboundRoute,
-          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
-          agentId,
-          payload: sendPayload.payload,
-          deliveryId:
-            normalizeOptionalString(params.idempotencyKey) ??
-            input.deliveryIntentId ??
-            randomUUID(),
-          signal: ctx.abortSignal,
-        });
-      }
     }
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),

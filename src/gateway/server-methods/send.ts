@@ -12,12 +12,12 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
+import { dispatchDirectGatewayMessageAction } from "../../infra/outbound/message-action-gateway-transcript.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -33,7 +33,6 @@ import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-n
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   isAgentHarnessSessionKey,
@@ -328,14 +327,10 @@ export const sendHandlers: GatewayRequestHandlers = {
                 const result = await runMessageAction({
                   ...actionContext,
                   gatewayOwnedDelivery: true,
-                  callerRecordsDestinationHistory: Boolean(client?.internal?.agentRuntimeIdentity),
-                  ...(request.action === "send"
-                    ? {
-                        actionOrigin: trustedContext.runtimeAgentId
-                          ? ("message-tool" as const)
-                          : undefined,
-                      }
-                    : {}),
+                  actionOrigin:
+                    request.action === "send" && trustedContext.runtimeAgentId
+                      ? ("message-tool" as const)
+                      : undefined,
                   params: {
                     ...request.params,
                     channel,
@@ -347,21 +342,26 @@ export const sendHandlers: GatewayRequestHandlers = {
               } else {
                 await messageAuthority.beforeDeliveryAttempt();
                 assertDirectAdapterHandoff?.();
-                const handled = await dispatchChannelMessageAction(actionContext);
-                if (handled) {
-                  payload = extractToolPayload(handled);
-                } else {
-                  const error = errorShape(
-                    ErrorCodes.INVALID_REQUEST,
-                    `Message action ${request.action} not supported for channel ${channel}.`,
-                  );
+                const direct = await dispatchDirectGatewayMessageAction(
+                  actionContext,
+                  request.idempotencyKey,
+                  sourceReplySessionKey,
+                );
+                if (!direct.handled) {
                   return createGatewayInflightResult({
                     context,
                     dedupeKey,
                     channel,
-                    result: { ok: false, error },
+                    result: {
+                      ok: false,
+                      error: errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        `Message action ${request.action} not supported for channel ${channel}.`,
+                      ),
+                    },
                   });
                 }
+                payload = direct.payload;
               }
               await scheduleDeliveredSourceReplyTranscriptMirror({
                 context,
