@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -8,13 +8,16 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { codexUpstreamBaseline } from "../session-upstream-marker.js";
+import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { prepareCanonicalCodexFork } from "./canonical-fork-preparation.js";
 import { claimCodexAppServerLiveThread, hasCodexAppServerLiveThread } from "./client-runtime.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerLiveThreadOwnership } from "./client-thread-owner.js";
+import type { CodexAppServerClient } from "./client.js";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { checkCodexThreadAppAvailability } from "./plugin-thread-attestation.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import { flattenCodexDynamicToolFunctions } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import {
   sessionBindingIdentity,
@@ -33,6 +36,32 @@ import {
 type Boundary = Extract<CodexUpstreamForkBoundaryResult, { ok: true }> & {
   canonical: NonNullable<Extract<CodexUpstreamForkBoundaryResult, { ok: true }>["canonical"]>;
 };
+
+/** Resolves once the connection closes the thread or exits; both drop its writer lock. */
+function waitForCodexForkUnload(client: CodexAppServerClient, threadId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (unloaded: boolean) => {
+      clearTimeout(timer);
+      stopNotifications();
+      stopClose();
+      resolve(unloaded);
+    };
+    const timer = setTimeout(() => finish(false), CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+    const stopNotifications = client.addNotificationHandler((notification) => {
+      if (
+        notification.method === "thread/closed" &&
+        isJsonObject(notification.params) &&
+        notification.params.threadId === threadId
+      ) {
+        finish(true);
+      }
+    });
+    const stopClose = client.addCloseHandler(() => finish(true));
+    if (wasCodexAppServerThreadClosed(client, threadId) || client.getCloseError()) {
+      finish(true);
+    }
+  });
+}
 
 /** Native history stays native; only the verified local display prefix is copied. */
 export async function forkCanonicalCodexSession(params: {
@@ -173,6 +202,8 @@ export async function forkCanonicalCodexSession(params: {
             raw = await control.forkThread(
               {
                 ...prepared.request,
+                // Lets readiness unload the child so its turn connection can take the writer.
+                config: { ...prepared.request.config, thread_unload_delay_secs: 0 },
                 threadId: sourceBinding.threadId,
                 beforeTurnId: resolved.boundary.beforeTurnId,
                 model,
@@ -310,8 +341,22 @@ export async function forkCanonicalCodexSession(params: {
             historyCoveredThrough: new Date().toISOString(),
           });
           assertCurrent();
-          await ownership.release(freshThreadId, assertCurrent);
+          // Codex holds one writer lock per home while a thread is loaded, and the child's
+          // turns run on the supervision turn connection, another process. Release this
+          // catalog connection's writer before readiness; the fork's zero unload delay makes
+          // unsubscribe close it. A missed close stays visible as the child's resume error.
+          const unloaded = waitForCodexForkUnload(context.client, freshThreadId);
+          // The close notification may invalidate the released claim before its ACK settles.
+          await ownership.release(freshThreadId, () => {
+            fork.assertCurrent();
+            initialization.assertCurrent();
+          });
           subscriptionReleased = true;
+          if (!(await unloaded)) {
+            embeddedAgentLog.warn("codex canonical fork did not unload before readiness", {
+              threadId: freshThreadId,
+            });
+          }
           initialization.assertCurrent();
           return { pluginExtensions: created.entry.pluginExtensions };
         },

@@ -21,6 +21,7 @@ import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
+import type { WorkerLocalMcpCall } from "./worker-local-mcp.js";
 import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -132,6 +133,7 @@ export async function runWorkerDescriptor(
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
     browserRuntime?: WorkerBrowserRuntime;
+    localMcp?: WorkerLocalMcpCall;
     /** Supplied by the managed process owner, which closes state after its final turn. */
     environmentStateDir?: string;
     nativeInference?: NativeInferenceStartup;
@@ -396,6 +398,8 @@ export async function runWorkerDescriptor(
             },
           },
           gatewayTools: connection,
+          mcpTools: toolAuthority.mcpTools,
+          localMcp: options.localMcp,
           createApprovalTransport: (toolCallId, signal) =>
             createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,

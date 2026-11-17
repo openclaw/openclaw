@@ -82,7 +82,7 @@ export async function readExactRestoreReceipt(
   return { ...receipt, commit, ref: receiptRef(record) };
 }
 
-export async function clearExactRestoreReceipt(
+async function clearExactRestoreReceipt(
   record: ManagedWorktreeRecord,
   receipt: Receipt,
   options: GitOptions,
@@ -92,6 +92,28 @@ export async function clearExactRestoreReceipt(
     ["update-ref", "-d", receiptRef(record), receipt.commit],
     options,
   );
+}
+
+/** A live exact restore may have lost acknowledgement before deleting its receipt. */
+export async function clearCompletedExactRestoreReceipt(
+  live: ManagedWorktreeRecord,
+  options: GitOptions,
+): Promise<void> {
+  const receipt = await readExactRestoreReceipt(live, options);
+  if (receipt) {
+    if (
+      receipt.snapshot !==
+      (await requireGit(live.repoRoot, ["rev-parse", live.snapshotRef + "^{commit}"], options))
+    ) {
+      throw new Error("Completed exact restore snapshot changed; source and receipt preserved");
+    }
+    const assertCurrent = () => {
+      options?.beforeRun?.();
+      assertExactStateSourceIdentity(live.path, receipt);
+    };
+    assertCurrent();
+    await clearExactRestoreReceipt(live, receipt, { ...options, beforeRun: assertCurrent });
+  }
 }
 
 async function createReceipt(

@@ -18,7 +18,7 @@ import {
 import { registerConnectionRecoveryEnglish } from "../../i18n/locales/en-connection-recovery.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { Icon } from "./icon.tsx";
+import { IconButton } from "./icon-button.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
 
@@ -39,7 +39,9 @@ function renderConfirmation(props: () => ConfirmationProps) {
   const summary = () => t("connection.switchGateway.summary");
   const notes = () =>
     [
-      t("connection.switchGateway.note"),
+      t("connection.switchGateway.note", {
+        host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
+      }),
       props().linkCarriesToken ? t("connection.switchGateway.noteToken") : null,
       // Tokens are origin-scoped: a different origin never receives the saved one.
       props().currentGatewayUrl.trim() &&
@@ -57,14 +59,14 @@ function renderConfirmation(props: () => ConfirmationProps) {
       <div class="oc-dialog gateway-switch">
         <div class="oc-dialog__header">
           <h2 class="oc-dialog__title">{title()}</h2>
-          <button
-            type="button"
+          <IconButton
+            size={28}
             class="oc-dialog__close"
-            aria-label={t("common.close")}
+            icon="x"
+            label={t("common.close")}
+            tooltip={false}
             onClick={() => props().onCancel()}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <div class="oc-dialog__description">
             <p>{summary()}</p>
           </div>

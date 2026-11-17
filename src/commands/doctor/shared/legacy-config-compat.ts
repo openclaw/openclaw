@@ -18,7 +18,10 @@ import {
 } from "../../../plugins/native-module-require.js";
 import { getCachedPluginModuleLoader } from "../../../plugins/plugin-module-loader-cache.js";
 import { preparePluginLoaderAliases } from "../../../plugins/sdk-alias.js";
-import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
+import {
+  applyChannelDoctorCompatibilityMigrations,
+  type ChannelDoctorCompatibilityOptions,
+} from "./channel-legacy-config-migrate.js";
 import { resolveChannelAccountBindingRepairInput } from "./legacy-config-binding-repair-input.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 import { collectToolPolicyConflictWarnings } from "./legacy-config-migrations.runtime.tool-policy-conflicts.js";
@@ -63,6 +66,7 @@ export type LegacyDoctorMigrationOptions = {
   context?: LegacyConfigMigrationContext;
   // State-free previews skip plugin contracts; the committed result always uses a full run.
   pluginContracts?: boolean;
+  pluginCompatibility?: ChannelDoctorCompatibilityOptions["pluginCompatibility"];
 };
 
 /** Apply all legacy doctor migrations to raw config, returning null when nothing changed. */
@@ -95,6 +99,7 @@ export function applyLegacyDoctorMigrations(
   }
   const compat = applyChannelDoctorCompatibilityMigrations(next, {
     pluginContracts: options.pluginContracts !== false,
+    pluginCompatibility: options.pluginCompatibility,
   });
   changes.push(...compat.changes);
   const legacyOwner = tryGetLegacyDefaultAgentId(next);

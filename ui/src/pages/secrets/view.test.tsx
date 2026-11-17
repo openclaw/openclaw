@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
+import { createInitialSecretsStoreState } from "../../lib/secrets-store/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -26,6 +27,7 @@ function mount(
   const context = { gateway: source.gateway } as ApplicationContext;
   const state = Object.assign(new SecretsPageState(context, vi.fn()), overrides);
   state.store.entries = typeof entries === "function" ? entries() : entries;
+  state.store.loaded = true;
   const read = typeof entries === "function" ? entries : () => state.store.entries;
   return mountSolid(() => (
     <SecretsStore
@@ -41,6 +43,21 @@ function mount(
     />
   )).container;
 }
+
+it("says the store is empty instead of repeating the page name", () => {
+  const container = mount([]);
+  const empty = container.querySelector(".settings-empty");
+  expect(empty?.textContent).toContain("No secrets yet.");
+  expect(empty?.querySelector("a")?.textContent).toBe("Docs");
+});
+
+it("retains a confirmed empty inventory alongside a later read error", () => {
+  const container = mount([], {
+    store: { ...createInitialSecretsStoreState(), loaded: true, error: "Refresh failed" },
+  });
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Refresh failed");
+  expect(container.querySelector(".settings-empty")?.textContent).toContain("No secrets yet.");
+});
 
 it("says why secrets are unavailable in the empty state, without a section or a count", () => {
   const container = mount([], {}, []);
@@ -95,7 +112,7 @@ it("shows the allowed-host field for secret add and edit dialogs", () => {
 it("hides mutation controls when the gateway does not advertise them", () => {
   const container = mount([], {}, ["secrets.store.list"]);
   expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Secrets");
+  expect(container.textContent).toContain("No secrets yet.");
 });
 
 it("uses the current system timezone for refreshed inventory timestamps", () => {

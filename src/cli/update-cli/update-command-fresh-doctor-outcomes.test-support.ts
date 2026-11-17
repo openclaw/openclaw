@@ -162,6 +162,37 @@ export function registerFreshDoctorOutcomeTests(
     expect(mocks.runUtf8).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { read: "after Doctor ran", changed: true, status: "warning" },
+    { read: "before Doctor could start", changed: false, status: "error" },
+  ])("owes the Doctor pass only when its state read fails $read", async ({ changed, status }) => {
+    // Changed plugins require Doctor outright; unchanged ones read pending migrations first.
+    mocks.pendingMigrations.mockRejectedValueOnce(new Error("state database is locked"));
+
+    const { pluginUpdate: result } = await completePostCorePluginUpdate({
+      ...updateOptions,
+      pluginUpdate: { ...updateOptions.pluginUpdate, changed },
+    });
+
+    expect(result.status).toBe(status);
+    expect(result.warnings).toEqual([
+      changed
+        ? {
+            reason: "post-plugin-doctor",
+            message: "state database is locked",
+            guidance: ["openclaw update repair"],
+          }
+        : expect.objectContaining({
+            message: "Post-update plugin Doctor did not complete: Error: state database is locked",
+          }),
+    ]);
+    expect(result.reason).toBe(changed ? undefined : "post-plugin-doctor-execution-failed");
+    expect(mocks.command.mock.calls.some(([, args]) => args.includes("--repair"))).toBe(changed);
+    // Either way the target's config validation and readiness checks still gate the restart.
+    expect(mocks.command.mock.calls.some(([, args]) => args.includes("validate"))).toBe(true);
+    expect(mocks.runUtf8).toHaveBeenCalledOnce();
+  });
+
   it.each(["settlement", "startup"])(
     "blocks further work when Doctor %s leaves write custody unsettled",
     async (phase) => {

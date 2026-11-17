@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
 import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -63,7 +63,7 @@ module.exports = {
   });
   const createHost = (first: string, ...rest: string[]) =>
     expectDefined(
-      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], (prefix) =>
+      prepareCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)])((prefix) =>
         tempDirs.make(prefix),
       ),
       "compiled SDK host",

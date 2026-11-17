@@ -22,8 +22,6 @@ describe("jsonl byte-fidelity", () => {
     });
     const rendered = result.raw;
     expect(rendered).toBe('{"a":2}\r\n{"b":2}\r\n');
-    expect((rendered.match(/\r\n/g) ?? []).length).toBe(2);
-    expect((rendered.match(/(?<!\r)\n/g) ?? []).length).toBe(0);
   });
 
   it("LF input preserves LF after a structural edit", () => {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import * as authRuntime from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useCodexWorkerProvisioningFixture } from "../node-app-server-command.test-support.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { createAttemptPaths, createAttemptParams } from "./attempt-startup.test-support.js";
@@ -135,6 +135,10 @@ async function connect(
 
 it("uses the versioned placement duplex and joins caller-owned probe shutdown", async () => {
   const fixture = await connect();
+  onTestFinished(async () => {
+    fixture.closed.resolve();
+    await releaseCodexProbeClient(fixture.client, fixture.factory, true);
+  });
   expect(fixture.open.mock.calls[0]?.[0]).toMatchObject({
     command: "codex.app-server.stdio.v1." + fixture.configVersion,
     nodeId: "node",

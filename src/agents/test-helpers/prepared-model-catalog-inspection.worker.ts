@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { parentPort } from "node:worker_threads";
 import { mockNativeModuleExports } from "../../../test/helpers/native-module-mock.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import type * as Catalog from "./prepared-model-catalog-inspection.js";
 
 const port = parentPort!;
@@ -22,11 +24,11 @@ mockNativeModuleExports(new URL("../../infra/sqlite-snapshot-source.ts", import.
     return copySqlite(...args);
   },
 });
-const models = await import("../models-config.js");
-const planModels = models.planOpenClawModelsJsonSource;
-mockNativeModuleExports(new URL("../models-config.ts", import.meta.url), {
+const models = await import("../models-config.core.js");
+const planModels = models.planOpenClawModelsJsonSourceWithInput;
+mockNativeModuleExports(new URL("../models-config.core.ts", import.meta.url), {
   ...models,
-  planOpenClawModelsJsonSource: async (...args: Parameters<typeof planModels>) => {
+  planOpenClawModelsJsonSourceWithInput: async (...args: Parameters<typeof planModels>) => {
     const plan = await planModels(...args);
     plans.push(plan);
     return plan;
@@ -44,6 +46,13 @@ mockNativeModuleExports(new URL("../prepared-model-runtime.full-catalog.ts", imp
   },
 });
 const facts = await import("../../config/resolution-facts.js");
+const { getRuntimeConfigSnapshot, getRuntimeConfigSourceSnapshot } =
+  await import("../../config/runtime-snapshot.js");
+const { isDeeplyFrozenPlainData } = await import("../../shared/immutable-data.js");
+const configIds = new WeakMap<object, number>();
+let nextConfigId = 0;
+const configCaptures: WeakRef<object>[] = [];
+const captureControl = new WeakRef({});
 const { registerResolvedAgentDir, resolveRegisteredAgentIdForDir, unregisterResolvedAgentDir } =
   await import("../agent-dir-registry.js");
 const { resolveUsableCustomProviderApiKey } = await import("../model-auth-provider-config.js");
@@ -86,39 +95,85 @@ port.on = (event, listener) => {
 };
 const post = port.postMessage.bind(port);
 port.postMessage = (message: { status: string; value?: object }, transferList) => {
-  let response = message;
-  if (message.status === "ok" && message.value) {
-    const { input, sourceConfigForSecrets } = task.value;
-    const runtimeFacts = facts.getConfigResolutionFacts(input.config);
-    const sourceFacts = facts.getConfigResolutionFacts(sourceConfigForSecrets);
-    const { provider, existingAgentIds, expectedCredential } = task.inspection ?? {};
-    const inspection: Catalog.CatalogInspection = {
-      sqliteCopies,
-      ...(copyHookObserved !== undefined ? { copyHookObserved } : {}),
-      plans,
-      runtimeFactsAbsent: runtimeFacts === null,
-      sourceFactsAbsent: sourceFacts === null,
-      sameResolutionFacts: runtimeFacts === sourceFacts,
-    };
-    const { agentDir, env, config } = input;
-    if (existingAgentIds) {
-      const scope = { agentId: "foreign", agentDir, env };
-      inspection.foreignReleased = unregisterResolvedAgentDir(scope);
-      inspection.registeredAgentId = resolveRegisteredAgentIdForDir(agentDir, env);
+  void (async () => {
+    let response = message;
+    if (message.status === "ok" && message.value) {
+      const { input, sourceConfigForSecrets } = task.value;
+      const runtimeFacts = facts.getConfigResolutionFacts(input.config);
+      const sourceFacts = facts.getConfigResolutionFacts(sourceConfigForSecrets);
+      const { provider, existingAgentIds, expectedCredential } = task.inspection ?? {};
+      const inspection: Catalog.CatalogInspection = {
+        sqliteCopies,
+        ...(copyHookObserved !== undefined ? { copyHookObserved } : {}),
+        plans,
+        runtimeFactsAbsent: runtimeFacts === null,
+        sourceFactsAbsent: sourceFacts === null,
+        sameResolutionFacts: runtimeFacts === sourceFacts,
+      };
+      if (task.inspection?.observeConfigSnapshots) {
+        const requested = [input.config, sourceConfigForSecrets];
+        inspection.configSnapshots = [
+          getRuntimeConfigSnapshot(),
+          getRuntimeConfigSourceSnapshot(),
+        ].map((config, index) => {
+          if (!config) {
+            throw new Error("Catalog request did not publish its config");
+          }
+          if (!configIds.has(config)) {
+            configIds.set(config, ++nextConfigId);
+          }
+          return {
+            id: configIds.get(config)!,
+            frozen: isDeeplyFrozenPlainData(config),
+            valuesMatchRequest: isDeepStrictEqual(config, requested[index]),
+            factsMatchRequest: isDeepStrictEqual(
+              facts.serializeConfigResolutionFacts(config),
+              facts.serializeConfigResolutionFacts(requested[index]),
+            ),
+          };
+        });
+      }
+      if (task.inspection?.collectConfigCaptures) {
+        configCaptures.push(new WeakRef(getRuntimeConfigSnapshot({ capture: true })!));
+        // Observe retired publications while the real worker still owns its registrations.
+        for (let pass = 0; pass < 2; pass++) {
+          await new Promise<void>((resolve) => {
+            setImmediate(() => {
+              forceFullGc();
+              resolve();
+            });
+          });
+        }
+        inspection.configCaptureCollection = {
+          live: configCaptures.flatMap((ref, index) => (ref.deref() ? [index] : [])),
+          controlCollected: captureControl.deref() === undefined,
+        };
+      }
+      const { agentDir, env, config } = input;
+      if (existingAgentIds) {
+        const scope = { agentId: "foreign", agentDir, env };
+        inspection.foreignReleased = unregisterResolvedAgentDir(scope);
+        inspection.registeredAgentId = resolveRegisteredAgentIdForDir(agentDir, env);
+      }
+      if (provider) {
+        const credential = resolveUsableCustomProviderApiKey({ cfg: config, provider, env });
+        inspection.credentialMatches = credential?.apiKey === expectedCredential;
+        const key = `models.providers.${provider}.apiKey`;
+        inspection.authoredRef = facts.getAuthoredConfigSecretRef(config, key);
+        inspection.resolvedEnvRef = facts.getResolvedConfigEnvSecretRef(config, key);
+      }
+      response = { ...message, value: { ...message.value, inspection } };
     }
-    if (provider) {
-      const credential = resolveUsableCustomProviderApiKey({ cfg: config, provider, env });
-      inspection.credentialMatches = credential?.apiKey === expectedCredential;
-      const key = `models.providers.${provider}.apiKey`;
-      inspection.authoredRef = facts.getAuthoredConfigSecretRef(config, key);
-      inspection.resolvedEnvRef = facts.getResolvedConfigEnvSecretRef(config, key);
+    if (Array.isArray(transferList)) {
+      post(response, transferList);
+    } else {
+      post(response, transferList);
     }
-    response = { ...message, value: { ...message.value, inspection } };
-  }
-  if (Array.isArray(transferList)) {
-    post(response, transferList);
-  } else {
-    post(response, transferList);
-  }
+  })().catch((error: unknown) => {
+    // Failed inspection must reject the pending worker request instead of losing its reply.
+    queueMicrotask(() => {
+      throw error;
+    });
+  });
 };
 await import("../prepared-model-catalog.worker.js");

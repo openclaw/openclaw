@@ -270,13 +270,13 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it("reads the unbounded offset log window", async () => {
+it("reads the unbounded offset and clamped tail log windows", async () => {
   const sessionId = await startAndFinish(
     createTool(),
     Array.from({ length: 201 }, (_, i) => shellEcho(`line-${i + 1}`)).join("; "),
   );
   const log = await processAction({ action: "log", sessionId, offset: 30 });
-  expect(log.details).toMatchObject({ totalLines: 201 });
+  expect(text(await processAction({ action: "log", sessionId, limit: -5 }))).toMatch(/^line-201\n/);
   expect(text(log).split("\n")[0]).toBe("line-31");
   expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
@@ -346,18 +346,25 @@ describe("background completion notifications", () => {
   });
 
   it.each([
+    { name: "defaults to notifying a chat provider", chat: true, emits: true },
+    // Dashboard and API sessions have no chat provider; silent success still wakes them.
+    { name: "defaults to notifying a non-chat session", chat: false, emits: true },
     {
-      name: "defaults to notifying chat providers",
-      notifyOnExitEmptySuccess: undefined,
-      emits: true,
+      name: "honors an explicit silent override",
+      chat: true,
+      notifyOnExitEmptySuccess: false,
+      emits: false,
     },
-    { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
-  ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
+  ])("$name on empty success", async ({ chat, notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
       notifyTool({
-        messageProvider: " Telegram ",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
+        ...(chat
+          ? {
+              messageProvider: " Telegram ",
+              currentChannelId: "telegram:-100123:topic:47",
+              currentThreadTs: "47",
+            }
+          : {}),
         notifyOnExitEmptySuccess,
       }),
       isWin ? "$null" : ":",
@@ -371,12 +378,14 @@ describe("background completion notifications", () => {
         expect.objectContaining({
           id: receipt.id,
           contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
+          deliveryContext: chat
+            ? {
+                channel: "telegram",
+                to: "telegram:-100123:topic:47",
+                threadId: "47",
+                accountId: undefined,
+              }
+            : undefined,
         }),
       );
       expect(
@@ -389,9 +398,13 @@ describe("background completion notifications", () => {
         }),
       ).toBeUndefined();
     }
-    expect(peekSystemEvents(sessionKey)).toEqual(
-      emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
-    );
+    const events = peekSystemEvents(sessionKey);
+    expect(events).toHaveLength(emits ? 1 : 0);
+    if (emits) {
+      expect(events[0]).toMatch(
+        new RegExp(`^Exec completed \\(${id.slice(0, 8)}, code 0, [^)]+\\) with no output\\.$`),
+      );
+    }
   });
 });
 

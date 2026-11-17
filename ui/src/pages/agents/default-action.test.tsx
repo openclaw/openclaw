@@ -21,7 +21,7 @@ it("shows admitted default commands and follows confirmed roster state", async (
     mounted.container.querySelector<HTMLButtonElement>(".agents-page-menu__trigger")!;
   const control = () =>
     [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) =>
-      /Set Default|Saving|^Default$/.test(item.textContent?.trim() ?? ""),
+      /Set default|Saving|^Default$/.test(item.textContent?.trim() ?? ""),
     );
   const disabled = () =>
     control()?.getAttribute("aria-disabled") === "true" ||
@@ -58,14 +58,14 @@ it("shows admitted default commands and follows confirmed roster state", async (
     mounted.update({ ...props, config: { ...props.config, configSaving: false } });
     await vi.waitFor(() => {
       reopen();
-      expect(control()?.textContent).toContain("Set Default");
+      expect(control()?.textContent).toContain("Set default");
       expect(disabled()).toBe(false);
     });
     first.resolve();
     mounted.update(props);
     await vi.waitFor(() => {
       reopen();
-      expect(control()?.textContent).toContain("Set Default");
+      expect(control()?.textContent).toContain("Set default");
       expect(disabled()).toBe(false);
     });
     control()!.click();

@@ -1,6 +1,6 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import type { RouteId } from "./app-route-paths.ts";
+import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -15,11 +15,11 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Pages derives its built-in catalog from these destinations. Personal rail
 // pins reference the catalog without changing its availability. Chat has the
 // Sessions view; Settings/Docs remain in the profile menu.
-// Skills and Skill Workshop are reached from the Plugins workspace, not sidebar items.
+// Skills, Skill Workshop and Templates are reached from the Customize workspace, not sidebar items.
+// Apps is reached from the profile menu and the command palette.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
-  "templates",
   "dashboards",
   "usage",
   "cron",
@@ -28,14 +28,18 @@ export const SIDEBAR_NAV_ROUTES = [
   "activity",
   "meetings",
   "plugins",
-  "apps",
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
 
-// Routes presented as tabs of the Plugins hub. The sidebar highlights the
-// Plugins entry for all of them, mirroring how config covers settings routes.
+// Routes presented as tabs of the Customize (Plugins) hub. The sidebar highlights
+// the Customize entry for all of them, mirroring how config covers settings routes.
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return routeId === "plugins" || routeId === "skills" || routeId === "skill-workshop";
+  return (
+    routeId === "plugins" ||
+    routeId === "skills" ||
+    routeId === "skill-workshop" ||
+    routeId === "templates"
+  );
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
@@ -56,8 +60,9 @@ export type SidebarZoneEntry =
   | { type: "session"; key: string; rail?: true }
   | { type: "person"; profileId: string };
 
-// The rail starts clean; only user-added shortcuts occupy the pins region.
-export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
+// Below the fixed Users item, the rail starts with Automations, Customize and
+// Usage; every other page waits in the "more" menu until it is pinned.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = ["route:cron", "route:plugins", "route:usage"];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -120,6 +125,14 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   return entry.type === "plugin"
     ? `plugin:${entry.key}`
     : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/**
+ * Native section pins lead the rail, above the Pages control and its separator;
+ * plugin, session and person pins always follow it, bundled plugins included.
+ */
+export function isRailSectionPin(entry: string): boolean {
+  return entry.startsWith("route:");
 }
 
 /** Personal session pins render in the Sessions list's Pinned section, not the rail. */
@@ -307,24 +320,25 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  templates: navigationPresentation("bot", "templates"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
-  meetings: navigationPresentation("book", "meetings"),
+  meetings: navigationPresentation("meetings", "meetings"),
   apps: navigationPresentation("layoutGrid", "apps"),
-  portals: navigationPresentation("monitor", "portals"),
+  portals: navigationPresentation("portals", "portals"),
   approvals: navigationPresentation("badgeCheck", "approvals"),
-  workboard: navigationPresentation("kanban", "workboard"),
+  workboard: navigationPresentation("workboard", "workboard"),
   worktrees: navigationPresentation("folder", "worktrees"),
   channels: navigationPresentation("link", "channels"),
   connection: navigationPresentation("radio", "connection"),
-  sessions: navigationPresentation("fileText", "sessions"),
-  systems: navigationPresentation("monitor", "systems"),
-  usage: navigationPresentation("coins", "usage"),
-  cron: navigationPresentation("calendarClock", "cron"),
+  sessions: navigationPresentation("sessions", "sessions"),
+  systems: navigationPresentation("systems", "systems"),
+  usage: navigationPresentation("usage", "usage"),
+  cron: navigationPresentation("automations", "cron"),
   skills: navigationPresentation("bookOpenText", "skills"),
   "skill-settings": navigationPresentation("bookOpenText", "skills"),
-  plugins: navigationPresentation("plug", "plugins"),
+  // The Plugins hub is the Customize section; its first tab keeps the Plugins name.
+  plugins: ["customize", "tabs.customize", "subtitles.plugins"],
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
   device: navigationPresentation("monitor", "device"),
@@ -334,7 +348,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   chat: navigationPresentation("messageSquare", "chat"),
   terminal: ["terminal", "terminal.title", "terminal.open"],
   dashboard: navigationPresentation("layoutDashboard", "chat"),
-  dashboards: navigationPresentation("layoutDashboard", "dashboards"),
+  dashboards: navigationPresentation("dashboards", "dashboards"),
   custodian: navigationPresentation("lobster", "custodian"),
   config: ["settings", "nav.settings", "subtitles.config"],
   profile: navigationPresentation("circleUser", "profile"),
@@ -368,8 +382,17 @@ export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
-export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
+export function isSettingsTakeover(
+  routeId: RouteId | undefined,
+  tabs?: readonly PluginTab[],
+  location?: { pathname: string; search: string },
+  basePath = "",
+): boolean {
+  return (
+    (routeId !== undefined && isSettingsNavigationRoute(routeId)) ||
+    (routeId === "plugin" &&
+      pluginTabForLocation(tabs, location, basePath)?.placement === "settings")
+  );
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -379,6 +402,19 @@ export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
 export function titleForRoute(routeId: NavigationRouteId, translate = t): string {
   const [, titleKey] = NAVIGATION_PRESENTATION[routeId];
   return translate(titleKey);
+}
+
+/** The title a route's own page shows: the actual device on the device route, and the
+ * plugin page's own label on the shared plugin route once that label is known. */
+export function pageTitleForRoute(
+  routeId: NavigationRouteId,
+  deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+  pluginPageLabel?: () => string | undefined,
+): string {
+  if (routeId === "device") {
+    return t(deviceSettingsGroupLabelKey(deviceSnapshot));
+  }
+  return (routeId === "plugin" && pluginPageLabel?.()) || titleForRoute(routeId);
 }
 
 /** Window/tab title, attention leftmost because tabs truncate from the right.

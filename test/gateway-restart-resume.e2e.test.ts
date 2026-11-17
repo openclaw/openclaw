@@ -9,7 +9,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
-import { assignSessionOwner } from "../src/config/sessions/session-accessor.sqlite-owner.js";
 import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
@@ -19,10 +18,10 @@ import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.p
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { setUserProfileRole } from "../src/state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../src/state/user-profiles.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
+  connectProxiedRestartOperator,
   connectRestartClient,
   readRestartSession,
   restartEnv,
@@ -294,6 +293,10 @@ async function providerFixture(signal: AbortSignal) {
             );
             return;
           }
+          if (name === "parent") {
+            tool("sessions_yield", {});
+            return;
+          }
           text(`FINISHED_${cycle}_${name}`);
         },
         { ignoreAborted: true },
@@ -340,7 +343,7 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes only the interrupted predecessor after SIGKILL and marked sessions after partial shutdown",
+  "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const proofStartedAt = performance.now();
@@ -538,9 +541,9 @@ it.skipIf(process.platform === "win32")(
           unmarkedKey,
         )?.startedAt;
         assert(typeof unmarkedStartedAt === "number");
-        // A persisted marker owns recovery across stores even when shutdown never records completion.
+        // Partial marking must not hide unfinished work from this predecessor in another store.
         const olderPartialRun = await seedUnfinished(staleKey, staleStartedAt);
-        const unmarkedRun = await seedUnfinished(unmarkedKey, unmarkedStartedAt);
+        await seedUnfinished(unmarkedKey, unmarkedStartedAt);
         provider.restart();
         phase = "partial-shutdown startup";
         await instance.startGateway();
@@ -551,24 +554,24 @@ it.skipIf(process.platform === "win32")(
         provider.release(1);
         phase = "partial-shutdown final reply";
         await waitFinal(partialKey, "RESUMED_1_stream");
+        await waitFinal(unmarkedKey, "RESUMED_10_idle");
         elapsedMs.thirdResumeCompleted = Math.round(performance.now() - proofStartedAt);
         phase = "partial-shutdown history and settlement";
-        for (const targetKey of [staleKey, unmarkedKey]) {
-          expect(JSON.stringify((await history(targetKey)).messages)).not.toContain(RESUME);
-        }
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
         expect(
           provider.calls
             .filter((call) => call.resumeInput)
-            .map(({ cycle, name }) => ({ cycle, name })),
+            .map(({ cycle, name }) => ({ cycle, name }))
+            .toSorted((left, right) => left.cycle - right.cycle),
         ).toEqual([
           { cycle: 0, name: "stream" },
           { cycle: 1, name: "stream" },
+          { cycle: 10, name: "idle" },
         ]);
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
         expectSettled(staleKey, olderPartialRun);
-        expectSettled(unmarkedKey, unmarkedRun);
         process.stdout.write(`[restart-resume-proof] elapsedMs=${JSON.stringify(elapsedMs)}\n`);
       },
       () => client?.stopAndWait(),
@@ -580,40 +583,59 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "records a visible outcome when a marked run loses principal authority before restart",
+  "records a visible outcome when a marked run loses requester authority before restart",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const origin = "https://revocation.restart.example.test";
+    const deniedUser = "denied@restart.example.test";
+    const healthyUser = "healthy@restart.example.test";
+    const admin = "admin@restart.example.test";
+    const scopes = ["operator.read", "operator.write"];
     const instance = await createOpenClawTestInstance({
       name: "restart-admission-failure",
       signal,
       config: {
         ...restartResumeConfig(model),
         gateway: {
-          roles: {
-            default: "writer",
-            definitions: {
-              writer: { scopes: ["operator.write"], agents: "*", sessions: { others: "none" } },
-              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+          mode: "local",
+          bind: "loopback",
+          trustedProxies: ["127.0.0.1", "::1"],
+          auth: {
+            mode: "trusted-proxy",
+            token: undefined,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
             },
+            identityScopes: { [admin]: ["operator.admin"] },
           },
+          controlUi: { enabled: false, allowedOrigins: [origin] },
         },
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
-    let client: GatewayClient | undefined;
+    const connectAs = (user: string, requested = scopes) =>
+      connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
     let deniedRunId: string | undefined;
+    let deniedProfileId: string | undefined;
     onTestFailed(() => {
       process.stderr.write(`${instance.logs()}\n`);
     });
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
         for (const cycle of [0, 1]) {
-          await client.request("sessions.create", { key: key(cycle, "stream"), agentId: "other" });
-          const accepted = await client.request<{ runId: string }>("chat.send", {
+          client = await connectAs(cycle === 0 ? deniedUser : healthyUser);
+          if (cycle === 0) {
+            const self = await client.call<{ profile: { id: string } }>("users.self", {});
+            deniedProfileId = self.profile.id;
+          }
+          const accepted = await client.call<{ runId: string }>("chat.send", {
             sessionKey: key(cycle, "stream"),
             message: marker(cycle, "stream"),
             idempotencyKey: randomUUID(),
@@ -622,6 +644,10 @@ it.skipIf(process.platform === "win32")(
             deniedRunId = accepted.runId;
           }
           await provider.wait(`ready:${cycle}:stream`);
+          if (cycle === 0) {
+            await client.close();
+            client = undefined;
+          }
         }
         const child = instance.child;
         assert(child?.pid, "Owned Gateway process unavailable");
@@ -629,7 +655,8 @@ it.skipIf(process.platform === "win32")(
         provider.restart();
         expect(child.kill("SIGTERM")).toBe(true);
         expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
-        await client.stopAndWait();
+        assert(client, "Healthy sibling client unavailable after marking");
+        await client.close();
         client = undefined;
         await instance.stopGateway();
         const scope = {
@@ -645,28 +672,24 @@ it.skipIf(process.platform === "win32")(
         }
         const denied = rows.find((row) => row.sessionKey === key(0, "stream"))?.entry;
         assert(denied);
-        // Only the stopped synthetic Gateway is mutated; exercise real principal admission.
-        const profile = ensureProfileForEmail("restart-denied@example.test", { env: instance.env });
-        setUserProfileRole(profile.id, "reader", { env: instance.env });
-        assignSessionOwner(
-          { ...scope, sessionKey: key(0, "stream") },
-          {
-            owner: { type: "human", id: profile.id },
-            assignedBy: { type: "human", id: "gateway-owner" },
-            expectedSessionId: denied.sessionId,
-          },
+        expect(denied).toHaveProperty(
+          "resumeAfterRestart.operatorSource.snapshot.profileId",
+          deniedProfileId,
         );
+        // Change only the captured requester, not the owner or Gateway-wide auth generation.
+        assert(deniedProfileId);
+        setUserProfileRole(deniedProfileId, "reader", { env: instance.env });
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         const started = performance.now();
         await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
+        client = await connectAs(admin, ["operator.admin"]);
         await provider.wait("resume:1:stream");
         provider.release(1);
         await vi.waitFor(
           async () => {
             for (const cycle of [0, 1]) {
-              const history = await client!.request<{
+              const history = await client!.call<{
                 messages: unknown[];
                 sessionInfo: { hasActiveRun: boolean };
               }>("chat.history", { sessionKey: key(cycle, "stream") });
@@ -684,7 +707,7 @@ it.skipIf(process.platform === "win32")(
           [1],
         );
         expect(instance.logs()).toContain(key(0, "stream"));
-        expect(instance.logs()).toContain("Session principal has no current run authority");
+        expect(instance.logs()).toContain("Restart recovery operator identity changed");
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
         expect(instance.logs()).toContain('"admissionStage":"principal"');
@@ -692,7 +715,141 @@ it.skipIf(process.platform === "win32")(
           `[restart-admission-proof] marked=2 resumed=1 visibleFailure=1 recoveryMs=${performance.now() - started}\n`,
         );
       },
-      () => client?.stopAndWait(),
+      () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "resumes a signed-in person's session and queued input on a Gateway without roles",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const origin = "https://control.restart.example.test";
+    const email = "person@restart.example.test";
+    const admin = "admin@restart.example.test";
+    const scopes = ["operator.read", "operator.write"];
+    const instance = await createOpenClawTestInstance({
+      name: "restart-untiered-person",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: {
+        ...restartResumeConfig(model),
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          trustedProxies: ["127.0.0.1", "::1"],
+          auth: {
+            mode: "trusted-proxy",
+            token: undefined,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
+            },
+            identityScopes: { [admin]: ["operator.admin"] },
+          },
+          controlUi: { enabled: false, allowedOrigins: [origin] },
+        },
+      },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    const connectAs = (user: string, requested: string[]) =>
+      connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
+    const sessionKey = key(2, "stream");
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectAs(email, scopes);
+        const self = await client.call<{ profile: { id: string } }>("users.self", {});
+        expect(self.profile.id).not.toBe("gateway-owner");
+        // The first send creates the session; its accepted input alone records the source.
+        await client.call("chat.send", {
+          sessionKey,
+          message: marker(2, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:2:stream");
+        // Another person's queued input runs under that sender's own recorded source.
+        const sender = await connectAs(admin, ["operator.admin"]);
+        try {
+          await sender.call("chat.send", {
+            sessionKey,
+            message: queued(2, 1),
+            idempotencyKey: randomUUID(),
+          });
+        } finally {
+          await sender.close();
+        }
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.close();
+        client = undefined;
+        await instance.stopGateway();
+        const marked = (
+          await readSessionEntrySummariesInWorker({
+            agentId: "other",
+            env: instance.env,
+            storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          })
+        ).find((row) => row.sessionKey === sessionKey)?.entry;
+        expect(marked?.resumeAfterRestart?.queuedInputIds).toHaveLength(1);
+        // The recorded source keeps the connection's own scopes; restart grants no more.
+        expect(marked?.operatorSources?.[self.profile.id]?.scopes).toEqual(scopes);
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        await instance.startGateway();
+        client = await connectAs(email, scopes);
+        await provider.wait("resume:2:stream");
+        provider.release(2);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            const text = JSON.stringify(history.messages);
+            expect(text).toContain("RESUMED_2_stream");
+            expect(text).toContain(`HANDLED_${queued(2, 1)}`);
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        // A host event in the person's session runs as its principal, outside restart recovery.
+        const operator = await connectAs(admin, ["operator.admin"]);
+        try {
+          await operator.call("system-event", {
+            text: "SYSTEM_TURN_AFTER_RESTART",
+            sessionKey,
+            wake: true,
+          });
+        } finally {
+          await operator.close();
+        }
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{ messages: unknown[] }>("chat.history", {
+              sessionKey,
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+          },
+          { timeout: 15_000 },
+        );
+        expect(instance.logs()).not.toContain("no current run authority");
+      },
+      () => client?.close(),
       () => instance.cleanup(),
       provider.close,
     );
@@ -906,6 +1063,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 } else if (name !== "tool") {
                   if (name === "parent") {
                     await waitProvider(`child:${cycle}`);
+                    await waitProvider(`ready:${cycle}:${name}`);
+                    const parked = readRestartSession(
+                      instance.state.agentDir("main"),
+                      key(cycle, name),
+                      sharedStore,
+                    );
+                    assert(parked?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+                    expect(
+                      await client!.request("agent.wait", {
+                        runId: parked.lifecycleRunId,
+                        timeoutMs: 30_000,
+                      }),
+                    ).toMatchObject({ status: "ok", yielded: true });
+                    return;
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }
@@ -1017,7 +1188,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             provider.releaseFinalizer();
             expect.soft(provider.finalizerAdmission()).toEqual({
-              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              admission: "accepted",
               attempts: 1,
             });
           }
@@ -1095,8 +1266,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle")
+              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+            // The stopped background command is reported as its own input, not as a resume.
+            ...(cases.includes("background")
+              ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
             { name: "stream", text: `HANDLED_${fresh(cycle)}` },
@@ -1133,14 +1308,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(resumes[0]?.current).toContain(
-                "Background exec processes were stopped; rerun them if still needed.",
-              );
+              // The process registry reports the stopped command; the resume input does not.
+              expect(
+                calls.some((call) =>
+                  call.current.includes("was stopped when the Gateway shut down"),
+                ),
+              ).toBe(true);
             }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

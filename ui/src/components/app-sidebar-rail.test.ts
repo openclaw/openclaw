@@ -150,8 +150,10 @@ describe("personal navigation rail", () => {
   it("keeps fixed navigation and Home, Inbox, identity separate from the middle view", async () => {
     const { sidebar, dom } = await fixture();
     expect(
-      [...dom.all("[data-navigation-view]")].map((button) => button.getAttribute("aria-label")),
-    ).toEqual(["Pages", "Sessions", "Users"]);
+      [...dom.all("[data-navigation-view]")].map((button) =>
+        button.getAttribute("data-navigation-view"),
+      ),
+    ).toEqual(["sessions", "online", "pages"]);
     const frame = dom.query("aside.sidebar")!;
     const bottom = dom.query(".sidebar-rail__bottom")!;
     expect(
@@ -240,7 +242,7 @@ describe("personal navigation rail", () => {
     publish({ label: "Release Notes" });
     await sidebar.updateComplete;
     const pins = dom.query(".sidebar-rail__pins")!;
-    expect(pins.children).toHaveLength(0);
+    expect(pins.querySelectorAll(".sidebar-rail__pin, .sidebar-rail__separator")).toHaveLength(0);
     expect(pins.classList.contains("sidebar-rail__pins--drag-active")).toBe(false);
     const unrelated = createDataTransferStub();
     unrelated.setData("text/plain", "not a sidebar item");
@@ -428,10 +430,9 @@ describe("personal navigation rail", () => {
     });
     sidebar.onToggleSidebar = toggle;
     for (const [view, collapsed] of [
-      ["sessions", true],
-      ["sessions", false],
       ["pages", false],
       ["pages", true],
+      ["sessions", false],
       ["online", false],
       ["online", false],
     ] as const) {
@@ -441,7 +442,7 @@ describe("personal navigation rail", () => {
         collapsed ? undefined : sidebar.querySelector(`[data-navigation-view="${view}"]`),
       );
     }
-    expect(toggle).toHaveBeenCalledTimes(4);
+    expect(toggle).toHaveBeenCalledTimes(2);
     await update(sidebar, { navigationVisible: false });
     expect(sidebar.activeNavigationViewElement()).toBeUndefined();
     await update(sidebar, { navigationVisible: true });

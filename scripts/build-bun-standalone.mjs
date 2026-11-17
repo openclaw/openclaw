@@ -487,7 +487,7 @@ globalThis.__openclawStandaloneImport = (parent, specifier, options) => {
     commonJsEntries.has(target) ? { ...loaded.default, ...loaded } : loaded);
 };
 ${requireAdapter.bootstrap}
-${createStandaloneExternalModuleBootstrap({ source: Boolean(sourceGraph) })}
+${createStandaloneExternalModuleBootstrap()}
 ${createStandaloneModuleResolverBootstrap()}
 if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
   await import(process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD);
@@ -822,7 +822,7 @@ if (!result.success) {
   throw new AggregateError(result.logs, "Standalone bundle failed");
 }
 workers.validateOutputs(result.outputs.map((output) => output.path));
-fs.writeFileSync(path.join(outputRoot, "metafile.json"), JSON.stringify(result.metafile, null, 2));
+fs.writeFileSync(path.join(outputRoot, "metafile.json"), JSON.stringify(result.metafile));
 fs.writeFileSync(
   path.join(outputRoot, "transformed.json"),
   JSON.stringify(

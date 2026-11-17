@@ -5,9 +5,9 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
-  installMockGateway,
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
@@ -54,7 +54,7 @@ suite.define(() => {
       async ({ page }) => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [{ pluginId: "x", rootDir: pluginRoot, source: "src/control-ui.tsx" }],
           operatorScopes: ["operator.admin"],
           featureMethods: [
@@ -159,7 +159,7 @@ suite.define(() => {
         await button("Refresh").click();
         await gateway.waitForRequest("x.allowlist.list", { after: retired });
         const pages = await openSidebarPages(page);
-        await pages.getByRole("link", { name: "Plugins", exact: true }).click();
+        await pages.getByRole("link", { name: "Customize", exact: true }).click();
         await surface.waitFor({ state: "detached" });
         await gateway.resolveDeferred("x.allowlist.list", added);
         await openSidebarPages(page);

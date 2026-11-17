@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createReadinessChecker } from "../gateway/server/readiness.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 
 const originalExecPath = process.execPath;
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -23,14 +30,13 @@ function diagnostic(kind: string, addon = false) {
   const owner = addon ? "plugin.node" : "node";
   const value = addon ? "plugin_value" : "runtime_value";
   const messages: Record<string, string> = {
+    loader: addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib",
     symbol: `node: symbol lookup error: /fixture/${addon ? owner : "libnode.so"}: undefined symbol: ${value}`,
     "dyld-symbol": `dyld: lazy symbol binding failed: Symbol not found: _${value}`,
     musl: `Error loading shared library ${addon ? "libaddon.so" : "libnode.so"}: No such file or directory (needed by /fixture/${owner})`,
     version: `node: /fixture/${addon ? "libstdc++.so.6" : "libc.so.6"}: version '${addon ? "GLIBCXX_3.4.29" : "GLIBC_2.28"}' not found (required by /fixture/${owner})`,
   };
-  const message =
-    messages[kind] ?? (addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib");
-  return message ? `echo "${message}" >&2` : "";
+  return messages[kind] ?? "";
 }
 
 const session = () =>
@@ -41,7 +47,7 @@ const session = () =>
     argv: [],
     retainLifetime: false,
     requestArgs: () => [],
-    readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
+    readBudget: async () => ({ timeoutMs: 5_000, size: "fixture" }),
     deadlineOwnedByCaller: () => true,
     timeoutError: () => new Error("unexpected timeout"),
     closeTimeoutMs: 5_000,
@@ -73,7 +79,7 @@ it
     await runtime(
       'if [ "$1" = "--version" ]; then echo v26.12.0; exit 0; fi\n' +
         // Admit the request before exiting so the control observes a worker crash, not EPIPE.
-        `${diagnostic(kind, true)}\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
+        `echo "${diagnostic(kind, true)}" >&2\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
     );
     await expect(runWorker()).rejects.toThrow(
       `SQLite read-only worker exited with code ${ordinaryExit}`,
@@ -81,7 +87,7 @@ it
     expect([readChildRuntimeViability().available, readiness().ready]).toEqual([true, true]);
 
     const brokenExit = kind === "symbol" || kind === "musl" ? 127 : kind === "version" ? 1 : 134;
-    const executable = await runtime(`${diagnostic(kind)}\nexit ${brokenExit}`);
+    const executable = await runtime(`echo "${diagnostic(kind)}" >&2\nexit ${brokenExit}`);
     if (kind === "removed") {
       await fs.unlink(executable);
     } else if (kind === "permission") {
@@ -89,11 +95,11 @@ it
     }
     await expect(runWorker()).rejects.toMatchObject({
       code: "NODE_RUNTIME_UNAVAILABLE",
-      message: `The Node.js runtime this Gateway started with (${executable}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+      message: expect.stringContaining(diagnostic(kind) || "Restart the Gateway."),
     });
     expect(readChildRuntimeViability()).toEqual({ execPath: executable, available: false });
     expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
-    expect(() => session()).toThrow("Restart the Gateway.");
+    expect(() => session()).toThrow(diagnostic(kind) || "Restart the Gateway.");
   },
 );
 
@@ -111,3 +117,63 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   expect(recover).toHaveBeenCalledTimes(1);
   expect(() => session()).toThrow("Restart the Gateway.");
 });
+
+it.skipIf(process.platform === "win32").for([false, true])(
+  "retains retired reader custody through async diagnosis (cancel=%s)",
+  async (cancel, { signal }) => {
+    const executable = await runtime(
+      'if [ "$1" = "--version" ]; then echo v26.12.0; exit 0; fi\n' +
+        "dd bs=1 count=1 <&3 >/dev/null 2>&1\nexit 1",
+    );
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const stat = fs.stat;
+    let held = false;
+    using _ = vi.spyOn(fs, "stat").mockImplementation(async (file) => {
+      const info = await stat(file);
+      if (!held && file === executable) {
+        held = true;
+        entered.resolve();
+        await resume.promise;
+      }
+      return info;
+    });
+    const controller = new AbortController();
+    const reason = new Error("reader cancelled during runtime diagnosis");
+    const worker = session();
+    const result = worker.run("fixture", { mode: "staging-create", signal: controller.signal });
+    const outcome = result.catch((error: unknown) => error);
+    const request = observeSettlement(result);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "Reader settled before asynchronous runtime diagnosis",
+        ),
+        signal,
+      );
+      expect(worker.isRetired()).toBe(true);
+      const closing = worker.close();
+      const close = observeSettlement(closing);
+      if (cancel) {
+        controller.abort(reason);
+      }
+      await withinTest(nextEventLoopTurn(), signal);
+      expect([request.settled, close.settled]).toEqual([false, false]);
+      resume.resolve();
+      if (cancel) {
+        expect(await withinTest(outcome, signal)).toBe(reason);
+      } else {
+        expect(await withinTest(outcome, signal)).toMatchObject({
+          message: "SQLite read-only worker exited with code 1",
+        });
+      }
+      await withinTest(closing, signal);
+    } finally {
+      resume.resolve();
+      await worker.close();
+      await outcome;
+    }
+  },
+);

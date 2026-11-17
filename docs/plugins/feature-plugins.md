@@ -38,9 +38,11 @@ Native browser UI is available by default for enabled plugins, including
 user-installed and local development plugins. There is no Custom plugin UI
 Labs switch. Install and enable only plugins you trust: their browser code runs
 inside the Control UI with each signed-in viewer's Gateway permissions.
-Installed plugin details and existing enable reviews disclose a native UI entry
-when the inspected manifest declares one. Catalog install surfaces explain that
-plugin code may include native UI when that metadata is not available yet.
+Plugin details list declared UI contributions under **Extensions**, with a short
+description of what each adds and where it appears. Existing enable reviews
+disclose a native UI entry when the inspected manifest declares one. Catalog
+install surfaces explain that plugin code may include native UI when that
+metadata is not available yet.
 
 The existing config key remains an advanced opt-out. To disable native browser
 code from user-installed plugins, set:
@@ -132,6 +134,26 @@ handler receives a discriminated invocation context: `source` is
 surface. Tool policy, authenticated command handling, and Gateway scope checks
 remain owned by their existing execution paths.
 
+Operation count is not tool count: a custom UI can use many typed session
+actions without exposing them to the agent. Contracts have no operation-count,
+tool-count, or declared event-type cap. Operation and event IDs, schemas, bounded
+JSON payloads, and authorization checks still apply.
+
+OpenClaw logs advisory warnings when plugin registration or an embedded turn's
+tool preparation takes more than five seconds, and when a session's effective tool
+catalog exceeds 64 tools. These are diagnostic thresholds, not capacity limits.
+Catalog warnings are deduplicated by session and catalog; Code Mode and deferred
+discovery can expose fewer tool definitions to the model than the catalog holds.
+
+For session actions, thrown handler errors return `ok: false` with code
+`OPERATION_FAILED` and the error's message (or stringified thrown value), limited
+to 2,000 UTF-16 code units without splitting surrogate pairs. Blank messages use
+`Feature operation failed`. Validation failures retain `INVALID_INPUT` or
+`INVALID_OUTPUT`. `createFeatureClient.invoke` rejects with the returned message.
+Use caller-safe error messages: stacks, causes, and other error fields are not
+included. Tools and commands retain their existing error handling; the Gateway
+still masks uncaught errors from directly registered session actions.
+
 Use `createFeatureClient(contract, context.host)` inside a browser view:
 
 ```typescript
@@ -187,7 +209,44 @@ Its id must match the plugin manifest. Register contributions through
 | `registerAccessory`                     | Session header content.                                                                                                                 |
 | `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
-| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                        |
+
+The `run-failure-feedback` replacement occupies only the feedback action beside
+an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
+repeatCount }`; `runId` identifies the displayed failed run, not the currently
+running reply. The host preserves the original error details, copying, and
+recovery controls. No replacement, a disabled plugin, or a failed mount keeps
+the built-in **Report a bug** link available; `context.mountDefault(container)`
+can also delegate to that link.
+
+Plugins can render their own feedback actions and status receipts in this slot
+without appending a transcript message or starting a model turn. Rendering the
+slot does not establish reporting eligibility or authorize a report: keep
+classification, privacy checks, durable idempotency, delivery state, and any
+report submission in the plugin's backend. Changing the agent, session, or
+failed run retires the view and its host handles. Check `context.signal` before
+publishing an asynchronous result, and retain only verified report identifiers
+and links.
+
+Panels can supply an optional `icon` with a fixed host icon-registry name, such as
+`bookOpenText`, `barChart`, `activity`, or `terminal`:
+
+```typescript
+host.ui.registerPanel({
+  id: "activity",
+  label: "Activity",
+  icon: "activity",
+  mount(container) {
+    // Mount the plugin's panel content.
+  },
+});
+```
+
+The same icon appears in panel pickers and tabs, including mobile launchers.
+Omitted or unknown names fall back to `plug`; URLs, raw SVG, and emoji are not
+accepted as registry names. A plugin's [manifest-provided SVG](/plugins/manifest/surfaces#controlui-reference)
+takes precedence over this per-panel choice. If that artwork cannot render, the
+host uses the registered icon, or `plug` when no known icon was selected.
 
 Set a navigation item's `parent` to another navigation ID in the same plugin to
 show it nested while the parent or a child destination is active; children only
@@ -243,6 +302,23 @@ handles, including retained composer operations. Header and composer actions als
 retire when their pane stops being presented. A later return to that pane allows
 new actions; it does not revive handles from an earlier invocation.
 
+A composer action's `run` context also receives `composer`, bound to the pane
+that invoked it. `composer.draft` returns that pane's draft when read, and
+`composer.setDraft(text)` replaces it. Both throw once the action's `signal`
+aborts, so a retained handle never reads or edits the draft of a later session.
+Header and session actions receive no `composer`.
+
+```typescript
+host.ui.registerAction({
+  id: "shout",
+  label: "Uppercase draft",
+  placement: "composer",
+  run({ composer }) {
+    composer?.setDraft(composer.draft.toUpperCase());
+  },
+});
+```
+
 Replacements can compose the built-in view by calling
 `context.mountDefault(container)`. A workspace replacement should use this
 when it wants to retain the built-in chat state and session owners. The SDK
@@ -262,17 +338,29 @@ view is presented again; previously captured operations remain retired.
 
 Use the host for shared application behavior:
 
-| Capability              | Purpose                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
-| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
-| `connection`            | Current connection and operator capabilities.                                                                 |
-| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
-| `navigation`            | Open plugin pages and build their URLs.                                                                       |
-| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
-| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
-| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
-| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+| Capability                   | Purpose                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                     | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`                 | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`                 | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)            | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`                 | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent`      | Authenticated Gateway requests and event subscriptions.                                                       |
+| `recoveryStorage` (optional) | Account-bound, tab-local recovery data for this plugin.                                                       |
+| `sessions`                   | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`                  | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                         | Register, select, and invalidate plugin contributions.                                                        |
+
+Use `host.recoveryStorage` for private retry drafts that must survive a view
+remount. Version 1 provides `getItem`, `setItem`, `removeItem`, and
+`assertCurrent`. It is absent or null until the Gateway resolves the authenticated
+recovery owner. Include the agent and session identity in your local key. Storage
+errors throw; an unavailable read does not mean no previous operation exists.
+Captured handles stop working when the account, connection, plugin activation,
+or view changes. Credential replacement, rejection, or forgetting an account
+retires its stored data. Reconnect, acquire a new handle, and reauthorize the
+server resource before restoring private content. Do not fall back to an
+account-independent browser storage key.
 
 `onEvent("session.message", listener)` listeners receive complete messages;
 delivery begins once the Gateway confirms full-body delivery for this connection.

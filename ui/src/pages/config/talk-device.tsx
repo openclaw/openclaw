@@ -14,6 +14,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -342,7 +343,7 @@ function DeviceVoiceSettings(props: {
         />
       )}
       {locale()?.error && (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {locale()!.error}
           <button
             class="btn btn--sm"
@@ -361,7 +362,7 @@ function DeviceVoiceSettings(props: {
           >
             {t("common.retry")}
           </button>
-        </div>
+        </InlineAlert>
       )}
       {microphone() && (
         <SettingsRow

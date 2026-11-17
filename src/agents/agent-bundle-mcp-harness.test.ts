@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const startAuthorization = vi.hoisted(() => vi.fn());
 const readCredentialsStatus = vi.hoisted(() => vi.fn());
+const startOperatorLink = vi.hoisted(() => vi.fn());
 type Requester = { sessionId: string; requesterSenderId?: string | null };
 
 const mocks = vi.hoisted(() => {
@@ -63,6 +65,12 @@ vi.mock("./mcp-oauth.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Harness tests own projection and turn authority, not provider OAuth I/O.
+vi.mock("./mcp-oauth-link.js", () => ({
+  startOperatorMcpOAuthLink: startOperatorLink,
+  completeOperatorMcpOAuthLink: vi.fn(),
+}));
+
 import {
   materializeRequesterScopedMcpToolsForHarnessRunCore,
   materializeStaticMcpToolsForHarnessRunCore,
@@ -98,6 +106,7 @@ beforeEach(() => {
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
   startAuthorization.mockReset();
+  startOperatorLink.mockReset();
 });
 
 function makeStaticRuntime(sessionId: string) {
@@ -126,6 +135,48 @@ function setCatalog(runtime: SessionMcpRuntime, catalog: McpToolCatalog) {
   runtime.peekCatalog = () => catalog;
   runtime.getCatalog = async () => catalog;
 }
+
+it("projects shared owner sign-in through the CLI harness with the same direct-chat gate", async () => {
+  const sessionId = "shared-harness-connect";
+  const runtime = makeStaticRuntime(sessionId);
+  setCatalog(runtime, { version: 1, generatedAt: 1, servers: {}, tools: [] });
+  const cfg = {
+    mcp: {
+      servers: {
+        linear: {
+          url: "https://linear.example/mcp",
+          transport: "streamable-http" as const,
+          auth: "oauth" as const,
+        },
+      },
+    },
+  };
+  startOperatorLink.mockResolvedValue({
+    status: "redirect",
+    serverName: "linear",
+    authorizationUrl: "https://linear.example/authorize",
+    redirectUrl: "https://gateway.example/oauth/mcp/callback",
+    usesPublicOrigin: true,
+  });
+  const options = {
+    cfg,
+    policyContext: { senderIsOwner: true, chatType: "direct" },
+    isTurnTainted: () => false,
+  };
+  const owner = await staticTools(sessionId, options);
+  expect(toolNames(owner.tools)).toEqual(["linear__connect"]);
+  expect(await owner.tools[0]!.execute("connect", {})).toMatchObject({
+    content: [{ type: "text", text: expect.stringContaining("https://linear.example/authorize") }],
+  });
+  await owner.dispose();
+  const group = await staticTools(sessionId, {
+    ...options,
+    policyContext: { senderIsOwner: true, chatType: "group" },
+  });
+  expect(group.tools).toEqual([]);
+  await group.dispose();
+});
+
 function approvalGate(deniedId = "denied") {
   type Approval = NonNullable<
     Parameters<
@@ -369,7 +420,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     await result.dispose();
   });
 
-  it("returns a bounded operator-visible notice for failed configured MCP discovery", async () => {
+  it("returns a well-formed bounded notice for failed configured MCP discovery", async () => {
     const runtime = makeStaticRuntime("scheduled-diagnostic");
     setCatalog(runtime, {
       ...runtime.peekCatalog()!,
@@ -380,7 +431,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           serverName: "user-mail",
           safeServerName: "user-mail",
           launchSummary: "user-mail",
-          message: "authentication required",
+          message: "authentication required " + "🙂".repeat(120),
         },
       ],
     });
@@ -388,7 +439,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     const result = await staticTools("scheduled-diagnostic", { toolsAllow: ["*"] });
 
     expect(result.diagnosticNotice).toContain("user-mail: authentication required");
-    expect(result.diagnosticNotice).toContain("Do not claim MCP-backed work succeeded");
+    expect(result.diagnosticNotice).toContain(`${"🙂".repeat(72)}. Do not claim MCP-backed work`);
     await result.dispose();
   });
 

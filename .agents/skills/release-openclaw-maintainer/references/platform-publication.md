@@ -2,8 +2,10 @@
 
 ## Decoupling
 
-npm + ClawHub publication is the priority path. Native app publication
-(macOS, Windows, Linux, Android) runs in parallel and never gates it: a native
+Successful plugin npm publication precedes core npm. ClawHub runs
+independently from its existing dispatch point and does not gate core, GitHub
+finalization, main closeout, or the retrospective PR. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates npm: a native
 failure is classified and fixed in parallel, not a reason to re-cut or re-run
 npm validation. Each native lane starts as soon as its own prerequisites
 exist, alongside npm publication rather than queued behind it: macOS from the
@@ -13,8 +15,9 @@ tag and exact source; the Linux and Windows publishers from
 Apps are independent publication tasks. They do not block npm, Docker, GitHub
 release finalization, or stable main closeout. Record pending platforms
 explicitly and call each complete only after its assets and updater evidence
-verify. Beta skips native publication unless requested; extended-stable never
-inherits these platforms.
+verify. Beta automatically requests Gateway MSIX prereleases and Store
+Development-flight delivery; other native publication remains opt-in.
+Extended-stable never inherits these platforms.
 
 ## macOS
 
@@ -153,20 +156,121 @@ other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
 cannot establish forward order. Stop on ambiguous history.
 
+## Windows Gateway MSIX
+
+Regular stable publication to npm `latest` and beta publication to npm `beta`
+request `Windows Gateway Release Request` after GitHub activation, through both
+`OpenClaw Release Publish` and `OpenClaw Release Button`. Alpha and extended-stable
+do not request Gateway MSIX publication.
+
+For beta, the detached request dispatches `gateway-msix.yml` from packaging
+`main` with `release_channel=beta`, `signing_mode=official`,
+`publish_release=true`, the exact published `gateway_version`, and its signed
+tag's full source SHA as `openclaw_ref`. It does not follow the moving npm beta
+selector or need a Store credential. The packaging
+workflow owns source and artifact authorization, installed sideload upgrade
+proof, protected Azure signing, and permanent x64, ARM64, and bundle assets as
+GitHub prereleases, never Latest. After that build and publication succeed, core
+requests Store **Development** delivery through the central publisher. The
+packaging workflow must support these beta inputs and retain the Store bundle
+and witness on `main` before this automation is enabled.
+
+For stable, the detached request builds the exact signed Gateway source in
+`openclaw/openclaw-windows-packaging`, checks both the payload and the independently
+selected MSIX release identity, then requests `windows-store-publish.yml` on
+`openclaw/releases` `main` for Store **Production** delivery. No sideload signing
+or packaging GitHub release is requested for stable.
+
+Both lanes wait for the exact packaging-main build, check
+`openclaw-source-resolution/source-resolution.json`, and require the current
+API `run_attempt` artifacts `openclaw-gateway-msix-store-submission-<attempt>` and
+`store-release-source-<attempt>/store-source.json`. The snapshot must match the
+published signed source, version, release identity, and channel; beta uses
+`signingMode=official`, stable uses `signingMode=store`. The witness must bind that
+run, attempt, packaging commit, channel, `v<upstream>-msix.N` identity, exact Store
+bundle name, and SHA-256. Old runs without the witness are ineligible. Core does
+not download the Store bundle; the central publisher owns byte/hash verification.
+The central dispatch is `{product: gateway, run_id: <build>, channel: development
+| production, automatic: true}`; beta never targets Production.
+
+The release GitHub App must be installed on core, packaging, and releases with
+Actions write and Contents read for both channels. The existing
+`GH_APP_PRIVATE_KEY` supplies the scoped installation tokens; no PAT is needed.
+The central publisher owns source run/attempt,
+artifact, and bundle-hash validation, Store credentials, and the
+`microsoft-store-gateway` environment requiring release-manager approval for
+**both** destinations. It also owns the configured Development flight and the
+operational activation flag for automatic Development requests. A disabled flag
+is a recorded non-delivery outcome, not proof that a beta reached the flight.
+Core has no Store credential, flight GUID, or second activation policy. Central
+workflow and publisher code require release-manager review.
+
+Enable only after [packaging beta support](https://github.com/openclaw/openclaw-windows-packaging/pull/246),
+[current-attempt Store artifacts](https://github.com/openclaw/openclaw-windows-packaging/pull/247),
+[packaging's request-only cutover](https://github.com/openclaw/openclaw-windows-packaging/pull/212),
+and the [central publisher](https://github.com/openclaw/releases/pull/48) plus its
+administrative setup are ready. Configure central
+protection and exclusive Store federation and revoke the old repository's Store
+federation. Cut updated protected release tooling for both core release entry
+points; merging core alone does not update an existing frozen tooling cut.
+
+A successful core request means the central publisher was dispatched, not that
+approval or flight/Production delivery succeeded. Follow the linked releases run
+for activation status, release-manager approval, and its Store commit receipt;
+certification and delivery availability need separate verification. Core/npm
+publication does not wait for MSIX builds, approval, or Store acceptance. The
+detached request waits up to 45 minutes for packaging within its 55-minute job
+timeout. On timeout, follow that retained build without starting another one.
+Repeated publication reuses the original request, including failed requests.
+Recover its retained packaging build and central Store run IDs rather than
+rerunning the entire request or starting a duplicate after an ambiguous dispatch.
+Evidence is retained for 90 days.
+
 ## Windows Hub
 
 The optional parent inputs `windows_node_tag` and
 `windows_node_installer_digests` are supplied together. The source tag must be
 exact and non-prerelease, with candidate-approved digests. The detached Windows
 child runs after GitHub finalization; failure does not keep the release drafted.
-To attach later or recover promotion:
+To attach later or recover promotion, use the original publisher's attested
+`windows-release-approval-<run-id>-<attempt>/approval.json`. Its `release` object
+supplies `parentRunId`, `parentRunAttempt`, `toolingRef`, and `releaseTag` for the
+variables below. The child binds its executing ref and SHA to that approval; the
+attested target is checked against the original signed tag object.
+Keep the original tooling ref; dispatching from current `main` does not recover
+a protected-tag publisher's approval.
+
+The approval must come from a publisher containing this Windows approval
+contract and remain within its 30-day artifact retention. Missing or expired
+approvals cannot be reconstructed from current tooling. If Windows was selected
+originally, reuse the exact source tag and digests. If it was omitted, explicit
+recovery selects the pinned installers under the Windows writer's `npm-release`
+environment approval without republishing npm. Complete that environment review
+before expecting uploads; cancelled or superseded publisher attempts are refused.
+
+With release-owner publication authority:
 
 ```bash
-gh workflow run windows-node-release.yml --repo openclaw/openclaw --ref main \
-  -f tag=vYYYY.M.PATCH \
+ghx workflow run windows-node-release.yml --repo openclaw/openclaw --ref "$RELEASE_TOOLING_REF" \
+  -f tag="$RELEASE_TAG" \
   -f windows_node_tag=vX.Y.Z \
-  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}'
+  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
+  -f release_publish_run_id="$RELEASE_PUBLISH_RUN_ID" \
+  -f release_publish_run_attempt="$RELEASE_PUBLISH_RUN_ATTEMPT" \
+  -F direct_release_recovery=true
 ```
+
+A failed-writer retry reuses its successful validation artifact by ID. After
+that artifact's seven-day retention, rerun validation with the still-valid
+original approval.
+
+Windows promotion uploads the two installers and checksum manifest sequentially,
+rechecking current authority before each upload; these writes are not atomic.
+Cancellation is asynchronous, so an in-flight upload may complete and previously
+uploaded assets remain published. After interruption, reconcile the actual asset
+names and digests against the approved bytes before retrying with a still-valid
+original publisher approval. A superseded publisher attempt remains denied;
+replaying its old approval does not authorize recovery.
 
 Verify canonical x64/arm64 installer assets and
 `OpenClawCompanion-SHA256SUMS.txt`, expected Foundation Authenticode signer, and

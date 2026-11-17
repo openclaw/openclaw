@@ -1,3 +1,7 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -12,6 +16,7 @@ import {
 import { createRequireRecord, oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import openrouterPlugin from "./index.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
@@ -419,13 +424,16 @@ describe("openrouter video generation provider", () => {
 
   it("submits OpenRouter video jobs, polls completion, and downloads the result", async () => {
     postMock.mockResolvedValue(releasedJson(pendingVideoJob()));
+    for (const status of ["queued", "pending", "in_progress", "processing", "running"]) {
+      fetchMock.mockResolvedValueOnce(releasedJson({ id: "job-123", status }));
+    }
     fetchMock
-      .mockResolvedValueOnce(releasedJson({ id: "job-123", status: "in_progress" }))
       .mockResolvedValueOnce(
         releasedJson({
           id: "job-123",
           generation_id: "gen-123",
           status: "completed",
+          error: "ignored completed failure",
           model: "google/veo-3.1",
           unsigned_urls: ["/api/v1/videos/job-123/content?index=0"],
           usage: { cost: 0.25, is_byok: false },
@@ -437,7 +445,15 @@ describe("openrouter video generation provider", () => {
       proxy: { mode: "explicit-proxy" as const, url: "https://proxy.example" },
     };
 
-    const result = await generateVideo({
+    const { videoProviders } = await registerProviderPlugin({
+      plugin: openrouterPlugin,
+      id: "openrouter",
+      name: "OpenRouter Provider",
+    });
+    const provider = requireRegisteredProvider(videoProviders, "openrouter", "video provider");
+    const result = await provider.generateVideo({
+      provider: "openrouter",
+      model: "google/veo-3.1",
       prompt: "A chrome sphere glides across a quiet moonlit beach",
       durationSeconds: 5.4,
       aspectRatio: "16:9",
@@ -483,9 +499,12 @@ describe("openrouter video generation provider", () => {
     expectFetchUrl(0, `${LEGACY_BASE}/videos/job-123`, "status");
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer openrouter-key");
     expectFetchUrl(1, `${LEGACY_BASE}/videos/job-123`, "status");
-    expectFetchUrl(2, `${LEGACY_BASE}/videos/job-123/content?index=0`, "download");
-    expect(requireFetchCallHeaders(2).get("authorization")).toBe("Bearer openrouter-key");
-    expect(waitMock).toHaveBeenCalledOnce();
+    for (let index = 2; index < 6; index += 1) {
+      expectFetchUrl(index, `${LEGACY_BASE}/videos/job-123`, "status");
+    }
+    expectFetchUrl(6, `${LEGACY_BASE}/videos/job-123/content?index=0`, "download");
+    expect(requireFetchCallHeaders(6).get("authorization")).toBe("Bearer openrouter-key");
+    expect(waitMock).toHaveBeenCalledTimes(5);
     expect(result.videos[0]?.buffer).toBeInstanceOf(Buffer);
     expect(result.videos[0]).toMatchObject({
       buffer: Buffer.from("mp4-bytes"),
@@ -545,21 +564,51 @@ describe("openrouter video generation provider", () => {
     expect(oversized.wasCanceled()).toBe(true);
   });
 
-  it.each([
-    ["nearly_done", undefined, "OpenRouter video generation response malformed"],
-    ["failed", "  ", "OpenRouter video generation failed"],
-  ])("rejects poll status %s without waiting for timeout", async (status, error, expected) => {
-    postMock.mockResolvedValue(releasedJson({ ...pendingVideoJob(), status: "pending" }));
-    fetchMock.mockResolvedValueOnce(
+  it.each([undefined, " ", 42])(
+    "polls a missing normalized submission status %s",
+    async (status) => {
+      postMock.mockResolvedValue(releasedJson({ ...pendingVideoJob(), status }));
+      fetchMock
+        .mockResolvedValueOnce(releasedJson(completedVideoJob()))
+        .mockResolvedValueOnce(releasedVideo());
+
+      const result = await generateVideo();
+
+      expectFetchUrl(0, "https://openrouter.ai/api/v1/videos/job-123", "status");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.metadata).toEqual({ jobId: "job-123", status: "completed" });
+      expect(waitMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each<["poll" | "submission", unknown, string | undefined, string]>([
+    ["poll", "nearly_done", undefined, "OpenRouter video generation response malformed"],
+    ["poll", "failed", "  ", "OpenRouter video generation failed"],
+    ["poll", undefined, undefined, "OpenRouter video generation response malformed"],
+    ["poll", " ", undefined, "OpenRouter video generation response malformed"],
+    ["poll", 42, undefined, "OpenRouter video generation response malformed"],
+    ["poll", "COMPLETED", undefined, "OpenRouter video generation response malformed"],
+    ["submission", "nearly_done", undefined, "OpenRouter video generation response malformed"],
+    ["submission", "failed", "  synthetic failure  ", "synthetic failure"],
+    ["submission", "cancelled", undefined, "OpenRouter video generation cancelled"],
+    ["poll", "expired", "  synthetic expiry  ", "synthetic expiry"],
+    ["submission", "expired", " ", "OpenRouter video generation expired"],
+  ])("rejects %s status %s without waiting for timeout", async (phase, status, error, expected) => {
+    postMock.mockResolvedValue(
       releasedJson({
-        id: "job-123",
-        status,
-        error,
+        ...pendingVideoJob(),
+        ...(phase === "submission" ? { status, error } : { status: "pending" }),
       }),
     );
+    if (phase === "poll") {
+      fetchMock.mockResolvedValueOnce(releasedJson({ id: "job-123", status, error }));
+    }
 
     await expect(generateVideo()).rejects.toThrow(expected);
     expect(waitMock).not.toHaveBeenCalled();
+    if (phase === "submission") {
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
   });
 
   it("does not forward auth headers to cross-origin polling URLs", async () => {
@@ -594,6 +643,7 @@ describe("openrouter video generation provider", () => {
         id: "job-123",
         status: "completed",
         polling_url: "https://openrouter.ai/api/v1/videos/job-123",
+        error: "ignored completed failure",
       },
       { contentType: "video/webm", bytes: "webm-bytes" },
     );

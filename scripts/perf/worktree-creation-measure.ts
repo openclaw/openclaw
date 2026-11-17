@@ -3,20 +3,37 @@
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
  * Run serial AB/BA arms from the respective source revisions, ten creations per
  * revision. The repository must be a disposable local clone; refs and worktrees
- * are created only there and below output. No network fetch, hooks or setup code.
+ * are created only there and below output. --default-base includes remote refresh
+ * and base hydration against the fixture's file:// origin. No hooks or setup code.
  * Each creation uses the real service, state leases, Git workers and native Git.
  * Workers drain between samples to model infrequent fresh-session creation.
  * Source-loader startup precedes timing; worker startup is included. Owner logs
  * report inclusive preparation phases; Git and worker timings are also inclusive.
- * CPU/allocation cover the main JS thread, excluding workers and Git children.
+ * Main CPU/allocation exclude workers; process CPU includes workers, not Git children.
+ * OPENCLAW_BENCH_BASELINE_DIR selects a sparse frozen owner overlay in every worker.
+ * --eviction-delay-ms injects snapshot latency during capacity GC and measures a concurrent
+ * creation once a slot is available. Records allocation wait plus whole-operation CPU.
+ * --agent-db-fixture clones an offline synthetic agent database into each arm.
  * Acceptance: same checkout commit/files, one fewer cold object census, lower
  * owner CPU/allocation, no material creation regression with matched controls.
  * Small samples describe latency, never establish p99. This is not Gateway load.
+ * --alternate-policy alternates ordinary/source-only requests at one commit.
+ * --prewarm drains the service's refill request between creates; its cost is
+ * reported separately. --checkout-owner loads a frozen baseline checkout.ts.
+ * Policy acceptance: two cold builds then warm reuse, identical clean contents,
+ * lower preparation cost without >20% CPU/allocation or same-mode regression.
+ * --project-routing measures cloned-project source selection plus allocation,
+ * with omitted worktree intent. --project-owner loads a frozen baseline
+ * session-create-project.ts. Scratch writes run after timing and report their
+ * placement; session-row admission and model execution are not measured.
+ * Routing acceptance: identical source commit, zero base-clone scratch bytes.
+ * Report the added checkout cost; this correctness change is not a speedup.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -29,11 +46,23 @@ const { values } = parseArgs({
     repo: { type: "string" },
     output: { type: "string" },
     samples: { type: "string", default: "5" },
+    "default-base": { type: "boolean" },
+    "expected-commit": { type: "string" },
+    "alternate-policy": { type: "boolean" },
+    prewarm: { type: "boolean" },
+    "checkout-owner": { type: "string" },
+    fixture: { type: "boolean" },
+    "project-routing": { type: "boolean" },
+    "project-owner": { type: "string" },
+    "eviction-delay-ms": { type: "string" },
+    "agent-db-fixture": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
-const repo = await fs.realpath(values.repo);
 const output = path.resolve(values.output);
+if (process.env.OPENCLAW_BENCH_BASELINE_DIR) {
+  await import("./worker-retained-heap-preload.js");
+}
 const samples = Number(values.samples);
 assert(Number.isSafeInteger(samples) && samples > 0);
 await fs.mkdir(output);
@@ -54,6 +83,38 @@ Object.assign(process.env, {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_ATTR_NOSYSTEM: "1",
 });
+if (values.fixture) {
+  // 50k tracked source files + 12k ignored dependency files, 1.10 GB in total.
+  // Managed source templates must never copy the host's node_modules.
+  await fs.mkdir(values.repo);
+  const payload = Buffer.alloc(17742, 120);
+  for (let index = 0; index < 62000; index++) {
+    const directory = path.join(
+      values.repo,
+      index < 50000 ? "src" : "node_modules/.pnpm/fixture/node_modules/dependency",
+      `group-${Math.floor(index / 100)}`,
+    );
+    if (index % 100 === 0) {
+      await fs.mkdir(directory, { recursive: true });
+    }
+    await fs.writeFile(path.join(directory, `file-${index}.txt`), payload);
+  }
+  await fs.writeFile(path.join(values.repo, ".gitignore"), "node_modules/\n");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", values.repo!, ...args], { stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=Fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "commit",
+    "-qm",
+    "synthetic",
+  );
+}
+const repo = await fs.realpath(values.repo);
 const key = Symbol.for("openclaw.perf.worktree-creation");
 let gitTimings: Record<string, { count: number; elapsedMs: number }> = {};
 let workerTimings: Record<string, { count: number; elapsedMs: number }> = {};
@@ -74,8 +135,75 @@ Object.defineProperty(globalThis, key, {
     return () => record(gitTimings, command ?? "unknown", performance.now() - start);
   },
 });
+let snapshotEntered: (() => void) | undefined;
+let allocationWaitMs = 0;
+const evictionDelayMs = Number(values["eviction-delay-ms"] ?? 0);
+assert(Number.isFinite(evictionDelayMs) && evictionDelayMs >= 0);
+const contentionKey = Symbol.for("openclaw.perf.worktree-contention");
+Reflect.set(globalThis, contentionKey, {
+  async snapshot() {
+    if (snapshotEntered) {
+      const entered = snapshotEntered;
+      snapshotEntered = undefined;
+      entered();
+      await new Promise((resolve) => {
+        setTimeout(resolve, evictionDelayMs);
+      });
+    }
+  },
+  phase(name?: string) {
+    const start = performance.now();
+    let finished = false;
+    return () => {
+      if (!finished && name === "allocationWait") {
+        allocationWaitMs += performance.now() - start;
+      }
+      finished = true;
+    };
+  },
+});
 const hooks = registerHooks({
   load(url, context, next) {
+    if (
+      values["project-owner"] &&
+      url.endsWith("/src/gateway/server-methods/session-create-project.ts")
+    ) {
+      return {
+        format: "module-typescript",
+        shortCircuit: true,
+        source: readFileSync(values["project-owner"], "utf8"),
+      };
+    }
+    if (values["checkout-owner"] && url.endsWith("/src/agents/worktrees/checkout.ts")) {
+      return {
+        format: "module-typescript",
+        shortCircuit: true,
+        source: readFileSync(values["checkout-owner"], "utf8"),
+      };
+    }
+    if (evictionDelayMs && url.endsWith("/src/agents/worktrees/snapshot-host.ts")) {
+      let source = readFileSync(new URL(url), "utf8");
+      const declaration = "export async function captureManagedWorktreeSnapshot(";
+      assert(source.includes(declaration));
+      source = source.replace(declaration, "async function captureMeasuredSnapshot(");
+      source += `\nexport async function captureManagedWorktreeSnapshot(...args: Parameters<typeof captureMeasuredSnapshot>) {
+        await globalThis[Symbol.for("openclaw.perf.worktree-contention")].snapshot();
+        return await captureMeasuredSnapshot(...args);
+      }`;
+      return { format: "module-typescript", shortCircuit: true, source };
+    }
+    if (evictionDelayMs && url.endsWith("/src/agents/worktrees/preparation-timing.ts")) {
+      let source = readFileSync(new URL(url), "utf8");
+      const declaration = "export function startWorktreePreparationPhase(";
+      assert(source.includes(declaration));
+      source = source.replace(declaration, "function startMeasuredPhase(");
+      source += `\nexport function startWorktreePreparationPhase(...args: Parameters<typeof startMeasuredPhase>) {
+        const finish = startMeasuredPhase(...args);
+        const measure = globalThis[Symbol.for("openclaw.perf.worktree-contention")].phase(preparation.getStore() ? args[0] : undefined);
+        return () => { measure(); finish(); };
+      }`;
+      return { format: "module-typescript", shortCircuit: true, source };
+    }
     if (!url.endsWith("/src/infra/git-exec.ts")) {
       return next(url, context);
     }
@@ -104,6 +232,7 @@ const observe = (message: unknown) => {
 diagnostics.subscribe(observe);
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const config = {
+  worktreeMaxCount: 4096,
   logging: {
     level: "info" as const,
     consoleLevel: "info" as const,
@@ -111,56 +240,231 @@ const config = {
   },
 };
 setRuntimeConfigSnapshot(config, config);
+if (values["agent-db-fixture"]) {
+  const destination = path.join(
+    process.env.OPENCLAW_STATE_DIR!,
+    "agents/main/agent/openclaw-agent.sqlite",
+  );
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.copyFile(
+    values["agent-db-fixture"],
+    destination,
+    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+  );
+}
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { requireGit } = await import("../../src/agents/worktrees/git.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
-const commit = await requireGit(repo, ["rev-parse", "HEAD"]);
+if (values["default-base"]) {
+  assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
+}
+const commit = values["expected-commit"] ?? (await requireGit(repo, ["rev-parse", "HEAD"]));
+const projectSelection = values["project-routing"]
+  ? await (async () => {
+      const { prepareProjectRegistration, registerPreparedProjectRegistry } =
+        await import("../../src/projects/project-registration.js");
+      const { withProjectCheckoutLifecycle } =
+        await import("../../src/projects/project-checkout.js");
+      const { captureOpenClawStateWorkerContext } =
+        await import("../../src/state/openclaw-state-worker-context.js");
+      const context = captureOpenClawStateWorkerContext({ env: process.env });
+      const prepared = await prepareProjectRegistration({
+        path: repo,
+        source: "cloned",
+        name: "Synthetic clone",
+      });
+      const project = await withProjectCheckoutLifecycle(repo, { context }, (lease) =>
+        registerPreparedProjectRegistry(prepared, [lease], context),
+      );
+      const owner = await import("../../src/gateway/server-methods/session-create-project.js");
+      // The baseline exposes only a root; the candidate also owns placement intent.
+      const candidate = Reflect.get(owner, "resolveRequestedSessionProject");
+      const resolve = candidate ?? Reflect.get(owner, "resolveRequestedSessionProjectRoot");
+      assert.equal(typeof resolve, "function");
+      return async (): Promise<{ root: string; worktree: boolean }> => {
+        const result: { ok: true; value: unknown } | { ok: false; error: unknown } = await resolve(
+          config,
+          { projectId: project.id },
+          null,
+        );
+        assert(result.ok, JSON.stringify(result.ok ? undefined : result.error));
+        if (typeof result.value === "string") {
+          return { root: result.value, worktree: false };
+        }
+        assert(result.value && typeof result.value === "object");
+        assert("root" in result.value && typeof result.value.root === "string");
+        assert("worktree" in result.value && typeof result.value.worktree === "boolean");
+        return { root: result.value.root, worktree: result.value.worktree };
+      };
+    })()
+  : undefined;
 const ownerSha256 = createHash("sha256")
   .update(
-    await fs.readFile(new URL("../../src/agents/worktrees/capacity.runtime.ts", import.meta.url)),
+    await fs.readFile(
+      values["checkout-owner"] ??
+        new URL("../../src/agents/worktrees/checkout.ts", import.meta.url),
+    ),
   )
   .digest("hex");
+const projectOwnerSha256 = projectSelection
+  ? createHash("sha256")
+      .update(
+        await fs.readFile(
+          values["project-owner"] ??
+            new URL("../../src/gateway/server-methods/session-create-project.ts", import.meta.url),
+        ),
+      )
+      .digest("hex")
+  : undefined;
 const rows = [];
 try {
+  if (projectSelection) {
+    // Fixture registration must not warm only the first measured state lookup.
+    await drainGlobalSingletonLifecycleState();
+  }
   for (let index = 0; index < samples; index++) {
     gitTimings = {};
     workerTimings = {};
     const service = new ManagedWorktreeService({ getConfig: () => config });
+    let refill: Parameters<typeof service.prewarm>[0] | undefined;
+    const unsubscribe = service.onWarmPoolNeeded((request) => {
+      refill = request;
+    });
+    const sourceOnly = projectSelection ? false : !values["alternate-policy"] || index % 2 === 1;
+    let collecting: ReturnType<typeof service.gc> | undefined;
+    let maintenanceStart = 0;
+    let maintenanceCpu = process.cpuUsage();
+    let maintenanceAllocated = 0;
+    if (evictionDelayMs) {
+      await service.create({
+        repoRoot: repo,
+        name: `victim-${path.basename(output)}-${index}`,
+        baseRef: commit,
+        ownerKind: "manual",
+        runSetupScript: false,
+        provisionIgnoredFiles: false,
+      });
+      config.worktreeMaxCount = 0;
+      const entered = new Promise<void>((resolve) => {
+        snapshotEntered = resolve;
+      });
+      maintenanceStart = performance.now();
+      maintenanceCpu = process.cpuUsage();
+      maintenanceAllocated = getHeapStatistics().total_allocated_bytes;
+      collecting = service.gc();
+      await Promise.race([
+        entered,
+        collecting.then(() => {
+          throw new Error("GC did not reach snapshot");
+        }),
+      ]);
+      config.worktreeMaxCount = 4096;
+    }
+    allocationWaitMs = 0;
     const loadBefore = loadavg();
     const cpu = process.threadCpuUsage();
+    const processCpu = process.cpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
     assert(Number.isFinite(allocated), "Runtime must expose exact V8 allocation counters");
     const start = performance.now();
     let promptReadyMs: number | undefined;
-    const created = await service.create({
-      repoRoot: repo,
-      name: `measure-${path.basename(output)}-${index}`,
-      baseRef: commit,
-      ownerKind: "session",
-      ownerId: `synthetic-${index}`,
-      runSetupScript: false,
-      provisionIgnoredFiles: false,
-      onPromptReady: async () => {
-        promptReadyMs = performance.now() - start;
-      },
-    });
+    const selected = projectSelection ? await projectSelection() : undefined;
+    const created =
+      selected && !selected.worktree
+        ? { path: selected.root }
+        : await service.create({
+            repoRoot: selected?.root ?? repo,
+            name: `measure-${path.basename(output)}-${index}`,
+            baseRef: values["default-base"] ? undefined : commit,
+            ownerKind: "session",
+            ownerId: `synthetic-${index}`,
+            runSetupScript: false,
+            provisionIgnoredFiles: !sourceOnly,
+            onPromptReady: projectSelection
+              ? undefined
+              : async () => {
+                  promptReadyMs = performance.now() - start;
+                },
+          });
     const elapsedMs = performance.now() - start;
     const used = process.threadCpuUsage(cpu);
+    const processUsed = process.cpuUsage(processCpu);
     const row = {
       index,
+      sourceOnly,
       ownerSha256,
+      projectOwnerSha256,
       elapsedMs,
+      allocationWaitMs,
+      evictionDelayMs,
+      maintenanceMs: 0,
+      maintenanceProcessCpuMs: 0,
+      maintenanceAllocatedBytes: 0,
       promptReadyMs,
       mainThreadCpuMs: (used.user + used.system) / 1000,
+      processCpuMs: (processUsed.user + processUsed.system) / 1000,
       mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
       gitTimings: structuredClone(gitTimings),
       workerTimings: structuredClone(workerTimings),
       loadBefore,
       loadAfter: loadavg(),
       memory: process.memoryUsage(),
+      refillMs: 0,
+      refillMainCpuMs: 0,
+      refillMainAllocatedBytes: 0,
+      baseScratchBytes: 0,
+      managedScratchBytes: 0,
     };
+    if (collecting) {
+      const { acquireWorktreeRunLease } = await import("../../src/agents/worktrees/run-lease.js");
+      assert("id" in created);
+      const lease = await acquireWorktreeRunLease(created.id);
+      try {
+        await collecting;
+        row.maintenanceMs = performance.now() - maintenanceStart;
+        const maintenanceUsed = process.cpuUsage(maintenanceCpu);
+        row.maintenanceProcessCpuMs = (maintenanceUsed.user + maintenanceUsed.system) / 1000;
+        row.maintenanceAllocatedBytes =
+          getHeapStatistics().total_allocated_bytes - maintenanceAllocated;
+      } finally {
+        await lease.release();
+      }
+    }
     assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), commit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+    if (projectSelection) {
+      const scratch = path.join(created.path, ".openclaw/tmp/placement-measure");
+      await fs.mkdir(scratch, { recursive: true });
+      const bytes = 16 * 1024 * 1024;
+      const file = path.join(scratch, "synthetic-build.bin");
+      await fs.writeFile(file, Buffer.alloc(bytes, 0x61));
+      row.baseScratchBytes =
+        statSync(path.join(repo, ".openclaw/tmp/placement-measure/synthetic-build.bin"), {
+          throwIfNoEntry: false,
+        })?.size ?? 0;
+      row.managedScratchBytes = created.path === repo ? 0 : statSync(file).size;
+      assert.equal(row.baseScratchBytes + row.managedScratchBytes, bytes);
+      await fs.rm(scratch, { recursive: true });
+      await fs.rmdir(path.dirname(scratch));
+      await fs.rmdir(path.dirname(path.dirname(scratch)));
+    }
+    if (values["alternate-policy"]) {
+      assert.equal(
+        await fs.stat(path.join(created.path, "node_modules")).catch(() => undefined),
+        undefined,
+      );
+    }
+    unsubscribe();
+    if (values.prewarm && refill) {
+      const refillStart = performance.now();
+      const refillCpu = process.threadCpuUsage();
+      const refillAllocated = getHeapStatistics().total_allocated_bytes;
+      await service.prewarm(refill, { commitGuard: () => {} });
+      row.refillMs = performance.now() - refillStart;
+      const refillUsed = process.threadCpuUsage(refillCpu);
+      row.refillMainCpuMs = (refillUsed.user + refillUsed.system) / 1000;
+      row.refillMainAllocatedBytes = getHeapStatistics().total_allocated_bytes - refillAllocated;
+    }
     rows.push(row);
     console.log(JSON.stringify(row));
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
@@ -171,4 +475,5 @@ try {
   diagnostics.unsubscribe(observe);
   hooks.deregister();
   Reflect.deleteProperty(globalThis, key);
+  Reflect.deleteProperty(globalThis, contentionKey);
 }

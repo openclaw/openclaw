@@ -17,12 +17,13 @@ import {
   normalizeBasePath,
   pathForWorkboardBoard,
   workboardBoardIdFromPath,
+  pluginTabKey,
+  pluginTabRefFromSearch,
 } from "./app-route-paths.ts";
 import { routeIdFromPath, type RouteId } from "./app-routes.ts";
 import { sessionRefFromPath } from "./app-session-route-paths.ts";
 import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { settingsSearchTextMatches } from "./lib/settings-navigation.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "./pages/plugin/route.tsx";
 
 function expectBase(base: string, ...paths: string[]) {
   for (const path of paths) {
@@ -171,8 +172,17 @@ it("reads a namespaced tab reference from the generic URL", () => {
 });
 
 it("recognizes plugin hub routes", () => {
-  const routes = ["plugins", "skills", "skill-workshop", "skill-settings", "sessions"] as const;
-  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, false, false]);
+  const routes = [
+    "plugins",
+    "skills",
+    "skill-workshop",
+    "templates",
+    "skill-settings",
+    "sessions",
+  ] as const;
+  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, true, false, false]);
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("templates");
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("apps");
 });
 
 function expectRoutedPath(path: string, route: RouteId, base = "") {

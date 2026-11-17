@@ -53,7 +53,7 @@ const resultSchema = z.strictObject({
   configPaths: z.array(z.string()).max(4096),
 });
 
-/** Retain the observed core identities and capture data before plugin reservation. */
+/** Reserve plugin recovery before capturing the database generation Doctor will migrate. */
 export async function createUpdateCommandRollbackCapture(
   execution: MutableUpdateExecutionParams,
   run: UpdateCommandOptions["run"],
@@ -78,12 +78,6 @@ export async function createUpdateCommandRollbackCapture(
       if (!run) {
         return undefined;
       }
-      const capture = await captureUpdateDatabases({
-        transaction,
-        execution,
-        context,
-        assertCurrent,
-      });
       const fence = run.executorFence;
       const version = candidate?.version ?? targetVersion;
       if (!fence || !previous.version || !version) {
@@ -97,7 +91,7 @@ export async function createUpdateCommandRollbackCapture(
           execution.packageUpdateNodeRunner ??
           process.execPath,
       };
-      await beginUpdatePluginCohort({
+      const pair = await beginUpdatePluginCohort({
         runId: run.runId,
         env: context?.env ?? run.env,
         fence,
@@ -106,7 +100,20 @@ export async function createUpdateCommandRollbackCapture(
         to: { ...runtime, version, buildId: candidate?.buildId ?? null },
       });
       assertCurrent();
-      return capture;
+      // Reservation writes share the state database; capture their settled generation.
+      const captured = await captureUpdateDatabases({
+        transaction,
+        execution,
+        context,
+        assertCurrent,
+      });
+      if (captured.backup) {
+        captured.backup.pluginCohortRecovery = {
+          runId: pair.cohort.runId,
+          transactionId: pair.cohort.transactionId,
+        };
+      }
+      return captured;
     },
   };
 }
@@ -125,13 +132,24 @@ export async function commitVerifiedUpdatePluginCohort(
     (activationVerified || run?.gatewayRestartRequired !== true) &&
     run?.executorFence
   ) {
-    await settleUpdatePluginCohort({
-      runId: run.runId,
-      env: params.ownedManagedUpdateEnv ?? run.env,
-      fence: run.executorFence,
-      action: "commit",
-    });
-    assertCurrent();
+    const startedAt = performance.now();
+    try {
+      await settleUpdatePluginCohort({
+        runId: run.runId,
+        env: params.ownedManagedUpdateEnv ?? run.env,
+        fence: run.executorFence,
+        action: "commit",
+      });
+      assertCurrent();
+    } finally {
+      result.steps.push({
+        name: "plugin-cohort-commit-timing",
+        command: "openclaw update",
+        cwd: result.root ?? "",
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    }
   }
 }
 

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -15,6 +16,7 @@ import { waitForAgentDatabasePreparation } from "../../../state/agent-database-p
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import {
   SubagentCompletionSourceChangedError,
@@ -23,10 +25,7 @@ import {
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import {
-  captureSubagentControllerInputRetirement,
-  retireSubagentControllerInputs,
-} from "./subagent-controller-inputs.js";
+import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
@@ -44,8 +43,10 @@ import {
 import {
   assertRequesterSettleWakeBatchCurrent,
   mutateRequesterSettleWakeBatch,
-  settleRequesterSettleWakeBatch,
+  createRequesterWakeSettlement,
+  hasPendingRequesterSettlement,
   isRetainedRequesterSettleWakeMember,
+  pendingRequesterSettlements,
   type RequesterWakeMutationReceipt,
 } from "./subagent-registry-requester-wake-mutation.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -61,43 +62,10 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
-// Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
-// retired owners; the scope keeps a later yield generation from consuming an older receipt.
-const pendingRequesterSettlements = new WeakMap<
-  object,
-  {
-    scope: string;
-    rearmGeneration: number | undefined;
-    receipt: RequesterWakeMutationReceipt;
-    stateContext: OpenClawStateWorkerContext;
-    settle: () => Promise<void>;
-  }
->();
 const pendingRequesterTransitions = new WeakMap<
   object,
   { scope: string; commit: () => Promise<void> }
 >();
-
-export function hasPendingRequesterSettlement(
-  context: SubagentLifecycleWakeContext,
-  entry: SubagentRunRecord,
-): boolean {
-  const pending = pendingRequesterSettlements.get(getSubagentRunRuntimeKey(entry));
-  if (!pending) {
-    return false;
-  }
-  try {
-    assertSubagentRegistryWriteSourceCurrent(pending.stateContext);
-  } catch {
-    return false;
-  }
-  return isRetainedRequesterSettleWakeMember(
-    context,
-    entry,
-    pending.rearmGeneration,
-    pending.receipt,
-  );
-}
 
 /** Releases a settled batch's process-local custody, then re-evaluates the requester's other wakes. */
 function releaseRequesterSettleWakeBatch(
@@ -255,7 +223,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 }
 
 /** One in-flight evaluation per owed continuation; members of one cohort share it. */
-function requesterSettleWakeScope(entry: SubagentRunRecord): string {
+export function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
   if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
@@ -383,7 +351,7 @@ export function scheduleRequesterSettleWake(
   const completeBatch = async (
     batch: readonly SubagentRunRecord[],
     rearmGeneration: number | undefined,
-    outcome?: Parameters<typeof settleRequesterSettleWakeBatch>[3],
+    outcome?: SubagentAnnounceDeliveryResult,
     onCommitted?: () => void | Promise<void>,
   ) => {
     // A retirement may have replaced the pause notice this evaluation was delivering.
@@ -391,58 +359,17 @@ export function scheduleRequesterSettleWake(
     if (Boolean(admittedWake?.pauseNotice) !== Boolean(entry.requesterSettleWake?.pauseNotice)) {
       return;
     }
-    // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
-    const receipt: RequesterWakeMutationReceipt = {};
-    const retireInputs = batch.map(captureSubagentControllerInputRetirement);
-    const settlement = {
+    settleObserved = createRequesterWakeSettlement({
+      context,
       scope,
+      batch,
       rearmGeneration,
-      receipt,
+      outcome,
+      onCommitted,
       stateContext,
-      settle: async (): Promise<void> => {
-        const members = batch.filter(
-          (member) =>
-            pendingRequesterSettlements.get(getSubagentRunRuntimeKey(member)) === settlement &&
-            isRetainedRequesterSettleWakeMember(context, member, rearmGeneration, receipt),
-        );
-        // A quiet decision needs its whole cohort; a recorded outcome stays with surviving peers.
-        const settlesMembers =
-          members.length > 0 &&
-          (outcome !== undefined ||
-            receipt.committed !== undefined ||
-            members.length === batch.length);
-        if (
-          settlesMembers &&
-          !(await settleRequesterSettleWakeBatch(
-            context,
-            members,
-            rearmGeneration,
-            outcome,
-            stateContext,
-            receipt,
-          ))
-        ) {
-          return;
-        }
-        for (const member of batch) {
-          const key = getSubagentRunRuntimeKey(member);
-          if (pendingRequesterSettlements.get(key) === settlement) {
-            pendingRequesterSettlements.delete(key);
-          }
-        }
-        if (settlesMembers) {
-          for (const retire of retireInputs) {
-            retire();
-          }
-          await onCommitted?.();
-          releaseRequesterSettleWakeBatch(context, members, rearmGeneration);
-        }
-      },
-    };
-    for (const member of batch) {
-      pendingRequesterSettlements.set(getSubagentRunRuntimeKey(member), settlement);
-    }
-    settleObserved = settlement.settle;
+      admittedWake,
+      release: (members) => releaseRequesterSettleWakeBatch(context, members, rearmGeneration),
+    });
     await settleObserved();
   };
   runWithoutOwnedSessionTranscriptWrites(() => {
@@ -480,12 +407,23 @@ export function scheduleRequesterSettleWake(
                   settledEntry: entry,
                   isSourceCurrent,
                   onAccepted: releasePreparation,
+                  recordRequesterDelivery: async (batch, fact, onPublished) => {
+                    await mutateRequesterSettleWakeBatch(
+                      context,
+                      batch,
+                      admittedWake?.rearmGeneration,
+                      { kind: "requesterDelivery", fact },
+                      stateContext,
+                      {},
+                      onPublished,
+                    );
+                  },
                   onDescendantsPending: (deadline) => {
                     if (isSourceCurrent()) {
                       descendantWait = { entry, deadline };
                     }
                   },
-                  transitionBatch: async (batch, state, onPublished) => {
+                  transitionBatch: async (batch, state, onPublished, requesterDelivery) => {
                     // New transitions need the whole batch; retained receipts may reconcile survivors.
                     if (!isSourceCurrent()) {
                       return;
@@ -533,7 +471,7 @@ export function scheduleRequesterSettleWake(
                             context,
                             members,
                             state.rearmGeneration,
-                            { kind: "transition", state },
+                            { kind: "transition", state, requesterDelivery },
                             stateContext,
                             receipt,
                             onPublished,
@@ -609,12 +547,15 @@ export function scheduleRequesterSettleWake(
               });
               return;
             }
+            // A policy outage refuses this attempt without revoking its source: the finished
+            // result stays owed and the next lifecycle event retries it.
             const retryPreparation =
               !settleObserved &&
               ((error instanceof AgentDatabaseAdmissionError &&
                 error.refusal.code === "agent-database-inspection-pending") ||
                 error instanceof SubagentAnnouncePreparationConflictError ||
-                (error instanceof WorkerTaskError && error.code === "overloaded"));
+                (error instanceof WorkerTaskError && error.code === "overloaded") ||
+                isOperatorAuthorityUnavailable(error));
             const safeError = buildSafeLifecycleErrorMeta(error);
             if (retryPreparation) {
               // No delivery was admitted. Retain the exact cohort and its counters;
@@ -670,8 +611,6 @@ export function scheduleRequesterSettleWake(
                   agentId: entry.requesterAgentId,
                   sessionKey: requesterSessionKey,
                   storePath: entry.requesterStorePath,
-                  expectedSessionId: entry.completionRequesterSessionId,
-                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
                   idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
                   text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
                   assertCurrent: () => {

@@ -2,12 +2,14 @@ import { afterAll, afterEach, vi } from "vitest";
 
 const attachmentLookup = vi.hoisted(() => vi.fn());
 vi.mock("node:dns/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: (...args: Parameters<typeof actual.lookup>) =>
       attachmentLookup.getMockImplementation() ? attachmentLookup(...args) : actual.lookup(...args),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 export type AttachmentTestTransport = {

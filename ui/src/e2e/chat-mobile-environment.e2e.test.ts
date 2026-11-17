@@ -94,7 +94,7 @@ suite.define(() => {
         const environment = host.locator(".chat-environment-mobile");
         const machine = environment.getByRole("button", { name: machineName, exact: true });
         expect(module.requests()).toBe(0);
-        await header.getByRole("button", { name: /Studio Mac.*Offline/i }).click();
+        await header.getByRole("button", { name: /Studio Mac.*Disconnected/i }).click();
         const moduleUrl = await module.request;
         await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
         await host.getByRole("button", { name: "Back", exact: true }).click();

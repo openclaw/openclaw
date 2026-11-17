@@ -32,6 +32,15 @@ function displayRow(key: string, label: string, pinned = false) {
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
 
+it("preserves a pinned session's snooze deadline through the saved sidebar snapshot", () => {
+  const row = { ...displayRow("agent:main:snoozed", "Snoozed pin", true), snoozedUntil: 20_000 };
+  const saved = parse({ pinnedSessions: snapshotSessions([row]) });
+  expect(saved).not.toBeNull();
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, row.key);
+  expect(restored.snoozedUntil).toBe(row.snoozedUntil);
+  expect(restored.pinned).toBe(true);
+});
+
 it("retains pin action geometry without restoring mutation authority", () => {
   const rows = [
     { key: "agent:main:dashboard:root", parentSessionKey: "agent:main:main" },

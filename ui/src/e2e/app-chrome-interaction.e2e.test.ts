@@ -73,7 +73,7 @@ suite.define(() => {
       await page.locator('[data-chat-model-select="true"]').click();
       const modelOptions = page.locator(".chat-controls__model-options");
       await expect.poll(() => modelOptions.isVisible()).toBe(true);
-      await expectStyles(modelOptions, { width: "12px" }, "::-webkit-scrollbar");
+      await expectStyles(modelOptions, { width: "8px" }, "::-webkit-scrollbar");
       expect(
         await modelOptions.evaluate((element) => ({
           overflowX: getComputedStyle(element).overflowX,
@@ -180,7 +180,7 @@ suite.define(() => {
             .poll(() => capabilityMenu.evaluate((node) => node.hasAttribute("open")))
             .toBe(true);
           const menu = capabilityMenu.locator(".oc-menu").first();
-          await expectStyles(menu, { width: "12px" }, "::-webkit-scrollbar");
+          await expectStyles(menu, { width: "8px" }, "::-webkit-scrollbar");
           await expectStyles(
             menu,
             {
@@ -189,14 +189,16 @@ suite.define(() => {
             "::-webkit-scrollbar-thumb",
           );
 
-          const menuScrollbarWidths = await page.evaluate(() => {
-            return Array.from(
-              document.querySelectorAll("[popover]"),
-              (surface) => getComputedStyle(surface, "::-webkit-scrollbar").width,
-            );
+          const menuScrollbars = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll("[popover]"), (surface) => ({
+              width: getComputedStyle(surface, "::-webkit-scrollbar").width,
+              size: getComputedStyle(surface).getPropertyValue("--scrollbar-size").trim(),
+            }));
           });
-          expect(menuScrollbarWidths.length).toBeGreaterThan(1);
-          expect([...new Set(menuScrollbarWidths)]).toEqual(["12px"]);
+          expect(menuScrollbars.length).toBeGreaterThan(1);
+          for (const scrollbar of menuScrollbars) {
+            expect(scrollbar.width).toBe(scrollbar.size);
+          }
         },
         { colorScheme },
       );

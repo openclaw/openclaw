@@ -97,18 +97,17 @@ suite.define(() => {
     return gateway;
   }
 
-  it("wraps an unnamed user's long email in both hero fields on narrow screens", async () => {
+  it("wraps a long display name and email in both hero fields on narrow screens", async () => {
+    const longName = "Primaryuser".repeat(8);
     const longEmail = "primaryuserprimaryuserprimaryuserprimaryuserprimaryuser@example.test";
     await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
-      await openProfilePage(
-        page,
-        { "users.self": { profile: { ...testProfile, displayName: null, emails: [longEmail] } } },
-        testPresenceUsers.map((user) => ({ ...user, name: undefined, email: longEmail })),
-      );
+      await openProfilePage(page, {
+        "users.self": { profile: { ...testProfile, displayName: longName, emails: [longEmail] } },
+      });
 
       const title = page.locator(".profile-hero__name");
       const handle = page.locator(".profile-hero__handle");
-      await expect(title).toHaveText(longEmail);
+      await expect(title).toHaveText(longName);
       await expect(handle).toContainText(longEmail);
       for (const field of [title, handle]) {
         await expect(field).toBeInViewport({ ratio: 1 });
@@ -181,7 +180,7 @@ suite.define(() => {
     await suite.withPage(undefined, async ({ page }) => {
       await openProfilePage(page, { "users.authConnect.catalog": { providers: [] } });
       const section = page.locator("section.settings-section", {
-        has: page.getByRole("heading", { name: "Connected accounts" }),
+        has: page.getByRole("heading", { name: "Saved accounts" }),
       });
       // Where a sign-in lands is read while signing in, not on every visit.
       await expect(section.getByText("Person", { exact: true })).toHaveCount(0);
@@ -300,6 +299,49 @@ suite.define(() => {
         avatarRevision: revision,
       });
       await expect(chooser).toBeEnabled();
+    });
+  });
+  it("preserves a linked unavailable Discord account before an available unlinked account", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await openProfilePage(page, {
+        "users.channelIdentity": {
+          status: "ready",
+          accounts: [
+            { accountId: "community", available: true, senderIds: [] },
+            { accountId: "retained", available: false, senderIds: ["123456789012345678"] },
+          ],
+        },
+      });
+      const discord = page.locator("#settings-profile-identity .settings-row").filter({
+        has: page.locator(".settings-row__title", { hasText: "Discord account" }),
+        hasNot: page.locator("openclaw-select-picker"),
+      });
+      const account = page.locator("openclaw-select-picker").filter({
+        has: page.getByRole("button", { name: /^Discord account:/u }),
+      });
+      await expect(discord).toContainText("Verified");
+      await expect(discord).toContainText("123456789012345678");
+      await expect(discord.getByRole("button", { name: "Disconnect", exact: true })).toBeEnabled();
+      await expect(account).toContainText("retained");
+      await screenshot(page, "30-linked-unavailable-initial.png");
+
+      await account.getByRole("button", { name: /^Discord account:/u }).click();
+      await account.getByRole("option", { name: "community", exact: true }).click();
+      await expect(discord).toContainText("Not connected");
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      await screenshot(page, "31-explicit-available-selection.png");
+      // A status refresh must not overwrite the person's explicit selection.
+      const beforeRefresh = (await gateway.getRequests("users.channelIdentity")).length;
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
+      await expect
+        .poll(async () => (await gateway.getRequests("users.channelIdentity")).length)
+        .toBeGreaterThan(beforeRefresh);
+      await expect(account).toContainText("community");
+      await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
+      expect(await gateway.getRequests("users.channelIdentity")).not.toHaveLength(0);
+      for (const request of await gateway.getRequests("users.channelIdentity")) {
+        expect(request.params).toMatchObject({ action: "status" });
+      }
     });
   });
   it("links and disconnects Discord below linked emails without changing GitHub identity", async () => {

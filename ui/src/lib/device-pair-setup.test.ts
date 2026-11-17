@@ -264,8 +264,7 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      message:
-        "Gateway does not provide pairing lifecycle metadata. Update the Gateway and try again.",
+      message: "Couldn’t track this connection. Update the Gateway and try again.",
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });
@@ -477,7 +476,7 @@ describe("device pairing setup state", () => {
     [
       "the recorded completion belongs to another setup",
       async () => ({ completion: completion("other-setup") }),
-      "Invalid setup status response",
+      "Couldn’t read the connection status. Try again.",
     ],
   ] as const)(
     "keeps an unknown outcome recoverable when %s",

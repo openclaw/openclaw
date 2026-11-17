@@ -7,6 +7,8 @@
  *   scripts/perf/state-read-transport-bench.ts --iterations 10000
  * Add --allocations for sampled allocation, including objects collected by GC.
  * --owner <absolute source module path> selects another prepared revision.
+ * --command descendants --topology-size 2000 models cron cleanup's live identity
+ * topology. Add --immutable-command to include the producer's freeze admission.
  *
  * This measures the per-read machinery only, using the real source capture,
  * transport creation and cleanup. The backup command has no variable payload;
@@ -24,7 +26,9 @@ import { resolve } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 import type { captureOpenClawStateReadSource } from "../../src/state/openclaw-state-read-worker.js";
+import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -33,6 +37,9 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
     owner: { type: "string" },
+    command: { type: "string", default: "backup" },
+    "topology-size": { type: "string", default: "2000" },
+    "immutable-command": { type: "boolean", default: false },
   },
 });
 const iterations = parseStrictIntegerOption({
@@ -55,12 +62,44 @@ const ownerSourceSha256 = createHash("sha256").update(readFileSync(ownerUrl)).di
 const { captureOpenClawStateReadSource: captureSource } = (await import(ownerUrl.href)) as {
   captureOpenClawStateReadSource: typeof captureOpenClawStateReadSource;
 };
-const command = { type: "backup.runs" } as const;
+const topologySize = parseStrictIntegerOption({
+  raw: values["topology-size"],
+  label: "--topology-size",
+  min: 1,
+  fallback: 2000,
+});
+const liveTopology = freezeTrustedJsonSnapshot(
+  Array.from({ length: topologySize }, (_, index) => ({
+    childSessionKey: `agent:synthetic:subagent:00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    requesterSessionKey: `agent:synthetic:cron:00000000-0000-4000-8000-${String(Math.floor(index / 8)).padStart(12, "0")}:run:synthetic`,
+  })),
+);
+function createCommand(): OpenClawStateReadCommand {
+  switch (values.command) {
+    case "backup":
+      return { type: "backup.runs" };
+    case "registry":
+      return { type: "agentDatabaseRegistry.read" };
+    case "descendants": {
+      const command = {
+        type: "subagents.runs",
+        scope: {
+          kind: "descendants",
+          sessionKeys: ["agent:synthetic:cron:00000000-0000-4000-8000-000000000000:run:synthetic"],
+          liveTopology,
+        },
+      } as const;
+      return values["immutable-command"] ? freezeTrustedJsonSnapshot(command) : command;
+    }
+    default:
+      throw new Error(`Unknown command: ${values.command}`);
+  }
+}
 
 async function setup(count: number): Promise<void> {
   for (let index = 0; index < count; index++) {
     const source = captureSource();
-    const transport = source.createTransport(command);
+    const transport = source.createTransport(createCommand());
     await transport.startClose();
   }
 }
@@ -72,7 +111,7 @@ async function countFunctions(count: number) {
   const startClose = new Set();
   for (let index = 0; index < count; index++) {
     const source = captureSource();
-    const transport = source.createTransport(command);
+    const transport = source.createTransport(createCommand());
     createTransport.add(source.createTransport);
     startRead.add(transport.startRead);
     startValidateFresh.add(transport.startValidateFresh);
@@ -122,6 +161,10 @@ try {
     JSON.stringify({
       workload: "state read source capture, transport setup and empty close; no read dispatch",
       ownerSourceSha256,
+      command: values.command,
+      topologySize: values.command === "descendants" ? topologySize : undefined,
+      immutableCommand: values["immutable-command"],
+      commandJsonBytes: Buffer.byteLength(JSON.stringify(createCommand())),
       host: hostname(),
       node: process.version,
       availableParallelism: availableParallelism(),

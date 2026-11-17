@@ -9,7 +9,7 @@ import {
   resolveTargetSqliteOptions,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { beginUpdateDoctorHistoricalScan } from "../infra/update-doctor-scan-receipts.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 

@@ -133,6 +133,7 @@ async function run(turnCount: number) {
         } as unknown as EmbeddedAttemptExecutionPhaseInput;
         owner.installEmbeddedAttemptStreamGuards(input, {
           onRejectedProviderReplayRepaired: () => assert.fail("unexpected repair"),
+          isToolBoundarySafe: () => false,
           onIdleTimeout: (error) => {
             throw error;
           },

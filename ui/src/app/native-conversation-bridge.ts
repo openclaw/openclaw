@@ -336,7 +336,7 @@ export function createNativeConversationBridge(
       ...(location.search ? { search: location.search } : {}),
     }).then((delivery) => {
       if (delivery !== "accepted" && current()) {
-        showToast({ message: t("nativeConversation.openDashboardFailed") });
+        showToast({ severity: "error", message: t("nativeConversation.openDashboardFailed") });
       }
     });
     return true;

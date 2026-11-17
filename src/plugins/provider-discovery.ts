@@ -12,6 +12,8 @@ import {
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogContext, ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import { PROVIDER_CATALOG_ORDERS as DISCOVERY_ORDER } from "./provider-catalog.types.js";
+import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 const providerRuntimeLoader = createLazyImportLoader(
@@ -28,6 +30,10 @@ type PreparedProviderStaticCatalogEntry = Readonly<{
 export type PreparedProviderStaticCatalog = Readonly<{
   /** Provider handles captured for this config/workspace generation. */
   providers?: readonly ProviderPlugin[];
+  runtimeProvenance?: Readonly<{
+    registry: WeakRef<PluginRegistry>;
+    loadContext: WeakRef<PluginRuntimeLoadContextState>;
+  }>;
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
 

@@ -1,13 +1,15 @@
 // Client Ed25519 identity API backed by the local credential owner.
 import crypto from "node:crypto";
 import {
+  resolveDeviceIdentityStore,
+  type DeviceIdentityStoreOptions,
+} from "./device-identity-store-options.js";
+import {
   generateStoredDeviceIdentity,
   insertStoredDeviceIdentityIfAbsent,
   readStoredDeviceIdentity,
   readStoredDeviceIdentityReadOnly,
-  resolveDeviceIdentityStore,
   type DeviceIdentity,
-  type DeviceIdentityStoreOptions,
   type StoredDeviceIdentity,
 } from "./device-identity-store.js";
 import { normalizeEd25519PublicKeyBase64Url, verifyEd25519Signature } from "./ed25519-signature.js";

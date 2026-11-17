@@ -16,6 +16,7 @@ import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsNavRow,
   SettingsRow,
@@ -37,10 +38,16 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
+import {
+  modelSettingFallbacks,
+  modelSettingPrimary,
+  readModelSetting,
+} from "../../lib/model-setting.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -51,6 +58,8 @@ import type { AgentIdentityOutcome } from "./identity-actions.ts";
 import { renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
+
+const INHERIT_UTILITY = "__openclaw_inherit_utility__";
 
 export function AgentOverview(
   params: AgentConfigState &
@@ -63,6 +72,7 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
+      panelAccess: AgentSettingsAccess["panels"];
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -142,6 +152,77 @@ export function AgentOverview(
   const inheritedDecisionModel = createMemo(() => {
     const value = config().defaults?.decisionModel;
     return typeof value === "string" ? value : undefined;
+  });
+  // Own utility model: an omitted primary inherits agents.defaults.utilityModel; "" disables it.
+  const ownUtilitySetting = createMemo(() => readModelSetting(config().entry?.utilityModel));
+  const utilityModel = createMemo(() => modelSettingPrimary(ownUtilitySetting()));
+  const ownUtilityFallbacks = createMemo(() => modelSettingFallbacks(ownUtilitySetting()));
+  const utilityModelOptions = createMemo(() => {
+    const inherited = modelSettingPrimary(readModelSetting(config().defaults?.utilityModel));
+    return [
+      {
+        value: INHERIT_UTILITY,
+        label: t("agents.overview.inheritDefaultModel", {
+          model:
+            inherited === undefined
+              ? t("agents.overview.utilityModelInheritAutomatic")
+              : inherited || t("modelProviders.defaults.disabled"),
+        }),
+      },
+      { value: "", label: t("agents.overview.utilityModelDisabled") },
+      // Passing the own model keeps an unavailable override visible and selected.
+      ...buildModelOptions(
+        configForm(),
+        utilityModel() || undefined,
+        params.modelCatalog,
+        params.agent.id,
+      ),
+    ];
+  });
+  // Thinking is not a model choice, so a restricted model catalog does not hide it.
+  const thinkingConfig = createMemo(() => resolveAgentConfig(params.configForm, params.agent.id));
+  const thinkingDefault = createMemo(() => thinkingConfig().entry?.thinkingDefault);
+  // The Gateway resolves both from the saved config: thinkingDefault is the agent's level, and
+  // thinkingInheritedDefault (sent only with an override) is what clearing it resolves to.
+  // With an override, thinkingDefault is the override itself, so it never names the inherited
+  // level; restricted rosters omit the inherited field and the option then names no level.
+  const inheritedThinking = () =>
+    thinkingDefault()
+      ? params.agent.thinkingInheritedDefault
+      : (params.agent.thinkingInheritedDefault ?? params.agent.thinkingDefault);
+  const thinkingDisabled = createMemo(
+    () =>
+      !params.canUpdateConfig || !params.configForm || params.configLoading || params.configSaving,
+  );
+  const thinkingOptions = createMemo(() => {
+    const levels = params.agent.thinkingLevels ?? [];
+    const saved = thinkingDefault();
+    if (levels.length === 0 && !saved) {
+      return [];
+    }
+    const inherited = inheritedThinking();
+    const options: { value: string; label: string; disabled?: boolean }[] = [
+      {
+        value: "",
+        // Without config the source of the resolved level is unknown: show it as is.
+        label: !params.configForm
+          ? thinkingLevelLabel(t, params.agent.thinkingDefault ?? "")
+          : inherited
+            ? t("agents.overview.inheritDefaultThinking", {
+                level: thinkingLevelLabel(t, inherited),
+              })
+            : t("agents.overview.inheritDefault"),
+      },
+      ...levels.map((level) => ({
+        value: level.id,
+        label: thinkingLevelLabel(t, level.id, level.label),
+      })),
+    ];
+    // A level the current model does not offer stays visible instead of being rewritten.
+    if (saved && !levels.some((level) => level.id === saved)) {
+      options.push({ value: saved, label: thinkingLevelLabel(t, saved), disabled: true });
+    }
+    return options;
   });
   const modelFallbacks = createMemo(
     () =>
@@ -438,6 +519,53 @@ export function AgentOverview(
             />
           }
         />
+        <Show when={thinkingOptions().length > 0}>
+          <SettingsRow
+            title={t("agents.context.thinkingDefault")}
+            control={
+              <SettingsSelect
+                aria-label={t("agents.context.thinkingDefault")}
+                value={thinkingDefault() ?? ""}
+                options={thinkingOptions()}
+                disabled={thinkingDisabled()}
+                onChange={(event) =>
+                  params.onThinkingDefaultChange(params.agent.id, event.currentTarget.value || null)
+                }
+              />
+            }
+          />
+        </Show>
+        <SettingsRow
+          title={t("agents.overview.utilityModel")}
+          description={
+            <>
+              {t("agents.overview.utilityModelHelp")}
+              <Show when={ownUtilityFallbacks().length > 0}>
+                <br />
+                {t("agents.overview.utilityModelFallbacks", {
+                  models: ownUtilityFallbacks().join(", "),
+                })}
+              </Show>
+            </>
+          }
+          control={
+            <ModelPicker
+              id="agent-utility-model"
+              label={t("agents.overview.utilityModel")}
+              title={utilityModel() || undefined}
+              value={utilityModel() ?? INHERIT_UTILITY}
+              options={utilityModelOptions()}
+              disabled={disabled()}
+              onChange={(value) =>
+                params.onUtilityModelChange(
+                  params.agent.id,
+                  value === INHERIT_UTILITY ? null : value,
+                )
+              }
+              onOpen={params.onModelCatalogOpen}
+            />
+          }
+        />
         <SettingsRow
           title={t("chat.modelControls.decisionLabel")}
           description={t("chat.modelControls.decisionAgentHelp")}
@@ -455,23 +583,35 @@ export function AgentOverview(
         />
       </SettingsSection>
       <SettingsSection title={t("agents.context.title")}>
-        <SettingsNavRow
-          title={t("agents.context.workspace")}
-          description={<span class="agent-overview__workspace">{context().workspace}</span>}
-          onClick={() => params.onSelectPanel("files")}
-        />
-        <SettingsNavRow
-          title={t("agents.context.skillsFilter")}
-          control={<SettingsValue value={context().skillsLabel} />}
-          onClick={() => params.onSelectPanel("skills")}
-        />
-        <Show when={params.agent.thinkingDefault}>
-          {(level) => (
+        <Show
+          when={params.panelAccess.files === "available"}
+          fallback={
             <SettingsRow
-              title={t("agents.context.thinkingDefault")}
-              control={<SettingsValue value={formatThinkingOverrideLabel(level())} />}
+              title={t("agents.context.workspace")}
+              control={<SettingsValue mono value={context().workspace} />}
             />
-          )}
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.workspace")}
+            description={<span class="agent-overview__workspace">{context().workspace}</span>}
+            onClick={() => params.onSelectPanel("files")}
+          />
+        </Show>
+        <Show
+          when={params.panelAccess.skills === "available"}
+          fallback={
+            <SettingsRow
+              title={t("agents.context.skillsFilter")}
+              control={<SettingsValue value={context().skillsLabel} />}
+            />
+          }
+        >
+          <SettingsNavRow
+            title={t("agents.context.skillsFilter")}
+            control={<SettingsValue value={context().skillsLabel} />}
+            onClick={() => params.onSelectPanel("skills")}
+          />
         </Show>
         <Show when={context().runtime !== "-"}>
           <SettingsRow

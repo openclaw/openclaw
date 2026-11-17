@@ -322,7 +322,7 @@ it("leaves the accepted run running when waiting for its answer times out", asyn
   expect(h.state.realtimeTalk.snapshot).toMatchObject({
     realtimeTalkStatus: "error",
     realtimeTalkDetail:
-      "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
+      "Talk stopped waiting. The agent’s reply will appear in Chat when it finishes.",
   });
   // Dismissing the failed call must not turn its earlier detach into an abort.
   await h.state.toggleRealtimeTalk();
@@ -559,4 +559,25 @@ it("surfaces a rejected chat admission instead of waiting forever for a model re
   expect(h.called("chat.send")).toBe(true);
   expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
+});
+
+it("keeps split Talk listening after a successfully completed empty utterance", async () => {
+  const h = harness();
+  h.intercept("talk.session.close", async (_next, params) => {
+    const captureId = asOptionalRecord(params)?.sessionId;
+    h.emit("talk.event", {
+      transcriptionSessionId: captureId,
+      type: "transcript",
+      text: "",
+      final: true,
+    });
+    h.emit("talk.event", { transcriptionSessionId: captureId, type: "close", reason: "completed" });
+    return { ok: true };
+  });
+  await h.state.toggleRealtimeTalk();
+  h.utterance();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
+  expect(tracks).toHaveLength(2);
+  expect(h.called("chat.send")).toBe(false);
 });

@@ -15,7 +15,7 @@ import {
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import {
-  formatBetaChannelFallbackOutcomeSuffix,
+  formatChannelFallbackOutcomeSuffix,
   resolveExactNpmSpecVersion,
   resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
@@ -123,6 +123,7 @@ type PluginUpdateSpecPlan = {
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  minimumStableVersion?: string;
 };
 
 type PluginUpdateInstallResult =
@@ -343,13 +344,15 @@ export async function runPluginUpdateAttempt(params: {
               }),
             isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
             onFallback: () => {
-              channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
+              const channel = params.clawhubSpecs?.minimumStableVersion ? "stable" : "beta";
+              channelFallbackSuffix = formatChannelFallbackOutcomeSuffix({
                 fallbackLabel: params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec,
                 fallbackSpec: clawhubFallbackSpec,
                 verb: params.dryRun ? "would use" : "used",
+                channel,
               });
               params.logger.info?.(
-                `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec}; using ${clawhubFallbackSpec} instead. Core update can still complete.`,
+                `Plugin "${params.pluginId}" has no ${channel} ClawHub release for ${params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec}; using ${clawhubFallbackSpec} instead. Core update can still complete.`,
               );
               activeClawHubInstallSpec = clawhubFallbackSpec;
             },

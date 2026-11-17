@@ -19,6 +19,16 @@ type ProviderAuthRuntimeLookup = Pick<
   "provider" | "config" | "workspaceDir" | "env"
 >;
 
+export const formatProviderAuthProfileApiKeyWithPlugin = (
+  params: ProviderAuthRuntimeLookup & {
+    context: Parameters<NonNullable<ProviderPlugin["formatApiKey"]>>[0];
+  },
+) => {
+  const plugin = resolveProviderRuntimePlugin(params);
+  const hook = plugin?.formatApiKey;
+  return hook?.call(plugin, params.context);
+};
+
 export class UnsupportedProviderRuntimeAuthCapabilityError extends Error {
   constructor() {
     super("Provider credential exchange requires a full chat model; use prepareRuntimeAuthV2.");

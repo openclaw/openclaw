@@ -110,12 +110,19 @@ export function resolveProjectRegistryInDatabase(
 export function resolveRecordedProjectRootInDatabase(
   database: EngineConnection,
   repoRoot: string,
+  source?: ProjectRegistryInsert["source"],
 ): string | undefined {
   const db = getNodeSqliteKysely<ProjectsDatabase>(database);
-  return executeSqliteQueryTakeFirstSync(
+  const query = db
+    .selectFrom("projects")
+    .select("repo_root")
+    .where("repo_root", "=", repoRoot)
+    .limit(1);
+  const row = executeSqliteQueryTakeFirstSync(
     database,
-    db.selectFrom("projects").select("repo_root").where("repo_root", "=", repoRoot),
-  )?.repo_root;
+    source ? query.where("source", "=", source) : query,
+  );
+  return row?.repo_root;
 }
 
 function readMatchingProjectRow(

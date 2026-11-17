@@ -208,12 +208,24 @@ describe("authenticated GitHub identity sync", () => {
   });
 
   it.each([
-    { provider: "tailscale", name: 123, initial: "Provider Ada", expected: "Provider Ada" },
-    { provider: "access", name: 123, initial: "Provider Ada", expected: "Provider Ada" },
-    { provider: "access", name: undefined, initial: undefined, expected: "Ada" },
+    {
+      provider: "tailscale",
+      name: 123,
+      initial: "Provider Ada",
+      expected: "Provider Ada",
+      stored: "Provider Ada",
+    },
+    {
+      provider: "access",
+      name: 123,
+      initial: "Provider Ada",
+      expected: "Provider Ada",
+      stored: "Provider Ada",
+    },
+    { provider: "access", name: undefined, initial: undefined, expected: "Ada", stored: null },
   ])(
     "preserves $provider display fallback $expected without extra requests",
-    async ({ provider, name, initial, expected }) => {
+    async ({ provider, name, initial, expected, stored }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const fetchMock = vi.spyOn(globalThis, "fetch");
         if (provider === "access") {
@@ -228,6 +240,7 @@ describe("authenticated GitHub identity sync", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const display = getUserProfileDisplay(result.profileId);
         expect(display.displayName).toBe(expected);
+        expect(getUserProfileListItem(result.profileId).displayName).toBe(stored);
         const presenceUser = buildAuthenticatedPresenceUser({
           authenticatedUserId: provider === "access" ? "ada@example.com" : "ada@github",
           authenticatedUserIsTailscaleProvider: provider === "tailscale",
@@ -255,13 +268,8 @@ describe("authenticated GitHub identity sync", () => {
       const profile = ensureProfileForTailscaleIdentity({ login: "ada@github" });
       setDisplayName(profile.id, "Ada");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      let resolveLookup: ((response: Response) => void) | undefined;
-      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveLookup = resolve;
-          }),
-      );
+      const lookup = createDeferred<Response>();
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockReturnValueOnce(lookup.promise);
 
       const sync = tailscaleSync();
       const first = sync?.();
@@ -269,7 +277,7 @@ describe("authenticated GitHub identity sync", () => {
       expect(second).toBe(first);
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
       setDisplayName(profile.id, "User Chosen");
-      resolveLookup?.(githubResponse({ id: 583231, login: "Ada", name: "Ada Lovelace" }));
+      lookup.resolve(githubResponse({ id: 583231, login: "Ada", name: "Ada Lovelace" }));
 
       await expect(first).resolves.toMatchObject({ profileId: profile.id });
       expect(getUserProfileListItem(profile.id).githubIdentity).toMatchObject({ login: "Ada" });

@@ -59,6 +59,12 @@ describe("session observer settings patches", () => {
     );
   });
 
+  it("does not infer a missing utility model from an unobserved status", () => {
+    const container = renderObserver({ sessionObserverResolvedModel: undefined });
+    expect(container.textContent).toContain("Utility model status not loaded");
+    expect(container.textContent).not.toContain("no small model");
+  });
+
   it("keeps auto and disabled selectable when explicit models are unavailable", async () => {
     const container = renderObserver({
       sessionObserverResolvedModel: { status: "unavailable" },

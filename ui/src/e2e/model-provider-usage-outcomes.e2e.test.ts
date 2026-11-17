@@ -12,8 +12,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const now = Date.now();
-const unavailableMessage =
-  "Provider usage is unavailable; the last request failed. Refresh to retry.";
+const unavailableMessage = "Couldn’t load provider usage. Refresh to try again.";
 
 const config = {
   agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -48,7 +47,7 @@ function providerUsageResponses(usageStatus: unknown) {
 }
 
 suite.define(() => {
-  it.each([1440, 390])("draws the daily cost trend on desktop only: %ipx", async (width) => {
+  it.each([1440, 390])("draws the daily cost trend at every width: %ipx", async (width) => {
     await withPage(async (page) => {
       await installMockGateway(page, {
         methodResponses: providerUsageResponses({
@@ -81,8 +80,8 @@ suite.define(() => {
       const row = await expandProvider(page, "openai");
       const line = row.locator(".oc-sparkline-line");
       if (width === 390) {
-        await row.locator(".provider-usage__trend small").waitFor();
-        expect(await line.isVisible()).toBe(false);
+        await row.locator(".provider-usage__fact .provider-usage__reset").waitFor();
+        expect(await line.isVisible()).toBe(true);
         return;
       }
       await line.waitFor();
@@ -127,6 +126,10 @@ suite.define(() => {
           await page.locator('[data-provider-id="openai"]').waitFor();
           await expect
             .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())
+            .toContain("Couldn’t check usage");
+          await expandProvider(page, "openai");
+          await expect
+            .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())
             .toContain("provider API unavailable");
           await warning.not.toContain(unavailableMessage);
         }
@@ -165,19 +168,16 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
       const openaiCard = page.locator('[data-provider-id="openai"]');
-      // An agent switch reloads the list, so open the row again on each read.
-      const credentials = async () =>
-        (await expandProvider(page, "openai"))
-          .locator(".model-providers__credentials")
-          .textContent();
-      await expect.poll(credentials).toContain("Credentials for Main");
-      await openaiCard.getByRole("button", { name: "Set API key" }).click();
+      const scope = () => page.locator(".oc-settings-section").last().textContent();
+      await expect.poll(scope).toContain("Accounts for Main");
+      await expandProvider(page, "openai");
+      await openaiCard.getByRole("button", { name: "Replace API key" }).click();
       await openaiCard.getByLabel("API key", { exact: true }).fill("synthetic-main-provider-key");
 
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
-      await expect.poll(credentials).toContain("Credentials for Writer");
+      await expect.poll(scope).toContain("Accounts for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -190,7 +190,7 @@ suite.define(() => {
       await evaluateControlUiContext(page, (context) => {
         context.settingsAgentSelection.set("main");
       });
-      await expect.poll(credentials).toContain("Credentials for Main");
+      await expect.poll(scope).toContain("Accounts for Main");
       await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);

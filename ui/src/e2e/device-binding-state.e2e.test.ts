@@ -162,6 +162,7 @@ suite.define(() => {
       const requireRecord = createRequireRecord("record", "expected-object-value");
       const config = makeConfig("default-node", "agent-node");
       await suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
+        await page.clock.install();
         const artifacts = captureUiProof
           ? createControlUiE2eArtifactDir("device-binding-clear")
           : undefined;
@@ -224,7 +225,13 @@ suite.define(() => {
         );
         expect(JSON.parse(String(clearedAgent.raw))).toEqual(makeConfig("", ""));
         await gateway.resolveDeferred("config.set");
-        await expect(indicator).toContainText("Apply changes");
+        await expect
+          .poll(async () => {
+            // Let each real config.get settle before advancing the next polling window.
+            await page.clock.runFor(1_000);
+            return indicator.textContent();
+          })
+          .toContain("Apply changes");
         await expect(
           section.getByText("No devices can run commands yet.", { exact: true }),
         ).toBeVisible();

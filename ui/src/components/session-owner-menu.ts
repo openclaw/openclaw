@@ -1,4 +1,5 @@
 import { createProjection, createSignal } from "solid-js";
+import { userProfileDisplayName } from "../../../src/shared/user-profile-display-name.js";
 import { normalizeAgentTargetLabel } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { profileAvatarUrl, profileDirectory } from "../lib/profile-directory.ts";
@@ -37,7 +38,9 @@ export function createSessionOwnerMenu(presented: () => boolean = () => true) {
         type: "human",
         id: profile.id,
         identity: { type: "profile", id: profile.id },
-        label: profile.displayName?.trim() || profile.githubIdentity?.login || profile.id,
+        label:
+          userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
+          profile.id,
         avatarUrl: profileAvatarUrl(profile),
       }));
     const identityOwner = identities?.read();

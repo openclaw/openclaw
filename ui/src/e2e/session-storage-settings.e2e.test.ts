@@ -6,35 +6,33 @@ import { sessionStorageStatus } from "../pages/config/session-storage.test-suppo
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectText } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Session storage settings",
   startServerBeforeBrowser: true,
 });
 const route = "settings/ai-agents?section=session";
-const agentStorage = (
-  agentId: string,
-  hotTranscripts: number,
-  coldTranscripts: number,
-  databaseBytes: number,
-  walBytes = 0,
-  archiveBytes = 0,
-  embeddedArchiveBytes = 0,
-) => ({
-  agentId,
-  storePath: `/synthetic/${agentId}/agent.sqlite`,
-  hotTranscripts,
-  coldTranscripts,
-  databaseBytes,
-  walBytes,
-  archiveBytes,
-  embeddedArchiveBytes,
-});
-
 const storage: SessionsStorageStatusResult = sessionStorageStatus([
-  agentStorage("main", 240, 760, 734003200, 10485760, 125829120, 10485760),
-  agentStorage("research", 60, 140, 314572800, 0, 41943040),
+  {
+    agentId: "main",
+    storePath: "/synthetic/main/agent.sqlite",
+    hotTranscripts: 240,
+    coldTranscripts: 760,
+    databaseBytes: 734003200,
+    walBytes: 10485760,
+    archiveBytes: 125829120,
+    embeddedArchiveBytes: 10485760,
+  },
+  {
+    agentId: "research",
+    storePath: "/synthetic/research/agent.sqlite",
+    hotTranscripts: 60,
+    coldTranscripts: 140,
+    databaseBytes: 314572800,
+    walBytes: 0,
+    archiveBytes: 41943040,
+    embeddedArchiveBytes: 0,
+  },
 ]);
 function snapshot(enabled = false, afterDays = 30, hash = "storage-e2e") {
   const config = { session: { maintenance: { coldStorage: { enabled, afterDays } } } };
@@ -51,15 +49,13 @@ const maintenanceStatus = (maintenance: Partial<SessionsStorageStatusResult["mai
   ...storage,
   maintenance: { ...storage.maintenance, ...maintenance },
 });
-function row(page: Page, title: string) {
-  return page
+const row = (page: Page, title: string) =>
+  page
     .locator("div.settings-row")
     .filter({ has: page.locator(".settings-row__title").getByText(title, { exact: true }) });
-}
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const ageInput = (page: Page) => page.getByRole("spinbutton", { name: "Archive after (days)" });
-const archiveSwitch = (page: Page) =>
-  page.getByRole("switch", { name: /Archive older transcripts/ });
+const archiveSwitch = (page: Page) => page.getByRole("switch", { name: /Archive older chats/ });
 const expectRow = (page: Page, title: string, text: string) =>
   expect.poll(() => row(page, title).textContent()).toContain(text);
 async function openStorage(page: Page, options: Parameters<typeof installMockGateway>[1] = {}) {
@@ -77,14 +73,40 @@ async function openStorage(page: Page, options: Parameters<typeof installMockGat
 }
 
 suite.define(() => {
+  it("uses default archival settings and preserves an explicit opt-out", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const config = {};
+      const gateway = await openStorage(page, {
+        methodResponses: {
+          "config.get": {
+            ...configSnapshot(config, "default-storage"),
+            appliedConfigHash: "default-storage",
+          },
+        },
+      });
+      await expectRow(page, "Chats", "1200");
+      await expect.poll(() => archiveSwitch(page).isChecked()).toBe(true);
+      expect(await ageInput(page).inputValue()).toBe("30");
+      await expect.poll(() => button(page, "Run now").isEnabled()).toBe(true);
+      await archiveSwitch(page).click();
+      const save = await gateway.waitForRequest("config.set");
+      expect(submittedConfig(save)).toHaveProperty(
+        "session.maintenance.coldStorage.enabled",
+        false,
+      );
+      expect(await archiveSwitch(page).isChecked()).toBe(false);
+    });
+  });
+
   it("shows inventory, saves whole-day policy without restart, and runs only applied settings", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1100 }, colorScheme: "dark" },
       async ({ page }) => {
+        await page.clock.install();
         const gateway = await openStorage(page);
         const run = button(page, "Run now");
-        await expectRow(page, "Transcripts", "1200");
-        await expectRow(page, "Transcripts", "300 uncompressed · 900 archived");
+        await expectRow(page, "Chats", "1200");
+        await expectRow(page, "Chats", "300 uncompressed · 900 archived");
         await page.getByText("Details by agent", { exact: true }).click();
         await expectRow(page, "research", "140 archived");
         await page.getByText("Details by agent", { exact: true }).click();
@@ -107,8 +129,12 @@ suite.define(() => {
         expect(submittedConfig(firstSave)).toMatchObject({
           session: { maintenance: { coldStorage: { afterDays: 14 } } },
         });
-        await expectText(page.locator("openclaw-settings-save-indicator"), "Apply changes");
-        await row(page, "Archive older transcripts").getByRole("switch").click();
+        const indicator = page.locator("openclaw-settings-save-indicator");
+        await expect
+          .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
+          .toContain("Apply changes");
+        await page.clock.resume();
+        await row(page, "Archive older chats").getByRole("switch").click();
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(2);
         const saves = await gateway.getRequests("config.set");
         expect(submittedConfig(saves[1]!)).toHaveProperty("session.maintenance.coldStorage", {
@@ -129,10 +155,14 @@ suite.define(() => {
         const running = maintenanceStatus({ running: true, lastStartedAt: 1789135190000 });
         await gateway.setMethodResponse("sessions.storage.status", running);
         await gateway.resolveDeferred("sessions.storage.run", running);
-        await page.getByRole("status").filter({ hasText: "Background batch started." }).waitFor();
-        expect(await page.getByText("Batch completed", { exact: false }).count()).toBe(0);
+        const notice = page.getByRole("status");
+        await notice.filter({ hasText: "Maintenance batch started." }).waitFor();
+        expect(await page.getByText("Maintenance batch completed", { exact: false }).count()).toBe(
+          0,
+        );
         await expectRow(page, "Background maintenance", "Running");
         const initialReads = (await gateway.getRequests("sessions.storage.status")).length;
+        await page.clock.runFor(3_000); // Include the poll's queued reply.
         await expect
           .poll(async () => (await gateway.getRequests("sessions.storage.status")).length)
           .toBeGreaterThan(initialReads);
@@ -143,10 +173,9 @@ suite.define(() => {
             lastCompletedAt: 1789135200000,
           }),
         );
-        await page
-          .getByRole("status")
-          .filter({ hasText: "Batch completed. 12 transcripts archived." })
-          .waitFor();
+        await page.clock.runFor(2_000);
+        await notice.filter({ hasText: "Batch completed. 12 chats archived." }).waitFor();
+        await page.clock.resume();
         await page.setViewportSize({ width: 390, height: 844 });
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -170,17 +199,17 @@ suite.define(() => {
       });
       const run = button(page, "Run now");
       await page.getByRole("alert").filter({ hasText: "Archive missing" }).waitFor();
-      expect(await row(page, "Transcripts").count()).toBe(0);
+      expect(await row(page, "Chats").count()).toBe(0);
       expect(await run.isDisabled()).toBe(true);
       await gateway.setMethodResponse("sessions.storage.status", storage);
       await button(page, "Refresh").click();
-      await expectRow(page, "Transcripts", "1200");
+      await expectRow(page, "Chats", "1200");
       await gateway.setMethodResponse("sessions.storage.run", {
         __mockError: { code: "UNAVAILABLE", message: "Not enough disk space" },
       });
       await run.click();
       await page.getByRole("alert").filter({ hasText: "Not enough disk space" }).waitFor();
-      expect(await page.getByText("Batch completed", { exact: false }).count()).toBe(0);
+      expect(await page.getByText("Maintenance batch completed", { exact: false }).count()).toBe(0);
     });
   });
 
@@ -189,9 +218,7 @@ suite.define(() => {
       const gateway = await openStorage(page, {
         operatorScopes: ["operator.read"],
       });
-      await page
-        .getByText("Administrator access is required to inspect session storage.")
-        .waitFor();
+      await page.getByText("You need admin access to inspect session storage.").waitFor();
       expect(await ageInput(page).isDisabled()).toBe(true);
       expect(await archiveSwitch(page).isDisabled()).toBe(true);
       for (const method of ["sessions.storage.status", "config.set"]) {

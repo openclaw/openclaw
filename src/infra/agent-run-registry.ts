@@ -32,12 +32,11 @@ import type {
   ProjectedAgentRunState,
 } from "./agent-run-registry.types.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
+import { isOperatorAuthorityUnavailable } from "./operator-authority-error.js";
 
-export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
+export type { AgentRunDelegatedAuthority, ProjectedAgentRunIndex };
 export { listAgentRunsForSession } from "./agent-run-registry-state.js";
-export { getAgentRunLifecycleGeneration, readAgentRunIndexVersion };
-export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
+export { getAgentRunContextOwnerStatus, getAgentRunLifecycleGeneration, readAgentRunIndexVersion };
 
 const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
 
@@ -429,6 +428,9 @@ function readActiveAgentRunDelegatedAuthority(
       ? authority
       : undefined;
   } catch (error) {
+    if (isOperatorAuthorityUnavailable(error)) {
+      throw error;
+    }
     if (!delegatedAuthorityFailures.has(authority)) {
       delegatedAuthorityFailures.set(authority, { cause: error });
     }
@@ -466,7 +468,9 @@ export function captureAgentRunDelegatedSourceAssertion(
   }
   return {
     assertBinding: () => assertActive(() => {}),
-    assertCurrent: composeSessionSourceAssertion([source], assertActive),
+    assertCurrent: composeSessionSourceAssertion([source], assertActive, {
+      synchronousCheck: true,
+    }),
   };
 }
 

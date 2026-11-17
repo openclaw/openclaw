@@ -1,7 +1,6 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   isSessionRouteId,
-  pathForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   sameRouteLocation,
@@ -23,13 +22,14 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { settingsParentRoute } from "../lib/settings-navigation.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
+import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -40,7 +40,7 @@ export interface ShellNavigationHost {
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     agents?: ApplicationContext["agents"],
@@ -91,7 +91,7 @@ export class ShellNavigationOwner {
       return;
     }
     // The new draft owns focus after it mounts; a drawer return must not reclaim it.
-    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
+    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session", finishMotion: true });
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
@@ -303,7 +303,15 @@ export class ShellNavigationOwner {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
     this.synchronizeSessionUrl();
-    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
+    if (
+      routeState.routeId &&
+      !isSettingsTakeover(
+        routeState.routeId,
+        context?.gateway.snapshot.hello?.controlUiTabs,
+        routeState.location,
+        context?.basePath,
+      )
+    ) {
       // The embedded list is this search's home, so its results survive Back.
       if (routeState.routeId !== "settings") {
         this.host.settingsSearchQuery = "";
@@ -335,11 +343,10 @@ export class ShellNavigationOwner {
     const { routeId, location } = this.host.routeState;
     const basePath = this.host.context?.basePath ?? "";
     const parent =
-      routeId && isRouteId(routeId)
-        ? settingsParentRoute(routeId, location?.pathname, basePath)
-        : null;
+      routeId && isRouteId(routeId) ? settingsParentTarget(routeId, location, basePath) : null;
     if (parent) {
-      this.navigate(parent, { pathname: pathForRoute(parent, basePath), search: "", hash: "" });
+      const { routeId: parentRoute, ...parentLocation } = parent;
+      this.navigate(parentRoute, parentLocation);
       return;
     }
     this.exitSettings();

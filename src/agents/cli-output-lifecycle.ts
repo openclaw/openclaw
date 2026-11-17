@@ -38,7 +38,15 @@ export function parseCliBackendLifecycleLine(params: {
 export function projectCliBackendLifecycleEvent(
   event: CliBackendParsedJsonlLifecycleEvent,
 ): CliCompactionDelta {
-  return event.phase === "start"
-    ? { phase: "start" }
-    : { phase: "end", completed: event.completed };
+  if (event.phase === "start") {
+    return { phase: "start" };
+  }
+  // Copy only the contract fields; this delta is published verbatim on the agent event.
+  return {
+    phase: "end",
+    completed: event.completed,
+    ...(event.trigger ? { trigger: event.trigger } : {}),
+    ...(event.tokensBefore !== undefined ? { tokensBefore: event.tokensBefore } : {}),
+    ...(event.tokensAfter !== undefined ? { tokensAfter: event.tokensAfter } : {}),
+  };
 }
