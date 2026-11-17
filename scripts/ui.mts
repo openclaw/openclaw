@@ -4,14 +4,12 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { runDistArtifactChild, withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import { hasUnjoinedWork, signalExitCode } from "./lib/managed-child-process.mts";
 import {
   assertRealOutputRoot,
   CONTROL_UI_BUILD_PREFIX,
@@ -390,27 +388,33 @@ function normalizeUiBuildPermissions(directory: string): void {
 async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<UiSpawnResult> {
-  const validation = runSpawnCallSync(
+  const run = async (call: UiSpawnCall, native = true): Promise<UiSpawnResult> => ({
+    status: await runDistArtifactChild(repoRoot, call.args[0]!, call.args.slice(1), {
+      cwd: call.options.cwd?.toString(),
+      env: call.options.env,
+      signal,
+      native,
+    }),
+    signal: null,
+  });
+  const validation = await run(
     resolveSpawnCall(
       process.execPath,
-      [
-        "--import",
-        pathToFileURL(path.join(here, "tsx.mjs")).href,
-        path.join(here, "generate-control-ui-validators.mts"),
-        "--check",
-      ],
+      [path.join(here, "generate-control-ui-validators.mts"), "--check"],
       env,
       { cwd: repoRoot },
     ),
-    "Control UI protocol validators",
+    false,
   );
   if (validation.signal || validation.status !== 0) {
     return validation;
   }
   // Prepare before cache input capture: presenter source edits must change the
   // canonical bytes and inventory even when the UI bundle can otherwise be reused.
-  await prepareControlUiSettings(repoRoot);
+  await prepareControlUiSettings(repoRoot, here, signal);
+  signal.throwIfAborted();
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
@@ -436,13 +440,12 @@ async function buildAndPublishUi(
   }
   const staging = fs.mkdtempSync(path.join(dist, `${CONTROL_UI_BUILD_PREFIX}${process.pid}-`));
   const retired = `${staging}.retired`;
+  let joined = true;
   try {
-    const validator = (script: string, ...args: string[]): [UiSpawnCall, string] => [
+    const validator = (script: string, ...args: string[]): UiSpawnCall =>
       resolveSpawnCall(process.execPath, [path.join(here, script), ...args], env, {
         cwd: repoRoot,
-      }),
-      script,
-    ];
+      });
     const cache =
       env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
@@ -486,38 +489,32 @@ async function buildAndPublishUi(
       await refreshControlUiBuildOutput(staging, resolveControlUiBuildInfo({ env }));
       console.log("Control UI build: reused content cache; refreshed release identity");
     }
-    const calls: [UiSpawnCall, string][] = [
-      ...(!reuseOutput
-        ? ([
-            [
-              {
-                ...toolCall,
-                options: {
-                  ...toolCall.options,
-                  env: {
-                    ...toolCall.options.env,
-                    OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
-                  },
-                },
-                args: distArtifactEntryArgs(
-                  toolCall.args[0]!,
-                  [...toolCall.args.slice(1), "--outDir", staging],
-                  { native: true },
-                ),
-              },
-              "Control UI build",
-            ],
-          ] satisfies [UiSpawnCall, string][])
-        : []),
-      validator("check-control-ui-precompressed-assets.mts", staging),
-      validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
-    ];
-    for (const [call, label] of calls) {
-      const result = runSpawnCallSync(call, label);
-      if (result.signal || result.status !== 0) {
+    if (!reuseOutput) {
+      const result = await run({
+        ...toolCall,
+        options: {
+          ...toolCall.options,
+          env: {
+            ...toolCall.options.env,
+            OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+          },
+        },
+        args: [...toolCall.args, "--outDir", staging],
+      });
+      if (result.status !== 0) {
         return result;
       }
     }
+    for (const call of [
+      validator("check-control-ui-precompressed-assets.mts", staging),
+      validator("check-control-ui-performance.mts", "--report-only", "--dist", staging),
+    ]) {
+      const result = await run(call);
+      if (result.status !== 0) {
+        return result;
+      }
+    }
+    signal.throwIfAborted();
     // A cache hit refreshes identity only in staging; its validated seed is immutable.
     if (cache && cacheState && inputSignature && !reuseOutput) {
       const consumedInputs: string[] = JSON.parse(
@@ -550,8 +547,13 @@ async function buildAndPublishUi(
     }
     removeUiBuildDirectory(retired);
     return { status: 0, signal: null };
+  } catch (error) {
+    joined = !hasUnjoinedWork(error);
+    throw error;
   } finally {
-    removeUiBuildDirectory(staging);
+    if (joined) {
+      removeUiBuildDirectory(staging);
+    }
   }
 }
 
@@ -621,11 +623,38 @@ export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<
     env,
   );
   if (action === "build") {
-    exitForSpawnResult(
-      rest.some((arg) => arg === "--help" || arg === "-h")
-        ? runSpawnCallSync(toolCall, "Control UI build")
-        : await withDistArtifactOwnership(repoRoot, () => buildAndPublishUi(toolCall, env)),
-    );
+    if (rest.some((arg) => arg === "--help" || arg === "-h")) {
+      exitForSpawnResult(runSpawnCallSync(toolCall, "Control UI build"));
+      return;
+    }
+    const cancellation = new AbortController();
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    let interrupted: NodeJS.Signals | undefined;
+    const handlers = signals.map((signal) => {
+      const handler = () => {
+        interrupted ??= signal;
+        cancellation.abort();
+      };
+      process.on(signal, handler);
+      return [signal, handler] as const;
+    });
+    try {
+      const result = await withDistArtifactOwnership(
+        repoRoot,
+        () => buildAndPublishUi(toolCall, env, cancellation.signal),
+        cancellation.signal,
+      );
+      process.exitCode = result.status ?? 1;
+    } catch (error) {
+      if (!interrupted || hasUnjoinedWork(error)) {
+        throw error;
+      }
+      process.exitCode = signalExitCode(interrupted);
+    } finally {
+      for (const [signal, handler] of handlers) {
+        process.off(signal, handler);
+      }
+    }
     return;
   }
 

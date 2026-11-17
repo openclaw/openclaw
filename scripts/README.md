@@ -57,6 +57,17 @@ also verify `dist/build-info.json` against a source commit should use
 or declaration build. Keep generated files unchanged after either build so
 equivalent-input admission can certify the same source bytes.
 
+## Interrupted Control UI builds
+
+Source UI builds and Settings preparation share checkout artifact ownership.
+On POSIX, a canceled managed child retires its invocation claim only after the
+existing process owner verifies child-tree and output completion. The UI builder
+stops admitting steps on cancellation and does not publish canceled output.
+The Gateway gives that builder 15 seconds to join before escalating termination.
+Unverified cleanup retains the artifact lock and staging directory; abrupt owner
+death still requires inspection, not PID-based lock reclamation. Windows retains
+the existing child-owned claim when interrupted completion cannot be certified.
+
 ## Exact memory search benchmark
 
 Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
