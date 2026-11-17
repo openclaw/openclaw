@@ -1,11 +1,14 @@
-import { realpathSync } from "node:fs";
+import fsSync, { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import * as databaseRegistry from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { dedupeSessionStoreTargetsBySqliteTarget as dedupeTargets } from "./targets.js";
+import {
+  dedupeSessionStoreTargetsBySqliteTarget as dedupeTargets,
+  isConfiguredAgentDatabaseTarget as isConfigured,
+} from "./targets.js";
 
 const inHome = (run: (home: string) => Promise<void>) => () => withTempHome(run);
 
@@ -117,5 +120,45 @@ it(
     );
     expect(preparedPaths).toHaveLength(targets.length);
     expect(new Set(preparedPaths).size).toBe(preparedPaths.length);
+  }),
+);
+
+it(
+  "admits exact configured fleet paths without filesystem probes",
+  inHome(async (home) => {
+    const targets = Array.from({ length: 32 }, (_, index) => ({
+      path: path.join(home, `agent-${index}.sqlite`),
+    }));
+    await Promise.all(targets.map((target) => fs.writeFile(target.path, "")));
+    using stat = vi.spyOn(fsSync, "statSync");
+    for (const target of targets) {
+      expect(isConfigured(targets, "main", target.path)).toBe(true);
+    }
+    expect(stat).not.toHaveBeenCalled();
+  }),
+);
+
+it.runIf(process.platform !== "win32")(
+  "requires a compatible owner and concrete file for configured aliases",
+  inHome(async (home) => {
+    const file = path.join(home, "store.sqlite");
+    const alias = path.join(home, "alias.sqlite");
+    const missing = path.join(home, "missing.sqlite");
+    await fs.writeFile(file, "");
+    await fs.link(file, alias);
+    const owned = [{ agentId: "main", path: file }];
+    expect(isConfigured(owned, "main", file)).toBe(true);
+    expect(isConfigured(owned, "ops", file)).toBe(false);
+    expect(isConfigured(owned, "main", alias)).toBe(true);
+    expect(isConfigured(owned, "ops", alias)).toBe(false);
+    expect(isConfigured(owned, undefined, alias)).toBe(true);
+    expect(isConfigured([{ path: file }], "ops", alias)).toBe(true);
+    expect(isConfigured(owned, "main", missing)).toBe(false);
+    expect(isConfigured([{ path: missing }], "main", missing)).toBe(true);
+    await fs.unlink(alias);
+    await fs.symlink(file, alias);
+    expect(isConfigured(owned, "main", alias)).toBe(true);
+    await fs.unlink(file);
+    expect(isConfigured(owned, "main", alias)).toBe(false);
   }),
 );

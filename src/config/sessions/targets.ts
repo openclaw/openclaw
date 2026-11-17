@@ -448,14 +448,23 @@ export function isConfiguredAgentDatabaseTarget(
   agentId: string | undefined,
   pathname: string,
 ): boolean {
-  // Only concrete files prove aliases; preserve exact configured claims for inspection.
+  // Exact configured claims need no disk evidence, even after unrelated targets.
+  if (
+    targets.some(
+      (target) =>
+        (agentId === undefined || target.agentId === undefined || target.agentId === agentId) &&
+        target.path === pathname,
+    )
+  ) {
+    return true;
+  }
+  // Only concrete files prove aliases.
   return targets.some(
     (target) =>
       (agentId === undefined || target.agentId === undefined || target.agentId === agentId) &&
-      (target.path === pathname ||
-        (fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
-          fsSync.statSync(pathname, { throwIfNoEntry: false }) &&
-          isSameOpenClawAgentDatabasePath(target.path, pathname))),
+      fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
+      fsSync.statSync(pathname, { throwIfNoEntry: false }) &&
+      isSameOpenClawAgentDatabasePath(target.path, pathname),
   );
 }
 
