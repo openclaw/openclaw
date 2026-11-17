@@ -1,5 +1,9 @@
 import { zstdDecompressSync } from "node:zlib";
-import { getAiTransportHost } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  getDefaultAiTransportHost,
+} from "@openclaw/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -78,13 +82,21 @@ function completedResponse(model: string): Response {
   });
 }
 
-beforeEach(bindSessionMcpRuntimeTestScheduler);
+let originalTransportHost = getDefaultAiTransportHost();
+
+beforeEach(() => {
+  originalTransportHost = getDefaultAiTransportHost();
+  return bindSessionMcpRuntimeTestScheduler();
+});
 
 afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   vi.restoreAllMocks();
+  // Lazy runtime installation can copy the spied fetch port into a new default host.
+  // Restoring the original object alone leaves that copied fixture active across files.
+  configureAiTransportHost(originalTransportHost);
 });
 
 describe("persisted cron inference identity through the real embedded runner", () => {
