@@ -644,6 +644,7 @@ async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
     try {
       resources = await createBrokerNativeResourceServer({
         endpoint: authority.endpoint,
+        directory: authority.directory,
         secret: authority.secret,
         generation: authority.generation,
         reportParent: report,
