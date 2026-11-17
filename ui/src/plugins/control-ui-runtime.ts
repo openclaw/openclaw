@@ -578,7 +578,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,
           value: entry.value,
-          ...(kind === "panels" && owner.descriptor.panelIcon
+          ...((kind === "panels" || kind === "actions") && owner.descriptor.panelIcon
             ? { panelIcon: owner.descriptor.panelIcon }
             : {}),
           host: owner.host,

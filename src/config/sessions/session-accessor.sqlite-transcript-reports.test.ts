@@ -454,6 +454,7 @@ describe("SQLite report payload selection", () => {
         kind === "response" ? { kind: "assistant", message: assistant } : custom(selectReport);
       await expect(appendSessionTranscriptReport(scope, report)).resolves.toMatchObject({
         ok: true,
+        value: { appended: false },
       });
       expect(transcriptSnapshot(db)).toEqual(before);
       if (kind === "custom") {
@@ -493,7 +494,7 @@ describe("SQLite report payload selection", () => {
       });
       await expect(
         appendSessionTranscriptReport(aliasedScope, custom(selectReport)),
-      ).resolves.toEqual({ ok: true, value: undefined });
+      ).resolves.toEqual({ ok: true, value: { appended: true } });
     }
     const events = await loadTranscriptEvents(scope);
     expect(events).toHaveLength(8);
@@ -524,7 +525,7 @@ describe("SQLite report payload selection", () => {
           }),
         ),
       ),
-    ).resolves.toEqual({ ok: true, value: undefined });
+    ).resolves.toEqual({ ok: true, value: { appended: true } });
     expect(serializedKeys).toEqual(["", "details", "nested"]);
     const events = await loadTranscriptEvents(scope);
     expect(events.at(-1)).toMatchObject({

@@ -16,7 +16,8 @@ import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
-  projectAgentEndEvent,
+  createAgentEndHook,
+  createRunFailedHook,
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
@@ -1029,11 +1030,9 @@ export function createHookRunner(
       runModifyingHook("before_agent_finalize", withAgentRunId(event, ctx), ctx, {
         mergeResults: mergeBeforeAgentFinalize,
       }),
-    runAgentEnd: async (
-      event: HookEvent<"agent_end">,
-      ctx: HookContext<"agent_end">,
-      optionsLocal?: VoidHookRunOptions,
-    ) => runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal),
+    runAgentEnd: createAgentEndHook((event, ctx, optionsLocal) =>
+      runVoidHook("agent_end", event, ctx, optionsLocal),
+    ),
     runBeforeCompaction: bindVoidHook("before_compaction"),
     runAfterCompaction: bindVoidHook("after_compaction"),
     runBeforeReset: bindVoidHook("before_reset"),
@@ -1103,6 +1102,7 @@ export function createHookRunner(
         ),
       ),
     runRunStopped: bindVoidHook("run_stopped"),
+    runRunFailed: createRunFailedHook(bindVoidHook("run_failed")),
     runSubagentDeliveryTarget: bindModifyingHook("subagent_delivery_target", {
       mergeResults: (acc, next): PluginHookSubagentDeliveryTargetResult =>
         acc?.origin ? acc : next,

@@ -201,15 +201,42 @@ Export `defineControlUiPlugin({ id, activate(host) })` from the browser entry.
 Its id must match the plugin manifest. Register contributions through
 `host.ui`; each registration returns a disposer.
 
-| Registration                            | Host placement                                                                                                                          |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |
-| `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
-| `registerPanel`                         | Session panels.                                                                                                                         |
-| `registerAccessory`                     | Session header content.                                                                                                                 |
-| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
-| `registerWidget`                        | Native dashboard widget views.                                                                                                          |
-| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+| Registration                            | Host placement                                                                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                                                     |
+| `registerAction`                        | Composer, header, session menu, or settled run-failure actions. `resolve` supplies the current label, hidden/disabled state, and an optional run-failure receipt. |
+| `registerPanel`                         | Session panels.                                                                                                                                                   |
+| `registerAccessory`                     | Session header content.                                                                                                                                           |
+| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                                               |
+| `registerWidget`                        | Native dashboard widget views.                                                                                                                                    |
+| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                                          |
+
+### Settled run-failure actions
+
+Use `placement: "run-failure"` to offer a plugin action beside a persisted
+failure notice. The resolver and action receive `runFailure` (the host's
+`runId`, plain-text `summary`, and optional provider `cause`) plus the exact
+`sessionKey` and `agentId`. This placement does not observe intermediate model
+attempts, create a chat message, or start a model turn. Incognito failures keep
+the built-in action and are not disclosed to this placement.
+
+A resolver may return `receipt: { id, text, links?: [{ label, url }] }`.
+The host renders text literally, filters unsafe link schemes, and identifies
+the registered plugin rather than attributing the receipt to an assistant or
+person. The action uses the plugin's admitted manifest icon, with a built-in
+plug fallback; receipts cannot supply HTML or arbitrary icon URLs.
+
+The plugin owns reporting policy, persistence, deduplication, redaction, and
+receipt lookup. Use the existing feature query/action transport and its
+session authorization, then call `host.ui.invalidate()` when plugin-owned
+receipt data changes. Resolvers only read prepared state; do not report from a
+resolver or infer automatic reporting policy from a rendered notice. A receipt
+is a display projection, not a new host transcript or event store.
+
+When no visible plugin action is registered, OpenClaw preserves its built-in
+report link. Invocation errors remain visible and also offer that fallback.
+Removing the plugin restores the built-in action. Registration grants no new
+Gateway or session permissions.
 
 Panels can supply an optional `icon` with a fixed host icon-registry name, such as
 `bookOpenText`, `barChart`, `activity`, or `terminal`:

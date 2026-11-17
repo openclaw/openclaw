@@ -29,7 +29,7 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 
 // mock-isolation: Exercise lifecycle reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+  appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: { appended: true } })),
 }));
 
 // mock-isolation: Exercise the lifecycle reducer without opening the session database.

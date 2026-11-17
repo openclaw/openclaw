@@ -195,18 +195,37 @@ export type ControlUiPanel = {
   mount: ControlUiView<BoardGetParams>;
 };
 
+/** A plugin-owned display receipt, never an assistant message or a model turn. */
+export type ControlUiActionReceipt = {
+  id: string;
+  text: string;
+  links?: readonly { label: string; url: string }[];
+};
+
+/** The same terminal failure facts displayed by the host transcript. */
+export type { RunFailureNotice as ControlUiRunFailure } from "../shared/run-failure-notice.js";
+
+export type ControlUiActionContext = BoardGetParams & {
+  session?: ControlUiSession;
+  /** Present only at the run-failure placement; never an intermediate model attempt. */
+  runFailure?: import("../shared/run-failure-notice.js").RunFailureNotice;
+};
+
 export type ControlUiAction = {
   id: string;
   label: string;
-  placement: "composer" | "header" | "session";
-  resolve?: (context: BoardGetParams & { session?: ControlUiSession }) => {
+  placement: "composer" | "header" | "session" | "run-failure";
+  resolve?: (context: ControlUiActionContext) => {
     label?: string;
     disabled?: boolean;
     hidden?: boolean;
+    /** Run-failure only. Host attributes this virtual receipt to the registered plugin.
+     * Persist and refresh its data in the plugin, then call ui.invalidate().
+     */
+    receipt?: ControlUiActionReceipt;
   };
   run: (
-    context: BoardGetParams & {
-      session?: ControlUiSession;
+    context: ControlUiActionContext & {
       host: ControlUiHost;
       signal: AbortSignal;
     },

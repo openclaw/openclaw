@@ -290,6 +290,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-history-worker.integration.test.ts",
   "src/gateway/session-involvement.test.ts",
   "src/gateway/session-lifecycle-incognito.test.ts",
+  "src/gateway/session-lifecycle-run-failed-hook.test.ts",
   "src/gateway/session-lifecycle-run-failure.test.ts",
   "src/gateway/session-lifecycle-source-authority.test.ts",
   "src/gateway/session-lifecycle-state.persistence.test.ts",

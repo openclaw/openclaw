@@ -105,7 +105,7 @@ export function executeSessionActorMemoryReportCommand(
     extra: Partial<TranscriptReportCommit> = {},
   ): { ok: true; value: TranscriptReportCommit } => ({
     ok: true,
-    value: { committed, projectionNeedsReconcile: false, ...extra },
+    value: { committed, appended: committed, projectionNeedsReconcile: false, ...extra },
   });
   switch (command.type) {
     case "session.event.append": {
@@ -180,14 +180,14 @@ export function executeSessionActorMemoryReportCommand(
         kind: "assistant",
         responseId: report.message.responseId,
       });
-      if (!facts.suppressed) {
+      const appended =
+        !facts.suppressed &&
         appendMessage({
           message: report.preparedMessage.persistedMessage,
           messageJson: report.preparedMessage.messageJson,
           parentId: facts.appendParentId,
-        });
-      }
-      return commit(!facts.suppressed);
+        }).result?.appended === true;
+      return commit(!facts.suppressed, { appended });
     }
     case "session.report.abortedPartial": {
       const partial = command.input.report;

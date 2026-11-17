@@ -9,6 +9,7 @@ import type {
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
+import type { RunFailureNotice } from "../shared/run-failure-notice.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindow,
@@ -43,6 +44,7 @@ import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
 } from "./hook-message.types.js";
+import { PLUGIN_HOOK_METADATA } from "./hook-metadata.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookRunStoppedHandler } from "./hook-run-stopped.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
@@ -111,74 +113,18 @@ export type {
   PluginHookSkillContext,
 } from "./hook-skill.types.js";
 
+/** A committed receipt for an accepted run that exhausted recovery or timed out. */
+export type PluginHookRunFailedEvent = RunFailureNotice;
+
+export type PluginHookRunFailedContext = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+};
+
 export type PluginHookName = keyof PluginHookHandlerMap;
 
-type PluginHookMetadata = {
-  conversationAccess?: boolean;
-  promptInjection?: boolean;
-  voidTimeoutMs?: number;
-  modifyingTimeoutMs?: number;
-};
-
-export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMetadata>> = {
-  before_model_resolve: { conversationAccess: true },
-  agent_turn_prepare: { conversationAccess: true, promptInjection: true },
-  before_prompt_build: {
-    conversationAccess: true,
-    promptInjection: true,
-    modifyingTimeoutMs: 15_000,
-  },
-  before_agent_reply: { conversationAccess: true },
-  model_call_started: {},
-  model_call_ended: {},
-  llm_input: { conversationAccess: true },
-  llm_output: { conversationAccess: true },
-  // Terminal finalization hooks sit on the runner's completion path. A hung
-  // handler must not freeze final delivery or keep compaction retry recovery
-  // unresolved; timeout fail-opens with the original final answer.
-  before_agent_finalize: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
-  agent_end: { conversationAccess: true, voidTimeoutMs: 30_000 },
-  // Compaction hooks run on the serialized notification queue. Allow memory
-  // flushes the agent_end budget, then fail open so later notifications proceed.
-  before_compaction: { voidTimeoutMs: 30_000 },
-  after_compaction: { voidTimeoutMs: 30_000 },
-  before_reset: {},
-  before_channel_ingress: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
-  inbound_claim: {},
-  channel_pairing_requested: { voidTimeoutMs: 2_000 },
-  message_received: {},
-  // Outbound modifying hooks run inside the serialized reply delivery lane.
-  // A hung plugin must fail open so later hooks and queued replies can settle.
-  message_sending: { modifyingTimeoutMs: 15_000 },
-  reply_payload_sending: { modifyingTimeoutMs: 15_000 },
-  message_sent: {},
-  // Policy hooks fail closed in the global runner. A bounded timeout turns a
-  // stalled policy process into a denial instead of freezing the operation.
-  before_tool_call: { modifyingTimeoutMs: 15_000 },
-  after_tool_call: {},
-  tool_result_persist: {},
-  before_message_write: {},
-  session_start: {},
-  session_end: {},
-  run_stopped: {},
-  subagent_delivery_target: {},
-  subagent_spawned: {},
-  subagent_progress: {},
-  subagent_ended: {},
-  gateway_start: {},
-  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
-  // open after logging so one plugin cannot consume the process watchdog.
-  gateway_stop: { voidTimeoutMs: 5_000 },
-  heartbeat_prompt_contribution: { promptInjection: true },
-  cron_reconciled: {},
-  cron_changed: {},
-  skill_changed: { voidTimeoutMs: 30_000 },
-  before_dispatch: {},
-  reply_dispatch: {},
-  before_install: { modifyingTimeoutMs: 15_000 },
-  before_agent_run: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
-  resolve_exec_env: { modifyingTimeoutMs: 15_000 },
-};
+export { PLUGIN_HOOK_METADATA } from "./hook-metadata.js";
 
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
   typeof hookName === "string" && Object.hasOwn(PLUGIN_HOOK_METADATA, hookName);
@@ -825,6 +771,7 @@ export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   session_start: AsyncPluginHook<PluginHookSessionStartEvent, PluginHookSessionContext>;
   session_end: AsyncPluginHook<PluginHookSessionEndEvent, PluginHookSessionContext>;
   run_stopped: PluginHookRunStoppedHandler;
+  run_failed: AsyncPluginHook<PluginHookRunFailedEvent, PluginHookRunFailedContext>;
   subagent_delivery_target: AsyncPluginHook<
     PluginHookSubagentDeliveryTargetEvent,
     PluginHookSubagentContext,
@@ -874,4 +821,3 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   conversationAccessAllowed?: true;
   source: string;
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

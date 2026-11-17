@@ -28,6 +28,9 @@ function FailureNotice(props: ChatNoticeProps) {
       data-run-failure={failure().runId}
     >
       <ChatRunFailureNotice
+        sessionKey={props.sessionKey}
+        agentId={props.agentId}
+        runId={failure().runId}
         summary={failure().summary}
         cause={failure().cause}
         repeatCount={props.item.repeatCount}
@@ -42,7 +45,7 @@ function FailureNotice(props: ChatNoticeProps) {
 export function ChatNotice(props: ChatNoticeProps) {
   return (
     <Show when={props.item.runError} fallback={<ChatNoticeDetails {...props} />}>
-      <FailureNotice item={props.item} recovery={props.recovery} />
+      <FailureNotice {...props} />
     </Show>
   );
 }

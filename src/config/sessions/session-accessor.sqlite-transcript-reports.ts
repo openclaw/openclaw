@@ -397,7 +397,7 @@ export async function appendSessionTranscriptReport(
   options?: {
     sessionEntryCurrent?: SessionEntryCurrentCheck;
   },
-): Promise<Result<void, TranscriptAppendRefusal>> {
+): Promise<Result<{ appended: boolean }, TranscriptAppendRefusal>> {
   if (report.kind === "assistant") {
     const preparedMessage = prepareTranscriptMessageAppend({
       message: applyAssistantDeliveryDirectives(report.message),
@@ -415,7 +415,7 @@ export async function appendSessionTranscriptReport(
           return result;
         }
         publish(result.value);
-        return ok(undefined);
+        return ok({ appended: result.value.appended });
       },
       options?.sessionEntryCurrent,
     );
@@ -425,7 +425,7 @@ export async function appendSessionTranscriptReport(
     customTypes: [...report.customTypes],
   };
   const selectReport = report.selectReport;
-  return withReportWorker(
+  return withReportWorker<{ appended: boolean }>(
     scope,
     "append",
     async (operation, assertCurrent, publish) => {
@@ -436,12 +436,12 @@ export async function appendSessionTranscriptReport(
           return prepared;
         }
         if (prepared.value.suppressed) {
-          return ok(undefined);
+          return ok({ appended: false });
         }
         const selected = selectReport(prepared.value.latest);
         assertCurrent();
         if (!selected) {
-          return ok(undefined);
+          return ok({ appended: false });
         }
         const input = prepareCustomTranscriptReport(selected, prepared.value.appendParentId);
         assertCurrent();
@@ -451,7 +451,7 @@ export async function appendSessionTranscriptReport(
         }
         if (result.value.committed) {
           publish(result.value);
-          return ok(undefined);
+          return ok({ appended: true });
         }
         // Only a proven no-write revision mismatch permits another selection; errors never replay.
       }

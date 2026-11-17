@@ -22,6 +22,8 @@ import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 export type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
+  sessionKey?: string;
+  agentId?: string;
   onPermissionRetry?: (message: string) => void;
   modelCatalog?: ModelCatalogEntry[];
   recovery?: Pick<

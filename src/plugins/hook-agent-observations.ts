@@ -1,5 +1,11 @@
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import type { PluginHookAgentContext, PluginHookAgentEndEvent } from "./hook-types.js";
+import type { VoidHookRunOptions } from "./hook-runner-types.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookAgentEndEvent,
+  PluginHookRunFailedEvent,
+  PluginHookRunFailedContext,
+} from "./hook-types.js";
 
 export function withAgentRunId<TEvent extends { runId?: string }>(
   event: TEvent,
@@ -31,4 +37,27 @@ export function withoutIncognitoLlmContent<TEvent>(
       await run(event, ctx);
     }
   };
+}
+
+/** Keep terminal observation projections with the other privacy-aware observers. */
+export function createAgentEndHook(
+  run: (
+    event: PluginHookAgentEndEvent,
+    ctx: PluginHookAgentContext,
+    options?: VoidHookRunOptions,
+  ) => Promise<void>,
+) {
+  return (
+    event: PluginHookAgentEndEvent,
+    ctx: PluginHookAgentContext,
+    options?: VoidHookRunOptions,
+  ) => run(projectAgentEndEvent(event, ctx), ctx, options);
+}
+
+/** Failure receipts contain conversation content, unlike the redacted agent-end projection. */
+export function createRunFailedHook(
+  run: (event: PluginHookRunFailedEvent, ctx: PluginHookRunFailedContext) => Promise<void>,
+) {
+  return (event: PluginHookRunFailedEvent, ctx: PluginHookRunFailedContext) =>
+    isIncognitoSessionKey(ctx.sessionKey) ? Promise.resolve() : run(event, ctx);
 }

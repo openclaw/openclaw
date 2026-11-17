@@ -12,7 +12,10 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { isTerminalSessionStatus } from "../config/sessions/types.js";
+import { fireAndForgetBoundedHook } from "../hooks/fire-and-forget.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { readAgentRunProviderReview } from "../sessions/provider-review-terminal.js";
 import {
@@ -26,6 +29,8 @@ import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-s
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
+
+const log = createSubsystemLogger("sessions/lifecycle");
 
 type GatewaySessionLifecycleEventParams = {
   sessionKey: string;
@@ -248,7 +253,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       assertCommitAllowed: params.assertCommitAllowed,
     };
     // An accepted terminal owns its receipt, independently of an ambient requester turn.
-    await withOwnedSessionTranscriptWrites(
+    const committedNotice = await withOwnedSessionTranscriptWrites(
       {
         sessionTarget: receipt.target,
         assertCommitAllowed: params.assertCommitAllowed,
@@ -256,5 +261,23 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       },
       () => recordGatewaySessionRunFailure(receipt),
     );
+    if (committedNotice && !isIncognitoSessionKey(sessionEntry.canonicalKey)) {
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("run_failed")) {
+        const context = {
+          agentId: sessionEntry.agentId,
+          sessionKey: sessionEntry.canonicalKey,
+          sessionId: persisted.sessionId,
+        };
+        // Receipt persistence settles independently of best-effort external reporting.
+        // A crash or queue overflow may lose this notification; plugins own recovery/deduplication.
+        fireAndForgetBoundedHook(
+          () => hookRunner.runRunFailed(committedNotice, context),
+          "run_failed plugin hook",
+          (message) => log.warn(message),
+          { timeoutMs: 30_000 },
+        );
+      }
+    }
   }
 }
