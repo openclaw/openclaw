@@ -18,12 +18,17 @@ export async function retainMemberRecoveryUses(
   }
   const uses: MemberRecoveryUse[] = [];
   for (const [accountId, member] of Object.entries(state.members)) {
+    const recoveredPeers = member.peer_keys.filter(
+      (peerKey) =>
+        member.devices?.[peerKey]?.approved_by?.kind === "member_recovery_kit" &&
+        !previous?.authority?.members[accountId]?.peer_keys.includes(peerKey),
+    );
+    if (!recoveredPeers.length) {
+      continue;
+    }
     for (const device of await describeMemberDevices(member)) {
       const peerKey = device.peer_key;
-      if (
-        device.approved_by?.kind !== "member_recovery_kit" ||
-        previous?.authority?.members[accountId]?.peer_keys.includes(peerKey)
-      ) {
+      if (!recoveredPeers.includes(peerKey)) {
         continue;
       }
       const usedAt = member.last_seen[peerKey];

@@ -9,8 +9,10 @@ import {
   signStatement,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import * as protocol from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
+import * as membershipViews from "./membership-views.js";
 import {
   linkedClaw,
   memoryStore,
@@ -150,6 +152,21 @@ describe("Gateway member recovery", () => {
         { ok: false, code: "seq_conflict" },
       ]);
       expect((await service.linkStatus()).recoveryUses).toEqual([use]);
+      const projection = vi.spyOn(membershipViews, "describeMemberDevices");
+      const hashing = vi.spyOn(protocol, "fingerprint");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
+      const writes = vi.spyOn(store, "write").mockClear();
+      try {
+        await restarted.recordDiscovery({ mailbox_cursor: "after-recovery" });
+        await restarted.recordSeen(peer);
+        expect(writes).toHaveBeenCalledTimes(2);
+        expect(projection).not.toHaveBeenCalled();
+        expect(hashing).not.toHaveBeenCalled();
+      } finally {
+        projection.mockRestore();
+        hashing.mockRestore();
+        clock.mockRestore();
+      }
       expect(await restarted.memberView(peer)).not.toHaveProperty("recoveryUses");
       expect(await restarted.memberView(peer)).toMatchObject({
         account_id: "recovery-member",

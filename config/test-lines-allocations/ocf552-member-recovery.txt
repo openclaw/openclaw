@@ -1,8 +1,9 @@
-# +1325 net test lines against main after the member-approval stack landed.
+# +1342 net test lines against main after the member-approval stack landed.
 # 379 protocol: artifact/key separation and recovery-only authority, replay, replacement,
 #     removal/reinvite and pending-invite collision negatives at the signed boundary.
-# 226 Gateway: malformed mail, commit failure, reload/replay, owner-only persisted history,
+# 243 Gateway: malformed mail, commit failure, reload/replay, owner-only persisted history,
 #     member provenance and tunnel principal decoding at the production storage boundary.
+#     Includes 17 regression lines for ClawSweeper P2: bookkeeping must skip projection/hashing.
 # 159 People page/support (net): literal safe history, non-owner access and retained route
 #     updates/browser ordering; separate recovery suite keeps the main role suite below its cap.
 # 398 browser: source core + plugin Inbox deep link, owner-key signing, confirmed removal,
@@ -10,5 +11,5 @@
 # 126 core UI: owner-only Inbox/dismissal persistence and current-admission notice provenance.
 # 37 compression: folded gate-fix parity coverage proves measured gzip matches shipped bytes.
 # The browser composition covers routing/key/mailbox/toast lifetimes that isolated page
-# or protocol tests cannot. 400 default lines + 925 allocation = 1325 total.
-925
+# or protocol tests cannot. 400 default lines + 942 allocation = 1342 total.
+942
