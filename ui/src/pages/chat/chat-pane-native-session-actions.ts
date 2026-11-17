@@ -3,7 +3,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import type { HeaderMenuAction } from "./chat-pane-session-menu-contract.ts";
@@ -28,8 +28,16 @@ export class ChatPaneNativeSessionActions {
       stopAction &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.reclaim"),
     );
+    // Only a conversation outside every project and worktree can move into one.
+    const canMoveToProject = Boolean(
+      row &&
+      !row.projectId &&
+      !row.worktree &&
+      canCallGatewayMethod(context.gateway.snapshot, "projects.moveSession", "operator.write"),
+    );
     return this.memo.read(
       [
+        canMoveToProject,
         ...pluginActions.flatMap(({ id, label, disabled }) => [id, label, disabled]),
         canStop,
         row?.key,
@@ -40,6 +48,16 @@ export class ChatPaneNativeSessionActions {
         onAction,
       ],
       () => [
+        ...(canMoveToProject
+          ? [
+              {
+                id: "move-to-project",
+                label: t("chat.sessionHeader.moveToProject.action"),
+                icon: "folder" as const,
+                onActivate: () => onAction({ kind: "move-to-project" }),
+              },
+            ]
+          : []),
         ...pluginActions.map((action): HeaderMenuSessionAction => ({
           label: action.label,
           disabled: action.disabled,

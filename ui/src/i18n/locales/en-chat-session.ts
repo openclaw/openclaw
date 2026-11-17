@@ -123,6 +123,23 @@ const enChatSession = {
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
       panels: "Panels",
+      moveToProject: {
+        action: "Move to project…",
+        title: "Move to a project",
+        description: "The conversation continues on its own branch of the project you choose.",
+        projects: "Project",
+        checkouts: "Folder to bring along",
+        carryOne: "Your work in {folder} comes along: last commit “{subject}” and 1 unsaved file.",
+        carryMany:
+          "Your work in {folder} comes along: last commit “{subject}” and {count} unsaved files.",
+        carryCommitted: "Your work in {folder} comes along: last commit “{subject}”.",
+        fresh: "It starts from the project’s latest version.",
+        move: "Move",
+        moving: "Moving… this can take a minute",
+        moved: "Moved into {project} on branch {branch}",
+        movedNoBranch: "Moved into {project}",
+        failed: "Couldn’t move this conversation. Try again.",
+      },
       continueInTerminal: {
         action: "Continue in terminal…",
         disconnected: "Reconnect to continue in a terminal.",

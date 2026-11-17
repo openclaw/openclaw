@@ -55,6 +55,28 @@ export async function openHeaderSessionGroup(
   });
 }
 
+async function moveHeaderSessionToProject(
+  owner: ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
+  row: GatewaySessionRow,
+): Promise<void> {
+  const client = owner.context.gateway.snapshot.client;
+  if (!client) {
+    return;
+  }
+  const outcomeOwner = owner.headerOutcomeOwner;
+  try {
+    const { showMoveToProjectDialog } = await import("./components/move-to-project-dialog.tsx");
+    await showMoveToProjectDialog({
+      client,
+      key: row.key,
+      ...(row.agentId ? { agentId: row.agentId } : {}),
+      signal: owner.headerSessionDraftAbortController.signal,
+    });
+  } catch (error) {
+    owner.publishHeaderError(error, outcomeOwner);
+  }
+}
+
 export async function revealHeaderWorkspace(
   owner: Pick<
     ReturnType<ChatHeaderSessionActionSource["readOwner"]>,
@@ -221,6 +243,9 @@ export async function runChatHeaderSessionAction(
   if (action.kind === "continue-in-terminal") {
     owner.openContinueInTerminalDialog(row);
     return;
+  }
+  if (action.kind === "move-to-project") {
+    return moveHeaderSessionToProject(owner, row);
   }
   if (action.kind === "toggle-pin") {
     const current = owner.state ? selectedChatSessionRow(owner.state) : undefined;
