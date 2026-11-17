@@ -6,6 +6,7 @@ import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
 } from "../config/config.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
@@ -288,6 +289,13 @@ export function createManagedReloadSecretHandlers(options: {
       const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
       const previousGenerationOwnership = params.sharedGatewaySessionGenerationState.capture();
       const previousSharedGatewaySessionGeneration = previousGenerationOwnership.generation;
+      const candidatePluginMetadata = plan.reloadPlugins
+        ? await resolveConfigWidePluginMetadataSnapshotAsync({
+            config: sourceConfig,
+            env: transactionOwnership.runtimeEnv?.env,
+            allowCurrent: false,
+          })
+        : undefined;
       const preparation = await tryPrepareRuntimeSecrets(
         prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
         transactionOwnership,
@@ -296,6 +304,7 @@ export function createManagedReloadSecretHandlers(options: {
           publishFailureAsDegraded: true,
           ...(transactionOwnership.runtimeEnv ? { env: transactionOwnership.runtimeEnv.env } : {}),
           includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
+          ...(candidatePluginMetadata ? { pluginMetadataSnapshot: candidatePluginMetadata } : {}),
         },
       );
       if (
@@ -496,7 +505,12 @@ export function createManagedReloadSecretHandlers(options: {
           );
           applicationStatus = "applied";
         } else {
-          applicationStatus = await applyHotReload(plan, prepared.config, publication);
+          applicationStatus = await applyHotReload(
+            plan,
+            prepared.config,
+            publication,
+            candidatePluginMetadata,
+          );
         }
       } catch (err) {
         // A direct cause survives only a completed, uncommitted plugin rollback.

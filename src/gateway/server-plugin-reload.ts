@@ -198,13 +198,15 @@ export async function reloadGatewayPlugins(
         );
         await checkpoint();
         // Match startup's workspace inventory so a narrower scan cannot replace or drop other owners.
-        const nextMetadata = await withPluginCache(cache, () =>
-          resolveConfigWidePluginMetadataSnapshotAsync({
-            config: params.sourceConfig,
-            env: params.env,
-            allowCurrent: false,
-          }),
-        );
+        const nextMetadata =
+          params.pluginMetadataSnapshot ??
+          (await withPluginCache(cache, () =>
+            resolveConfigWidePluginMetadataSnapshotAsync({
+              config: params.sourceConfig,
+              env: params.env,
+              allowCurrent: false,
+            }),
+          ));
         await checkpoint();
         const activationConfig = resolveGatewayStartupPluginActivationConfig({
           runtimeConfig: params.nextConfig,

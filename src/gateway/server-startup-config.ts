@@ -496,7 +496,13 @@ export function createRuntimeSecretsActivator(params: {
           params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
         const allowUnavailableSecretOwners =
           activationParams.reason !== "startup" || getActiveSecretsRuntimeSnapshotState() === null;
-        const useStartupMetadata = activationParams.reason === "startup";
+        const candidateMetadata = activationParams.pluginMetadataSnapshot;
+        const manifestRegistry =
+          candidateMetadata?.manifestRegistry ??
+          (activationParams.reason === "startup" ? startupManifestRegistry : undefined);
+        const pluginMetadataSnapshot =
+          candidateMetadata ??
+          (activationParams.reason === "startup" ? params.pluginMetadataSnapshot : undefined);
         const prepared = await measureDiagnosticsTimelineSpan(
           "secrets.prepare",
           () =>
@@ -506,12 +512,8 @@ export function createRuntimeSecretsActivator(params: {
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               forceColdRefKeys: activationParams.forceColdRefKeys,
-              ...(useStartupMetadata && startupManifestRegistry
-                ? { manifestRegistry: startupManifestRegistry }
-                : {}),
-              ...(useStartupMetadata && params.pluginMetadataSnapshot
-                ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-                : {}),
+              ...(manifestRegistry ? { manifestRegistry } : {}),
+              ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
               ...(loadAuthStore ? { loadAuthStore } : {}),
             }),
           {
