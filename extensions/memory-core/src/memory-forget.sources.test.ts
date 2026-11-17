@@ -86,6 +86,38 @@ describe("memory forget source removal", () => {
     ).toMatchObject({ sources: [{ path: "memory/retained.md", source: "memory" }] });
   });
 
+  it("counts fts rows past the sqlite bind-variable limit for one selected session", async () => {
+    const { db, path: databasePath } = openOpenClawAgentDatabase({ agentId: "main" });
+    db.exec("CREATE VIRTUAL TABLE memory_index_chunks_fts USING fts5(id, path, source)");
+    const total = 34000;
+    const insertChunk = db.prepare(`INSERT INTO memory_index_chunks
+      (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES (?, 'sessions/main/target', 'sessions', 1, 1, 'hash', 'test', '', x'', 1)`);
+    const insertFts = db.prepare(
+      "INSERT INTO memory_index_chunks_fts (id, path, source) VALUES (?, 'sessions/main/target', 'sessions')",
+    );
+    db.exec("BEGIN");
+    for (let index = 0; index < total; index += 1) {
+      insertChunk.run(`chunk-${index}`);
+      insertFts.run(`chunk-${index}`);
+    }
+    db.exec("COMMIT");
+    const plan = await readMemoryForgetIndexInWorker({
+      kind: "forget-index-plan" as const,
+      agentId: "main",
+      databasePath,
+      stateDir: h.stateDir,
+      changedPaths: [],
+      removedPaths: [],
+      sessionIds: ["target"],
+      excludedSessionIds: [],
+      entryKeys: [],
+      corpusSnippets: [],
+    });
+    expect(plan.chunks).toHaveLength(total);
+    expect(plan.ftsRows).toBe(total);
+  });
+
   it("retains planning input and placement across dispatch without creating missing stores", async () => {
     const options = { agentId: "main", env: { OPENCLAW_STATE_DIR: h.stateDir } };
     const db = openOpenClawAgentDatabase(options).db;

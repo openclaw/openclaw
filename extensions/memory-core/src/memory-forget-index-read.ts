@@ -117,7 +117,7 @@ export async function readMemoryForgetIndexInWorker(
                 kysely
                   .selectFrom("memory_index_chunks")
                   .select("chunk_rowid")
-                  .where("id", "in", chunkIds),
+                  .where("id", "in", sqliteStringSet(chunkIds)),
               ),
           ).rows[0]!.count
         : 0;
