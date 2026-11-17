@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, linkSync, readFileSync, unlinkSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isSqliteDatabaseAdmissionFactCurrent } from "../infra/sqlite-database-admission-record.js";
 import {
@@ -10,13 +10,21 @@ import {
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { getSqliteWorkerActorIdentity } from "../infra/sqlite-worker-store.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state-row.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { getOpenClawStateWorkerOwner } from "./openclaw-state-worker-owner.js";
+import { createOpenClawStateWorkerLease } from "./openclaw-state-worker-store.js";
 import * as worker from "./openclaw-state.worker.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -189,5 +197,41 @@ it("rejects leaked readers and unfinished transactions through the same actor se
     if (db.isTransaction) {
       db.exec("ROLLBACK");
     }
+  }
+});
+
+it("joins shared-state leases before actor retirement and refuses fresh shutdown admission", async () => {
+  const writer = openOpenClawStateDatabase();
+  const context = captureOpenClawStateWorkerContext({ path: writer.path });
+  const lease = createOpenClawStateWorkerLease(context);
+  await lease.ready;
+  const store = await getOpenClawStateWorkerOwner().open(context);
+  assert(store);
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    async close() {
+      entered.resolve();
+      await finish.promise;
+      await lease.retire();
+    },
+  });
+  const closing = drainGlobalSingletonLifecycleState("shared-state");
+  try {
+    await entered.promise;
+    expect(() => getSqliteWorkerActorIdentity(store)).not.toThrow();
+    expect(() => captureOpenClawStateWorkerContext({ path: writer.path })).toThrow(/closed/);
+    expect(writer.db.isOpen).toBe(true);
+    finish.resolve();
+    await closing;
+    expect(() => getSqliteWorkerActorIdentity(store)).toThrow(/unavailable/);
+    expect(writer.db.isOpen).toBe(false);
+    expect(context.admission.assertCurrent).toThrow(/admission changed/);
+    expect(openOpenClawStateDatabase({ path: writer.path }).db.isOpen).toBe(true);
+  } finally {
+    finish.resolve();
+    await lease.retire();
+    await closing;
+    unregister();
   }
 });
