@@ -157,6 +157,7 @@ describe("continue_work tool", () => {
     const tool = makeTool();
 
     expect(tool.description).toContain("arrange your own next turn in this same session");
+    expect(tool.description).toContain("Put the action you will take in reason");
     expect(tool.description).toContain("Do not use continue_work to wait, yield, stand by, park");
     expect(tool.description).toContain("use sessions_yield");
     expect(tool.description).toContain("An unarmed intention will not wake you by itself.");
