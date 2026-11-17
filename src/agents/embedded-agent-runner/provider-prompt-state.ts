@@ -211,6 +211,8 @@ export function wrapStreamFnWithProviderPromptState(params: {
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  /** Last edit before the body is recorded and sent; a session fork replays its parent here. */
+  finalizePayload?: (payload: Record<string, unknown>) => void;
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
@@ -223,6 +225,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
         if (finalPayload && typeof finalPayload === "object" && !Array.isArray(finalPayload)) {
+          params.finalizePayload?.(finalPayload as Record<string, unknown>);
           // Shallow: transports reassign top-level fields after the hook; items stay shared.
           preparedRequests.set(params.state, { model: payloadModel, body: { ...finalPayload } });
         }
