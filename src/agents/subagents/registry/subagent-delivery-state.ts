@@ -233,16 +233,11 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
-/** A yielded final still owes its visible answer after the input is committed. */
-function owesOnlyItsInput(entry: SubagentRunRecord): boolean {
-  return (
-    hasConsumedRequesterInput(entry) && entry.requesterSettleWake?.yieldedFinalDeliverable !== true
-  );
-}
-
+/** A private result is delivered by its committed input; a yielded final also owes an answer. */
 export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
-    owesOnlyItsInput(entry) &&
+    hasConsumedRequesterInput(entry) &&
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
     (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
   );
 }
@@ -273,7 +268,7 @@ export function resolveRequesterDeliveryOutcome(
     entries.every(
       (entry) =>
         hasConsumedPrivateRequesterInput(entry) ||
-        (turnFailedBeforeAnswer && owesOnlyItsInput(entry)),
+        (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry)),
     )
     ? { delivered: true, path: "direct" }
     : outcome;
