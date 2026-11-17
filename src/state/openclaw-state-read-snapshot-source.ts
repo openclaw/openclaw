@@ -37,6 +37,7 @@ import {
   captureOpenClawStateDatabaseReadAdmission,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
+import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -245,6 +246,10 @@ export async function prepareOpenClawStateReadSnapshotSource({
     },
     readSource: (): StateReadSnapshotSource | undefined => {
       if (lazy) {
+        // A lazy scope can open before engine selection; PostgreSQL readers keep their own path.
+        if (isStatePostgres()) {
+          return undefined;
+        }
         const pending = startLazySource();
         if (pending) {
           const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -276,7 +281,9 @@ export async function prepareOpenClawStateReadSnapshotSource({
     },
     prepareSource: lazy
       ? async () => {
-          await startLazySource()?.result;
+          if (!isStatePostgres()) {
+            await startLazySource()?.result;
+          }
         }
       : undefined,
     forkSource: async (signal?: AbortSignal) => {

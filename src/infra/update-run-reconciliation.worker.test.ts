@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withArtifactPreservingStateSnapshot } from "../state/openclaw-state-inspection-snapshot.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { isContainerEnvironment } from "./container-environment.js";
@@ -224,6 +226,49 @@ it.each([
     }
   },
 );
+it("reports history healed inside one inspection image", async () => {
+  const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  await once(helper, "spawn");
+  const parent = readUpdateRunDriver()!;
+  const driver = readUpdateRunDriver(helper.pid)!;
+  const run = fixture({
+    trigger: "cli",
+    origin: { driver, previousDrivers: [parent], managedHandoff: { parent, helper: driver } },
+  });
+  try {
+    run.phase("validating");
+    await closeOpenClawStateDatabaseAsync();
+    vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
+    const exited = once(helper, "exit");
+    helper.kill("SIGKILL");
+    await exited;
+    vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+      yield {
+        pid: process.pid,
+        pgid: process.pid,
+        state: "S",
+        command: { ppid: process.ppid, argv: [process.execPath] },
+      };
+    });
+    const status = await withArtifactPreservingStateSnapshot(
+      new AbortController().signal,
+      async () => {
+        // The image predates healing, as when another status section read first.
+        expect(await getActiveOpenClawStateDatabaseReadSnapshotAsync()).toBeDefined();
+        return readUpdateRunStatus();
+      },
+    );
+    expect(status).toMatchObject({
+      lastRun: { runId: run.id, status: "failed", reason: "handoff-terminated" },
+    });
+  } finally {
+    if (helper.exitCode === null && helper.signalCode === null) {
+      helper.kill("SIGKILL");
+    }
+  }
+});
 it("settles expired legacy history through the history reader", async () => {
   const run = await expiredLegacyRun();
   const reconciled = (await run.history()).run;

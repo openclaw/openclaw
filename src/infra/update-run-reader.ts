@@ -173,20 +173,26 @@ export async function getUpdateRunStatusAsync(
 
 export async function getUpdateRunHistoryStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
+  readOptions: Pick<OpenClawStateReadOptions, "current"> = {},
 ): Promise<{
   activeRun?: UpdateRunRecord;
   lastRun?: UpdateRunRecord;
   expiredRun?: UpdateRunRecord;
 }> {
-  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options, readOptions);
 }
 
 async function readUpdateRunStatusAsync(
   type: "updateRuns.status" | "updateRuns.historyStatus",
   options: OpenClawStateDatabaseOptions,
+  readOptions: Pick<OpenClawStateReadOptions, "current"> = {},
 ) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
+    executeExistingOpenClawStateRead(
+      options,
+      { type },
+      { ...readOptions, preferIndependentWarmRead: true },
+    ),
   );
   if (!reply) {
     return {};
@@ -198,12 +204,13 @@ async function readUpdateRunStatusAsync(
 export async function listUpdateRunsAsync(
   input: UpdateRunListInput = {},
   options: OpenClawStateDatabaseOptions = {},
+  readOptions: Pick<OpenClawStateReadOptions, "current"> = {},
 ): Promise<UpdateRunRecord[]> {
   const reply = await withArtifactPreservingStateReads(() =>
     executeExistingOpenClawStateRead(
       options,
       { type: "updateRuns.list", input: { ...input } },
-      { preferIndependentWarmRead: true },
+      { ...readOptions, preferIndependentWarmRead: true },
     ),
   );
   if (!reply) {
