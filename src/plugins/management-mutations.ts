@@ -215,7 +215,8 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
-        requireCapabilityConsent: params.templateManaged === true,
+        requireCapabilityConsent:
+          params.templateManaged === true || params.requireCapabilityConsent,
         requireClawHubTrust: params.templateManaged === true,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: prepareEffect,
