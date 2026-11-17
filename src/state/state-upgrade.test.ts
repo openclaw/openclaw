@@ -152,13 +152,13 @@ describe("upgradeStateDirectory version zero", () => {
 });
 
 describe("createDoctorChain", () => {
-  it("points agent-directory selectors into the private copy", async () => {
+  it("points agent-directory selectors into the private copy and names its live directory", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-chain-"));
     dirs.push(root);
     const entry = path.join(root, "entry.mjs");
     fs.writeFileSync(
       entry,
-      "console.log(JSON.stringify([process.env.OPENCLAW_AGENT_DIR, process.env.PI_CODING_AGENT_DIR ?? null]));",
+      "console.log(JSON.stringify([process.env.OPENCLAW_AGENT_DIR, process.env.PI_CODING_AGENT_DIR ?? null, process.env.OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR]));",
     );
     const logPath = path.join(root, "chain.log");
     await createDoctorChain(
@@ -177,6 +177,7 @@ describe("createDoctorChain", () => {
     expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
       path.join(root, "shadow", "agents", "main", "agent"),
       null,
+      path.join(root, "live"),
     ]);
   });
 });

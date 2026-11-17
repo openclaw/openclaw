@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,6 +7,8 @@ import * as directoryObservation from "../infra/owned-directory-observation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readAuthProfileAuthorizationLifetime } from "./auth-profiles/authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./auth-profiles/authorization-observation.js";
@@ -343,3 +346,26 @@ it.each([undefined, ""])(
     });
   },
 );
+
+it("records an upgrade copy's authorization as the live databases it is published as", async () => {
+  await withRoot(async (root) => {
+    const agentDir = (stateDir: string) => path.join(stateDir, "agents", "main", "agent");
+    const live = await root.capture("shared", agentDir(root.stateDir), true);
+    live.dispose();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    // The state upgrade runs Doctor on a private copy inside the live state directory.
+    const shadow = path.join(root.stateDir, ".upgrade-test", "state");
+    for (const dir of ["agents", "state"]) {
+      fs.cpSync(path.join(root.stateDir, dir), path.join(shadow, dir), { recursive: true });
+    }
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: shadow, OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR: root.stateDir },
+      async () => {
+        const copy = await root.capture("shared", agentDir(shadow), true);
+        expect(copy.authorizationId).toBe(live.authorizationId);
+      },
+    );
+  });
+});

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -280,6 +282,18 @@ export async function captureAuthProfileAuthorization(params: {
           }
         }
         assertFacts();
+        // State-upgrade Doctor runs on a private copy that is then published at the live state
+        // directory. Identify its databases by where they will be published, or every binding
+        // recorded during the upgrade names paths that no longer exist after it.
+        const publishedStateDir = env.OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR;
+        const copyStateDir =
+          publishedStateDir && resolvePathViaExistingAncestorSync(resolveStateDir(env));
+        const published = (databasePath: string) => {
+          const relative = copyStateDir ? path.relative(copyStateDir, databasePath) : "..";
+          return publishedStateDir && !relative.startsWith("..") && !path.isAbsolute(relative)
+            ? resolvePathViaExistingAncestorSync(path.join(publishedStateDir, relative))
+            : databasePath;
+        };
         // Hash only opaque owner-issued incarnations, never credential or token material.
         // Preserve the original namespace so existing MCP bindings survive this owner extraction.
         const authorizationId = createHash("sha256")
@@ -287,8 +301,8 @@ export async function captureAuthProfileAuthorization(params: {
             JSON.stringify([
               "mcp-auth-profile-v1",
               profileId,
-              selectedPath,
-              ...lineage.map((target) => [target.databasePath, target.incarnation]),
+              published(selectedPath),
+              ...lineage.map((target) => [published(target.databasePath), target.incarnation]),
             ]),
           )
           .digest("hex");

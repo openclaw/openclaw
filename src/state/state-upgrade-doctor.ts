@@ -42,6 +42,8 @@ export const createDoctorChain =
     }
     Object.assign(childEnv, {
       OPENCLAW_STATE_DIR: stateDir,
+      // Opaque identities recorded in the copy name the databases as published here.
+      OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR: liveStateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       OPENCLAW_NO_RESPAWN: "1",
