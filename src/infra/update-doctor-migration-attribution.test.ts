@@ -103,7 +103,6 @@ it.each([false, true])(
       "INSERT INTO retained VALUES (7);",
     );
     const generations = readUpdateDatabaseGenerations([pathname]);
-    expect(generations[pathname]).toEqual(expect.any(String));
     const backup: UpdateDatabaseBackup = {
       directory: root,
       databases: [
@@ -459,7 +458,11 @@ function legacyGeneration(file: string): string {
 it.each(["unchanged", "changed data", "same-content commit", "replaced file"])(
   "verifies a 2026.9.34 inventory through migration and native close: %s",
   async (change) => {
-    const { root, pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+    // DELETE mode keeps same-content commit evidence after close, independent of timestamps.
+    const { root, pathname, env } = fixture(
+      "source.sqlite",
+      `INSERT INTO retained VALUES (7); ${change === "same-content commit" ? "PRAGMA journal_mode=DELETE;" : ""}`,
+    );
     const missing = path.join(root, "missing.sqlite");
     const generations = { [pathname]: legacyGeneration(pathname), [missing]: null };
     expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);

@@ -39,6 +39,7 @@ export type Member = {
   accountId: string;
   role: string;
   roleDefined?: boolean;
+  recoveryKit?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -52,6 +53,18 @@ export type RemovalSummary = { devices: number; connectionsClosed: number; runsC
 
 /** A local personal profile with no OpenClaw ID linked yet. */
 export type ExistingProfile = { id: string; displayName: string | null };
+
+/** Owner-only accepted recovery-kit use, independent of current member/device membership. */
+export type MemberRecoveryUse = {
+  seq: number;
+  accountId: string;
+  memberName: string;
+  deviceLabel: string;
+  peerKey: string;
+  peerFp: string;
+  /** Gateway-observed admission time, Unix seconds. */
+  usedAt: number;
+};
 
 /** One invite as the Gateway lists it to owners. */
 export type Invite = {
@@ -100,6 +113,7 @@ export type Link = {
   ownerDevices?: OwnerDevice[];
   members?: Member[];
   roles?: Role[];
+  recoveryUses?: MemberRecoveryUse[];
   /** Default engine liveness; null means this backend is not probed here. */
   sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];

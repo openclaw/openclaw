@@ -1220,7 +1220,7 @@ src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
-src/agents/sessions/session-manager-codec.ts	5
+src/agents/sessions/session-manager-codec.ts	4
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
@@ -1304,7 +1304,6 @@ src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
-src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
@@ -1710,7 +1709,6 @@ src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
 src/gateway/server-methods/agent-session-reset.ts	1
 src/gateway/server-methods/approval-publication.ts	4
-src/gateway/server-methods/approval-request-delivery.ts	1
 src/gateway/server-methods/approval-shared.ts	1
 src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1

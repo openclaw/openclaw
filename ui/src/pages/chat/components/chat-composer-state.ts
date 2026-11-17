@@ -38,6 +38,7 @@ function createChatComposerState(): ChatComposerState {
     microphonePicker: null,
     textareaRef: null,
     composerInputRef: null,
+    stopRunFromEscape: null,
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,

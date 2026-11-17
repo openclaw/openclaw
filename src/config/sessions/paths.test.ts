@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../../infra/boundary-path.js";
 import {
   resolveSessionFilePathCore,
+  resolveSessionFilePathCoreAsync,
   resolveSessionStorePathCore,
   SessionStoreAgentIdRequiredError,
 } from "./paths.js";
@@ -21,8 +22,28 @@ afterEach(() => {
 
 describe("resolveSessionFilePath cross-root reroot", () => {
   it.skipIf(process.platform === "win32")(
+    "preserves lexical parent normalization before following links",
+    async () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-path-parent-")));
+      tempDirs.push(root);
+      const sessionsDir = path.join(root, "sessions");
+      const outside = path.join(root, "outside");
+      fs.mkdirSync(sessionsDir);
+      fs.mkdirSync(path.join(outside, "child"), { recursive: true });
+      fs.writeFileSync(path.join(sessionsDir, "record.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(outside, "record.jsonl"), "{}\n");
+      fs.symlinkSync(path.join(outside, "child"), path.join(sessionsDir, "alias"), "dir");
+      const entry = { sessionFile: `${sessionsDir}/alias/../record.jsonl` };
+      const expected = path.join(sessionsDir, "record.jsonl");
+      expect(resolveSessionFilePathCore("fallback", entry, { sessionsDir })).toBe(expected);
+      await expect(
+        resolveSessionFilePathCoreAsync("fallback", entry, { sessionsDir }),
+      ).resolves.toBe(expected);
+    },
+  );
+  it.skipIf(process.platform === "win32")(
     "resolves a sibling transcript once per call and observes changed symlinks",
-    () => {
+    async () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sibling-")));
       tempDirs.push(root);
       const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -48,13 +69,28 @@ describe("resolveSessionFilePath cross-root reroot", () => {
         realpath.mock.calls.filter(([file]) => file === alias || file === transcript),
       ).toHaveLength(1);
 
+      await expect(
+        resolveSessionFilePathCoreAsync(
+          "sess-1",
+          { sessionFile: alias },
+          { sessionsDir, agentId: "worker" },
+        ),
+      ).resolves.toBe(transcript);
+
       fs.unlinkSync(alias);
       fs.symlinkSync(outside, alias);
       expect(resolve()).toBe(path.join(sessionsDir, "sess-1.jsonl"));
+      await expect(
+        resolveSessionFilePathCoreAsync(
+          "sess-1",
+          { sessionFile: alias },
+          { sessionsDir, agentId: "worker" },
+        ),
+      ).resolves.toBe(path.join(sessionsDir, "sess-1.jsonl"));
     },
   );
 
-  it("re-roots foreign-root absolute paths when the file exists in the current sessions dir", () => {
+  it("re-roots foreign-root absolute paths when the file exists in the current sessions dir", async () => {
     // Restored backups and moved state dirs persist absolute sessionFile
     // paths from the old root; migration must find the local copy.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reroot-")));
@@ -71,9 +107,16 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     );
 
     expect(resolved).toBe(path.join(sessionsDir, "sess-1.jsonl"));
+    await expect(
+      resolveSessionFilePathCoreAsync(
+        "sess-1",
+        { sessionFile: foreign },
+        { sessionsDir, agentId: "main" },
+      ),
+    ).resolves.toBe(resolved);
   });
 
-  it("keeps foreign-root absolute paths when no local copy exists", () => {
+  it("keeps foreign-root absolute paths when no local copy exists", async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reroot-keep-")));
     tempDirs.push(root);
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -87,6 +130,13 @@ describe("resolveSessionFilePath cross-root reroot", () => {
     );
 
     expect(resolved).toBe(foreign);
+    await expect(
+      resolveSessionFilePathCoreAsync(
+        "sess-2",
+        { sessionFile: foreign },
+        { sessionsDir, agentId: "main" },
+      ),
+    ).resolves.toBe(resolved);
   });
 });
 

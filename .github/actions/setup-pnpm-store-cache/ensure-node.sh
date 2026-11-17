@@ -224,7 +224,7 @@ openclaw_download_node() {
   fi
 }
 
-openclaw_ensure_node() {
+openclaw_select_local_node() {
   local requested_node="${1:-}"
   requested_node="${requested_node#v}"
   if [[ -z "$requested_node" ]]; then
@@ -239,13 +239,22 @@ openclaw_ensure_node() {
   fi
 
   node_bin="$(openclaw_find_toolcache_node "$requested_node" || true)"
-  if [[ -n "$node_bin" ]]; then
-    echo "Using Node $("$node_bin" -p 'process.versions.node') from $node_bin"
-    openclaw_prepend_node_bin "$(dirname "$node_bin")"
-  else
-    openclaw_download_node "$requested_node" || true
+  [[ -n "$node_bin" ]] || return 1
+  echo "Using Node $("$node_bin" -p 'process.versions.node') from $node_bin"
+  openclaw_prepend_node_bin "$(dirname "$node_bin")"
+  openclaw_node_version_matches "$(openclaw_active_node_version)" "$requested_node"
+}
+
+openclaw_ensure_node() {
+  local requested_node="${1:-}"
+  requested_node="${requested_node#v}"
+  if openclaw_select_local_node "$requested_node"; then
+    return 0
   fi
 
+  openclaw_download_node "$requested_node" || true
+
+  local active_node_version
   active_node_version="$(openclaw_active_node_version)"
   if ! openclaw_node_version_matches "$active_node_version" "$requested_node"; then
     echo "::error::Expected Node '${requested_node}', but active node is '${active_node_version:-missing}' at $(command -v node || true)"

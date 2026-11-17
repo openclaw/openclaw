@@ -615,6 +615,12 @@ function runRunnerProfileFixture(options: {
       ].join("\n"),
       "utf8",
     );
+    const harnessScripts = path.join(root, ".ci-harness", "scripts");
+    mkdirSync(harnessScripts, { recursive: true });
+    copyFileSync(
+      "scripts/ci-resolve-runner-profile.sh",
+      path.join(harnessScripts, "ci-resolve-runner-profile.sh"),
+    );
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -639,6 +645,8 @@ function runRunnerProfileFixture(options: {
         REQUESTED_RUNNER_PROFILE: options.requestedProfile ?? "default",
         QUALIFICATION_DISPATCH: String(options.qualificationDispatch ?? false),
         CI_SHAPE: options.ciShape ?? "default",
+        BOAT_API_KEY: "",
+        BOAT_ORG: "",
       },
     });
     const outputs = Object.fromEntries(
@@ -6168,15 +6176,16 @@ describe("ci workflow guards", () => {
       ...scenario,
     });
     expect(result.status, result.output).toBe(0);
+    const fullBoat = "qualificationDispatch" in scenario && scenario.qualificationDispatch;
     expect(result.outputs).toMatchObject({
       runner_profile: scenario.admitted ? "hybrid" : "github",
-      node_runner_backend: scenario.admitted ? "boat" : "github",
-      effective_runner_backend: scenario.admitted ? "boat" : "github",
+      node_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
+      effective_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
       placement_runner_backend: scenario.admitted ? "hybrid" : "github",
     });
   });
 
-  it("routes general Boat jobs and retained retries without pilot exceptions", () => {
+  it("routes retained Boat plans and retries without pilot exceptions", () => {
     const admitted = runRunnerProfileFixture({
       configuredProfile: "boat",
       eventName: "pull_request",
@@ -6190,7 +6199,12 @@ describe("ci workflow guards", () => {
       runnerBackend: "boat" as const,
       runAttempt: 1,
       runnerEnvironment: "self-hosted" as const,
-      preflightOutputs: admitted.outputs,
+      // Already-emitted plans and explicit qualifications keep the full Boat route.
+      preflightOutputs: {
+        ...admitted.outputs,
+        node_runner_backend: "boat",
+        effective_runner_backend: "boat",
+      },
     };
     for (const [name, runner] of [
       ["checks-fast-core", "ubuntu-24.04"],
@@ -13520,6 +13534,16 @@ describe("ci workflow guards", () => {
     };
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
+      nodeTestShards: createNodeTestShardBundles({
+        changedPaths: targets,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+        compactMode: "pull-request",
+        runnerBackend: "blacksmith",
+      }),
       historicalCompatibility: false,
       eventName: "pull_request",
       changedPaths: targets,
