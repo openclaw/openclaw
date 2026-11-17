@@ -127,8 +127,9 @@ export async function prepareSessionMutationFacts(
       throw new SessionMutationFactsUnavailableError();
     }
   };
-  const invalidate = () => {
+  const invalidate = (reason: string) => {
     invalidated = true;
+    SessionMutationFactsUnavailableError.report(reason, new Error());
   };
   const acquisition = createSessionSharingFactAcquisition({
     followLifecycle: params.followLifecycle,
@@ -170,10 +171,10 @@ export async function prepareSessionMutationFacts(
           try {
             assertRegistryPublication();
           } catch {
-            invalidate();
+            invalidate("registry-topology");
           }
         } else {
-          invalidate();
+          invalidate("other-topology");
         }
         return;
       }
@@ -204,7 +205,7 @@ export async function prepareSessionMutationFacts(
         // The next assertion still checks the retained physical source and current facts.
         return;
       }
-      invalidate();
+      invalidate("broad-publication");
       return;
     }
     if (
@@ -246,7 +247,7 @@ export async function prepareSessionMutationFacts(
           expectedPlaceholder = placeholder;
           return;
         } catch {
-          invalidate();
+          invalidate("creation-source");
           return;
         }
       }
@@ -267,7 +268,7 @@ export async function prepareSessionMutationFacts(
       return;
     }
     if (!facts || facts.target === null || readPreparedSessionSharingChange(change) === undefined) {
-      invalidate();
+      invalidate("unmatched-keyed-publication");
     }
   };
   releases.push(
@@ -287,7 +288,7 @@ export async function prepareSessionMutationFacts(
           change.current.sessionKeys.some((key) => initialStoreKeys.includes(key))
         )
       ) {
-        invalidate();
+        invalidate("identity-mutation");
       }
     }),
   );
@@ -689,7 +690,6 @@ export async function prepareSessionMutationFacts(
         assertSource();
         return readFacts();
       } catch (error) {
-        SessionMutationFactsUnavailableError.report(error, [active, invalidated, initialDiscovery]);
         throw error instanceof SessionMutationFactsUnavailableError
           ? error
           : new SessionMutationFactsUnavailableError({ cause: error });
