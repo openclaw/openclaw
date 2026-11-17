@@ -33,6 +33,7 @@ import {
   rejectBusyUpgrade,
   relayHeaders,
   logInferenceTransportFailure,
+  logInferenceAuthorizationFailure,
   type CodexInferenceTransportStage,
 } from "./inference-proxy-http.js";
 import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
@@ -327,6 +328,7 @@ export async function createCodexInferenceProxy(
       } catch (error) {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
         const denied = authorizationFailure(error);
+        logInferenceAuthorizationFailure(error, "http", res.headersSent);
         const tooLarge = requestTooLargeFailure(error);
         if (!denied && !tooLarge) {
           logInferenceTransportFailure(stage, error, res.headersSent);
@@ -600,8 +602,9 @@ export async function createCodexInferenceProxy(
                       close();
                     }
                   });
-                } catch {
+                } catch (error) {
                   releaseUpload?.();
+                  logInferenceAuthorizationFailure(error, "websocket");
                   close();
                 }
               };
@@ -646,6 +649,7 @@ export async function createCodexInferenceProxy(
                     await forward(frame);
                   } catch (error) {
                     prepared?.release();
+                    logInferenceAuthorizationFailure(error, "websocket");
                     const refused = authorizationFailure(error) ?? requestTooLargeFailure(error);
                     if (refused && accepted.readyState === WebSocket.OPEN) {
                       accepted.send(refused, { binary: false }, close);

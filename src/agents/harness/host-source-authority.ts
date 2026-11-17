@@ -18,6 +18,7 @@ import {
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { requiresOperatorModelExecutionPolicy } from "../operator-access-program.js";
 import {
@@ -47,21 +48,40 @@ export function bindHarnessHostSourceAuthority(params: {
     attempt.admittedRunContext,
     params.delegatedAuthority,
   );
+  // The first refusal ends this host's useful lifetime. Repeated token/tool assertions
+  // must not repeat diagnostics or replace its first observed cause.
+  let reported = false;
+  const refuse = (
+    reason:
+      | "host_closed"
+      | "admitted_source_missing"
+      | "operational_run_replaced"
+      | "admitted_source_refused"
+      | "gateway_stale",
+  ): never => {
+    if (!reported) {
+      reported = true;
+      log.warn("agent harness host source denied", { reason, runId: attempt.runId });
+    }
+    throw inactiveError("agent harness host capability is no longer active");
+  };
   const checkAdmitted = (assertSource: () => void) => {
-    if (
-      !params.isActive() ||
-      !admittedSource ||
-      attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance
-    ) {
-      throw inactiveError("agent harness host capability is no longer active");
+    if (!params.isActive()) {
+      refuse("host_closed");
+    }
+    if (!admittedSource) {
+      refuse("admitted_source_missing");
+    }
+    if (attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance) {
+      refuse("operational_run_replaced");
     }
     try {
       assertSource();
     } catch {
-      throw inactiveError("agent harness host capability is no longer active");
+      refuse("admitted_source_refused");
     }
     if (!params.isGatewayCurrent()) {
-      throw inactiveError("agent harness host capability is no longer active");
+      refuse("gateway_stale");
     }
   };
   const assertAdmitted = composeSessionSourceAssertion([admittedSource], checkAdmitted);

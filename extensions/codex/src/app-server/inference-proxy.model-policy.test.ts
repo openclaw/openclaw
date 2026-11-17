@@ -11,6 +11,7 @@ import {
 } from "./inference-proxy.capacity-test-support.js";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
@@ -97,6 +98,37 @@ function expectBinding(expected: object) {
   expect(bindModelExecution).toHaveBeenCalledOnce();
   expect(bindModelExecution.mock.calls[0]?.[0]).toMatchObject(expected);
 }
+
+it("logs one bounded denial for an invalid WebSocket frame, not its metadata", async () => {
+  const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    const { client } = await open();
+    const received = once(client, "message");
+    client.send(
+      JSON.stringify({
+        type: "response.create",
+        model: "allowed",
+        client_metadata: { "x-codex-turn-metadata": "synthetic-private-token" },
+      }),
+    );
+    const body = (await received)[0].toString();
+    expectDenied(body, "synthetic-private-token");
+    expect(bindModelExecution).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      [
+        "codex inference authorization denied",
+        {
+          transport: "websocket",
+          reason: "metadata_invalid",
+          responseStarted: false,
+        },
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-token");
+  } finally {
+    warn.mockRestore();
+  }
+});
 
 it.each(["/responses", "/responses/compact", "/images/generations"])(
   "checks HTTP model authority on %s",

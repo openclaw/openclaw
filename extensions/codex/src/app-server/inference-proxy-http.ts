@@ -2,7 +2,22 @@ import type { IncomingHttpHeaders } from "node:http";
 import type { Duplex } from "node:stream";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
+import { CodexInferenceAuthorizationError } from "./inference-dispatch.js";
 import { transportFailureReason } from "./inference-transport.js";
+
+export function logInferenceAuthorizationFailure(
+  error: unknown,
+  transport: "http" | "websocket",
+  responseStarted = false,
+): void {
+  if (error instanceof CodexInferenceAuthorizationError) {
+    embeddedAgentLog.warn("codex inference authorization denied", {
+      transport,
+      reason: error.diagnosticReason,
+      responseStarted,
+    });
+  }
+}
 
 export type CodexInferenceTransportStage =
   | "request"

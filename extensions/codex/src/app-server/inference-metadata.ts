@@ -6,6 +6,19 @@ const MAX_NATIVE_METADATA_BYTES = 1024 * 1024;
 const MAX_METADATA_FIELD_BYTES = 256;
 export const CODEX_INFERENCE_GENERATION_KEY = "openclaw_inference_generation";
 
+export class CodexInferenceMetadataError extends Error {
+  constructor(
+    readonly reason:
+      | "metadata_missing"
+      | "metadata_invalid"
+      | "metadata_mismatch"
+      | "execution_identity_missing",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /** Native request facts; their consistency does not grant execution authority. */
 export type CodexInferenceMetadata = Readonly<{
   sessionId?: string;
@@ -36,20 +49,29 @@ export function readCodexInferenceMetadata(
     // Native Images carries its real tool-call turn in this header, without Responses metadata.
     const nativeImageTurnId = readId("image turn", headers?.["x-codex-image-turn-id"]);
     if (!nativeImageTurnId) {
-      throw new Error("Codex image inference has no native turn metadata");
+      throw new CodexInferenceMetadataError(
+        "execution_identity_missing",
+        "Codex image inference has no native turn metadata",
+      );
     }
     return Object.freeze({ nativeImageTurnId });
   }
   const flat = body.client_metadata;
   if (flat !== undefined && !isRecord(flat)) {
-    throw new Error("Codex inference request has invalid native metadata");
+    throw new CodexInferenceMetadataError(
+      "metadata_invalid",
+      "Codex inference request has invalid native metadata",
+    );
   }
   const nested = readNativeMetadata(flat?.["x-codex-turn-metadata"]);
   // HTTP headers describe this request. A reused WebSocket's handshake describes an older turn.
   const httpHeaders = transport === "http" ? headers : undefined;
   const compatibility = readNativeMetadata(httpHeaders?.["x-codex-turn-metadata"]);
   if (!nested && !compatibility) {
-    throw new Error("Codex inference request is missing bounded native metadata");
+    throw new CodexInferenceMetadataError(
+      "metadata_missing",
+      "Codex inference request is missing bounded native metadata",
+    );
   }
   const nativeField = (key: string) => [nested?.[key], compatibility?.[key]];
   const requestKind = reconcileMetadataStrings("request kind", ...nativeField("request_kind"));
@@ -60,7 +82,10 @@ export function readCodexInferenceMetadata(
     (requestKind === "turn" ||
       (requestKind === "prewarm" && !(body.generate === false && generation === undefined)))
   ) {
-    throw new Error("Codex inference request has no native thread metadata");
+    throw new CodexInferenceMetadataError(
+      "execution_identity_missing",
+      "Codex inference request has no native thread metadata",
+    );
   }
   const readTurnId = (field: string, key: string) =>
     readId(field, flat?.[key], ...nativeField(key));
@@ -111,7 +136,10 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   }
   const encoded = readStringValue(raw);
   if (encoded === undefined || Buffer.byteLength(encoded) > MAX_NATIVE_METADATA_BYTES) {
-    throw new Error("Codex inference request is missing bounded native metadata");
+    throw new CodexInferenceMetadataError(
+      "metadata_missing",
+      "Codex inference request is missing bounded native metadata",
+    );
   }
   try {
     const value: unknown = JSON.parse(encoded);
@@ -121,7 +149,10 @@ function readNativeMetadata(raw: unknown): Record<string, unknown> | undefined {
   } catch {
     // Invalid JSON uses the same descriptive metadata rejection as a non-object payload.
   }
-  throw new Error("Codex inference request has invalid native metadata");
+  throw new CodexInferenceMetadataError(
+    "metadata_invalid",
+    "Codex inference request has invalid native metadata",
+  );
 }
 
 const reconcileMetadataStrings = metadataReconciler((value) => {
@@ -135,7 +166,10 @@ const reconcileMetadataBooleans = metadataReconciler(asBoolean, "invalid");
 function readId(field: string, ...values: unknown[]): string | undefined {
   const value = reconcileMetadataStrings(field, ...values);
   if (value !== undefined && (!value || value.trim() !== value)) {
-    throw new Error(`Codex inference ${field} metadata has an invalid identity`);
+    throw new CodexInferenceMetadataError(
+      "metadata_invalid",
+      `Codex inference ${field} metadata has an invalid identity`,
+    );
   }
   return value;
 }
@@ -152,10 +186,16 @@ function metadataReconciler<T extends string | boolean>(
       }
       const candidate = read(value);
       if (candidate === undefined) {
-        throw new Error(`Codex inference ${field} metadata is ${invalid}`);
+        throw new CodexInferenceMetadataError(
+          "metadata_invalid",
+          `Codex inference ${field} metadata is ${invalid}`,
+        );
       }
       if (result !== undefined && candidate !== result) {
-        throw new Error(`Codex inference ${field} metadata disagrees`);
+        throw new CodexInferenceMetadataError(
+          "metadata_mismatch",
+          `Codex inference ${field} metadata disagrees`,
+        );
       }
       result = candidate;
     }

@@ -71,6 +71,15 @@ export type NativeModelExecution = NativeModelSourceCustody & {
   executionOwner: ParentOwner;
   bindTurn: (turnId: string) => void;
 };
+export type NativeModelSourceUnavailableReason =
+  | "native_monitor_missing"
+  | "native_state_missing"
+  | "native_state_stale"
+  | "native_turn_settled"
+  | "native_owner_unavailable"
+  | "native_source_missing"
+  | "native_binding_missing";
+
 export type NativeModelSourceRequest = {
   threadId: string;
   turnId: string;
@@ -78,6 +87,8 @@ export type NativeModelSourceRequest = {
   parentTurnId?: string;
   rootTurnId?: string;
   signal?: AbortSignal;
+  /** Internal diagnostic fact only; never participates in source admission. */
+  onUnavailable?: (reason: NativeModelSourceUnavailableReason) => void;
 };
 export type NativeModelInputRequest = {
   threadId: string;

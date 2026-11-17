@@ -4,12 +4,17 @@ import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
-import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
+import {
+  readCodexInferenceMetadata,
+  CodexInferenceMetadataError,
+  type CodexInferenceMetadata,
+} from "./inference-metadata.js";
 import { CODEX_INFERENCE_TRANSPORT_FAILURE as FAILURE } from "./inference-transport.js";
 import { createUploadBody, createRetryableUploadBody, MAX_BODY_BYTES } from "./inference-upload.js";
 import type {
   NativeModelSourceCapture,
   NativeModelSourceRequest,
+  NativeModelSourceUnavailableReason,
 } from "./native-subagent-monitor-types.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
@@ -47,15 +52,33 @@ export function createCodexBoundedInferenceModelBinding(params: {
       request.metadata.subagent ||
       request.metadata.subagentKind
     ) {
-      throw new CodexInferenceAuthorizationError("owner");
+      throw new CodexInferenceAuthorizationError("owner", "request_shape_invalid");
     }
     return { assertCurrent: params.assertCurrent, release: () => {} };
   };
 }
 
+export type CodexInferenceDenialReason =
+  | CodexInferenceMetadataError["reason"]
+  | NativeModelSourceUnavailableReason
+  | "request_shape_invalid"
+  | "request_kind_mismatch"
+  | "source_capture_failed"
+  | "source_unavailable"
+  | "source_assertion_failed"
+  | "native_review_not_required"
+  | "model_binding_missing"
+  | "model_access_refused"
+  | "unknown";
+
 /** Only host-owned authorization failures may cross the private transport boundary. */
 export class CodexInferenceAuthorizationError extends Error {
-  constructor(reason: "model" | "owner") {
+  constructor(
+    reason: "model" | "owner",
+    readonly diagnosticReason: CodexInferenceDenialReason = reason === "model"
+      ? "model_access_refused"
+      : "unknown",
+  ) {
     super(
       reason === "model"
         ? "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy."
@@ -123,12 +146,16 @@ export function createCodexInferenceModelBinding(params: {
   }) => string | undefined;
 }) {
   const { assertCurrent: assertClient, provider } = params;
-  const refuseOwner = (error: unknown, signal: AbortSignal): never => {
+  const refuseOwner = (
+    error: unknown,
+    signal: AbortSignal,
+    reason: CodexInferenceDenialReason = "source_assertion_failed",
+  ): never => {
     signal.throwIfAborted();
     assertClient();
     throw error instanceof CodexInferenceAuthorizationError
       ? error
-      : new CodexInferenceAuthorizationError("owner");
+      : new CodexInferenceAuthorizationError("owner", reason);
   };
   return async ({
     path,
@@ -155,7 +182,7 @@ export function createCodexInferenceModelBinding(params: {
         "/guardian-classifier",
       ].includes(path)
     ) {
-      throw new CodexInferenceAuthorizationError("owner");
+      throw new CodexInferenceAuthorizationError("owner", "request_shape_invalid");
     }
     const reviewer =
       metadata.subagent === "guardian" && metadata.threadSource === "guardian_review";
@@ -166,7 +193,7 @@ export function createCodexInferenceModelBinding(params: {
       (path === "/guardian-classifier" && !classifier) ||
       (path === "/responses/compact" && metadata.requestKind !== "compaction")
     ) {
-      throw new CodexInferenceAuthorizationError("owner");
+      throw new CodexInferenceAuthorizationError("owner", "request_kind_mismatch");
     }
     const memory =
       metadata.threadSource === "memory_consolidation" &&
@@ -188,9 +215,10 @@ export function createCodexInferenceModelBinding(params: {
         : metadata.threadId;
     const turnId = imageTurnId ?? (parentExecution ? metadata.parentTurnId : metadata.turnId);
     if (!threadId || !turnId || memory) {
-      throw new CodexInferenceAuthorizationError("owner");
+      throw new CodexInferenceAuthorizationError("owner", "execution_identity_missing");
     }
     let acquired: NativeModelSourceCapture | undefined;
+    let unavailable: NativeModelSourceUnavailableReason | undefined;
     try {
       acquired = await params.captureModelSource({
         client: params.client,
@@ -204,12 +232,15 @@ export function createCodexInferenceModelBinding(params: {
               rootTurnId: metadata.rootTurnId,
             }),
         signal,
+        onUnavailable: (reason) => {
+          unavailable = reason;
+        },
       });
     } catch (error) {
-      refuseOwner(error, signal);
+      refuseOwner(error, signal, "source_capture_failed");
     }
     if (!acquired) {
-      throw new CodexInferenceAuthorizationError("owner");
+      throw new CodexInferenceAuthorizationError("owner", unavailable ?? "source_unavailable");
     }
     const captured = acquired;
     // Native Images failures return to the still-allowed parent; its turn owns other models too.
@@ -231,12 +262,12 @@ export function createCodexInferenceModelBinding(params: {
       assertClient();
       if (reviewer || classifier) {
         if (!captured.nativeReviewRequired) {
-          throw new CodexInferenceAuthorizationError("owner");
+          throw new CodexInferenceAuthorizationError("owner", "native_review_not_required");
         }
       } else if (captured.source) {
         const bind = captured.source.bindModelExecution;
         if (!bind) {
-          throw new CodexInferenceAuthorizationError("owner");
+          throw new CodexInferenceAuthorizationError("owner", "model_binding_missing");
         }
         try {
           const mapping = captured.modelMapping;
@@ -266,7 +297,7 @@ export function createCodexInferenceModelBinding(params: {
           throw new CodexInferenceAuthorizationError("model");
         }
         if (!model) {
-          throw new CodexInferenceAuthorizationError("owner");
+          throw new CodexInferenceAuthorizationError("owner", "model_binding_missing");
         }
         model.signal.addEventListener("abort", cancelNativeTurn, { once: true });
         releaseAbort = () => model?.signal.removeEventListener("abort", cancelNativeTurn);
@@ -340,7 +371,10 @@ export function createCodexInferenceDispatch(params: {
           metadata = readCodexInferenceMetadata(value, headers, transport, path);
         } catch (error) {
           if (params.bindModelExecution) {
-            throw new CodexInferenceAuthorizationError("owner");
+            throw new CodexInferenceAuthorizationError(
+              "owner",
+              error instanceof CodexInferenceMetadataError ? error.reason : "unknown",
+            );
           }
           throw error;
         }

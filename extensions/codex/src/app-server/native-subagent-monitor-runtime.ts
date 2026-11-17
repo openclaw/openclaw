@@ -277,8 +277,14 @@ export function createCodexNativeSubagentMonitorRuntime<T extends NativeMonitorC
     captureModelSource: ({
       client,
       ...request
-    }: NativeModelSourceRequest & { client: CodexAppServerClient }) =>
-      monitors.get(client)?.captureModelSource(request) ?? Promise.resolve(undefined),
+    }: NativeModelSourceRequest & { client: CodexAppServerClient }) => {
+      const monitor = monitors.get(client);
+      if (!monitor) {
+        request.onUnavailable?.("native_monitor_missing");
+        return Promise.resolve(undefined);
+      }
+      return monitor.captureModelSource(request);
+    },
     resolveModelThreadId: ({ client, turnId }: { client: CodexAppServerClient; turnId: string }) =>
       monitors.get(client)?.resolveModelThreadId(turnId),
     prepareModelInput: ({
