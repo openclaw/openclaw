@@ -106,6 +106,7 @@
   align-items: center;
   gap: 0 2px;
   padding: 7px 8px;
+  padding-right: calc(8px + var(--chat-composer-keyboard-clearance, 0px));
   border-radius: calc(28px * var(--openclaw-corner-radius-scale));
 }
 
