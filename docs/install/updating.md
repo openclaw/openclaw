@@ -45,6 +45,14 @@ backup.
 
 ## Update implementation contract
 
+Managed systemd Gateway activation also covers packages replaced outside
+`openclaw update`. Before ordinary startup admission, the native service reader
+must identify this process as the running unit's MainPID. Only older database
+schemas trigger Doctor's exclusive maintenance, verified pre-migration backups,
+and forward migration owners. The activation adapter does not control services
+or run the full Doctor health-repair flow on normal restarts. Unverifiable,
+foreign-owned, and newer state retains its refusal and recovery guidance.
+
 Plugin updates preserve authored environment references when a replacement
 plugin moves their settings, including single-file includes. The candidate
 plugin-update command must contain this repair; the installed updater needs no

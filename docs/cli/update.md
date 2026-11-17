@@ -91,8 +91,18 @@ update continues with a warning; only a confirmed ownership match skips replacem
 A missing package-manager executable is reported as unavailable, without database
 recovery instructions. For pacman (including Arch-based distributions), update
 with `sudo pacman -Syu` or your AUR helper. For FreeBSD,
-use the owning pkg or Ports deployment. Then run `openclaw doctor --fix` and restart
-the Gateway through its service owner; see
+use the owning pkg or Ports deployment. Then restart the Gateway through its
+service owner. For other service managers, run `openclaw doctor --fix` first.
+On Linux, an OpenClaw-managed systemd Gateway backs up and migrates
+supported older databases during activation, including after an OS image update
+or an `ExecStart` drop-in selects a new source build. Healthy restarts skip this
+repair. The running service keeps its existing account, environment, and state
+selection; Doctor does not stop or restart the unit from inside it.
+
+Newer, unreadable, or foreign-owned databases remain protected. If activation
+refuses state, stop the service and run `openclaw doctor --fix` to inspect the
+reported problem before starting it again. Ordinary foreground Gateway commands
+continue to require explicit Doctor repair. See
 [System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).
 Older updaters must receive this fix through that system package manager first;
 a candidate cannot repair an updater that fails before staging it.

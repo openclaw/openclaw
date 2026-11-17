@@ -17,7 +17,7 @@ import { isGatewayRunInvocationArgv } from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 
 /** Resolve this Gateway's own manager, never a same-named unit in another scope. */
-async function readOwnGatewayServiceCommand(
+export async function readOwnGatewayServiceCommand(
   env: NodeJS.ProcessEnv,
 ): Promise<GatewayServiceCommandConfig | undefined> {
   if (process.platform !== "linux" || !isGatewayRunInvocationArgv(process.argv)) {
