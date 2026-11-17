@@ -12,11 +12,8 @@ import {
   createSqliteLifecycleAggregateError,
   SqliteCoordinatorError,
 } from "./sqlite-lifecycle-errors.js";
-import {
-  resolveSqliteInspectionSignal,
-  runSqliteReadOnlyWorker,
-  runSqliteReadOnlyWorkerSync,
-} from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
+import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 import { resolveUpdateSqlitePath } from "./update-database-path.js";

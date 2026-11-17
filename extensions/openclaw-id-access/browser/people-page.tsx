@@ -15,7 +15,15 @@ import {
 } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
-import { createInvite, decideInvite, removeMember } from "./invites.js";
+import { roleText } from "./i18n.js";
+import { InviteForm } from "./invite-form.js";
+import {
+  createInvite,
+  decideInvite,
+  removeMember,
+  changeMemberRole,
+  RoleClassificationChangedError,
+} from "./invites.js";
 import { NodeSection } from "./node-section.js";
 import { createNodeInvite, decideNodeInvite, removeNode } from "./nodes.js";
 import { signMembershipChange, thisOwnerDevice } from "./owner-signing.js";
@@ -25,16 +33,12 @@ import {
   type PeopleErrorAction,
   type PeopleOperationError,
 } from "./people-error.js";
-import { memberName, removalNote } from "./people-format.js";
+import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
+import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
-import {
-  InviteForm,
-  Members,
-  PendingRequests,
-  OperationError,
-  type RemovedMemberNotice,
-} from "./people-sections.js";
+import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
+import { RecoveryUses } from "./recovery-uses.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
 
 // Canonical device fingerprints stay available in the request's details disclosure.
@@ -62,8 +66,15 @@ function sessionTitleFrom(host: ControlUiHost) {
   };
 }
 
+function memberRole(status: StatusResult): string {
+  return status.connection?.kind === "member" ? status.connection.role : "";
+}
+
 /** The Access page for one Control UI host. */
-export function PeoplePage(props: { host: ControlUiHost }) {
+export function PeoplePage(props: {
+  host: ControlUiHost;
+  params?: Readonly<Record<string, string>>;
+}) {
   // The host is fixed for the page's lifetime.
   const host = untrack(() => props.host);
   const motion = createPeopleMotion();
@@ -177,6 +188,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       if (!disposed) {
         motion.update(() => setError({ target, ...peopleError(failure, kind, host.redact) }));
       }
+      if (failure instanceof RoleClassificationChangedError) {
+        throw failure;
+      }
       return undefined;
     } finally {
       actionsInFlight.delete(operation);
@@ -233,6 +247,16 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     });
   };
 
+  const changeRole = async (
+    member: Member,
+    role: MemberRole,
+    confirmedAdmin: boolean,
+  ): Promise<boolean> =>
+    (await run(`member:${member.accountId}`, async (link) => {
+      await changeMemberRole(host.request, link, member.accountId, role, confirmedAdmin);
+      return true;
+    })) === true;
+
   const canManage = () =>
     Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
 
@@ -269,56 +293,81 @@ export function PeoplePage(props: { host: ControlUiHost }) {
               <Show
                 when={current().owner}
                 fallback={
-                  <p class="ocid-access__empty">
-                    Only the owner can see who has access. Open this page from an approved owner
-                    browser.
-                  </p>
+                  <div>
+                    <Show when={current().connection?.kind === "member"}>
+                      <p class="ocid-access__hint">
+                        {roleText(host.locale, "yourRole", {
+                          role: roleName(memberRole(current())),
+                        })}
+                      </p>
+                    </Show>
+                    <p class="ocid-access__empty">
+                      Only the owner can see who has access. Open this page from an approved owner
+                      browser.
+                    </p>
+                  </div>
                 }
               >
                 <section class="ocid-access__group" aria-labelledby="ocid-access-people">
                   <h2 id="ocid-access-people" class="ocid-access__sr-only">
                     People
                   </h2>
-                  <Show when={latest(ownDevicePub)}>
+                  <Show when={latest(ownDevicePub) && !props.params?.member}>
                     <InviteForm
                       link={current().link}
                       motion={motion}
                       components={host.components}
+                      roles={current().link.roles ?? []}
                       disabled={!canManage() || latest(creatingInvite)}
                       busy={latest(creatingInvite)}
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
                       existingProfiles={current().link.existingProfiles ?? []}
-                      onCreate={(email, role: MemberRole, existingProfileId) =>
+                      onCreate={(email, role: MemberRole, confirmedAdmin, existingProfileId) =>
                         run("invite", (link) =>
-                          createInvite(host.request, link, email, role, existingProfileId),
+                          createInvite(
+                            host.request,
+                            link,
+                            email,
+                            role,
+                            confirmedAdmin,
+                            existingProfileId,
+                          ),
                         )
                       }
                     />
                   </Show>
-                  <PendingRequests
-                    motion={motion}
-                    invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
-                    fingerprints={latest(fingerprints)}
-                    error={latest(error)}
-                    readOnly={!latest(ownDevicePub)}
-                    disabled={!canManage()}
-                    locale={host.locale}
-                    onRefresh={() => {
-                      refreshedError = latest(error);
-                      void observer?.refresh();
-                    }}
-                    onDecide={(invite, approve) =>
-                      void run(
-                        `request:${invite.inviteId}`,
-                        (link) => decideInvite(host.request, link, invite, approve),
-                        approve ? "approve" : "update",
-                      )
-                    }
-                  />
+                  <Show when={!props.params?.member}>
+                    <PendingRequests
+                      motion={motion}
+                      invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
+                      fingerprints={latest(fingerprints)}
+                      error={latest(error)}
+                      readOnly={!latest(ownDevicePub)}
+                      disabled={!canManage()}
+                      locale={host.locale}
+                      onRefresh={() => {
+                        refreshedError = latest(error);
+                        void observer?.refresh();
+                      }}
+                      onDecide={(invite, approve) =>
+                        void run(
+                          `request:${invite.inviteId}`,
+                          (link) => decideInvite(host.request, link, invite, approve),
+                          approve ? "approve" : "update",
+                        )
+                      }
+                    />
+                  </Show>
                   <Members
+                    selectedMember={props.params?.member}
+                    selectedDevice={props.params?.device}
+                    navigation={host.navigation}
                     motion={motion}
                     members={current().link.members ?? []}
+                    components={host.components}
+                    roles={current().link.roles ?? []}
+                    onChangeRole={changeRole}
                     error={latest(error)}
                     notice={latest(notice)}
                     readOnly={!latest(ownDevicePub)}
@@ -331,8 +380,16 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                     onRemove={remove}
                     onRemoveDevice={removeDevice}
                   />
+                  <RecoveryUses
+                    uses={(current().link.recoveryUses ?? []).filter(
+                      (use) => !props.params?.member || use.accountId === props.params.member,
+                    )}
+                    members={current().link.members ?? []}
+                    navigation={host.navigation}
+                    locale={host.locale}
+                  />
                 </section>
-                <Show when={latest(ownDevicePub)}>
+                <Show when={latest(ownDevicePub) && !props.params?.member}>
                   <OperationError
                     error={latest(error)?.target === "nodes" ? latest(error) : null}
                   />

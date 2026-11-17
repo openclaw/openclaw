@@ -34,6 +34,7 @@ const statusPath = `${repoPath}/commits/${headSha}/statuses`;
 const contentsPath = `${repoPath}/contents`;
 const manifestPath = `${contentsPath}/package.json`;
 const contributorPermission = `${repoPath}/collaborators/contributor/permission`;
+const securityMembership = "/orgs/openclaw/teams/openclaw-secops/memberships";
 const maintainerPermission = `${repoPath}/collaborators/maintainer/permission`;
 const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
@@ -155,7 +156,9 @@ function runDependencyGuard(
         [`GET ${issuePath}/comments`]: [],
         [`GET ${issuePath}/labels`]: [],
         [`GET ${contributorPermission}`]: { role_name: "write" },
-        [`GET ${maintainerPermission}`]: { role_name: "maintain" },
+        [`GET ${maintainerPermission}`]: { role_name: "admin" },
+        [`GET ${securityMembership}/contributor`]: { httpError: 404 },
+        [`GET ${securityMembership}/maintainer`]: { httpError: 404 },
         ...routes,
       },
     }),
@@ -171,6 +174,7 @@ function runDependencyGuard(
       encoding: "utf8",
       env: {
         GITHUB_TOKEN: "fixture-token",
+        GH_APP_TOKEN: "fixture-members-token",
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "1",
@@ -229,37 +233,58 @@ describe("dependency guard script", () => {
     expect(result.statuses.map((call) => call.body?.state)).toEqual(["pending", "failure"]);
   });
 
-  it("requires current maintainer authority for dependency approval", () => {
+  it("requires current admin or SecOps authority for dependency approval", () => {
     const early = "2025-12-31T00:00:00Z";
     const securityCommand = "/allow-security-sensitive-change";
-    const cases: Array<[string, boolean, Partial<typeof approval> | null]> = [
-      ["maintain", true, null],
-      ["admin", true, null],
-      ["maintain", true, {}],
-      ["admin", true, {}],
-      ["write", false, {}],
-      ["maintain", false, { created_at: early, updated_at: early }],
-      ["maintain", false, { updated_at: "2026-01-01T00:00:02Z" }],
-      ["maintain", false, { user: { ...approval.user, type: "Bot" } }],
-      ["maintain", false, { body: securityCommand }],
-      ["maintain", true, { body: `${securityCommand}\n${approval.body}` }],
-    ];
-    for (const [role, allowed, overrides] of cases) {
+    const cases: Array<[string, string | null, boolean, Partial<typeof approval> | null, string?]> =
+      [
+        ["maintain", null, false, null, "MEMBER"],
+        ["maintain", null, false, null, "COLLABORATOR"],
+        ["admin", null, true, null],
+        ["write", "active", true, null],
+        ["write", "pending", false, null],
+        ["maintain", null, false, {}],
+        ["admin", null, true, {}],
+        ["write", "active", true, {}],
+        ["write", "pending", false, {}],
+        ["write", null, false, {}],
+        ["admin", null, false, { created_at: early, updated_at: early }],
+        ["admin", null, false, { updated_at: "2026-01-01T00:00:02Z" }],
+        ["admin", "active", false, { user: { ...approval.user, type: "Bot" } }],
+        ["admin", null, false, { body: securityCommand }],
+        ["admin", null, true, { body: `${securityCommand}\n${approval.body}` }],
+      ];
+    for (const [role, membership, allowed, overrides, association] of cases) {
       const author = overrides === null;
+      const login = author ? "contributor" : "maintainer";
       const result = runDependencyGuard({
-        [`GET /repos/openclaw/openclaw/collaborators/${author ? "contributor" : "maintainer"}/permission`]:
-          { role_name: role },
+        [`GET ${pullPath}`]: { ...pullRequest, author_association: association },
+        [`GET ${repoPath}/collaborators/${login}/permission`]: { role_name: role },
+        [`GET ${securityMembership}/${login}`]: {
+          expectedToken: "fixture-members-token",
+          response: membership ? { state: membership } : { httpError: 404 },
+        },
+        [`POST ${repoPath}/statuses/${headSha}`]: {
+          expectedToken: "fixture-token",
+          response: {},
+        },
         [`GET ${issuePath}/comments`]: author
           ? []
           : [approvalNotice, { ...approval, ...overrides }],
       });
-      expectGuard(result, ["pending", allowed ? "success" : "pending"], 0, overrides);
-      if (author) {
+      expectGuard(result, ["pending", allowed ? "success" : "pending"], 0, {
+        role,
+        membership,
+        allowed,
+        overrides,
+        association,
+      });
+      if (author && allowed) {
         expect(result.stdout).toContain("informational");
         expect(result.stdout).toContain("- `pnpm-workspace.yaml`\n");
       } else {
         expect(result.stdout).toContain(
-          allowed ? "Dependency graph changes approved" : "Maintainer dependency review required",
+          allowed ? "Dependency graph changes approved" : "Dependency review required",
         );
         expect(result.stdout).toContain("<!-- openclaw:approval-request ");
       }
@@ -271,7 +296,7 @@ describe("dependency guard script", () => {
       [`GET ${issuePath}/comments`]: afterTwoReads([approvalNotice, approval], [approvalNotice]),
     });
     expectGuardState(result, "pending");
-    expect(result.stdout).toContain("Maintainer dependency review required");
+    expect(result.stdout).toContain("Dependency review required");
   });
 
   it("requires review for renamed protected files and preserves lockfile artifacts", () => {
@@ -568,7 +593,7 @@ describe("dependency guard script", () => {
     });
 
     expect(body).toContain("Dependency removals noted");
-    expect(body).toContain("does not require additional maintainer approval");
+    expect(body).toContain("does not require additional admin or SecOps approval");
     expect(body).toContain("Removed `example-dependency`");
     expect(body).toContain("`extensions/example/package.json`");
     expect(body).toContain(headSha);
@@ -723,6 +748,12 @@ describe("dependency guard script", () => {
       issuePath,
       commentMarker: "<!-- openclaw:dependency-graph-guard -->",
       approvalCommand: "/allow-dependencies-change",
+      membershipApi: {
+        request: async (requestPath: string) => {
+          expect(requestPath).toBe(`${securityMembership}/contributor`);
+          throw Object.assign(new Error("Not a SecOps member"), { status: 404 });
+        },
+      },
       api: {
         request: async (requestPath: string) =>
           requestPath.endsWith("/permission") ? { role_name: "read" } : autoscrubPullRequest,
@@ -777,7 +808,9 @@ describe("dependency guard script", () => {
     expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
     expect(body).toContain("Dependency graph guard cleared");
     expect(body).toContain(headSha);
-    expect(body).toContain("requires a maintainer's `/allow-dependencies-change` comment");
+    expect(body).toContain(
+      "requires an admin or SecOps member’s `/allow-dependencies-change` comment",
+    );
   });
 
   it("bounds GitHub response bodies while preserving error status", async () => {

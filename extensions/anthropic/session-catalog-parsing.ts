@@ -156,6 +156,7 @@ export function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     };
     for (const [key, maxLength] of [
       ["name", 500],
+      ["customGroup", 500],
       ["cwd", MAX_STRING_LENGTH],
       ["color", MAX_STRING_LENGTH],
       ["cliVersion", 256],

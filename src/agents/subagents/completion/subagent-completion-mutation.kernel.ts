@@ -23,6 +23,7 @@ import {
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
   recordRequesterDelivery,
+  hasConsumedPrivateRequesterInput,
   resolveRequesterDeliveryOutcome,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
@@ -153,10 +154,8 @@ function prepareBlockedSubagentCompletion(
   ) {
     return undefined;
   }
-  const consumed = resolveRequesterDeliveryOutcome([subagent], {
-    delivered: false,
-    path: "none",
-  })?.delivered;
+  // A block carries no turn outcome, so only the private rule can settle it as consumed.
+  const consumed = hasConsumedPrivateRequesterInput(subagent);
   if (params.operatorAuthorityUnavailable) {
     subagent.suppressCompletionDelivery = true;
     subagent.requesterSettleWake = undefined;
@@ -390,6 +389,9 @@ function mutateRequesterBatch(
       subagent.pauseReason !== "sessions_yield" &&
       subagent.expectsCompletionMessage === true &&
       (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+        (!params.outcome.delivered &&
+          subagent.delivery?.status === "failed" &&
+          subagent.delivery.disposition === "retryable") ||
         settleExpiredDelivery)
     ) {
       if (params.outcome.delivered) {

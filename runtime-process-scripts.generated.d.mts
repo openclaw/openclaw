@@ -17,3 +17,7 @@ export declare function createRuntimeProcessScriptFile(
     | "updateStateSizes",
   options?: RuntimeProcessScriptFileOptions,
 ): RuntimeProcessScriptFile;
+export declare function createRuntimeProcessScriptFileAsync(
+  name: Parameters<typeof createRuntimeProcessScriptFile>[0],
+  options?: RuntimeProcessScriptFileOptions,
+): Promise<{ url: URL; dispose(): Promise<void> }>;

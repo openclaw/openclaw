@@ -84,11 +84,11 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.maintenance":
     "Automatic session-store maintenance controls for app-session archiving, pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
-    'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage has its own explicit enabled setting.',
+    'Determines whether pruning and disk-budget policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds. Cold storage is enabled by default and has its own opt-out setting.',
   "session.maintenance.coldStorage":
     "Moves inactive chats into compressed JSONL archives while retaining session metadata. Archive files become required history and must be included in backups. Changes apply without restarting the Gateway.",
   "session.maintenance.coldStorage.enabled":
-    "Enables background chat archival (default false). A worker checks for eligible chats every minute. This explicit archive policy is separate from deletion and disk-budget cleanup.",
+    "Enables background chat archival (default true). Set false to disable future extraction. A worker checks for eligible chats every minute. This archive policy is separate from deletion and disk-budget cleanup.",
   "session.maintenance.coldStorage.afterDays":
     "Archive chats after this many inactive days (positive integer, default 30). Active work is protected; changing the cutoff takes effect on the next worker pass without a Gateway restart.",
   "session.maintenance.pruneAfter":

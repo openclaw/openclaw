@@ -588,6 +588,7 @@ function BoardWidgetCellContent(
             "board-widget--page-chrome": props.pageChrome,
             "board-widget--dragging": props.dragging,
             "board-widget--fixed-report": fixedReport(),
+            "board-widget--fit-content": contribution()?.fitsContent === true,
           },
           presentation() && `board-widget--${presentation()}`,
         ]}

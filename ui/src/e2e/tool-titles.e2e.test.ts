@@ -33,7 +33,9 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const historyRow = page.locator(".chat-tool-row", { hasText: "Check the test suite" });
+        // A command row names the command it ran, without its shell preamble; the full
+        // command and its recorded purpose stay in the expanded details.
+        const historyRow = page.locator(".chat-tool-row", { hasText: /^Ran\s*pnpm test$/ });
         await historyRow.waitFor();
         await historyRow.click();
         await page.locator(".chat-tool-msg-body", { hasText: "All tests passed." }).waitFor();
@@ -69,27 +71,20 @@ suite.define(() => {
         } as const;
         await emit("item", projectAgentToolActivity(parent));
         await emit("tool", parent);
+        // Live work leads with its purpose in the activity headline.
         await page
-          .locator(".chat-tool-row--running .chat-tool-row__title", {
-            hasText: "Inspect the workspace guide",
-          })
+          .locator(".chat-activity-group__summary", { hasText: "Inspect the workspace guide" })
           .waitFor();
         await emit("item", projectAgentToolActivity(child));
         await emit("tool", { ...child, parentToolCallId: "live-check" });
-        const activity = page.locator(".chat-activity-group", {
-          hasText: "Inspect the workspace guide",
+        // Once the script records a child command, the command is the operation and
+        // the script stays inspector evidence.
+        const summary = page.locator(".chat-activity-group__summary", {
+          hasText: "Running printf",
         });
-        const summary = activity.locator(":scope > .chat-activity-group__summary");
         await summary.waitFor();
-        expect(await summary.textContent()).toContain("Inspect the workspace guide");
-        expect(await summary.textContent()).not.toContain("printf");
         await summary.click();
-        const operation = activity.locator(".chat-tool-row", {
-          hasText: "Inspect the workspace guide",
-        });
-        expect(await activity.locator(".chat-tool-row").count()).toBe(1);
-        await operation.click();
-        await activity.locator(".chat-tool-children .chat-tool-row--running").waitFor();
+        await page.locator(".chat-tool-row--running", { hasText: "workspace" }).waitFor();
         await emit("tool", {
           phase: "result",
           toolCallId: "live-child",
@@ -99,9 +94,8 @@ suite.define(() => {
         });
         await emit("item", projectAgentToolActivity({ ...child, phase: "result", isError: false }));
         await expect
-          .poll(() => activity.locator(".chat-tool-children .chat-tool-row--running").count())
+          .poll(() => page.locator(".chat-thread .chat-tool-row--running").count())
           .toBe(0);
-        expect(await operation.getAttribute("aria-expanded")).toBe("true");
         expect(await gateway.getRequests("chat.toolTitles")).toHaveLength(0);
       },
     );
