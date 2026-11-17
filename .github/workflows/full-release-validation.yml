@@ -1100,6 +1100,7 @@ jobs:
       - name: Setup qualification verifier dependencies
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/package.json
           lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
@@ -2394,6 +2395,7 @@ jobs:
         name: Setup qualification verifier dependencies
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/package.json
           lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}

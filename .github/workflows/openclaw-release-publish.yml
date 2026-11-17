@@ -540,6 +540,7 @@ jobs:
       - name: Setup qualification verifier dependencies
         uses: ./.release-validation-tooling/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: .release-validation-tooling/package.json
           lockfile-path: .release-validation-tooling/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}

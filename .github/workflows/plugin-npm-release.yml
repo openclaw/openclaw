@@ -255,6 +255,7 @@ jobs:
         if: inputs.prepared_artifact != ''
         uses: ./.release-tooling/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: .release-tooling/package.json
           lockfile-path: .release-tooling/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
@@ -1488,6 +1489,7 @@ jobs:
         if: inputs.prepared_artifact != ''
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: ./package.json
           lockfile-path: ./pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}

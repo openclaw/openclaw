@@ -123,6 +123,7 @@ jobs:
         if: inputs.qualification_workflow_sha == ''
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: ./package.json
           lockfile-path: ./pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
@@ -138,6 +139,7 @@ jobs:
         if: inputs.qualification_workflow_sha != ''
         uses: ./qualification-verifier/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: off
           package-manager-file: qualification-verifier/package.json
           lockfile-path: qualification-verifier/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
