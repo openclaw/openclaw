@@ -11,7 +11,7 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
-import { logWarn } from "../../logger.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -434,9 +434,10 @@ export function parseSessionEntries(content: string): FileEntry[] {
     }
   }
   if (skipped > 0) {
-    logWarn(
-      `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
-        `${entries.length} valid entries were loaded`,
+    // The root logger routes this prefix to the same subsystem. The transcript reader loads this
+    // codec, and its only other use of that logger is a lazy import a static one would defeat.
+    createSubsystemLogger("parseJsonlEntries").warn(
+      `skipped ${skipped} malformed JSONL line(s) — ${entries.length} valid entries were loaded`,
     );
   }
   return entries;

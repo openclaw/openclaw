@@ -3781,6 +3781,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/run-vitest-state-cleanup.test.ts",
   "test/scripts/run-vitest.test.ts",
   "test/scripts/runtime-postbuild.test.ts",
+  "test/scripts/runtime-process-build-graph.test.ts",
   "test/scripts/security-review-workflow.test.ts",
   "test/scripts/setup-pnpm-store-cache-image.test.ts",
   "test/scripts/shrink-ratchet.test.ts",
