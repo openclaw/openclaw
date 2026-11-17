@@ -134,8 +134,7 @@ function validateRequest(request, main, proofBaseline, freshDirectory = ".local"
     !Number.isSafeInteger(pr) ||
     pr < 1 ||
     ![head, tree, incoming, review, receiptOid].every((value) => sha.test(value)) ||
-    !["prepare-push-result.env", "prepare-sync-result.env"].includes(receipt) ||
-    head === incoming
+    !["prepare-push-result.env", "prepare-sync-result.env"].includes(receipt)
   ) {
     throw new Error("Invalid correction continuation identity.");
   }
@@ -218,6 +217,10 @@ printf '%s\\0' "$PR_HEAD" "$PR_HEAD_SHA_BEFORE" "$PREP_INCOMING_JSON_OID" "\${PR
       throw new Error("Missing private canonical baseline checkpoint.");
     }
     git("merge-base", "--is-ancestor", proofBaseline, main);
+  }
+  // An equal hosted head has no descendants to verify; its exact signature
+  // still belongs to continuation admission, not the retained receipt.
+  if (proofBaseline || head === incoming) {
     git("verify-commit", head);
   }
   // Match publication admission: only the exact signed native baseline is
