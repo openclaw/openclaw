@@ -36,8 +36,10 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
   listeners they register
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
-  `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
-  not false assurances; deny the action if policy requires those fields.
+  `senderIsOwner`, provider-native `roleIds`, and `deviceId`, the paired device
+  of the Gateway connection that sent the turn after the Gateway verified its
+  signature (never a request parameter or client name). Missing fields are
+  unproven, not false assurances; deny the action if policy requires those fields.
 - optional `ctx.trigger`, the run origin when its producer supplies one, such as
   `"user"`, `"cron"`, or `"memory"`. Memory flushes retain the originating turn's
   requester. This field is metadata, not authorization: it never grants owner

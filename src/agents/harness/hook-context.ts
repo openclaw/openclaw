@@ -80,6 +80,9 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.contextWindowReferenceTokens
       ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
       : {}),
-    ...buildAgentHookContextIdentityFields(params),
+    ...buildAgentHookContextIdentityFields({
+      ...params,
+      approvalReviewerDeviceId: params.requesterDeviceId,
+    }),
   };
 }

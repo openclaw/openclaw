@@ -75,6 +75,26 @@ describe("gateway client identity", () => {
     expect(gatewayClientSessionCreator(client)).toBeUndefined();
   });
 
+  it("takes the requester device only from the connection's verified device", () => {
+    const base = createSessionMutationTestClient();
+    const clientInfo = createClientInfo({ id: "openclaw-ios", displayName: "iPhone" });
+    const paired = {
+      ...base,
+      connect: {
+        ...base.connect,
+        client: clientInfo,
+        device: { id: "device-1", publicKey: "key", signature: "sig", signedAt: 1 },
+      },
+    } as GatewayClient;
+    const unpaired = {
+      ...base,
+      connect: { ...base.connect, client: clientInfo, device: undefined },
+    } as GatewayClient;
+    expect(resolveChatSendCallerContext(paired).ApprovalReviewerDeviceId).toBe("device-1");
+    expect(resolveChatSendCallerContext(unpaired).ApprovalReviewerDeviceId).toBeUndefined();
+    expect(resolveChatSendCallerContext(unpaired).SenderId).toBe("openclaw-ios");
+  });
+
   it("reports unavailable profiles without loading the GitHub plugin surface", () => {
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     for (const cause of [undefined, new Error("profile store unavailable")]) {

@@ -68,6 +68,12 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   senderExternalId?: string;
   /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
   channelContext?: PluginHookChannelContext;
+  /**
+   * Paired device id of the Gateway connection that sent this user turn, after the Gateway
+   * verified the device signature. Never taken from request params or client info; absent
+   * for runs that did not start from a device-authenticated connection.
+   */
+  requesterDeviceId?: string;
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
   toolAuthority?: PluginHookToolAuthority;
   /** Checks this prompt hook handler's result-acceptance lifetime. */
