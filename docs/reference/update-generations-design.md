@@ -60,6 +60,14 @@ One run of the published-driver Docker cell on November 12, 2026: published
 updater `2026.11.3`, candidate #197922 at `758582e`, linux/arm64, a small
 fixture state. The installed package tree was 46,250 entries and 591 MB.
 
+Published updaters refuse a candidate whose installed tree exceeds 50,000
+entries or 1 GiB, and that check cannot be patched after release. On November
+16, 2026 `main` installed to 52,229 entries, because a dynamic import had
+pulled the Gateway graph into the transcript reader worker's private build.
+[#200321](https://github.com/openclaw/openclaw/pull/200321) restored 46,826
+entries and added a build guard that pull requests now run. The margin under
+the cap is small, and any release layout work has to keep it.
+
 | Step                                   | Time    |
 | -------------------------------------- | ------- |
 | Updater copying its own runtime        | 14.0 s  |
@@ -497,8 +505,14 @@ something the source showed.
   install: the Gateway restarts itself for the replaced installation while
   update Doctor stops it. That was measured on a plain install from `main`,
   it is independent of release directories, and
-  [#200181](https://github.com/openclaw/openclaw/pull/200181) proposes the
-  fix. Until it lands the in-place Docker cell stops the Gateway first.
+  [#200181](https://github.com/openclaw/openclaw/pull/200181) fixes it: the
+  updater accepts one process change when the newest recorded shutdown
+  belongs to the process it inspected and names the replaced installation,
+  then inspects again, warns, and drains and stops the restarted Gateway. Not
+  covered: a restart inside systemd's `RestartSec` window, and a Gateway that
+  restarts from rolled-back files after a failed update. The in-place Docker
+  cell still stops the Gateway first; running it with the Gateway up is a
+  follow-up.
   This installation's own service writes keep the package path (the adoption
   cell checks the unit).
 - **Launchers.** The first version refused before any change when a candidate
@@ -507,16 +521,28 @@ something the source showed.
   next update adopts again. The comparison covers only the launchers the swap
   publishes (`openclaw`). Comparing every `bin` entry made a candidate with an
   added command fall back on every update and never adopt the layout.
-- **Adoption** moves the plain directory into `releases/<label>` and renames
-  a prepared temporary link naming it onto the empty package path, then
-  switches as usual. Between the two renames the package path is missing.
-  Death there leaves `.openclaw.release-link-*` naming the unchanged previous
-  release; renaming it onto the package path restores the installation. That
-  recovery is manual and documented: the journal cannot hold it, because its
-  candidate is a sealed tree, and nothing can run `openclaw` while the
-  package path is missing. A failed second rename moves the directory back.
-  The first version refused before any change when `releases/` is on another
-  filesystem; under decision 8 that run takes the swap.
+- **Adoption** turns the plain directory into `releases/<label>` and puts a
+  link in its place, then switches as usual. The first version did that with
+  two renames, and between them the package path was missing: an updater
+  killed there left `openclaw` unable to start, with a manual recovery.
+  [#200273](https://github.com/openclaw/openclaw/pull/200273) prepares the
+  link at the release path and exchanges the two in one call (`renameat2`
+  with `RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP` on macOS),
+  so the package path names a complete package at every instant. Node has no
+  API for that call. The update makes it through Node's FFI when the running
+  Node has it (Node 26), and otherwise through `/usr/bin/osascript` on macOS
+  or `/usr/bin/perl` on Linux x64 and arm64; the installer's default Node is
+  24, so the external tools are the common route. The result is read from the
+  two paths' device and inode numbers, never from an exit code, and the
+  `package-swap` step names the route. An updater killed before the exchange
+  leaves a directory in `releases/` holding only a link, which is not a
+  release and is collected. When no exchange is available (another platform,
+  no perl, a filesystem that refuses the call), the run still adopts with the
+  two renames and says so in the step; only that fallback keeps the missing
+  package path and its documented manual recovery. A failed second rename
+  moves the directory back. The first version refused before any change when
+  `releases/` is on another filesystem; under decision 8 that run takes the
+  swap.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
@@ -767,6 +793,9 @@ existing handoff carries stop, publish, or rollback authority.
   Gateway-initiated update, APFS, and a published reader of the new run
   record (published `2026.11.3` cannot open state this candidate migrated;
   its `origin` schema is a plain `z.object`, which drops the key).
+- The adoption exchange ran on macOS arm64 and in linux/arm64 containers, with
+  the updater killed at every file system boundary. Not confirmed: native x64, an
+  installation made by `install-cli.sh`, and `osascript` under launchd.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
