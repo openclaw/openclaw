@@ -12,7 +12,7 @@ export function startGatewayPageActivation(
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
-        "needsWakeReconnect" | "needsReachabilityReconnect" | "gatewayUrl"
+        "needsWakeReconnect" | "needsReachabilityReconnect" | "checkInboundSilence" | "gatewayUrl"
       > | null;
     };
     connect: () => void;
@@ -24,6 +24,7 @@ export function startGatewayPageActivation(
   let disposed = false;
   let queued = false;
   let forceRecovery = false;
+  let refreshWorker = false;
   let wasHidden = documentTarget.visibilityState === "hidden";
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   let probe: AbortController | null = null;
@@ -91,11 +92,12 @@ export function startGatewayPageActivation(
     syncProbe(Math.max(0, 2_000 + Math.random() * 1_000 - (Date.now() - checkedAtMs)));
   };
 
-  const schedule = (force: boolean) => {
+  const schedule = (force: boolean, refreshesWorker = true) => {
     if (documentTarget.visibilityState === "hidden") {
       return;
     }
     forceRecovery ||= force;
+    refreshWorker ||= refreshesWorker;
     if (queued) {
       return;
     }
@@ -104,14 +106,24 @@ export function startGatewayPageActivation(
       queued = false;
       const forceQueuedRecovery = forceRecovery;
       forceRecovery = false;
+      const refreshQueuedWorker = refreshWorker;
+      refreshWorker = false;
       if (disposed || documentTarget.visibilityState === "hidden") {
         return;
       }
       const { client } = gateway.snapshot;
-      if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {
-        // Replacing the client retires Safari's ghost socket synchronously. A
-        // socket close would depend on the suspended transport firing `close`.
-        gateway.connect();
+      if (client && recoveryAllowed()) {
+        if (forceQueuedRecovery || client.needsWakeReconnect) {
+          // Replacing the client retires Safari's ghost socket synchronously. A
+          // socket close would depend on the suspended transport firing `close`.
+          gateway.connect();
+        } else {
+          // A socket that died while the app was away still looks open until it fails to answer.
+          client.checkInboundSilence(true);
+        }
+      }
+      if (!refreshQueuedWorker) {
+        return;
       }
       void import("./sw-refresh.runtime.ts")
         .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
@@ -137,11 +149,14 @@ export function startGatewayPageActivation(
     }
   };
   const onOnline = () => schedule(false);
+  // Returning from another app can leave the document visible; skip a worker update on focus.
+  const onFocus = () => schedule(false, false);
 
   const stops = [
     listen(documentTarget, "visibilitychange", onVisibilityChange),
     listen(windowTarget, "pageshow", onPageShow),
     listen(windowTarget, "online", onOnline),
+    listen(windowTarget, "focus", onFocus),
     gateway.subscribe(() => syncProbe()),
   ];
   syncProbe();
