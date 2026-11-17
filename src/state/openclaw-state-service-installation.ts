@@ -1,5 +1,5 @@
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { getGatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 
 /** Keep filesystem and refusal dependencies out of the eager CLI/worker context graph. */

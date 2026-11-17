@@ -14,6 +14,7 @@ import {
   resolveSlackReplyBlocks,
   resolveSlackReplyRenderPlan,
 } from "../../reply-blocks.js";
+import { SlackStreamMessageLedger } from "../../stream-size.js";
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
@@ -28,6 +29,7 @@ import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { deliverReplies } from "../replies.js";
 import {
   buildSlackEventDeliveryKey,
+  resolveSlackNativeMessageRowLimit,
   resolveSlackStreamRecipientTeamId,
 } from "./dispatch-helpers.js";
 import type { SlackDispatchSetup } from "./dispatch-setup.js";
@@ -55,13 +57,19 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     streamBoundary: ReturnType<typeof trackSlackDraftMessage> | null;
     interruptedThreadTs: string | undefined;
   } = { streamBoundary: null, interruptedThreadTs: undefined };
+  // Rows per message: an explicit progress.maxLines, else Slack's 50.
+  const streamRowLimit = resolveSlackNativeMessageRowLimit(account.config);
   const state = {
     streamSession: null as SlackStreamSession | null,
+    streamRowLimit,
+    // Content on the current stream message; replaced whenever a stream starts.
+    streamLedger: new SlackStreamMessageLedger(streamRowLimit),
     ...boundaryState,
     streamInterrupted: false,
     nativeProgressStreamStartPromise: null as Promise<SlackStreamSession | null> | null,
     nativeProgressStreamThreadTs: undefined as string | undefined,
     streamFailed: false,
+    pendingTextIsProgress: false,
     usedReplyThreadTs: undefined as string | undefined,
     usedBlockReplyThreadTs: undefined as string | undefined,
     observedReplyDelivery: false,
@@ -100,6 +108,8 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         userId: message.user,
       });
       state.streamSession = session;
+      state.streamLedger = new SlackStreamMessageLedger(streamRowLimit);
+      state.streamLedger.record(params);
       state.interruptedThreadTs = undefined;
       if (session.streamer.ts) {
         boundary.setMessageTs(session.streamer.ts);
@@ -268,10 +278,16 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     };
   };
 
+  /**
+   * Stops the current stream message, with the closeout chunks when given.
+   * `chunksRejected`: Slack refused the closeout with msg_too_long and the
+   * message was stopped without it, so the caller still owns that content.
+   */
   const finishStream = async (chunks?: AnyChunk[]) => {
     state.streamBoundary?.stop();
     state.streamBoundary = null;
     const session = state.streamSession;
+    let chunksRejected = false;
     if (session && !session.stopped) {
       try {
         try {
@@ -286,6 +302,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
                 "slack-stream: Slack rejected the closeout with msg_too_long; stopping without it",
               ),
             );
+            chunksRejected = true;
             markSlackStreamFallbackDelivered(session);
             await stopStream(session);
             state.observedReplyDelivery ||= session.delivered;
@@ -300,6 +317,24 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(error)}`));
       }
     }
+    return { chunksRejected };
+  };
+
+  /**
+   * Finishes the current message and keeps its thread for the next one: a
+   * human interruption seals it, a full message continues below it. Undefined
+   * when Slack's Stop cancelled the turn; the stopped session then stays
+   * current so every later delivery path stays suppressed.
+   */
+  const sealStream = async (chunks?: AnyChunk[]) => {
+    const threadTs = state.streamSession?.threadTs ?? state.nativeProgressStreamThreadTs;
+    const finished = await finishStream(chunks);
+    if (state.streamSession?.stoppedBySlack) {
+      return undefined;
+    }
+    state.streamSession = null;
+    state.interruptedThreadTs = threadTs;
+    return { threadTs, chunksRejected: finished.chunksRejected };
   };
 
   const rotateInterruptedStream = async (): Promise<string | undefined> => {
@@ -320,18 +355,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       state.streamBoundary = null;
       return undefined;
     }
-    const threadTs = state.streamSession?.threadTs ?? state.nativeProgressStreamThreadTs;
     // Finalize the visible pre-boundary message exactly once before any later
-    // output is admitted to a fresh Slack message in the same thread.
-    await finishStream();
-    if (state.streamSession?.stoppedBySlack) {
-      // Slack can Stop the stream while the sealing request is in flight.
-      // Keep that turn-level cancellation visible to all later delivery paths.
-      return undefined;
-    }
-    state.streamSession = null;
-    state.interruptedThreadTs = threadTs;
-    return threadTs;
+    // output is admitted to a fresh Slack message in the same thread. Slack can
+    // Stop the stream while the sealing request is in flight.
+    return (await sealStream())?.threadTs;
   };
 
   const deliverNormally = async (params: {
@@ -364,9 +391,15 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
       return { visibleReplySent: false };
     }
+    const session = state.streamSession;
+    const discardProgress = params.kind === "final" && state.pendingTextIsProgress;
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
     if (!sent?.receipt.platformMessageIds.length) {
       return { visibleReplySent: false };
+    }
+    // A confirmed final supersedes optional progress, never unacknowledged answer text.
+    if (discardProgress && session?.pendingText && !session.stopped) {
+      markSlackStreamFallbackDelivered(session);
     }
     state.observedReplyDelivery = true;
     const deliveredThreadTs = resolveSlackReplyThreadTs({
@@ -421,6 +454,12 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     streamText?: string;
     appendSeparator?: boolean;
     taskDisplayMode?: "plan" | "timeline";
+    /**
+     * Slack answered msg_too_long for this text. True once the caller finished
+     * the full message (opening a continuation, or leaving no session so the
+     * retry starts one in the same thread); the text is then sent once more.
+     */
+    onMessageTooLong?: (session: SlackStreamSession) => Promise<boolean>;
   }): Promise<LivePreviewDeliveryResult> => {
     if (state.streamSession?.stoppedBySlack) {
       return { visibleReplySent: false };
@@ -465,15 +504,14 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     }
     let messageId: string | undefined;
     let fallbackDelivery: LivePreviewDeliveryResult | undefined;
-    try {
+    state.pendingTextIsProgress = false;
+    const sendText = async () => {
       // Each logical reply owns an acknowledged send. Empty chunks flush short
       // SDK buffers before core settles the reply, including queued fallbacks.
       if (session) {
-        await appendSlackStream({
-          session,
-          text: `${params.appendSeparator === false ? "" : "\n"}${text}`,
-          chunks: [],
-        });
+        const streamText = `${params.appendSeparator === false ? "" : "\n"}${text}`;
+        state.streamLedger.record({ text: streamText });
+        await appendSlackStream({ session, text: streamText, chunks: [] });
       } else {
         session = await startStream({
           threadTs,
@@ -483,6 +521,23 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         });
       }
       messageId = session.streamer.ts;
+    };
+    try {
+      try {
+        await sendText();
+      } catch (error) {
+        // Slack sized the message, not this text: once the caller finished
+        // that message, send the same text once more on the next one.
+        if (
+          !(error instanceof SlackStreamMessageTooLongError) ||
+          !session ||
+          !(await params.onMessageTooLong?.(session))
+        ) {
+          throw error;
+        }
+        session = state.streamSession;
+        await sendText();
+      }
     } catch (error) {
       state.streamFailed = true;
       if (!(error instanceof SlackStreamNotDeliveredError)) {
@@ -512,6 +567,11 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         });
         throw fallbackError;
       }
+    }
+    if (!session) {
+      // Unreachable: sendText assigned the session it used, and a rejected
+      // start returned above. The closure hides that from narrowing.
+      return { visibleReplySent: false };
     }
     if (session.stoppedBySlack && session.pendingText) {
       emitStreamedDelivery(hookContent, { success: false, error: "Stopped by Slack user" });
@@ -546,6 +606,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
 
   return Object.assign(state, {
     canFinishNativeFinal,
+    sealStream,
     deliverNormally,
     deliverWithStreaming,
     finishStream,

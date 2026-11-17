@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {

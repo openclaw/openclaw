@@ -35,6 +35,7 @@ import {
   floatingSidebarAttentionVisible,
   navigationSurfaceIsHidden,
   NAVIGATION_RAIL_WIDTH,
+  type NavDrawerCloseOptions,
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
@@ -70,7 +71,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   readonly workspaceChromeVisible: boolean;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
   readonly handleNativeNewSession: () => void;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;

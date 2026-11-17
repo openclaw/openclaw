@@ -55,7 +55,7 @@ import {
 } from "./gateway-caller-context.js";
 import * as gateway from "./in-process-gateway.js";
 import * as handoff from "./session-tool-handoff.js";
-import { createSelfHeldSendRetainer } from "./sessions-send-self-hold.js";
+import { createSelfHeldSendRetainer, stopRetainedSessionSends } from "./sessions-send-self-hold.js";
 import * as delivery from "./sessions-send-tool.delivery.js";
 import * as input from "./sessions-send-tool.input.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
@@ -344,6 +344,7 @@ it.each([
   "entered-error",
   "different-requester",
   "handoff-failure",
+  "target-reset",
 ] as const)("settles retained send at the %s boundary without a second replay", async (boundary) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const currentness = /sandbox-(preparation|admission|effect|known-result|stable)-/.test(
@@ -467,9 +468,8 @@ it.each([
         args: { message: "original" },
         sessionKey: "agent:main:target",
         targetAgentId: "main",
-        sessionId: "target-id",
         storePath: "/fixture/store",
-        targetRun: null,
+        hadTask: false,
         requesterParentOwned: false,
       };
       const call = (origin: string) =>
@@ -567,6 +567,16 @@ it.each([
         ["policy-denied", "sender-denied", "sandbox-denied", "sandbox-enabled"].includes(boundary);
       assert(work?.run);
       const scope = { signal: new AbortController().signal, assertCurrent: () => {} };
+      if (boundary === "target-reset") {
+        // Reset stops the held send by its chat key; nothing compares the target's revision.
+        stopRetainedSessionSends({ agentId: "main", sessionKeys: ["agent:main:target"] }, "reset");
+        expect(await work.run(scope)).toEqual({
+          outcomes: [{ runId: "original-send", status: "not_delivered", stopCause: "reset" }],
+        });
+        expect(await work.run(scope)).toEqual({ outcomes: [] });
+        expect(replay).not.toHaveBeenCalled();
+        return;
+      }
       const replayResult = await work.run(scope);
       expect(replayResult, JSON.stringify(replayResult)).toMatchObject({
         outcomes: [
@@ -731,9 +741,8 @@ it.each([false, true])(
                     args: { message: id },
                     sessionKey: "agent:main:target",
                     targetAgentId: "main",
-                    sessionId: "target",
                     storePath: "/fixture/store",
-                    targetRun: null,
+                    hadTask: false,
                     requesterParentOwned: false,
                   },
                   id,

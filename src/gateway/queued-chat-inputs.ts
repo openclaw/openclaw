@@ -91,6 +91,7 @@ export async function continueSessionQueuedInputs(
       }
       const profile = getResidentUserProfileDisplay(authority.profileId);
       const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: admitted.authenticatedUserProfile,
         operatorRoleActor: { kind: "operator", profileId: authority.profileId },
         operatorRunAuthority: authority,
         scopes: [...authority.scopes],

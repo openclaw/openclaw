@@ -5,9 +5,14 @@ import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 export type ToolCardOptions = ToolRenderOptions & {
   expanded: boolean;
+  /** A coalesced lifecycle row owns this first call’s disclosure. */
+  hideSummary?: boolean;
+  /** Owning run was cancelled; this does not establish the tool's result. */
+  interrupted?: boolean;
   onToggleExpanded: (id: string) => void;
   showApprovalReviews?: boolean;
   activityCards?: readonly ToolCard[];
+  executionCards?: readonly ToolCard[];
 };
 export type ToolCardProps = {
   card: ToolCard;
@@ -18,6 +23,8 @@ export type ToolCardProps = {
 
 export type ToolCardContentProps = {
   card: ToolCard;
+  /** The adjacent disclosure already presents this command's compact form. */
+  commandInRow?: boolean;
   output?: ToolCardOutput;
   options: ToolRenderOptions;
 };

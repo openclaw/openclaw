@@ -21,6 +21,7 @@ import {
 } from "./chat-wizard-host.js";
 import {
   applyTurnDirective,
+  agentHandoffReturnHint,
   approvalQuestion,
   createCaptureRuntime,
   formatSystemAgentTurnInput,
@@ -162,7 +163,9 @@ export class SystemAgentChatEngine {
       if (reply && terminalStatus && !reply.applied) {
         reply.text = SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES[terminalStatus];
       }
-      if (reply && decision === "allow-once" && !reply.applied) {
+      const reviewingPlugin =
+        this.pending?.kind === "plugin-install" && this.pending.capabilityReview;
+      if (reply && decision === "allow-once" && !reply.applied && !reviewingPlugin) {
         reply.text += ` ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`;
       }
       if (reply?.text) {
@@ -474,6 +477,12 @@ export class SystemAgentChatEngine {
     }
     const capture = createCaptureRuntime();
     const result = await this.executeOperation(operation, capture, beforePersistentApply);
+    if (operation.kind === "plugin-install" && result?.pluginCapabilityReview) {
+      return await this.runOperation({
+        ...operation,
+        capabilityReview: result.pluginCapabilityReview,
+      });
+    }
     const configWrite =
       operation.kind === "config-set" ||
       operation.kind === "config-unset" ||
@@ -505,7 +514,7 @@ export class SystemAgentChatEngine {
       return {
         text: [
           baseText,
-          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
+          `Your agent is hatching — handing you over now. ${agentHandoffReturnHint(this.options.surface)}`,
         ].join("\n\n"),
         action: "open-tui",
         applied: true,
@@ -597,7 +606,7 @@ export class SystemAgentChatEngine {
         return { text: setupNotice, action: "none" };
       }
       return {
-        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
+        text: `Opening a chat with your agent. ${agentHandoffReturnHint(this.options.surface)}`,
         action: "open-tui",
         handoff: recordedOperation,
       };
@@ -633,11 +642,18 @@ export class SystemAgentChatEngine {
       return await this.startWizard(this.wizard.startMemoryImport());
     }
     if (recordedOperation.kind === "model-setup") {
-      return this.startModelSetup();
+      this.clearPendingProposals();
+      const capture = createCaptureRuntime();
+      await executeSystemAgentOperation(recordedOperation, capture);
+      return { text: capture.read(), action: "none" };
     }
 
     const capture = createCaptureRuntime();
-    if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
+    if (
+      isPersistentSystemAgentOperation(recordedOperation) &&
+      (!this.options.yes ||
+        (recordedOperation.kind === "plugin-install" && recordedOperation.capabilityReview))
+    ) {
       this.clearPendingProposals();
       // Validate through the executor before staging; delegated handoff copy must
       // not turn a forbidden operation into an approvable proposal.
@@ -710,26 +726,12 @@ export class SystemAgentChatEngine {
     return [result.text, verify].filter(Boolean).join("\n");
   }
 
-  private async startModelSetup(): Promise<SystemAgentChatReply> {
-    this.clearPendingProposals();
-    const capture = createCaptureRuntime();
-    await executeSystemAgentOperation({ kind: "model-setup" }, capture);
-    return { text: capture.read(), action: "none" };
-  }
-
   private commandDeps(): SystemAgentCommandDeps {
     return {
       ...this.options.deps,
       loadOverview: async () => await this.loadOverview(),
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
-  }
-
-  private agentHandoffReturnHint(): string {
-    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
-    return this.options.surface === "gateway"
-      ? "You can return through Settings → Ask OpenClaw."
-      : "Use /openclaw to come back.";
   }
 
   private clearPendingProposals(): void {

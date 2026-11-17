@@ -116,13 +116,17 @@ serveOwnedWorkerTasks(
         if (!channel) {
           throw new Error("Transcript search requires its host status channel");
         }
-        const { searchSessionTranscriptsReadOnlySync } =
-          await import("./session-transcript-search.js");
+        const { searchSessionTranscriptsReadOnlySync, searchSessionTranscriptsFiltered } =
+          await import("./session-transcript-search.worker.js");
         const options = {
           ...request.database,
           env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
         };
-        const { found, ...result } = searchSessionTranscriptsReadOnlySync(request.params, options);
+        const { found, ...result } = request.params.filterCandidates
+          ? await searchSessionTranscriptsFiltered(request.params, options, channel, () =>
+              control.throwIfCancelled(),
+            )
+          : searchSessionTranscriptsReadOnlySync(request.params, options);
         let indexing = false;
         if (found) {
           // Search hits describe their read snapshot; readiness comes from the projection owner.
@@ -608,6 +612,11 @@ serveOwnedWorkerTasks(
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
             };
+          }
+          if (request.kind === "compaction-preparation") {
+            const { readPreparedSessionCompaction } =
+              await import("./session-compaction-prepared.worker.js");
+            return readPreparedSessionCompaction(request, control, channel);
           }
           if (
             request.kind === "transcript-hydration" ||

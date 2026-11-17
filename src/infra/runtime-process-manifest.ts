@@ -115,6 +115,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
+    pluginCaptureNativeResource: runtimeProcessEntrypoint("plugins/plugin-capture-native-resource"),
     pluginGenerationPreparation: runtimeProcessEntrypoint(
       "plugins/plugin-generation-preparation.worker",
     ),
@@ -580,34 +581,6 @@ export const runtimeProcessExternalPackageEntrypoints = {
   preinstall: "scripts/preinstall-package-manager-warning.mjs",
   postinstall: "scripts/postinstall-bundled-plugins.mjs",
   fsSafePrebuild: "scripts/lib/fs-safe-prebuild.mjs",
-} as const;
-
-/** Dependency programs retain their installed package topology and disk runtime. */
-export const runtimeProcessDependencyEntrypoints = {
-  npm: {
-    specifier: "npm/bin/npm-cli.js",
-    packageJsonSpecifier: "npm/package.json",
-    relativePath: "bin/npm-cli.js",
-    execution: "external-disk",
-    kind: "standalone-package-manager",
-  },
-  npx: {
-    specifier: "npm/bin/npx-cli.js",
-    packageJsonSpecifier: "npm/package.json",
-    relativePath: "bin/npx-cli.js",
-    execution: "external-disk",
-    kind: "standalone-package-manager",
-  },
-  chromeDevtoolsMcp: {
-    specifier: "chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
-    execution: "external-disk",
-    kind: "package",
-  },
-  matrixCryptoDownload: {
-    specifier: "@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
-    execution: "external-disk",
-    kind: "package",
-  },
 } as const;
 
 // Keep installed CLI recovery compatible with the supported historical entry order.
