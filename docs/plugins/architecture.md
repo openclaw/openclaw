@@ -138,7 +138,7 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 Failed registrations remain visible in plugin diagnostics after their contributions are rolled back. Those records do not enter execution scopes or block healthy plugins and core context-engine admission; the loader still owns their cleanup.
 
-Runtime preparation checks pending data migrations through the shared-state read worker before registering plugins. Once checked, the process reuses that ledger result across plugin generations until a committed deferred-migration write invalidates it. Unrelated state writes do not repeat the check. Explicit artifact-preserving inspection keeps its isolated snapshot, and plugins with pending data migrations remain blocked until Doctor completes them.
+Runtime preparation checks pending data migrations through the shared-state read worker before registering plugins. Once checked, the process reuses that ledger result across plugin generations until a committed deferred-migration write invalidates it. Unrelated state writes do not repeat the check. Explicit artifact-preserving inspection keeps its isolated snapshot, and plugins with pending data migrations remain blocked until Doctor completes them. A plugin may separately declare explicit recovery CLI subtrees in its Doctor contract. The CLI can register those subtrees while migration withholds normal entrypoints; this never admits normal runtime code or invokes automatic recovery.
 
 Gateway startup confirms completed plugin migrations through the admitted live database reader, so checking a small migration ledger does not copy the entire shared database. Offline Doctor inspection retains its artifact-preserving snapshots.
 
