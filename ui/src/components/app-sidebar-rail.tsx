@@ -21,11 +21,14 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { forgetSectionLocation } from "../lib/section-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { navigationItemCurrent } from "../plugins/navigation-sections.ts";
+import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import {
   sidebarCollapsedByChoice,
   renderSidebarAgentCard,
@@ -189,22 +192,59 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   let pagesMenu: PopoverHandle | undefined;
   let moreButton: HTMLButtonElement | undefined;
   const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
-  // A page that lives only in the "more" menu (not pinned) marks the menu as where it is.
+  // Boards share one route but not one address, so the rail follows the router and the plugins.
+  const app = useApplication();
+  const [opened, setOpened] = createSignal(0);
+  onSettled(() => {
+    const changed = () => setOpened((value) => value + 1);
+    const stops = [app?.router.subscribe(changed), app?.plugins.subscribe(changed)];
+    return () => stops.forEach((stop) => stop?.());
+  });
+  // "More" marks where you are when the open page lives in its menu and no rail item marks it,
+  // read by the rule each item marks itself with.
   const moreHoldsPage = createMemo(() => {
+    opened();
     const route = host.activeRouteId;
-    if (route === "plugin") {
-      const key = host.activePluginTabId;
-      return (
-        key !== "" && !USERS_SECTION_PLUGIN_PAGES.has(key) && !pins().includes(`plugin:${key}`)
-      );
+    const pluginPage = host.activePluginTabId;
+    const menuRoute = route && isPluginsHubRoute(route) ? "plugins" : route;
+    const inMenu = pluginPage
+      ? !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
+      : menuRoute !== "sessions" && SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
+    if (!inMenu) {
+      return false;
     }
-    const entry = route && isPluginsHubRoute(route) ? "plugins" : route;
-    return (
-      entry !== "sessions" &&
-      SIDEBAR_NAV_ROUTES.some((menuRoute) => menuRoute === entry) &&
-      !pins().includes(`route:${entry}`)
+    const registrations = host.pluginNavigation();
+    return !pins().some((key) => {
+      const entry = parseSidebarEntry(key);
+      if (entry?.type === "route") {
+        return isSidebarRouteActive(route, entry.route);
+      }
+      if (entry?.type !== "plugin") {
+        return false;
+      }
+      const item = registrations.find((candidate) => candidate.key === entry.key);
+      return item
+        ? navigationItemCurrent(registrations, item, window.location, true)
+        : route === "plugin" && pluginPage === entry.key;
+    });
+  });
+  // A section's pin stands for its open children unless the open child is pinned itself:
+  // the most specific pin marks where you are.
+  const sectionsYielding = createMemo(() => {
+    opened();
+    const registrations = host.pluginNavigation();
+    return new Set(
+      registrations
+        .filter(
+          (item) =>
+            item.value.parent &&
+            pins().includes(`plugin:${item.key}`) &&
+            navigationItemCurrent(registrations, item, window.location, false),
+        )
+        .map((item) => `${item.pluginId}/${item.value.parent}`),
     );
   });
+  const standsForSection = (key: string) => !sectionsYielding().has(key);
   return [
     <nav
       ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
@@ -295,7 +335,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
         <For each={sectionPins()}>
-          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
         </For>
         <openclaw-tooltip prop:content={t("nav.pages")}>
           <button
@@ -319,7 +359,9 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         <Show when={otherPins().length > 0}>
           <span class="sidebar-rail__separator" aria-hidden="true" />
         </Show>
-        <For each={otherPins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
+        <For each={otherPins()}>
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone, standsForSection)}
+        </For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>,
@@ -355,6 +397,7 @@ function renderRailPin(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
   zone: () => SidebarZone,
+  standsForSection: (key: string) => boolean,
 ): JSX.Element {
   const serialized = serializeSidebarEntry(entry);
   const session = () => (entry.type === "session" ? zone().sessionRows.get(entry.key) : undefined);
@@ -436,6 +479,7 @@ function renderRailPin(
                     prop:kind={"navigation"}
                     prop:navigationKey={entry.key}
                     prop:navigationChildren={false}
+                    prop:navigationSection={entry.type === "plugin" && standsForSection(entry.key)}
                     prop:navigationMenus={host.sidebarMenus}
                   />
                 </Show>

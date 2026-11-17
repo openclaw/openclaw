@@ -1,5 +1,9 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
-import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  DEFAULT_SIDEBAR_ENTRIES,
+  type NavigationRouteId,
+  type SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
@@ -46,7 +50,7 @@ export type AppSidebarProps = {
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   connectionPending?: boolean;
-  navigationView: "automations" | "customize" | "sessions" | "online";
+  navigationView: SidebarNavigationView;
   navigationCollapsed: boolean;
   /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
   navigationCollapsedByChoice?: boolean;

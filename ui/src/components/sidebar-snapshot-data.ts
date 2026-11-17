@@ -1,5 +1,6 @@
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
+import { SIDEBAR_NAVIGATION_VIEWS } from "../app-navigation.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import * as json from "../lib/snapshot-json.ts";
@@ -100,7 +101,7 @@ export const sidebarSnapshotSchema = json.object({
   roster: json.nullable(bootRosterSchema),
   mode: json.enumeration(["chip", "roster"]),
   grouping: json.optional(json.enumeration(["none", "category", "person", "project"])),
-  navigationView: json.enumeration(["automations", "customize", "sessions", "online"]),
+  navigationView: json.enumeration(SIDEBAR_NAVIGATION_VIEWS),
   pinnedSessions: json.array(session),
   entries: json.array(
     json.refine(
