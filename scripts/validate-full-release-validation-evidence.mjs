@@ -54,7 +54,6 @@ function scalarString(value) {
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
  * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {unknown} [qualificationCoverage]
- * @property {unknown} [receiptRecovery]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -295,17 +294,15 @@ function validatePublicationEvidence(options, evidence) {
   }
   const proof = current.workflowRefProof;
   const source =
-    evidence.qualification.kind === "recovery"
-      ? "receipt-backed-recovery-v1"
-      : evidence.qualification.kind === "direct"
-        ? "candidate-owned-admission-v1"
-        : proof === "manifest-v3-protected-tag-tooling-lineage"
-          ? "sha-pinned-protected-tag-main-ancestor"
-          : proof === "manifest-v3-protected-tag-exact-sha"
-            ? "sha-pinned-protected-tag"
-            : isShaPinnedReleaseValidationBranch(current.workflowRef)
-              ? "sha-pinned-main"
-              : "direct";
+    evidence.qualification.kind === "direct"
+      ? "candidate-owned-admission-v1"
+      : proof === "manifest-v3-protected-tag-tooling-lineage"
+        ? "sha-pinned-protected-tag-main-ancestor"
+        : proof === "manifest-v3-protected-tag-exact-sha"
+          ? "sha-pinned-protected-tag"
+          : isShaPinnedReleaseValidationBranch(current.workflowRef)
+            ? "sha-pinned-main"
+            : "direct";
   return { run, source, coveragePolicy };
 }
 
@@ -422,9 +419,7 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
 }
 
 function candidateArtifactAuthorityRecord(manifest, evidence) {
-  const descriptor =
-    manifest?.sourceAdmission?.qualificationAdmission ??
-    manifest?.receiptRecovery?.qualificationAdmission;
+  const descriptor = manifest?.sourceAdmission?.qualificationAdmission;
   if (!descriptor) {
     return undefined;
   }
@@ -435,14 +430,6 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   return structuredClone({
     descriptor,
     admission: evidence.qualification.admission,
-    recoveryProducer: manifest.receiptRecovery
-      ? {
-          runId: String(manifest.runId),
-          runAttempt: Number(manifest.runAttempt),
-          fullRef: manifest.workflowFullRef,
-          sha: manifest.workflowSha,
-        }
-      : null,
   });
 }
 
@@ -485,8 +472,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherFullRef = "refs/heads/main",
   client,
 }) {
-  const recovery = manifest?.receiptRecovery;
-  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
+  if (!manifest?.sourceAdmission?.qualificationAdmission) {
     return null;
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);

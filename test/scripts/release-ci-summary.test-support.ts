@@ -214,7 +214,6 @@ export function trustedMainPackageFixture({
   const client = {
     validateChildReuse: unsupported,
     getRunAttempt: unsupported,
-    verifyRetainedPublicationArtifacts: unsupported,
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,

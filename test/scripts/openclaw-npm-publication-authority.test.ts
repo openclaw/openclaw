@@ -191,6 +191,8 @@ if (process.argv[1] === root + '/bin/gh') {
     OPENCLAW_GH_BIN: join(bin, "gh"),
     GH_TOKEN: "test-only",
     GITHUB_ACTIONS: "true",
+    GITHUB_OUTPUT: join(root, "github-output"),
+    GITHUB_STEP_SUMMARY: join(root, "github-step-summary"),
     GITHUB_REPOSITORY: f.repository,
     WORKFLOW_SHA: f.p,
     WORKFLOW_REF: f.admission.producer.workflowHeadBranch,

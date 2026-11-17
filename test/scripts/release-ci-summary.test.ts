@@ -3569,3 +3569,14 @@ describe("release CI summary child correlation", () => {
     );
   });
 });
+
+describe("retired receipt-backed qualification", () => {
+  it.each([null, {}])(
+    "rejects a manifest carrying receiptRecovery=%j before interpretation",
+    (receiptRecovery) => {
+      expect(() => validateParentManifest({ receiptRecovery }, { runId: "1" })).toThrow(
+        "Receipt-backed recovery is retired",
+      );
+    },
+  );
+});

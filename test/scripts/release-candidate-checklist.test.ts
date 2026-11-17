@@ -2397,9 +2397,10 @@ describe("GitHub API public fallback", () => {
   );
 });
 
-describe("receipt recovery checklist consumption", () => {
+describe("release checklist requires ordinary qualification", () => {
   it.each([
-    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", true],
+    ["Full Release Validation", ".github/workflows/full-release-validation.yml", true],
+    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", false],
     ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
     ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
   ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {

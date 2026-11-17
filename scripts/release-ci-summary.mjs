@@ -1122,6 +1122,11 @@ export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
   }
+  if (Object.hasOwn(value, "receiptRecovery")) {
+    throw new Error(
+      "Receipt-backed recovery is retired; run fresh Full Release Validation with an authenticated qualification admission.",
+    );
+  }
   validateRetiredReleaseRetryFields(value);
   if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
     throw new Error("release validation manifest schema is unsupported");
@@ -3152,12 +3157,11 @@ export async function validateReleaseRunEvidence(
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
-// Recovery retains its original admission here, never in the aggregate source field.
 function qualificationFacts(evidence) {
   const admission = evidence.qualificationAdmission ?? null;
   const manifest = evidence.current.manifest;
-  /** @type {"direct" | "recovery" | "historical"} */
-  const kind = admission ? (manifest.receiptRecovery ? "recovery" : "direct") : "historical";
+  /** @type {"direct" | "historical"} */
+  const kind = admission ? "direct" : "historical";
   return {
     kind,
     candidateSha: evidence.current.targetSha,
