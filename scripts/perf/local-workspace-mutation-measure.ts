@@ -1,4 +1,3 @@
-import { createHook } from "node:async_hooks";
 import { getHeapStatistics } from "node:v8";
 import { Worker } from "node:worker_threads";
 
@@ -17,29 +16,6 @@ type Sample = {
 export function observeLocalWorkspaceMutations() {
   const samples: Sample[] = [];
   let current: Sample | undefined;
-  let segmentStart = 0;
-  const callbacks: number[] = [];
-  const finishSegment = () => {
-    if (current) {
-      current.maxSyncMs = Math.max(current.maxSyncMs, performance.now() - segmentStart);
-    }
-  };
-  const hook = createHook({
-    before(id) {
-      if (!callbacks.length) {
-        segmentStart = performance.now();
-      }
-      callbacks.push(id);
-    },
-    after(id) {
-      if (callbacks.at(-1) === id) {
-        callbacks.pop();
-        if (!callbacks.length) {
-          finishSegment();
-        }
-      }
-    },
-  }).enable();
   // Saved for restoration; every invocation below supplies the original Worker receiver.
   // oxlint-disable-next-line typescript/unbound-method
   const post = Worker.prototype.postMessage;
@@ -73,12 +49,9 @@ export function observeLocalWorkspaceMutations() {
         throw new Error("Mutation measurement requires serial requests");
       }
       const started = performance.now();
-      if (!callbacks.length) {
-        segmentStart = started;
-      }
       const cpu = process.threadCpuUsage();
       const allocated = getHeapStatistics().total_allocated_bytes;
-      current = {
+      const sample: Sample = {
         packBytes,
         elapsedMs: 0,
         maxSyncMs: 0,
@@ -88,20 +61,31 @@ export function observeLocalWorkspaceMutations() {
         transferredBytes: 0,
         clonedBytes: 0,
       };
+      current = sample;
+      let lastTick = started;
+      const timer = setInterval(() => {
+        const now = performance.now();
+        sample.maxSyncMs = Math.max(sample.maxSyncMs, now - lastTick);
+        lastTick = now;
+      }, 1);
       try {
         return await run();
       } finally {
-        finishSegment();
         const used = process.threadCpuUsage(cpu);
-        current.mainCpuMs = (used.user + used.system) / 1000;
-        current.elapsedMs = performance.now() - started;
-        current.allocatedBytes = getHeapStatistics().total_allocated_bytes - allocated;
-        samples.push(current);
+        sample.mainCpuMs = (used.user + used.system) / 1000;
+        sample.elapsedMs = performance.now() - started;
+        sample.allocatedBytes = getHeapStatistics().total_allocated_bytes - allocated;
+        // Let the timer observe the final callback and its entire microtask drain.
+        // This is an upper bound including the timer's 1 ms resolution.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 2);
+        });
+        clearInterval(timer);
+        samples.push(sample);
         current = undefined;
       }
     },
     close() {
-      hook.disable();
       Worker.prototype.postMessage = post;
     },
   };
