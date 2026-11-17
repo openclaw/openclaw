@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
@@ -145,6 +146,8 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
+  // Full release validation invokes child-evidence reuse through a shell variable.
+  "scripts/find-reusable-release-child.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -610,10 +613,7 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       ),
     ]
       .filter((match) => match[2] === stagedToolingRoot)
-      .map(
-        ([, names, , specifier]) =>
-          `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
-      )
+      .map((match) => `import {${match[1]}} from ${JSON.stringify(`../../${match[3]}`)};`)
       .join("\n");
   }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
@@ -1194,6 +1194,11 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // These in-module helpers are direct seams in compaction-floor.test.ts and
+    // package-release-retention.test.ts. The full-tree scan verifies those consumers.
+    "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
+    "src/infra/package-release-retention.ts": ["exports"],
+    "src/infra/package-release-slot.ts": ["exports"],
     // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
     // Remove these production-only exceptions when the offline port caller lands;
     // the full-tree audit still checks all exports against their boundary tests.
@@ -1350,6 +1355,8 @@ const config = {
         "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",

@@ -87,6 +87,13 @@ the last recorded shutdown reason and time for the selected state directory;
 on Linux, it also reports competing user and system service units when inspecting
 the native service. Failure outcomes keep their specific failure reason.
 
+A SIGTERM or SIGINT that arrives during startup, before the Gateway has taken
+state ownership and installed its own signal handling, stops it like any other CLI
+command: the current startup step finishes or is cancelled and releases what it
+holds, the Gateway does not take state ownership, and the process exits with status
+`143` (`130` for SIGINT). No state lock is left behind, so a replacement in another
+container starts without `openclaw gateway recover-lock`. SIGKILL still leaves locks.
+
 After a downgrade, the Gateway refuses databases whose schema is newer than the
 running build supports. The startup error and `openclaw gateway status --deep`
 report the found and supported schema versions, the writer build when recorded,

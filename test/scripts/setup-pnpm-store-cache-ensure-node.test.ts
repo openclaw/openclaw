@@ -2,7 +2,15 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  evaluateWorkflowCondition,
+  evaluateWorkflowExpression,
+  readWorkflowOutputs,
+  requiredWorkflowStep,
+  type WorkflowStep,
+} from "./ci-workflow.test-support.js";
 
 const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-node.sh");
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -103,6 +111,190 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
 }
 
 describe("setup-pnpm-store-cache ensure-node", () => {
+  it.each([
+    {
+      local: "24.99.99",
+      restored: "",
+      downloaded: "24.99.99",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+    },
+    {
+      local: "",
+      toolcache: "24.99.99",
+      restored: "",
+      downloaded: "",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+    },
+    {
+      local: "24.13.0",
+      toolcache: "24.99.99",
+      restored: "",
+      downloaded: "",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+    },
+    {
+      local: "",
+      restored: "24.99.99",
+      downloaded: "24.99.99",
+      restores: 1,
+      downloads: 0,
+      status: 0,
+    },
+    {
+      local: "24.13.0",
+      restored: "24.99.99",
+      downloaded: "24.99.99",
+      restores: 1,
+      downloads: 0,
+      status: 0,
+    },
+    {
+      local: "",
+      restored: "24.13.0",
+      downloaded: "24.99.99",
+      restores: 1,
+      downloads: 1,
+      status: 0,
+    },
+    { local: "", restored: "24.13.0", downloaded: "24.13.0", restores: 1, downloads: 1, status: 1 },
+    {
+      local: "24.99.99",
+      restored: "",
+      downloaded: "",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+      cacheMode: "off",
+    },
+    {
+      local: "24.99.99",
+      restored: "",
+      downloaded: "",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+      runnerOs: "Windows",
+    },
+    {
+      local: "24.99.99",
+      restored: "",
+      downloaded: "",
+      restores: 0,
+      downloads: 0,
+      status: 0,
+      runnerEnvironment: "github-hosted",
+    },
+  ])("runs the shipped local/restore/download flow: %j", (scenario) => {
+    const root = temps.make("openclaw-node-action-");
+    const steps = (
+      parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8")) as {
+        runs: { steps: WorkflowStep[] };
+      }
+    ).runs.steps;
+    const normalize = requiredWorkflowStep(steps, "Normalize container toolcache");
+    const restore = requiredWorkflowStep(steps, "Restore Node toolchain cache");
+    const setup = requiredWorkflowStep(steps, "Setup Node.js");
+    expect(steps.indexOf(normalize)).toBeLessThan(steps.indexOf(restore));
+    expect(steps.indexOf(restore)).toBeLessThan(steps.indexOf(setup));
+    const bin = join(root, "bin");
+    const runnerToolcache = join(root, "toolcache");
+    const toolcacheBin = join(runnerToolcache, "node", "24.99.99", "x64", "bin");
+    if (scenario.toolcache) {
+      writeFakeNode(toolcacheBin, scenario.toolcache);
+    }
+    const toolchain = join(root, "openclaw-node-toolchain", "node");
+    if (scenario.local) {
+      const node = writeFakeNode(bin, scenario.local);
+      writeFileSync(
+        node,
+        readFileSync(node, "utf8").replace(
+          'case "$1"',
+          `echo probe >> "${join(root, "probes")}"\ncase "$1"`,
+        ),
+      );
+    } else {
+      writeExecutable(bin, "node", "exit 127");
+    }
+    const downloadedNode = writeFakeNode(join(root, "download"), scenario.downloaded);
+    writeFakeCurl(bin);
+    writeExecutable(bin, "tar", `mkdir -p "$4/bin"\ncp "${downloadedNode}" "$4/bin/node"`);
+    const githubPath = join(root, "github-path");
+    const output = join(root, "output");
+    const env = {
+      PATH: `${bin}:/usr/bin:/bin`,
+      RUNNER_TEMP: root,
+      RUNNER_TOOL_CACHE: runnerToolcache,
+      OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing"),
+      GITHUB_ACTION_PATH: resolve(".github/actions/setup-node-env"),
+      GITHUB_PATH: githubPath,
+      GITHUB_OUTPUT: output,
+      OPENCLAW_FAKE_CURL_LOG: join(root, "curl.log"),
+    };
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerEnvironment:
+        scenario.runnerEnvironment === "github-hosted"
+          ? ("github-hosted" as const)
+          : ("self-hosted" as const),
+      runnerOs: scenario.runnerOs === "Windows" ? ("Windows" as const) : ("Linux" as const),
+      runnerTemp: root,
+      inputs: { "node-version": "24.99.99", "cache-mode": scenario.cacheMode ?? "restore" },
+      env: { NODE_VERSION: "" },
+    };
+    function runStep(step: WorkflowStep) {
+      writeFileSync(output, "");
+      const stepEnv = Object.fromEntries(
+        Object.entries(step.env ?? {}).map(([key, value]) => [
+          key,
+          String(evaluateWorkflowExpression(value, context)),
+        ]),
+      );
+      return spawnSync("/bin/bash", ["-c", step.run!], {
+        encoding: "utf8",
+        env: { ...env, ...stepEnv },
+        timeout: 10_000,
+      });
+    }
+    const preflight = runStep(normalize);
+    expect(preflight.status, preflight.stderr).toBe(0);
+    if (scenario.cacheMode || scenario.runnerOs || scenario.runnerEnvironment) {
+      expect(existsSync(join(root, "probes"))).toBe(false);
+    }
+    if (existsSync(githubPath)) {
+      env.PATH = `${readFileSync(githubPath, "utf8").trim().split("\n").toReversed().join(":")}:${env.PATH}`;
+    }
+    if (scenario.toolcache) {
+      expect(readFileSync(githubPath, "utf8").trim()).toBe(toolcacheBin);
+    }
+    const shouldRestore = evaluateWorkflowCondition(restore.if ?? "true", {
+      ...context,
+      steps: { [normalize.id ?? "local-node"]: { outputs: readWorkflowOutputs(output) } },
+    });
+    expect(Number(shouldRestore)).toBe(scenario.restores);
+    if (shouldRestore && scenario.restored) {
+      writeFakeNode(join(toolchain, "restored", "bin"), scenario.restored);
+    }
+    const result = runStep(setup);
+    expect(result.status, result.stderr).toBe(scenario.status);
+    const calls = existsSync(env.OPENCLAW_FAKE_CURL_LOG)
+      ? readFileSync(env.OPENCLAW_FAKE_CURL_LOG, "utf8").trim().split("\n")
+      : [];
+    expect(calls).toHaveLength(scenario.downloads);
+    if (scenario.status === 0) {
+      expect(readWorkflowOutputs(output)["resolved-version"]).toBe("24.99.99");
+    } else {
+      expect(result.stdout).toContain("::error::Expected Node");
+    }
+  });
+
   it("handles missing toolcache roots under nounset", () => {
     const root = temps.make("openclaw-ensure-node-");
     const result = runShell(["set -euo pipefail", `openclaw_find_toolcache_node "99.99.99"`], {

@@ -1,9 +1,10 @@
 // Reads the claw's Discovery mailbox (store-and-forward). Member and node invite
 // redemptions become pending, never admitted; the authority verifies root statements
 // and revocations. Every other kind is explicitly refused until its handler exists.
-// Device-signed approvals arriving this way are refused (spec section 7).
+// Browser-device approvals are direct; recovery-only member keys may add their own browser.
 import {
   MAILBOX_MAX_WAIT_SECONDS,
+  parseStatement,
   type AuthorityEvent,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
@@ -78,6 +79,17 @@ export async function applyMailboxMessage(
     await record(await sink.memberBrowserRequest(message));
   } else if (payload.kind === "node_redemption") {
     await record(await sink.redeemNode(payload.redemption));
+  } else if (payload.kind === "member_recovery") {
+    const parsed = parseStatement(payload.statement, "MembershipChange");
+    if (!parsed.ok || parsed.statement.body.target.op !== "add_member_device") {
+      await record({
+        ok: false,
+        code: "unsupported",
+        detail: "member recovery adds only a member browser",
+      });
+    } else {
+      await record(await sink.submit(parsed.statement));
+    }
   } else if (payload.kind === "revocation") {
     await record(await sink.submit(payload.revocation));
   } else if (payload.kind === "root_statement") {

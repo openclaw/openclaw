@@ -377,11 +377,7 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
     const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
     recovery = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      target: {
-        agentId: "synthetic-agent",
-        sessionKey: "agent:synthetic-agent:recovery",
-        sessionId: "synthetic-recovery",
-      },
+      target: { agentId: "synthetic-agent", sessionKey: "agent:synthetic-agent:recovery" },
       context,
       assertCurrent() {},
     });

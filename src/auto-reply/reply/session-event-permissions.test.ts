@@ -265,10 +265,11 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
-      const channelDowngrade = change === "retained-channel-config-downgrade";
+      // Config edits apply to the next turn; session settings still bound a started one.
+      const configDowngrade = change.endsWith("config-downgrade");
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
-        ...(channelDowngrade
+        ...(change === "retained-channel-config-downgrade"
           ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
           : {}),
       });
@@ -384,7 +385,7 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
-              } else if (channelDowngrade) {
+              } else if (change === "retained-channel-config-downgrade") {
                 setRuntimeConfigSnapshot({
                   ...config,
                   channels: { discord: { enabled: true, actions: { stickers: false } } },
@@ -537,7 +538,7 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly || unrelatedConfig
+        change === "new-session" || remapped || toolOnly || unrelatedConfig || configDowngrade
           ? "completed\n"
           : "original\n",
       );
@@ -556,7 +557,7 @@ it.for([
       expect(attempted, evidence).toBe(
         change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
-      expect(retainedWriteRejected).toBe(retainedDowngrade);
+      expect(retainedWriteRejected).toBe(retainedDowngrade && !configDowngrade);
       if (change === "new-session") {
         expect(loadSessionEntry(scope)?.sessionId).toBe(target.sessionId);
       } else {

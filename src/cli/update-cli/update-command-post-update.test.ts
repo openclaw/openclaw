@@ -11,6 +11,7 @@ import { createRetainedUpdateRecovery } from "../../infra/update-retained-recove
 import {
   createUpdateRun,
   getUpdateRun,
+  readOwedUpdateSteps,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
@@ -196,6 +197,13 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
 
+  // A failed completion refresh stays owed, so those cases keep it out of the shared ledger.
+  const ownLedger = () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("post-update-owed-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    return { restartEnvironment: process.env, run };
+  };
+
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);
   registerStaleSessionReceiptUpdateTest(mocks);
@@ -340,7 +348,7 @@ describe("successful update finalization ordering", () => {
       Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
     );
 
-    await expect.soft(finishSuccessfulPackageSwitch()).resolves.toBeUndefined();
+    await expect.soft(finishSuccessfulPackageSwitch(ownLedger())).resolves.toBeUndefined();
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(output).toContain("Shell completion refresh failed");
@@ -352,6 +360,33 @@ describe("successful update finalization ordering", () => {
 
   registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
+  it("converges plugins for a switched Git release only after it verified", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(
+      await fs.realpath(tempDirs.make("git-release-finalize-")),
+      "git-install",
+    );
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+
+    await finishSuccessfulPackageSwitch(
+      {
+        packageRoot: gitReleaseSlot(prefix),
+        updateMode: "git",
+        sealed: true,
+        restartEnvironment: process.env,
+      },
+      { gitRelease: true },
+    );
+
+    // A failed trial switches core back; plugins replaced before that would require the new core.
+    expect(mocks.restartService).toHaveBeenCalled();
+    expect(mocks.updatePlugins).toHaveBeenCalled();
+    expectBefore(mocks.restartService, mocks.updatePlugins);
+  });
+
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
     await fs.writeFile(
@@ -359,10 +394,7 @@ describe("successful update finalization ordering", () => {
       'process.stderr.write("injected completion cache failure"); process.exit(1);',
     );
 
-    await finishSuccessfulPackageSwitch({
-      packageRoot: root,
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch({ ...ownLedger(), packageRoot: root });
 
     const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
     const warningIndex = logCalls.findIndex((call) =>
@@ -384,9 +416,11 @@ describe("successful update finalization ordering", () => {
       usesSlowPattern: true,
     });
     mocks.ensureCompletionCache.mockResolvedValueOnce(false);
+    const ledger = ownLedger();
 
-    await finishSuccessfulPackageSwitch();
+    await finishSuccessfulPackageSwitch(ledger);
 
+    expect(readOwedUpdateSteps(ledger.run)).toMatchObject([{ id: "shell-completion" }]);
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
     expect(output).toContain("Resolve the reported error before retrying");

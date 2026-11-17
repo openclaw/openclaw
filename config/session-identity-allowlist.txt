@@ -305,7 +305,6 @@ src/agents/bash-tools.exec-host-node-policy.ts	2
 src/agents/bash-tools.exec-host-shared.ts	3
 src/agents/bash-tools.exec-run.ts	1
 src/agents/btw-transcript.ts	6
-src/agents/btw.ts	1
 src/agents/cli-output-events.ts	4
 src/agents/cli-output-stream.ts	2
 src/agents/cli-runner.ts	1
@@ -379,7 +378,6 @@ src/agents/embedded-agent-runner/run/session-writer-revocation.ts	4
 src/agents/embedded-agent-runner/run/settled-turn-finalization.ts	7
 src/agents/embedded-agent-runner/run/setup.ts	4
 src/agents/embedded-agent-runner/runs.ts	33
-src/agents/embedded-agent-runner/session-fork-context.ts	6
 src/agents/embedded-agent-runner/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/failover/user-copy.ts	1
@@ -558,10 +556,10 @@ src/agents/tools/sessions-history-tool.ts	2
 src/agents/tools/sessions-list-tool.ts	2
 src/agents/tools/sessions-operator-authority.ts	1
 src/agents/tools/sessions-resolution.ts	2
-src/agents/tools/sessions-search-tool.ts	12
+src/agents/tools/sessions-search-tool.ts	8
 src/agents/tools/sessions-send-communication-endpoint.ts	2
 src/agents/tools/sessions-send-communication.ts	27
-src/agents/tools/sessions-send-executor.ts	9
+src/agents/tools/sessions-send-executor.ts	8
 src/agents/tools/sessions-send-followup.ts	4
 src/agents/tools/sessions-send-reply-flow.ts	2
 src/agents/tools/sessions-send-resume.ts	2
@@ -823,7 +821,6 @@ src/gateway/control-ui-session-task-prs.ts	4
 src/gateway/conversation-route-ownership.ts	1
 src/gateway/conversation-turn.ts	1
 src/gateway/cron-creator-authority-grant.ts	13
-src/gateway/cron-job-turn-target.ts	2
 src/gateway/cron-stream-sandbox-authority.ts	4
 src/gateway/cron-stream-sandbox.ts	1
 src/gateway/dashboard-session-title.ts	6
@@ -888,7 +885,7 @@ src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
 src/gateway/operator-invocation-authority.ts	3
 src/gateway/operator-run-authority.ts	2
-src/gateway/operator-run-recovery.ts	5
+src/gateway/operator-run-recovery.ts	3
 src/gateway/plugin-command-scheduled-run.ts	9
 src/gateway/question-manager.ts	4
 src/gateway/question-session-access.ts	4
@@ -940,7 +937,6 @@ src/gateway/server-methods/chat-pending-inputs-dismiss-handler.ts	5
 src/gateway/server-methods/chat-pending-inputs.ts	4
 src/gateway/server-methods/chat-prediction-handler.ts	6
 src/gateway/server-methods/chat-reply-media.ts	1
-src/gateway/server-methods/chat-send-active-leaf.ts	2
 src/gateway/server-methods/chat-send-admission-errors.ts	1
 src/gateway/server-methods/chat-send-admission.ts	6
 src/gateway/server-methods/chat-send-agent-dispatch.ts	4
@@ -1399,7 +1395,6 @@ src/infra/update-database-backup.ts	1
 src/infra/update-database-generations.ts	2
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
-src/infra/update-doctor-result.ts	1
 src/infra/update-doctor-scan-receipts.ts	3
 src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3

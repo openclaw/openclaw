@@ -146,9 +146,20 @@ export async function definePluginReloadProductTest(
       const guard = writePrivateUpdateHandoffChildGuard(binding.databasePath, handoff);
       const home = path.join(root, "home");
       fsSync.mkdirSync(home, { mode: 0o700 });
+      const noProxy = [
+        process.env.no_proxy ?? process.env.NO_PROXY,
+        "127.0.0.1",
+        "localhost",
+        "::1",
+      ]
+        .filter(Boolean)
+        .join(",");
       const env = withRuntimePreload(
         guard({
           ...process.env,
+          // Only owned loopback fixtures bypass inherited proxies; external routing stays intact.
+          NO_PROXY: noProxy,
+          no_proxy: noProxy,
           HOME: home,
           USERPROFILE: home,
           TMPDIR: root,
