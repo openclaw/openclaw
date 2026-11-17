@@ -252,16 +252,16 @@ function createFakeGh(
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
-  it("dispatches ordinary CI for the exact remote head", () => {
+  it("dispatches qualified PR-shaped CI for the exact remote head", () => {
     const fakeGh = createFakeGh();
     const result = fakeGh.ok();
     expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
     const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
     expect(calls).not.toContain("pr view");
-    expect(calls).toContain(
-      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345`,
-    );
+    expect(calls.split("\n").filter((line) => line.includes("\tworkflow run "))).toEqual([
+      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345 -f runner_backend=hybrid -f ci_shape=default`,
+    ]);
   });
 
   it("finds the publisher-owned Crabbox proof on a later check-run page", () => {
