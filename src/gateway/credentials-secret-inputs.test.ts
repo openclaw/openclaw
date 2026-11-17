@@ -18,12 +18,18 @@ vi.mock("../infra/database-engine/config.js", async (importOriginal) => ({
   resolveDatabaseEngineSelection: mocks.resolveDatabaseEngineSelection,
 }));
 
-const storeMocks = vi.hoisted(() => ({ sqliteToken: undefined as string | undefined }));
+const storeMocks = vi.hoisted(() => ({
+  sqliteToken: undefined as string | undefined,
+  failure: undefined as Error | undefined,
+}));
 
 // PostgreSQL state holds "store-token"; the default SQLite store holds sqliteToken, if any.
 vi.mock("../secrets/resolve-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/resolve-store.js")>()),
   resolveStoreRefs: async (params: { refs: Array<{ id: string }> }) => {
+    if (storeMocks.failure) {
+      throw storeMocks.failure;
+    }
     const token =
       getDatabaseEngineSelection()?.effectiveEngines.state === "postgres"
         ? "store-token"
@@ -53,9 +59,30 @@ const config = {
 afterEach(() => {
   mocks.resolveDatabaseEngineSelection.mockReset();
   storeMocks.sqliteToken = undefined;
+  storeMocks.failure = undefined;
 });
 
 describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
+  it("keeps the provider failure as the cause of an unavailable store-backed token", async () => {
+    const { providerResolutionError } = await import("../secrets/resolve-errors.js");
+    const failure = providerResolutionError({
+      source: "store",
+      provider: "default",
+      message: "Secret store database is unavailable",
+    });
+    storeMocks.failure = failure;
+
+    let error: unknown;
+    await resolveGatewayCredentialsWithSecretInputs({ config, env: {} }).catch((caught) => {
+      error = caught;
+    });
+    expect(error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    const unavailable = error as GatewaySecretRefUnavailableError;
+    expect(unavailable.cause).toBe(failure);
+    expect(unavailable.message).toContain(
+      "Provider error: SECRET_PROVIDER_UNAVAILABLE: Secret store database is unavailable",
+    );
+  });
   it("reads store refs from the configured engine when the process has none selected", async () => {
     mocks.resolveDatabaseEngineSelection.mockResolvedValue(postgresSelection);
     const env = { OPENCLAW_GATEWAY_TOKEN: "env-token" };

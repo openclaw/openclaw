@@ -35,13 +35,25 @@ export class GatewaySecretRefUnavailableError extends Error {
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
   readonly path: string;
 
-  constructor(path: string) {
+  constructor(
+    path: string,
+    options?: {
+      /** Underlying provider failure, preserved for callers that log causes. */
+      cause?: unknown;
+      /** Operator-facing line for the real failure, shown before the generic fix. */
+      providerDiagnostic?: string;
+    },
+  ) {
     super(
       [
         `${path} is configured as a secret reference but is unavailable in this command path.`,
+        ...(options?.providerDiagnostic
+          ? [`Provider error: ${options.providerDiagnostic}`]
+          : []),
         "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
         "or run a gateway command path that resolves secret references before credential selection.",
       ].join("\n"),
+      options?.cause !== undefined ? { cause: options.cause } : undefined,
     );
     this.name = "GatewaySecretRefUnavailableError";
     this.path = path;

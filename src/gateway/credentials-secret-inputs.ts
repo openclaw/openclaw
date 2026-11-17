@@ -56,7 +56,15 @@ async function resolveConfiguredGatewaySecretInput(params: {
         if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
           throw error;
         }
-        throw new GatewaySecretRefUnavailableError(params.path);
+        // The provider failure is the real cause (for example a read-only
+        // sandbox failing the store's cleanup write); surface it instead of
+        // pointing operators at credential overrides.
+        throw new GatewaySecretRefUnavailableError(params.path, {
+          cause: error,
+          ...(isSecretResolutionError(error)
+            ? { providerDiagnostic: `${error.code}: ${error.message}` }
+            : {}),
+        });
       },
     });
   // CLI RPC paths defer storage selection, so read store refs from a PostgreSQL state family
