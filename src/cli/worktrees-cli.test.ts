@@ -40,6 +40,12 @@ describe("worktrees cli", () => {
         {
           path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
           gcProtection: "preserved: nested-repository",
+          cleanup: {
+            state: "preserved",
+            reason: "nested-repository",
+            attempts: 1,
+            nextAttemptAt: null,
+          },
         },
       );
       if (command === "list") {
@@ -73,12 +79,36 @@ describe("worktrees cli", () => {
       reason: "manual-delete",
       ...admission,
       allowSnapshotLoss: true,
+      retryPreserved: undefined,
     });
   });
+  it.each([false, true])(
+    "reports preservation and retries only with the flag (JSON: %s)",
+    async (json) => {
+      const preserved = {
+        state: "preserved",
+        reason: "nested-repository",
+        attempts: 1,
+        nextAttemptAt: null,
+      };
+      const result = { removed: false, preserved };
+      const remove = vi.spyOn(owner, "remove").mockResolvedValue(result);
+      const output = muteOutput(json);
+      const args = ["remove", "worktree-id", ...(json ? ["--json"] : [])];
+      await expect(run(args)).rejects.toMatchObject({ code: 1 });
+      expect(output).toHaveBeenCalledWith(
+        json ? result : expect.stringContaining("nested-repository"),
+      );
+      remove.mockResolvedValue({ removed: true });
+      await run([...args, "--retry-preserved"]);
+      expect(remove).toHaveBeenLastCalledWith(expect.objectContaining({ retryPreserved: true }));
+    },
+  );
   it.each([
     ["remove", "--exact-state", "/missing-request", "--force"],
     ["remove", "--exact-state", "/missing-request", "--if-lossless"],
     ["remove", "--if-lossless", "--force"],
+    ["remove", "--if-lossless", "--retry-preserved"],
     ["remove", "--exact-state", "."],
     ["restore", "--recover-exact-state", "."],
     ["create", "--source-profile"],

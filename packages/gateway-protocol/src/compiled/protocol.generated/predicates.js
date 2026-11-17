@@ -1771,7 +1771,7 @@ var External = [
     /(^ticket$|^action$|^params$)/u,
     /(^repoRoot$|^name$|^baseRef$|^profiles$|^expectedOwnerId$|^expectedRepoIdentity$)/u,
     /^[a-z0-9][a-z0-9-]{0,63}$/u,
-    /(^id$|^force$|^ifLossless$|^exactState$|^expectedOwnerId$)/u,
+    /(^id$|^force$|^retryPreserved$|^ifLossless$|^exactState$|^expectedOwnerId$)/u,
     /(^ownerKind$|^ownerId$|^createdAt$|^lastActiveAt$|^head$|^branchHead$|^indexSha256$)/u,
     /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u,
     /(^id$|^recoverExactState$|^expectedOwnerId$)/u,
@@ -22008,6 +22008,9 @@ var External = [
     ) &&
     check_6(value.id) &&
     (value.force === void 0 || !("force" in value) || check_181(value.force)) &&
+    (value.retryPreserved === void 0 ||
+      !("retryPreserved" in value) ||
+      check_181(value.retryPreserved)) &&
     (value.ifLossless === void 0 || !("ifLossless" in value) || check_181(value.ifLossless)) &&
     (value.exactState === void 0 || !("exactState" in value) || check_3312(value.exactState)) &&
     (value.expectedOwnerId === void 0 ||

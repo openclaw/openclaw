@@ -1352,6 +1352,8 @@ const config = {
         "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",

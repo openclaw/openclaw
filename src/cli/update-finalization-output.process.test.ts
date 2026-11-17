@@ -212,7 +212,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       );
       if (scenario === "json" || scenario === "human") {
         for (const status of ["in_progress", "completed"]) {
-          const phaseRecord = `"step":"finalize:preflight","status":"${status}"`;
+          const phaseRecord = `[update finalize] finalize:preflight: ${status}`;
           check(result.stderr).toContain(phaseRecord);
           check(result.stdout).not.toContain(phaseRecord);
         }

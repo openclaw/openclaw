@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -6,7 +7,9 @@ import {
   backupNpmPackageRoot,
   movePackageRoot,
 } from "./package-update-filesystem.js";
+import type { PackageIntegrityFingerprint } from "./package-update-integrity.js";
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
+import type { createPublicationOwner } from "./package-update-publication-owner.js";
 import { exchangePaths, supportsPathExchange, type PathExchangeResult } from "./path-exchange.js";
 
 /** Whether one atomic exchange can publish this stage: only a directory can take the backup name. */
@@ -74,6 +77,58 @@ async function exchangeStagedPackageRoot(params: {
   return exchange;
 }
 
+const describePublication = (exchange: PathExchangeResult) =>
+  exchange.status === "exchanged"
+    ? `published by an atomic exchange (${exchange.route})`
+    : `published by two moves (atomic exchange unavailable: ${exchange.reason})`;
+
+/**
+ * Publishes through the publication journal and reports how. Where the journal
+ * can exchange, local overrides are captured from the old package at its path
+ * before the journal publishes, because an exchange never leaves it at a backup
+ * location first; the journal then decides between the exchange and its two moves.
+ */
+export async function publishJournaledPackageRoot(params: {
+  activation: Pick<
+    ReturnType<typeof createPublicationOwner>,
+    "publish" | "assertCurrent" | "exchangeOutcome"
+  > & { anchor: string };
+  liveRoot: string;
+  backupRoot: string;
+  warnings: string[];
+  replayLocalOverrides:
+    | ((roots: { backupRoot: string; packageRoot: string }) => Promise<void>)
+    | undefined;
+  /** The previous package is retained in the journal's custody. */
+  onDisplaced: (previous: PackageIntegrityFingerprint) => void;
+}): Promise<string | null> {
+  const { activation } = params;
+  // The same question the journal asks before it tries the exchange.
+  const captureFirst = supportsPathExchange();
+  const replay = async (previousRoot: string) => {
+    activation.assertCurrent();
+    await params.replayLocalOverrides?.({
+      backupRoot: previousRoot,
+      packageRoot: path.join(activation.anchor, "candidate"),
+    });
+    activation.assertCurrent();
+  };
+  if (captureFirst) {
+    await replay(params.liveRoot);
+  }
+  await activation.publish(false, async (previous, copied) => {
+    if (copied) {
+      params.warnings.push("EXDEV during package backup rename; using a verified rollback copy.");
+    }
+    params.onDisplaced(previous);
+    if (!captureFirst) {
+      await replay(params.backupRoot);
+    }
+  });
+  const exchange = activation.exchangeOutcome();
+  return exchange ? describePublication(exchange) : null;
+}
+
 /**
  * Replaces a package root without a publication journal and reports how. With
  * `exchange`, local overrides replay while the old package still serves and one
@@ -114,14 +169,14 @@ export async function publishStagedPackageRoot(params: {
       warn: (message) => warnings.push(message),
       onUncertain: () => params.onUnpublished(true),
     });
+    publication = describePublication(exchange);
     if (exchange.status === "exchanged") {
       params.onBackedUp();
       params.onRollbackOwed();
       params.onPublished();
       assertCaller();
-      return `published by an atomic exchange (${exchange.route})`;
+      return publication;
     }
-    publication = `published by two moves (atomic exchange unavailable: ${exchange.reason})`;
   }
   if (params.hadPackage) {
     if (params.native) {
