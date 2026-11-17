@@ -8,7 +8,10 @@ import {
 } from "../../agents/agent-scope-config.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
@@ -448,15 +451,107 @@ export function isConfiguredAgentDatabaseTarget(
   agentId: string | undefined,
   pathname: string,
 ): boolean {
+  const matchesOwner = (target: { agentId?: string }) =>
+    agentId === undefined || target.agentId === undefined || target.agentId === agentId;
+  for (const target of targets) {
+    if (matchesOwner(target) && target.path === pathname) {
+      return true;
+    }
+  }
+  if (!fsSync.statSync(pathname, { throwIfNoEntry: false })) {
+    return false;
+  }
   // Only concrete files prove aliases; preserve exact configured claims for inspection.
-  return targets.some(
-    (target) =>
-      (agentId === undefined || target.agentId === undefined || target.agentId === agentId) &&
-      (target.path === pathname ||
-        (fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
-          fsSync.statSync(pathname, { throwIfNoEntry: false }) &&
-          isSameOpenClawAgentDatabasePath(target.path, pathname))),
-  );
+  for (const target of targets) {
+    if (
+      matchesOwner(target) &&
+      fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
+      isSameOpenClawAgentDatabasePath(target.path, pathname)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Build a reusable configured-target matcher that avoids repeated stat/realpath scans across rows. */
+export function createConfiguredAgentDatabaseTargetMatcher(
+  targets: readonly { agentId?: string; path: string }[],
+): (agentId: string | undefined, pathname: string) => boolean {
+  const exactAnyOwner = new Set<string>();
+  const exactAnyPath = new Set<string>();
+  const exactByOwner = new Map<string, Set<string>>();
+  for (const target of targets) {
+    exactAnyPath.add(target.path);
+    if (target.agentId === undefined) {
+      exactAnyOwner.add(target.path);
+    } else {
+      let owned = exactByOwner.get(target.agentId);
+      if (!owned) {
+        owned = new Set();
+        exactByOwner.set(target.agentId, owned);
+      }
+      owned.add(target.path);
+    }
+  }
+  let aliasIndex:
+    | {
+        canonicalize: (pathname: string) => string;
+        anyOwner: Set<string>;
+        anyPath: Set<string>;
+        byOwner: Map<string, Set<string>>;
+      }
+    | undefined;
+  const ensureAliasIndex = () => {
+    if (aliasIndex) {
+      return aliasIndex;
+    }
+    const pathMatcher = createOpenClawAgentDatabasePathMatcher();
+    const canonicalize = pathMatcher.createIndex();
+    const anyOwner = new Set<string>();
+    const anyPath = new Set<string>();
+    const byOwner = new Map<string, Set<string>>();
+    for (const target of targets) {
+      if (!fsSync.statSync(target.path, { throwIfNoEntry: false })) {
+        continue;
+      }
+      const canonical = canonicalize(target.path);
+      anyPath.add(canonical);
+      if (target.agentId === undefined) {
+        anyOwner.add(canonical);
+      } else {
+        let owned = byOwner.get(target.agentId);
+        if (!owned) {
+          owned = new Set();
+          byOwner.set(target.agentId, owned);
+        }
+        owned.add(canonical);
+      }
+    }
+    aliasIndex = { canonicalize, anyOwner, anyPath, byOwner };
+    return aliasIndex;
+  };
+  return (agentId, pathname) => {
+    if (
+      exactAnyOwner.has(pathname) ||
+      (agentId === undefined
+        ? exactAnyPath.has(pathname)
+        : exactByOwner.get(agentId)?.has(pathname))
+    ) {
+      return true;
+    }
+    if (!fsSync.statSync(pathname, { throwIfNoEntry: false })) {
+      return false;
+    }
+    const index = ensureAliasIndex();
+    const canonical = index.canonicalize(pathname);
+    return (
+      index.anyOwner.has(canonical) ||
+      (agentId === undefined
+        ? index.anyPath.has(canonical)
+        : (index.byOwner.get(agentId)?.has(canonical) ?? false))
+    );
+  };
 }
 
 /** Resolves session store targets from explicit CLI-style selection options. */

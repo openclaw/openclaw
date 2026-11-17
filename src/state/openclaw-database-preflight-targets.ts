@@ -2,7 +2,7 @@ import { statSync } from "node:fs";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
-  isConfiguredAgentDatabaseTarget,
+  createConfiguredAgentDatabaseTargetMatcher,
   resolveConfiguredAgentDatabaseCandidatePaths,
   resolveConfiguredSessionStoreTargets,
 } from "../config/sessions/targets.js";
@@ -48,13 +48,13 @@ export function selectAgentDatabaseInspectionTargets(
           ).map((pathname) => ({ path: pathname })),
         ]
       : undefined;
+  const isConfiguredTarget = admissionTargets
+    ? createConfiguredAgentDatabaseTargetMatcher(admissionTargets)
+    : undefined;
   const skipped = new Set<string>();
   const inspectionTargets = candidates
     .filter((row) => {
-      if (
-        !admissionTargets ||
-        isConfiguredAgentDatabaseTarget(admissionTargets, row.agentId, row.path)
-      ) {
+      if (!isConfiguredTarget || isConfiguredTarget(row.agentId, row.path)) {
         return true;
       }
       if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {

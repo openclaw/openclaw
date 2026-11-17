@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { selectAgentDatabaseInspectionTargets } from "../../state/openclaw-database-preflight-targets.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
+  isConfiguredAgentDatabaseTarget,
   resolveConfiguredAgentDatabaseCandidatePaths as databaseCandidates,
   resolveConfiguredAgentDatabaseTargets as databaseTargets,
   resolveSessionStoreTargets as selectStores,
@@ -84,4 +86,72 @@ it.each([
   ["store", "   "],
 ] as const)("rejects blank --%s (%j) instead of defaulting", (option, value) => {
   expect(() => selectStores({}, { [option]: value })).toThrow(`--${option} must not be blank`);
+});
+
+it("matches configured database targets linearly without redundant filesystem probes", () => {
+  const root = fs.realpathSync.native(tempDirs.make("database-target-matching-"));
+  const env = { OPENCLAW_STATE_DIR: root };
+  const entries: Record<string, Record<string, never>> = {};
+  const configuredTargets: Array<{ agentId: string; path: string }> = [];
+  for (let i = 0; i < 20; i++) {
+    const agentId = `agent-${i}`;
+    entries[agentId] = {};
+    const dbPath = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    fs.writeFileSync(dbPath, "");
+    configuredTargets.push({ agentId, path: dbPath });
+  }
+  const unregisteredPath = path.join(root, "unregistered.sqlite");
+  fs.writeFileSync(unregisteredPath, "");
+  const aliasDir = path.join(root, "alias");
+  fs.symlinkSync(path.join(root, "agents", "agent-19", "agent"), aliasDir);
+  const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
+  const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries } };
+  const candidatePaths = databaseCandidates(cfg, { env });
+
+  using stat = vi.spyOn(fs, "statSync");
+  using realpath = vi.spyOn(fs.realpathSync, "native");
+  const last = configuredTargets.at(-1)!;
+  expect(
+    isConfiguredAgentDatabaseTarget(
+      [...configuredTargets, ...candidatePaths.map((pathname) => ({ path: pathname }))],
+      undefined,
+      last.path,
+    ),
+  ).toBe(true);
+  expect(stat).not.toHaveBeenCalled();
+  expect(realpath).not.toHaveBeenCalled();
+
+  expect(isConfiguredAgentDatabaseTarget(configuredTargets, "agent-19", aliasPath)).toBe(true);
+  expect(isConfiguredAgentDatabaseTarget(configuredTargets, "agent-0", aliasPath)).toBe(false);
+  expect(
+    isConfiguredAgentDatabaseTarget(
+      configuredTargets,
+      undefined,
+      path.join(root, "missing.sqlite"),
+    ),
+  ).toBe(false);
+  stat.mockClear();
+  realpath.mockClear();
+
+  const selected = selectAgentDatabaseInspectionTargets(
+    {
+      env,
+      purpose: "runtime",
+      agentAdmissionConfig: cfg,
+      configuredAgentDatabaseCandidatePaths: candidatePaths,
+    },
+    [
+      ...configuredTargets.map(({ path: pathname }) => ({ path: pathname })),
+      { agentId: "agent-19", path: aliasPath },
+      { path: unregisteredPath },
+    ],
+    configuredTargets,
+  );
+  expect(selected.inspectionTargets.map((row) => row.path)).toEqual([
+    ...configuredTargets.map((target) => target.path),
+    aliasPath,
+  ]);
+  expect(stat.mock.calls.length).toBeLessThanOrEqual(configuredTargets.length * 3 + 10);
+  expect(realpath.mock.calls.length).toBeLessThanOrEqual(configuredTargets.length + 5);
 });

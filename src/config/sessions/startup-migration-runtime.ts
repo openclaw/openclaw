@@ -25,7 +25,7 @@ import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { assertSessionStoreMigrationComplete } from "./startup-migration.js";
 import {
-  isConfiguredAgentDatabaseTarget,
+  createConfiguredAgentDatabaseTargetMatcher,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "./targets.js";
@@ -110,6 +110,7 @@ export async function runSessionStartupMigration(params: {
   const configuredTargets = resolveConfiguredAgentDatabaseCandidatePaths(params.cfg, {
     env,
   }).map((pathname) => ({ path: pathname }));
+  const isConfiguredTarget = createConfiguredAgentDatabaseTargetMatcher(configuredTargets);
   const tasks = targets.map((target) => async () => {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
@@ -121,7 +122,7 @@ export async function runSessionStartupMigration(params: {
     // Missing registry entries still need recovery before runtime can discover their lineage.
     if (
       registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
-      !isConfiguredAgentDatabaseTarget(configuredTargets, options.agentId, databasePath)
+      !isConfiguredTarget(options.agentId, databasePath)
     ) {
       return;
     }
