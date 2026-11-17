@@ -4,10 +4,11 @@ import { patchSettings } from "../../app/settings.ts";
 import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
-import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 
 type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
+type PlaceTranscript = ComposerDictationOwner["placeTranscript"];
 
 /** Caret mutations stay synchronous so partial and late transcripts target one draft snapshot. */
 export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | null) {
@@ -20,44 +21,43 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
         ? { start: textarea.selectionStart, end: textarea.selectionEnd, value: textarea.value }
         : null;
     },
-    previewTranscript(transcript: string): string | undefined {
+    previewTranscript(place: PlaceTranscript, transcript: string): string | undefined {
       const textarea = read();
-      if (!textarea) {
-        return undefined;
-      }
-      const selection = capturedSelection ?? {
-        start: textarea.selectionStart,
-        end: textarea.selectionEnd,
-        value: textarea.value,
-      };
-      return insertComposerDictation(selection.value, transcript, selection.start, selection.end)
-        .value;
+      return textarea
+        ? place(transcript, capturedSelection, {
+            start: textarea.selectionStart,
+            end: textarea.selectionEnd,
+            value: textarea.value,
+          })?.value
+        : undefined;
     },
     /** Commit live keystrokes before the owning draft rerenders. */
-    insertTranscript(transcript: string, late?: true, preservePreview?: true): string | null {
+    insertTranscript(
+      place: PlaceTranscript,
+      transcript: string,
+      late?: true,
+      preservePreview?: true,
+    ): string | null {
       const target = read();
-      if (!target) {
+      // Delayed finals must not replace edits made after Stop unlocked this draft.
+      const insertion =
+        target &&
+        place(
+          transcript,
+          capturedSelection,
+          {
+            start: late ? target.selectionStart : target.value.length,
+            end: late ? target.selectionEnd : target.value.length,
+            value: target.value,
+          },
+          late,
+          preservePreview,
+        );
+      if (!target || !insertion) {
         return null;
       }
-      // Delayed finals must not replace edits made after Stop unlocked this draft.
-      const selection =
-        capturedSelection && (preservePreview || !late || capturedSelection.value === target.value)
-          ? capturedSelection
-          : {
-              start: late ? target.selectionStart : target.value.length,
-              end: late ? target.selectionEnd : target.value.length,
-              value: target.value,
-            };
-      const insertion = insertComposerDictation(
-        selection.value,
-        transcript,
-        selection.start,
-        selection.end,
-      );
-      capturedSelection = preservePreview
-        ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
-        : null;
-      if (insertion.value === selection.value) {
+      capturedSelection = insertion.captured;
+      if (!insertion.changed) {
         return null;
       }
       target.value = insertion.value;
@@ -104,6 +104,7 @@ export class DirectDictationControl extends EventTarget {
   }
 
   private readonly changed = () => this.dispatchEvent(new Event("change"));
+  private readonly place: PlaceTranscript = (...args) => this.session?.placeTranscript(...args);
 
   subscribe(listener: () => void) {
     return listen(this, "change", listener);
@@ -122,7 +123,7 @@ export class DirectDictationControl extends EventTarget {
 
   previewDraft(): string | undefined {
     return this.session?.active
-      ? this.options.textarea.previewTranscript(this.session.transcript)
+      ? this.options.textarea.previewTranscript(this.place, this.session.transcript)
       : undefined;
   }
 
@@ -163,7 +164,12 @@ export class DirectDictationControl extends EventTarget {
         if (!ownsDraft() || !this.options.canCommit()) {
           return;
         }
-        const next = this.options.textarea.insertTranscript(transcript, late, preservePreview);
+        const next = this.options.textarea.insertTranscript(
+          this.place,
+          transcript,
+          late,
+          preservePreview,
+        );
         if (next !== null) {
           this.options.onMessage(next);
         }

@@ -6,6 +6,7 @@ import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
+  placeComposerDictation,
 } from "./composer-dictation-session.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
@@ -34,30 +35,6 @@ type ComposerDictationOwnerOptions = {
   onDictationUnavailable?: () => void;
 };
 
-export function insertComposerDictation(
-  value: string,
-  transcript: string,
-  selectionStart: number,
-  selectionEnd: number,
-): { value: string; caret: number } {
-  const spoken = transcript.trim();
-  if (!spoken) {
-    return { value, caret: selectionEnd };
-  }
-  const start = Math.max(0, Math.min(selectionStart, value.length));
-  const end = Math.max(start, Math.min(selectionEnd, value.length));
-  const before = value.slice(0, start);
-  const after = value.slice(end);
-  const leadingSpace = before && !/\s$/.test(before) && !/^\s|^[,.;:!?)]/.test(spoken) ? " " : "";
-  const trailingSpace =
-    after && !/^\s|^[,.;:!?)]/.test(after) && !/[\s([{]$/.test(spoken) ? " " : "";
-  const inserted = `${leadingSpace}${spoken}${trailingSpace}`;
-  return {
-    value: `${before}${inserted}${after}`,
-    caret: before.length + inserted.length,
-  };
-}
-
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
   private readonly playback = new GatewaySpeechPlayback();
@@ -73,7 +50,8 @@ export class ComposerDictationOwner extends EventTarget {
   private session: ComposerDictationSession | null = null;
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  // Created with the lazy capture module, before the first stopped recording.
+  // Loaded with capture, before the first transcript or stopped recording exists.
+  private capture: typeof import("./composer-dictation-session.ts") | undefined;
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
 
@@ -108,6 +86,13 @@ export class ComposerDictationOwner extends EventTarget {
 
   get locksComposer(): boolean {
     return this.phase !== "idle";
+  }
+
+  /** Places a transcript in a draft; there is nothing to place before capture loads. */
+  placeTranscript(
+    ...args: Parameters<typeof placeComposerDictation>
+  ): ReturnType<typeof placeComposerDictation> | undefined {
+    return this.capture?.placeComposerDictation(...args);
   }
 
   get inputLevel(): RealtimeTalkLevelSignal | undefined {
@@ -348,8 +333,9 @@ export class ComposerDictationOwner extends EventTarget {
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
+      const capture = (this.capture ??= await import("./composer-dictation-session.ts"));
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
-        await import("./composer-dictation-session.ts");
+        capture;
       if (
         this.captureStart !== captureStart ||
         this.disposed ||

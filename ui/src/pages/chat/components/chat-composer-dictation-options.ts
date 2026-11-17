@@ -1,6 +1,5 @@
 import { t } from "../../../i18n/index.ts";
 import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
-import { insertComposerDictation } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { commitComposerDraft, composerDraftKey } from "./chat-composer-state.ts";
@@ -28,30 +27,26 @@ export function createComposerDictationOptions(
       const liveValue = preservePreview
         ? (captured?.value ?? props.getDraft?.() ?? props.draft)
         : (target?.value ?? props.getDraft?.() ?? props.draft);
-      // Stop unlocks the draft. Preserve later edits by using the live caret only
-      // when a delayed final finds that the captured draft has changed.
-      const selection =
-        captured && (preservePreview || !late || captured.value === liveValue)
-          ? captured
-          : {
-              start: target?.selectionStart ?? liveValue.length,
-              end: target?.selectionEnd ?? liveValue.length,
-              value: liveValue,
-            };
-      const insertion = insertComposerDictation(
-        selection.value,
+      const insertion = state.dictation?.placeTranscript(
         transcript,
-        selection.start,
-        selection.end,
+        captured,
+        {
+          start: target?.selectionStart ?? liveValue.length,
+          end: target?.selectionEnd ?? liveValue.length,
+          value: liveValue,
+        },
+        late,
+        preservePreview,
       );
+      if (!insertion) {
+        return;
+      }
       if (target) {
         target.value = insertion.value;
         adjustTextareaHeight(target);
       }
       commitComposerDraft(props, insertion.value);
-      state.dictationSelection = preservePreview
-        ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
-        : null;
+      state.dictationSelection = insertion.captured;
       queueMicrotask(() => {
         const textarea = state.composerTextarea;
         if (!textarea) {

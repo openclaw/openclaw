@@ -104,6 +104,61 @@ export class ComposerDictationCommits {
   }
 }
 
+function insertComposerDictation(
+  value: string,
+  transcript: string,
+  selectionStart: number,
+  selectionEnd: number,
+): { value: string; caret: number } {
+  const spoken = transcript.trim();
+  if (!spoken) {
+    return { value, caret: selectionEnd };
+  }
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const leadingSpace = before && !/\s$/.test(before) && !/^\s|^[,.;:!?)]/.test(spoken) ? " " : "";
+  const trailingSpace =
+    after && !/^\s|^[,.;:!?)]/.test(after) && !/[\s([{]$/.test(spoken) ? " " : "";
+  const inserted = `${leadingSpace}${spoken}${trailingSpace}`;
+  return {
+    value: `${before}${inserted}${after}`,
+    caret: before.length + inserted.length,
+  };
+}
+
+type DictationSelection = { start: number; end: number; value: string };
+
+/**
+ * Places a transcript in a draft. The captured selection holds unless a late final
+ * finds the draft edited after Stop; with a newer recording's preview painted over
+ * the draft, the next result chains from the captured draft instead.
+ */
+export function placeComposerDictation(
+  transcript: string,
+  captured: DictationSelection | null,
+  live: DictationSelection,
+  late?: true,
+  preservePreview?: true,
+): { value: string; caret: number; changed: boolean; captured: DictationSelection | null } {
+  const selection =
+    captured && (preservePreview || !late || captured.value === live.value) ? captured : live;
+  const insertion = insertComposerDictation(
+    selection.value,
+    transcript,
+    selection.start,
+    selection.end,
+  );
+  return {
+    ...insertion,
+    changed: insertion.value !== selection.value,
+    captured: preservePreview
+      ? { start: insertion.caret, end: insertion.caret, value: insertion.value }
+      : null,
+  };
+}
+
 export function describeDictationStartError(error: unknown): [string, "busy" | "start"] {
   // Stopped recordings hold their Gateway sessions until transcribed; a full
   // connection refuses the next one before its microphone opens.

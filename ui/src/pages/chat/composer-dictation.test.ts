@@ -10,8 +10,8 @@ import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
-import { ComposerDictationSession } from "./composer-dictation-session.ts";
-import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
+import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
@@ -934,15 +934,11 @@ describe("composer microphone button", () => {
   });
 });
 
-it("insertComposerDictation spaces inserted and replaced selections", () => {
-  expect(insertComposerDictation("hello world", "brave new", 6, 6)).toEqual({
-    value: "hello brave new world",
-    caret: 16,
-  });
-  expect(insertComposerDictation("hello world", "there", 6, 11)).toEqual({
-    value: "hello there",
-    caret: 11,
-  });
+it("placeComposerDictation spaces inserted and replaced selections", () => {
+  const place = (start: number, end: number, spoken: string) =>
+    placeComposerDictation(spoken, null, { start, end, value: "hello world" });
+  expect(place(6, 6, "brave new")).toMatchObject({ value: "hello brave new world", caret: 16 });
+  expect(place(6, 11, "there")).toMatchObject({ value: "hello there", caret: 11 });
 });
 
 it.each([false, true])(
