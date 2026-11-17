@@ -221,7 +221,7 @@ export async function finalizeCodexAttempt(
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client: resourceState.client,
-      message: enrichedPromptErrorMessage,
+      promptError: enrichedPromptError,
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
@@ -231,7 +231,7 @@ export async function finalizeCodexAttempt(
         authProfileId: startupAuthProfileId,
         rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
       });
-      enrichedPromptError = new CodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+      enrichedPromptError = refreshedUsageLimitPromptError.promptError;
     } else if (
       enrichedPromptError instanceof CodexUsageLimitPromptError &&
       state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
