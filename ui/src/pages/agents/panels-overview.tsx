@@ -40,7 +40,7 @@ import {
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { thinkingLevelLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import {

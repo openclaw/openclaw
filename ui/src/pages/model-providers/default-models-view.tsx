@@ -17,7 +17,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
-import { thinkingLevelLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   canonicalModelAuthProviderId,
