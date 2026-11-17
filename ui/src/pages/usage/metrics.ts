@@ -156,6 +156,25 @@ type UsageInsightStats = {
   errorRate: number;
 };
 
+/**
+ * Throughput divides by active time — the assistant-turn durations already
+ * shipped in aggregates.latency — not the wall-clock session span, which also
+ * counts every idle gap between turns.
+ */
+export function usageThroughputStats(input: {
+  totals: { totalTokens: number; totalCost: number } | null;
+  latency?: { count: number; avgMs: number };
+}): { throughputTokensPerMin?: number; throughputCostPerMin?: number } {
+  const { totals, latency } = input;
+  const activeMs = latency && latency.count > 0 ? latency.avgMs * latency.count : 0;
+  return {
+    throughputTokensPerMin:
+      totals && activeMs > 0 ? totals.totalTokens / (activeMs / 60000) : undefined,
+    throughputCostPerMin:
+      totals && activeMs > 0 ? totals.totalCost / (activeMs / 60000) : undefined,
+  };
+}
+
 export type { UsageInsightStats };
 export {
   buildUsageCostWindows,
