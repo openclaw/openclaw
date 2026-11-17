@@ -780,16 +780,23 @@ it.each([false, true])(
 it("shows a fork a still-running tool call as pending without writing the source", async () => {
   await withHistory("fork-running-tool", async ({ scope, source, verifyRead }) => {
     source.appendMessage(makeUserMessage("Run the probe", 1));
-    appendCalls(source, "running");
+    // One call of the batch finished; the other is still running.
+    appendCalls(source, "done", "running");
+    appendResult(source, "done", "done-output");
     await verifyRead(async () => {
       const fork = await SessionManager.openModelContextAsync(scope);
       await markRunningToolCalls(fork);
-      expect(fork.buildSessionContext().messages.at(-1)).toMatchObject({
-        role: "toolResult",
-        toolCallId: "running",
-        isError: false,
-        content: [{ text: "This tool call is still running. Its result is not available yet." }],
-      });
+      const results = fork
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "toolResult");
+      expect(results).toMatchObject([
+        { toolCallId: "done", content: [{ text: "done-output" }] },
+        {
+          toolCallId: "running",
+          isError: false,
+          content: [{ text: "This tool call is still running. Its result is not available yet." }],
+        },
+      ]);
     });
   });
 });

@@ -23,6 +23,7 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import type { AssistantMessage } from "../llm/types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
 import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
@@ -260,12 +261,22 @@ async function readSessionForkPin(
  * results exist only in the fork.
  */
 export async function markRunningToolCalls(manager: SessionManager): Promise<void> {
-  const leaf = manager.getBranch().at(-1);
-  if (leaf?.type !== "message" || leaf.message.role !== "assistant") {
-    return;
+  // The latest batch is the last assistant message plus the tool results recorded after it.
+  const completed = new Set<string>();
+  let batch: AssistantMessage | undefined;
+  for (const entry of manager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    if (entry.message.role === "toolResult") {
+      completed.add(entry.message.toolCallId);
+      continue;
+    }
+    batch = entry.message.role === "assistant" ? entry.message : undefined;
+    break;
   }
-  for (const block of leaf.message.content) {
-    if (block.type === "toolCall") {
+  for (const block of batch?.content ?? []) {
+    if (block.type === "toolCall" && !completed.has(block.id)) {
       await manager.appendMessageAsync({
         role: "toolResult",
         toolCallId: block.id,
