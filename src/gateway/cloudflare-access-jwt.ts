@@ -53,7 +53,7 @@ async function resolveSigningKey(
 ): Promise<KeyObject | undefined | null> {
   const cached = keySets.get(issuer);
   const key = cached?.keys.get(kid);
-  if (key && Date.now() - cached!.fetchedAt < KEY_SET_TTL_MS) {
+  if (cached && key && Date.now() - cached.fetchedAt < KEY_SET_TTL_MS) {
     return key;
   }
   let pending = refreshes.get(issuer);
