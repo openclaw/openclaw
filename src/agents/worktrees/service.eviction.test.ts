@@ -101,6 +101,22 @@ describe("managed worktree cap eviction", () => {
       .all(worktreeRunLeaseScope(id));
   const evict = (record: ManagedWorktreeRecord, guard: WorktreeAllocationGuard) =>
     evictManagedWorktree({ env, record, guard, reason: "idle-age", getConfig });
+  it("preserves nested repositories at capacity and stops automatic snapshot retries", async () => {
+    const record = await createFixture("preserved-capacity");
+    const nested = path.join(record.path, "nested");
+    await fs.mkdir(nested);
+    await requireGit(nested, ["init", "-b", "main"]);
+    await fs.writeFile(path.join(nested, "valuable.txt"), "inner work\n");
+    await expect(create("overflow")).rejects.toThrow("cap 1 reached");
+    expect(registry(record.id)?.gcRetry).toMatchObject({
+      stage: "nested-repository",
+      retryAt: null,
+      attempts: 1,
+    });
+    await expect(create("overflow")).rejects.toThrow("cap 1 reached");
+    expect(registry(record.id)?.gcRetry?.attempts).toBe(1);
+    expect(await read(nested, "valuable.txt")).toBe("inner work\n");
+  });
   async function removeExact(record: ManagedWorktreeRecord, target = service, unsaved?: string) {
     const head = await requireGit(record.path, ["rev-parse", "HEAD"]);
     await requireGit(record.path, ["checkout", "--detach", "HEAD"]);

@@ -99,7 +99,7 @@ export async function proveAcceptedDirectoryRetention(
             getConfig: () => ({}),
           }),
         ),
-      ).resolves.toBe("dirty-purged");
+      ).rejects.toThrow("archive staging interrupted");
     } finally {
       staging.mockRestore();
     }
@@ -110,13 +110,14 @@ export async function proveAcceptedDirectoryRetention(
     ).toBe(false);
     source = "newer projection bytes after interrupted staging\n";
     await writeText(projection, "source.txt", source);
-  } else {
-    const removed = await service.remove({
-      id: owner.worktree.id,
-      reason: "directory-retention",
-    });
-    expect(removed.removed).toBe(true);
+    expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeUndefined();
+    await expectText(canonical, "authored/.env.local", "authored ignored bytes\n");
   }
+  const removed = await service.remove({
+    id: owner.worktree.id,
+    reason: "directory-retention",
+  });
+  expect(removed.removed).toBe(true);
   await expectMissing(canonical);
   await closeOpenClawStateDatabaseAsync();
   await service.restore({ id: owner.worktree.id });

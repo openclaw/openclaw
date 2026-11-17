@@ -92,70 +92,61 @@ export async function evictManagedWorktree(params: {
           };
           let snapshotRef: string | undefined;
           let dirty = false;
-          let snapshotError: string | undefined;
-          try {
-            const signal = AbortSignal.any([
-              ...(guard.signal ? [guard.signal] : []),
-              AbortSignal.timeout(5_000),
-            ]);
-            await withManagedWorktreeGit(
-              { record, env, getConfig: params.getConfig, signal, beforeRun },
-              async (git) => {
-                const provisionedPaths = await getRegistryWorktreeProvisionedPaths(env, record.id);
-                if (!provisionedPaths) {
-                  throw new Error("provisioned path ledger is unavailable");
-                }
-                const snapshot = await captureManagedWorktreeSnapshot({
-                  record,
-                  env,
-                  reason: `capacity-${params.reason}`,
-                  provisionedPaths,
-                  git,
-                  signal,
-                  assertCurrent: beforeRun,
-                  workerAuthority: heldClaimsAuthority(),
-                  requireDiskSpace: guard.requireDiskSpace,
-                });
-                snapshotRef = snapshot.snapshotRef;
-                beforeRun();
-                await updateRegistryWorktree(
-                  env,
-                  record.id,
-                  { snapshotRef, provisionedState: snapshot.provisionedState },
-                  { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
+          const snapshotSignal = AbortSignal.any([
+            ...(guard.signal ? [guard.signal] : []),
+            AbortSignal.timeout(5_000),
+          ]);
+          await withManagedWorktreeGit(
+            { record, env, getConfig: params.getConfig, signal: snapshotSignal, beforeRun },
+            async (git) => {
+              const provisionedPaths = await getRegistryWorktreeProvisionedPaths(env, record.id);
+              if (!provisionedPaths) {
+                throw new Error("provisioned path ledger is unavailable");
+              }
+              const snapshot = await captureManagedWorktreeSnapshot({
+                record,
+                env,
+                reason: `capacity-${params.reason}`,
+                provisionedPaths,
+                git,
+                signal: snapshotSignal,
+                assertCurrent: beforeRun,
+                workerAuthority: heldClaimsAuthority(),
+                requireDiskSpace: guard.requireDiskSpace,
+              });
+              snapshotRef = snapshot.snapshotRef;
+              beforeRun();
+              await updateRegistryWorktree(
+                env,
+                record.id,
+                { snapshotRef, provisionedState: snapshot.provisionedState },
+                { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
+              );
+              dirty = Boolean(
+                await git.require(
+                  record.repoRoot,
+                  [
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    worktreeSnapshotBase(snapshotRef, snapshotRef),
+                    snapshotRef,
+                  ],
+                  { signal: snapshotSignal, beforeRun },
+                ),
+              );
+              if (accepted) {
+                const snapshotCommit = await git.require(
+                  record.repoRoot,
+                  ["rev-parse", `${snapshotRef}^{commit}`],
+                  { signal: snapshotSignal, beforeRun },
                 );
-                dirty = Boolean(
-                  await git.require(
-                    record.repoRoot,
-                    [
-                      "diff-tree",
-                      "--no-commit-id",
-                      "--name-only",
-                      "-r",
-                      worktreeSnapshotBase(snapshotRef, snapshotRef),
-                      snapshotRef,
-                    ],
-                    { signal, beforeRun },
-                  ),
-                );
-                if (accepted) {
-                  const snapshotCommit = await git.require(
-                    record.repoRoot,
-                    ["rev-parse", `${snapshotRef}^{commit}`],
-                    { signal, beforeRun },
-                  );
-                  const archive = await accepted.prepareArchive?.();
-                  await archive?.(snapshotCommit);
-                }
-              },
-            );
-          } catch (error) {
-            if (hasSqliteWorkerOutcomeUnknown(error)) {
-              throw error;
-            }
-            beforeRun();
-            snapshotError = String(error);
-          }
+                const archive = await accepted.prepareArchive?.();
+                await archive?.(snapshotCommit);
+              }
+            },
+          );
           beforeRun();
           const live = await readRegistryWorktrees(env, { liveOnly: true });
           const liveIds = new Set(live.map((candidate) => candidate.id));
@@ -250,9 +241,9 @@ export async function evictManagedWorktree(params: {
             // Deletion already holds custody; caller cancellation cannot abandon its settlement.
             { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
           );
-          const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
+          const reason = dirty ? "dirty-purged" : params.reason;
           log.warn(
-            `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}${snapshotError ? `; snapshot failed: ${snapshotError}` : ""}`,
+            `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; snapshot ${snapshotRef}`,
           );
           return reason;
         },

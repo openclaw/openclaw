@@ -18,6 +18,7 @@ import {
   deferFailedWorktreeRemoval,
   deferWorktreeCleanup,
   retireMissingRegistryWorktree,
+  worktreeCleanupProtection,
 } from "./registry-retirement.js";
 import {
   createWorktreeRemovalClaimsGuard,
@@ -257,9 +258,7 @@ export function createWorktreeGcRemoval(context: {
     const previous = repositoryFailures.get(record.repoRoot);
     repositoryFailures.set(record.repoRoot, {
       attempts: Math.max(previous?.attempts ?? 0, record.gcRetry.attempts),
-      reason:
-        previous?.reason ??
-        (!policy.retryDeferred && now < record.gcRetry.retryAt ? record.gcProtection : undefined),
+      reason: previous?.reason ?? worktreeCleanupProtection(record, now, policy.retryDeferred),
     });
   }
   const withOwnerCleanup = <T>(
@@ -349,14 +348,27 @@ export function createWorktreeGcRemoval(context: {
         );
       }
     }
-    const retainUnreadable = (error: unknown) => {
+    const retainUnreadable = async (error: unknown) => {
       if (!isWorktreePermissionError(error)) {
         return false;
       }
+      await withOwnerMutation(async () =>
+        deferFailedWorktreeRemoval({
+          env,
+          id: record.id,
+          stage: "permission-denied",
+          reason:
+            "Checkout preserved: permission-denied; repair access, then run openclaw worktrees gc --retry-deferred",
+          elapsedMs: 0,
+          now,
+          previousAttempts: record.gcRetry?.attempts ?? 0,
+          assertCurrent: await prepareOwnerCurrent(record, retiredOwner),
+        }),
+      );
       progress.protect("idle", record.id, "unreadable", `unreadable: ${formatErrorMessage(error)}`);
       return true;
     };
-    if (retainUnreadable(initialError)) {
+    if (await retainUnreadable(initialError)) {
       return;
     }
     if (isWorktreeRepositoryCorruptionError(initialError)) {
@@ -377,7 +389,7 @@ export function createWorktreeGcRemoval(context: {
       if (retry) {
         repositoryFailures.set(record.repoRoot, { attempts: retry.attempts, reason });
         log.warn(
-          `${reason}; next automatic retry at ${new Date(retry.retryAt).toISOString()}: ${formatErrorMessage(initialError)}`,
+          `${reason}; ${retry.retryAt === null ? "automatic retries stopped" : `next automatic retry at ${new Date(retry.retryAt).toISOString()}`}: ${formatErrorMessage(initialError)}`,
         );
       }
       progress.error("idle", `${reason}: ${formatErrorMessage(initialError)}`, record.id);
@@ -438,7 +450,7 @@ export function createWorktreeGcRemoval(context: {
         }
       } catch (retirementError) {
         assertCurrent?.();
-        if (retainUnreadable(retirementError)) {
+        if (await retainUnreadable(retirementError)) {
           return;
         }
         // An unavailable repository or uncertain repair cannot authorize retirement.
@@ -480,6 +492,11 @@ export function createWorktreeGcRemoval(context: {
         }
         let retiredOwner = false;
         try {
+          const deferred = worktreeCleanupProtection(record, now, policy.retryDeferred);
+          if (deferred) {
+            progress.protect("idle", record.id, deferred);
+            continue;
+          }
           if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
             const retired = await withOwnerCleanup(record, async (withOwnerMutation) => {
               const assertOwnerCurrent = await prepareOwnerCurrent(record);

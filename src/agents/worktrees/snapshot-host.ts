@@ -24,6 +24,7 @@ import {
 } from "./registry-read.js";
 import { deferWorktreeCleanup } from "./registry-retirement.js";
 import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
+import { WorktreePreservationError } from "./removal-errors.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
 import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
@@ -96,7 +97,8 @@ export async function captureManagedWorktreeSnapshot(params: {
           params.signal?.throwIfAborted();
           params.assertCurrent?.();
           // Keep the cleanup owner's shared-repository backoff on failed hydration.
-          throw new Error(
+          throw new WorktreePreservationError(
+            "repository-corrupt",
             `Worktree snapshot has missing blob ${missing[0]}; check the promisor remote or repair the repository before retrying cleanup. Checkout preserved.`,
             { cause },
           );

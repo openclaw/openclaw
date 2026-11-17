@@ -24,7 +24,11 @@ import {
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
 } from "./registry.js";
-import { WorktreeSnapshotError, WorktreeRemovalLockError } from "./removal-errors.js";
+import {
+  WorktreeSnapshotError,
+  WorktreeRemovalLockError,
+  worktreePreservationReason,
+} from "./removal-errors.js";
 import {
   assertExactStateOwner,
   prepareSnapshotBranchDeletion,
@@ -230,7 +234,7 @@ export async function removeSettledManagedWorktree(
           { cause: cleanupError },
         );
       }
-      if (!params.allowSnapshotLoss) {
+      if (!params.allowSnapshotLoss || worktreePreservationReason(error)) {
         throw new WorktreeSnapshotError(snapshotError, { cause: error });
       }
       snapshotRef = undefined;

@@ -18,6 +18,11 @@ import {
   readWorktreeCleanupState,
 } from "./registry-read.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
+import {
+  deferFailedWorktreeRemoval,
+  removalDeferralReason,
+  worktreeCleanupProtection,
+} from "./registry-retirement.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import type { CreateManagedWorktreeParams, ManagedWorktreeRecord } from "./types.js";
 
@@ -117,6 +122,7 @@ export function createWorktreeCapacityOwner({
     const idle: ManagedWorktreeRecord[] = [];
     const leased = new Set<string>();
     for (const record of records) {
+      const protection = worktreeCleanupProtection(record, Date.now());
       if (live.has(worktreeRunLeaseScope(record.id))) {
         leased.add(record.id);
         if (progress.start(record.id)) {
@@ -124,6 +130,8 @@ export function createWorktreeCapacityOwner({
           progress.protect("limits", record.id, "live-refused", `${owner} has an active run lease`);
           log.info(`Worktree eviction live-refused: ${record.id}; owner ${owner}`);
         }
+      } else if (protection) {
+        progress.protect("limits", record.id, protection);
       } else {
         idle.push(record);
       }
@@ -202,6 +210,19 @@ export function createWorktreeCapacityOwner({
           }
         } catch (error) {
           guard.commitGuard();
+          const refusal = removalDeferralReason(error);
+          if (refusal) {
+            await deferFailedWorktreeRemoval({
+              env: env ?? process.env,
+              id: record.id,
+              stage: "snapshot",
+              ...refusal,
+              elapsedMs: Math.round(performance.now() - started),
+              now: Date.now(),
+              previousAttempts: record.gcRetry?.attempts ?? 0,
+              assertCurrent: guard.commitGuard,
+            });
+          }
           progress.error("limits", error, record.id);
         }
       }
