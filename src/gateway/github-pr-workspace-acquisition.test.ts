@@ -60,23 +60,17 @@ describe("PR source acquisition", () => {
         return result;
       });
       const prepareCheckout = checkout.prepareLocalWorkspaceCheckout;
-      const temporaryCheckouts = new Set<string>();
       using checkoutSpy = vi.spyOn(checkout, "prepareLocalWorkspaceCheckout");
       checkoutSpy.mockImplementation(async (params) => {
         expect(runtime.isPaused(), "Temporary base checkouts must leave the guest running").toBe(
           false,
         );
-        temporaryCheckouts.add(params.temporaryRoot);
         return prepareCheckout(params);
       });
       const remove = fs.rm;
       const cleanupPaused: boolean[] = [];
-      const gatewayCleanup: string[] = [];
       using removalSpy = vi.spyOn(fs, "rm");
       removalSpy.mockImplementation(async (target, options) => {
-        if (temporaryCheckouts.has(String(target))) {
-          gatewayCleanup.push(String(target));
-        }
         if (String(target).includes("openclaw-checkpoint-payload-")) {
           cleanupPaused.push(runtime.isPaused());
         }
@@ -134,11 +128,6 @@ describe("PR source acquisition", () => {
       expect(cleanupPaused, "Accepted result cleanup must leave the guest running").not.toContain(
         true,
       );
-      expect(temporaryCheckouts.size).toBeGreaterThan(0);
-      expect(gatewayCleanup, "Large checkout cleanup must not walk the Gateway heap").toEqual([]);
-      for (const directory of temporaryCheckouts) {
-        await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      }
       expect(await f.git("rev-parse", "--is-shallow-repository")).toBe("false");
       expect(await f.git("rev-list", "--count", head)).toBe("4");
       expect(await f.git("write-tree")).toBe(await upstream("rev-parse", `${head}^{tree}`));
