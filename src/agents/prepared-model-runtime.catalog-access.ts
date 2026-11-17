@@ -39,6 +39,7 @@ import {
 import {
   createCatalogInventoryPublisher,
   listChangedPreparedCatalogProviders,
+  listEligibleCatalogProviders,
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
   prepareRetainedProviderCatalog,
@@ -76,13 +77,7 @@ export async function createFullModelCatalogAccess(
     params.agentFacts.input.config,
     params.agentFacts.env,
   );
-  const eligibleProviders = [
-    ...new Set(
-      [...params.agentFacts.providerIds, ...Object.keys(params.agentFacts.credentials)].map(
-        normalizeProvider,
-      ),
-    ),
-  ].toSorted();
+  const eligibleProviders = listEligibleCatalogProviders(params.agentFacts, normalizeProvider);
   const currentAuth = await prepareInitialModelCatalogAuth(
     params,
     eligibleProviders,
@@ -650,7 +645,7 @@ export async function createFullModelCatalogAccess(
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = (async () => {
+    const discoverCatalog = async () => {
       await using _ = {
         [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
       };
@@ -665,11 +660,16 @@ export async function createFullModelCatalogAccess(
         // discard them. Native discovery starts from this accepted publication.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
-      if (includeNative) {
-        return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
+      const catalog = includeNative
+        ? await acquireNativeCatalog(nativeScope, undefined, options.refresh)
+        : (published.catalog ?? staticCatalog);
+      // Completed discovery cannot satisfy a later refresh while generation custody settles.
+      if (pending) {
+        pending.refresh = false;
       }
-      return published.catalog ?? staticCatalog;
-    })().finally(() => {
+      return catalog;
+    };
+    const promise = discoverCatalog().finally(() => {
       pending = undefined;
       retryFailedDiscovery();
     });

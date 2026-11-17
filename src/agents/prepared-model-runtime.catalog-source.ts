@@ -21,6 +21,16 @@ import type {
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 
+/** Configured and credential-bearing providers eligible for full discovery. */
+export function listEligibleCatalogProviders(
+  facts: Pick<PreparedModelRuntimeAgentFacts, "providerIds" | "credentials">,
+  normalize: (provider: string) => string,
+): string[] {
+  return [
+    ...new Set([...facts.providerIds, ...Object.keys(facts.credentials)].map(normalize)),
+  ].toSorted();
+}
+
 /** Keep acquired provider scopes after auth replacement removes their rows. */
 export function createCatalogInventoryPublisher(
   owner: Pick<PreparedModelRuntimeOwner, "catalogInventory">,
