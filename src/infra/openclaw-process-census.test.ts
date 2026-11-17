@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
@@ -11,6 +13,7 @@ const {
   readlink,
   realpath,
   stat,
+  lstat,
   definitelyDead,
   container,
   darwinCommand,
@@ -25,6 +28,7 @@ const {
   readlink: vi.fn(),
   realpath: vi.fn(),
   stat: vi.fn(),
+  lstat: vi.fn(),
   definitelyDead: vi.fn(),
   container: vi.fn(),
   darwinCommand: vi.fn(),
@@ -42,6 +46,7 @@ vi.mock("node:fs", () => {
     readlinkSync: (file: string) => readlink(fixturePath(file)),
     realpathSync: (file: string) => realpath(fixturePath(file)),
     statSync: (file: string) => stat(fixturePath(file)),
+    lstatSync: (file: string) => lstat(fixturePath(file)),
   };
   return { ...filesystem, default: filesystem };
 });
@@ -119,6 +124,7 @@ beforeEach(() => {
   ancestry.mockReset().mockReturnValue(null);
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
+  lstat.mockReset().mockReturnValue({ isDirectory: () => true, uid: 1000, mode: 0o40700 });
   readlink.mockReset().mockImplementation((file: string) => {
     const pid = Number(/^\/proc\/(\d+)\/cwd$/.exec(file)?.[1]);
     const cwd = rows.get(pid)?.cwd ?? "/app";
@@ -204,6 +210,89 @@ it.each([
   }
   rows.delete(peer);
   expectPids([], undefined, free);
+});
+
+it.each([
+  ["node", "worker.js"],
+  ["/usr/bin/node", "-e", "1"],
+])("releases private runtimes across repeated censuses with foreign %j", (...argv) => {
+  processRow(peer, argv, { uid: 2000, cwd: denied() });
+  for (const runtime of [
+    "/tmp/openclaw-update-runtime-Free01",
+    "/tmp/openclaw-update-runtime-Free02",
+    "/tmp/openclaw-update-runtime-Free01",
+  ]) {
+    expectPids([], undefined, runtime);
+  }
+  // An unscoped census has no private directory whose permissions it can verify.
+  expectPids([peer], `PID ${peer}: working directory is unavailable`);
+});
+
+it.each([
+  { uid: 1000, mode: 0o40755, directory: true },
+  { uid: 2000, mode: 0o40700, directory: true },
+  { uid: 1000, mode: 0o120700, directory: false },
+  { uid: 1000, mode: 0o40700, directory: true, unavailable: true },
+])("retains foreign cwd uncertainty without private runtime evidence: %j", (facts) => {
+  processRow(peer, ["node", "worker.js"], { uid: 2000, cwd: denied() });
+  lstat.mockImplementation(() => {
+    if (facts.unavailable) {
+      throw denied();
+    }
+    return { ...facts, isDirectory: () => facts.directory };
+  });
+  expectPids(
+    [peer],
+    `PID ${peer}: working directory is unavailable`,
+    "/tmp/openclaw-update-runtime-Free01",
+  );
+});
+
+it("preserves explicit foreign runtime references despite private permissions", () => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  processRow(peer, ["node", `${runtime}/worker.js`], { uid: 2000, cwd: denied() });
+  expectPids([peer], undefined, runtime);
+});
+
+it("reclaims abandoned runtimes on repeated cleanup despite a persistent foreign node process", async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "census-cleanup-"));
+  try {
+    const { uid } = await fs.stat(base);
+    Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
+    vi.spyOn(os, "tmpdir").mockReturnValue(base);
+    lstat.mockReturnValue({ isDirectory: () => true, uid, mode: 0o40700 });
+    processRow(peer, ["node", "worker.js"], { uid: uid + 1, cwd: denied() });
+    const packageRoot = path.join(base, "package");
+    for (const name of ["Free01", "Free02"]) {
+      const runtime = path.join(base, `openclaw-update-runtime-${name}`);
+      const root = path.parse(packageRoot).root;
+      const projected = path.join(
+        runtime,
+        "tree",
+        Buffer.from(root).toString("hex"),
+        path.relative(root, packageRoot),
+      );
+      await fs.mkdir(projected, { recursive: true, mode: 0o700 });
+      await fs.writeFile(path.join(projected, "package.json"), '{"name":"openclaw"}');
+    }
+    const { maintainRetainedUpdateRuntimes } = await import("./temp-artifact-cleanup.js");
+    const messages: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      messages.push(
+        ...(await maintainRetainedUpdateRuntimes({
+          packageRoots: [packageRoot],
+          repair: true,
+          assertCurrent: () => {},
+        })),
+      );
+    }
+    expect(
+      messages.filter((message) => message.startsWith("Removed abandoned updater runtime:")),
+    ).toHaveLength(2);
+    expect(await fs.readdir(base)).toEqual([]);
+  } finally {
+    await fs.rm(base, { recursive: true, force: true });
+  }
 });
 
 it("releases runtimes from Gateway processes without artifact evidence", () => {
