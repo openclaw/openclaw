@@ -141,38 +141,6 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     throw new Error(admission.message);
   }
   const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
-  if (validChannel) {
-    const settlement = await settlePendingPackageActivation(
-      resolveUpdateInstallRoot(discoveredRoot),
-      (settled) => {
-        defaultRuntime.error(
-          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
-            settled.retained
-              ? `Recovery evidence retained at ${settled.retained}.`
-              : "The original package and launchers remain unchanged."
-          }${settled.detail ? ` ${settled.detail}` : ""}`,
-        );
-        if (settled.detail) {
-          // The operation UUID identifies this repair receipt, not the original failed run.
-          // Replaying it after interrupted reporting preserves the original update outcome.
-          createUpdateRun(
-            {
-              runId: settled.operationId,
-              trigger: "cli",
-              settlement: {
-                reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
-              },
-            },
-            options,
-          );
-        }
-      },
-    );
-    if (settlement?.warning) {
-      defaultRuntime.error(`Warning: ${settlement.warning}`);
-    }
-  }
   let retained: RetainedUpdateCustodyReport | undefined;
   const prepareHandoffRepair = async () => {
     // Admission keys custody by the canonical installation, not a lexical slot.
@@ -209,6 +177,41 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (validChannel) {
+    // Repair's claim now owns the installation; fresh admission would be refused.
+    const settlement = await settlePendingPackageActivation(
+      resolveUpdateInstallRoot(discoveredRoot),
+      (settled) => {
+        defaultRuntime.error(
+          `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+            settled.retained
+              ? `Recovery evidence retained at ${settled.retained}.`
+              : "The original package and launchers remain unchanged."
+          }${settled.detail ? ` ${settled.detail}` : ""}`,
+        );
+        if (settled.detail) {
+          // The operation UUID identifies this repair receipt, not the original failed run.
+          // Replaying it after interrupted reporting preserves the original update outcome.
+          createUpdateRun(
+            {
+              runId: settled.operationId,
+              trigger: "cli",
+              settlement: {
+                reason: settled.reason,
+                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+              },
+            },
+            options,
+          );
+        }
+      },
+      undefined,
+      handoff ? { owner: () => handoff.assertCurrent() } : undefined,
+    );
+    if (settlement?.warning) {
+      defaultRuntime.error(`Warning: ${settlement.warning}`);
+    }
+  }
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
   const recentRuns = listUpdateRuns({ limit: 100 }, options);
