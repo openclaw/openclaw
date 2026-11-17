@@ -19,7 +19,15 @@ export const waitClockFixture = {
   updateReply: "The review is still running. I will report its result when it finishes.",
   childReply: "The release notes review is complete. No issues found.",
   resumedReply: "The review finished successfully. No issues found in the release notes.",
+  trailingNarration: "Waiting quietly for the review session to finish before replying again.",
 };
+
+/**
+ * reply: the update turn answers with ordinary assistant text after already_pending.
+ * message-tool: it sends its visible reply with message(final: false), then yields; any
+ * trailing text the model writes after already_pending is narration, not a reply.
+ */
+export type WaitClockUpdateVia = "reply" | "message-tool";
 
 export async function createWaitClockInstance(port: number, controlUiRoot: string) {
   const instance = await createChatGatewayInstance({
@@ -70,7 +78,8 @@ function writeReply(response: ServerResponse, text: string, id: string) {
 }
 
 /** Model transport only: the Gateway executes all tools and owns the native child registry. */
-export async function startWaitClockProvider() {
+export async function startWaitClockProvider(options: { updateVia?: WaitClockUpdateVia } = {}) {
+  const updateVia = options.updateVia ?? "reply";
   const childStarted = createDeferred();
   const failure = createDeferred<never>();
   void failure.promise.catch(() => {});
@@ -78,6 +87,7 @@ export async function startWaitClockProvider() {
   const requests: Array<{ method?: string; url?: string }> = [];
   const receipts: Array<{ step: number; tool: string; result: ReturnType<typeof toolResult> }> = [];
   let parentRequests = 0;
+  let trailingNarrationRequests = 0;
   let childResponse: ServerResponse | undefined;
   let childReleased = false;
   let stopped = false;
@@ -125,14 +135,33 @@ export async function startWaitClockProvider() {
           } else if (step === 2) {
             expect(JSON.stringify(body.input)).toContain(waitClockFixture.updatePrompt);
             expect(childReleased).toBe(false);
+            if (updateVia === "message-tool") {
+              writeToolCall(response, "message", {
+                action: "send",
+                message: waitClockFixture.updateReply,
+                final: false,
+              });
+            } else {
+              writeToolCall(response, "sessions_yield", {});
+            }
+          } else if (step === 3 && updateVia === "message-tool") {
+            const result = toolResult(body.input, "message");
+            receipts.push({ step, tool: "message", result });
+            expect(childReleased).toBe(false);
             writeToolCall(response, "sessions_yield", {});
-          } else if (step === 3) {
+          } else if (step === 3 || (step === 4 && updateVia === "message-tool" && !childReleased)) {
             const result = toolResult(body.input, "sessions_yield");
             receipts.push({ step, tool: "sessions_yield", result });
             // Never manufacture already_pending: this must come from the real registry/tool owner.
             expect(result.status).toBe("already_pending");
             expect(result.pendingChildren).toHaveLength(1);
-            writeReply(response, waitClockFixture.updateReply, "update");
+            if (updateVia === "message-tool") {
+              // Reached only when the runtime keeps the turn open after the delivered reply.
+              trailingNarrationRequests += 1;
+              writeReply(response, waitClockFixture.trailingNarration, "narration");
+            } else {
+              writeReply(response, waitClockFixture.updateReply, "update");
+            }
           } else {
             expect(step, "exactly one completion turn must resume the parent").toBe(4);
             expect(childReleased).toBe(true);
@@ -159,6 +188,7 @@ export async function startWaitClockProvider() {
       withinTest(Promise.race([childStarted.promise, failure.promise]), signal),
     check: () => Promise.race([failure.promise, Promise.resolve()]),
     parentRequests: () => parentRequests,
+    trailingNarrationRequests: () => trailingNarrationRequests,
     childIsRunning: () => childResponse?.destroyed === false && !childReleased,
     releaseChild() {
       if (!childResponse || childResponse.destroyed || childReleased) {
