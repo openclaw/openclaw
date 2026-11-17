@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { confirm } from "@clack/prompts";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
+import * as migrationBackups from "../../commands/doctor-migration-backup.js";
 import { SystemdInspectionTimeout } from "../../daemon/service-inspection-error.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -10,6 +13,7 @@ import {
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { withGatewayServiceInstallation } from "../../infra/gateway-service-installation-context.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as ports from "../../infra/ports-inspect.js";
@@ -25,8 +29,14 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import * as utils from "../../utils.js";
+import { VERSION } from "../../version.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
+import { createCliTtyMock } from "../test-runtime-capture.js";
 import * as shared from "./shared.js";
 import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
@@ -49,8 +59,14 @@ const native = vi.hoisted(() => ({
   contend: true,
   elapsedMs: 0,
   root: "",
+  serviceRoot: undefined as string | undefined,
+  unknownService: false,
   realOwner: false,
   blockCode: undefined as string | undefined,
+}));
+vi.mock("@clack/prompts", async (original) => ({
+  ...(await original<typeof import("@clack/prompts")>()),
+  confirm: vi.fn(),
 }));
 vi.mock("../../config/paths.js", async (original) => ({
   ...(await original<typeof import("../../config/paths.js")>()),
@@ -80,7 +96,12 @@ vi.mock("../../infra/gateway-state-owner.js", async (original) => {
   return {
     ...actual,
     acquireGatewayStateOwner: (params: Parameters<typeof actual.acquireGatewayStateOwner>[0]) => {
-      if (!native.realOwner && native.inspecting && (!native.stopped || native.contend)) {
+      if (
+        !native.realOwner &&
+        !native.unknownService &&
+        native.inspecting &&
+        (!native.stopped || native.contend)
+      ) {
         native.events.push(native.stopped ? "non-serving-holder" : "running-holder");
         throw new actual.GatewayStateOwnerContentionError(params.databasePath);
       }
@@ -96,6 +117,18 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
       params: Parameters<typeof actual.maybeStopManagedServiceBeforeMutableUpdate>[0],
     ) => {
       native.inspecting = true;
+      if (native.unknownService) {
+        return {
+          stopped: false,
+          inspected: false,
+          running: false,
+          runtimeInspected: false,
+          serviceUpdateVerdict: {
+            kind: "unavailable",
+            message: "Synthetic unavailable service inspection",
+          },
+        };
+      }
       if (native.realOwner) {
         return actual.maybeStopManagedServiceBeforeMutableUpdate(params);
       }
@@ -122,9 +155,10 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
         serviceEnv: { ...process.env },
         serviceUpdateVerdict: {
           kind: "owned",
-          root: native.root,
+          root: native.serviceRoot ?? native.root,
           fingerprint: "fixture-service",
-          refreshDefinition: false,
+          refreshDefinition: native.serviceRoot !== undefined,
+          requiresInstallRootRefresh: native.serviceRoot !== undefined,
         },
       };
       if (native.stopped) {
@@ -195,6 +229,7 @@ vi.mock("../../config/config.js", async (original) => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const tty = createCliTtyMock();
 const pending = {
   pluginId: "synthetic-retained-state",
   reason: "Retained migration inputs are still pending.",
@@ -212,6 +247,8 @@ beforeEach(async () => {
   mockSystemAccountHome();
   native.root = path.join(base, "package");
   native.realOwner = false;
+  native.serviceRoot = undefined;
+  native.unknownService = false;
   native.blockCode = undefined;
   await fs.mkdir(native.root);
   await prepareFinalizationPackage(native.root);
@@ -242,6 +279,135 @@ beforeEach(async () => {
 });
 
 afterEach(cleanupUpdateCommandTest);
+afterEach(() => tty.restore());
+
+it.each([
+  "unconsented",
+  "consented",
+  "mixed-backups",
+  "interactive",
+  "installation-fact",
+  "installed-package",
+  "same-version",
+  "compatible-schemas",
+  "unknown",
+] as const)(
+  "admits repair before the candidate Doctor can migrate databases (%s)",
+  async (scenario) => {
+    native.contend = false;
+    native.unknownService = scenario === "unknown" || scenario === "installation-fact";
+    const interactive = scenario === "interactive";
+    tty.set(interactive);
+    vi.mocked(confirm).mockClear().mockResolvedValueOnce(true);
+    await fs.writeFile(
+      path.join(native.root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: VERSION }),
+    );
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await closeOpenClawStateDatabaseAsync();
+    {
+      using database = new DatabaseSync(databasePath);
+      database.exec(`
+        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+        UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+        DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';
+      `);
+    }
+    const serviceRoot = path.join(path.dirname(native.root), "older-package");
+    await fs.mkdir(serviceRoot);
+    await fs.writeFile(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: scenario === "same-version" ? VERSION : "2026.9.7",
+        openclaw: {
+          schemaVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION - Number(scenario !== "compatible-schemas"),
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+        },
+      }),
+    );
+    const childReached = new Error("Reached candidate Doctor before migration");
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      childReached,
+    );
+    const postgresSource = path.join(path.dirname(databasePath), "agent-postgres.sqlite");
+    const postgresBackup = `${postgresSource}.pre-startup-migration-verified.postgres`;
+    if (scenario === "mixed-backups") {
+      const backup = migrationBackups.backupDoctorMigrationDatabases;
+      vi.spyOn(migrationBackups, "backupDoctorMigrationDatabases").mockImplementation(
+        async (params) => {
+          const snapshots = await backup(params);
+          return {
+            ...snapshots,
+            changes: [
+              ...snapshots.changes,
+              `Saved pre-migration PostgreSQL backup: ${postgresBackup}`,
+            ],
+            postgresGenerations: { [postgresSource]: "verified-generation" },
+          };
+        },
+      );
+    }
+    const identified = [
+      "unconsented",
+      "consented",
+      "mixed-backups",
+      "interactive",
+      "installation-fact",
+    ].includes(scenario);
+    native.serviceRoot =
+      native.unknownService || scenario === "installed-package" ? undefined : serviceRoot;
+    const repair = withGatewayServiceInstallation(
+      {
+        installation:
+          scenario === "installation-fact"
+            ? { root: serviceRoot, version: "2026.9.7", cliVersion: VERSION, databasePath }
+            : scenario === "installed-package"
+              ? { root: native.root, version: VERSION, cliVersion: VERSION, databasePath }
+              : undefined,
+      },
+      () =>
+        updateRepairCommand({
+          json: !interactive,
+          yes: scenario === "consented" || scenario === "mixed-backups",
+        }),
+    );
+    if (scenario === "unconsented" || scenario === "installation-fact") {
+      await expect(repair).rejects.toThrow("Installed OpenClaw 2026.9.7 will not be able to read");
+      expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
+    } else {
+      await expect(repair).rejects.toBe(childReached);
+    }
+    const output = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
+    if (scenario === "mixed-backups") {
+      expect(output).toContain(postgresBackup);
+      expect(output).toContain("https://docs.openclaw.ai/install/backups");
+    }
+    expect(confirm).toHaveBeenCalledTimes(Number(interactive));
+    if (identified) {
+      const backup = (await fs.readdir(path.dirname(databasePath))).find((name) =>
+        name.startsWith("openclaw.sqlite.pre-startup-migration-"),
+      );
+      expect(backup).toBeDefined();
+      expect(output).toContain(path.join(path.dirname(databasePath), backup!));
+      expect(output).toContain(
+        backup!.endsWith(".scoped.bak")
+          ? `database restore-migration-backup ${path.join(path.dirname(databasePath), backup!)} ${databasePath}`
+          : `sqlite3 ${databasePath}`,
+      );
+      expect(output).toContain("--yes");
+    } else {
+      expect(output).not.toContain("will not be able to read");
+    }
+    using database = new DatabaseSync(databasePath, { readOnly: true });
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION - 1,
+    });
+    expect(native.events.includes("restart-verified")).toBe(!native.unknownService);
+  },
+);
 
 it("keeps repair pending with a real state owner and unavailable systemd inspection", async () => {
   native.realOwner = true;

@@ -31,6 +31,8 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+Cross-version `npx openclaw@<version> update repair` is one-way for databases unless their verified backups are restored; restoring configuration alone does not undo those migrations.
+
 When an older Gateway service refuses newer-written config, run the newer
 OpenClaw binary or reinstall the service from that newer installation. Service
 startup ignores `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`, including

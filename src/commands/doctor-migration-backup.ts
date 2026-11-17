@@ -163,6 +163,7 @@ export async function backupDoctorMigrationDatabases(params: {
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
     postgresGenerations?: Record<string, string>;
+    snapshots?: readonly { sourcePath: string; path: string }[];
   }
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
@@ -308,7 +309,7 @@ export async function backupDoctorMigrationDatabases(params: {
       integrityChecks,
     });
   };
-  let result: MigrationMessages;
+  let result: Awaited<ReturnType<typeof backupDoctorSqliteDatabases>>;
   try {
     result = await backup();
   } catch (error) {

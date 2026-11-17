@@ -47,6 +47,7 @@ import {
   useDoctorMaintenanceRuntimeDirectory,
 } from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import { DoctorRepairSchemaConsentRefusal } from "./doctor-repair-schema-admission.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -186,6 +187,7 @@ afterEach(() => {
 async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
+  schemaConsentRefused?: boolean;
   bun?: boolean;
   launcherOverride?: boolean;
   installFails?: boolean;
@@ -565,7 +567,21 @@ async function runInstallationCase(params: {
             (!params.tokenRecovery || params.tokenRecovery === "no-consent"),
         },
         runtime,
+        beforeStateMutation: params.schemaConsentRefused
+          ? async () => {
+              throw new DoctorRepairSchemaConsentRefusal(
+                "Schema migration consent declined",
+                oldRoot,
+              );
+            }
+          : undefined,
       });
+      if (params.schemaConsentRefused) {
+        await expect(admission).rejects.toThrow("Schema migration consent declined");
+        expectOriginal(["stop", "restart"], true);
+        expect(mocks.health).toHaveBeenCalledOnce();
+        return;
+      }
       if (pairedDeviceDatabasePath && authWorkerRun) {
         const usedAuthPools = () =>
           authWorkerRun.mock.contexts.filter(
@@ -860,6 +876,9 @@ async function runInstallationCase(params: {
 }
 
 type InstallationCase = Omit<Parameters<typeof runInstallationCase>[0], "mode">;
+
+it("restores the original installation when cross-version schema consent is refused", async () =>
+  runInstallationCase({ platform: "linux", mode: "maintenance", schemaConsentRefused: true }));
 
 it.skipIf(process.platform !== "linux")(
   "migrates pending runtime pins before restoring the service under existing custody",

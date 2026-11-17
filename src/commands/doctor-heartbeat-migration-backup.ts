@@ -23,25 +23,7 @@ export async function prepareDoctorMigrationBackups(params: {
 }) {
   const { schemas, env, check, verifiedSnapshots, automaticRepair, runtime, measure } = params;
   const { prepareDoctorDatabaseMigrations } = await import("./doctor-schema-migrations.js");
-  const { createOpenClawAgentDatabasePathMatcher } =
-    await import("../state/openclaw-agent-db.paths.js");
-  const { normalizeAgentId } = await import("../routing/session-key.js");
-  const samePath = createOpenClawAgentDatabasePathMatcher();
-  const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-  const databaseTargets = discovery?.schemaTargets.filter(
-    ({ agentId, path: databasePath, realPath }) =>
-      !schemas.agentRefusals?.some(
-        (refusal) =>
-          normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
-          refusal.paths.some((pathname) => samePath(pathname, databasePath)),
-      ) &&
-      !schemas.indeterminate.some(
-        (failure) =>
-          failure.kind === "agent" &&
-          (failure.path === databasePath ||
-            discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
-      ),
-  );
+  const databaseTargets = await resolveDoctorMigrationDatabaseTargets(schemas);
   const backups = await measure("doctor.database-migrations", () =>
     prepareDoctorDatabaseMigrations({
       env,
@@ -73,6 +55,29 @@ export async function prepareDoctorMigrationBackups(params: {
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
     runtime.log(message);
   }
+}
+
+/** Admission and migration capture the same eligible group so the child's backup is reused. */
+export async function resolveDoctorMigrationDatabaseTargets(schemas: DoctorDatabasePreflight) {
+  const { createOpenClawAgentDatabasePathMatcher } =
+    await import("../state/openclaw-agent-db.paths.js");
+  const { normalizeAgentId } = await import("../routing/session-key.js");
+  const samePath = createOpenClawAgentDatabasePathMatcher();
+  const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
+  return discovery?.schemaTargets.filter(
+    ({ agentId, path: databasePath, realPath }) =>
+      !schemas.agentRefusals?.some(
+        (refusal) =>
+          normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
+          refusal.paths.some((pathname) => samePath(pathname, databasePath)),
+      ) &&
+      !schemas.indeterminate.some(
+        (failure) =>
+          failure.kind === "agent" &&
+          (failure.path === databasePath ||
+            discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
+      ),
+  );
 }
 
 /**
