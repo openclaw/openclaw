@@ -1,3 +1,4 @@
+import type { DiagnosticToolAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import type {
   OwnedWait,
   SessionWatchdogDecision,
@@ -20,6 +21,7 @@ export type SessionControllerWatchdogAttempt = {
     toolCallId: string;
     toolName: string;
     deadlineAtMs?: number;
+    awaiting?: readonly DiagnosticToolAwaiting[];
   }): (completed?: boolean) => void;
   toolEvent(event: {
     phase: "start" | "end";

@@ -1,4 +1,5 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import type { DiagnosticToolAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   createWatchdogAssessment,
   type WatchdogAssessmentBackend,
@@ -89,7 +90,12 @@ export function createSessionControllerWatchdog(params: {
     | undefined;
   const requests = new Set<{ requestTimeoutMs?: number; deadlineAtMs?: number }>();
   const waits = new Set<OwnedWait>();
-  const tools = new Set<SessionWatchdogSnapshot["tools"][number] & { touch(): void }>();
+  const tools = new Set<
+    SessionWatchdogSnapshot["tools"][number] & {
+      touch(): void;
+      awaiting?: readonly DiagnosticToolAwaiting[];
+    }
+  >();
   const executions = new Set<OwnedExecution>();
   const finalizationWork = new Set<{ deadlineAtMs: number }>();
   const current = () => !closed && live(params.isCurrent);
@@ -437,11 +443,19 @@ export function createSessionControllerWatchdog(params: {
       const result = assessment.result();
       const staleReason = rateLimitMessage === undefined ? "no_activity" : "rate_limited";
       const stoppedAtMs = now();
-      const pendingTools = [...tools].slice(0, 5).map(({ toolName, toolCallId, startedAtMs }) => ({
-        toolName,
-        toolCallId,
-        elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
-      }));
+      const pendingTools = [...tools]
+        .slice(0, 5)
+        .map(({ toolName, toolCallId, startedAtMs, awaiting }) => {
+          const pending: SessionWatchdogError["pendingTools"][number] = {
+            toolName,
+            toolCallId,
+            elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
+          };
+          if (awaiting?.length) {
+            pending.awaiting = awaiting;
+          }
+          return pending;
+        });
       return {
         staleReason,
         error: new SessionWatchdogError(
@@ -585,6 +599,9 @@ export function createSessionControllerWatchdog(params: {
             toolName: tool.toolName,
             toolCallId: tool.toolCallId,
             startedAtMs,
+            get awaiting() {
+              return tool.awaiting;
+            },
             touch() {
               lastProgressAtMs = now();
             },
