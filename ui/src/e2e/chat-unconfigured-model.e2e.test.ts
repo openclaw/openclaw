@@ -21,27 +21,24 @@ suite.define(() => {
           methodResponses: { "models.authStatus": { ts: 1, providers: [] } },
         });
         await page.goto(new URL("chat", suite.server.baseUrl).href);
-        const trigger = page.locator("[data-chat-model-select]").first();
-        await trigger.click();
-        const menu = page.locator(".chat-controls__model-menu").first();
-        await menu.getByText("No models available", { exact: true }).waitFor();
+        const setup = page.locator("[data-chat-model-setup]").first();
+        await setup.waitFor();
+        expect(await page.locator("[data-chat-model-select]").count()).toBe(0);
+        expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
         const frame = await takeControlUiScreenshotFrame(
           page,
           page.locator("openclaw-app"),
-          [menu],
+          [setup],
           { animations: "disabled" },
         );
         await writeFile(path.join(suite.artifactDir, "picker.png"), frame.png);
-        expect(await trigger.textContent()).toContain("Set up a model");
-        expect(await menu.locator("[data-chat-model-option]").count()).toBe(0);
-        await page.keyboard.press("Escape");
+        expect(await setup.textContent()).toContain("Set up a model");
         const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await composer.fill("Hello");
         await composer.press("Enter");
         expect((await composer.inputValue()).trimEnd()).toBe("Hello");
         expect(await page.locator(".chat-send-btn--send").isDisabled()).toBe(true);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        const setup = page.getByRole("button", { name: "Set up a model", exact: true });
         await setup.waitFor();
         const sendFrame = await takeControlUiScreenshotFrame(
           page,
