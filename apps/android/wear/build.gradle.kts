@@ -7,18 +7,11 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
-val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
-val openClawAndroidVersionProperties =
-  Properties().apply {
-    if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
-    }
-    openClawAndroidVersionFile.inputStream().use(::load)
-  }
+val openClawAndroidVersionDefaults: Provider<Properties> by rootProject.extra
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionDefaults.get().getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name from Android runtime version metadata.")
 
 fun parseOpenClawAndroidVersionCode(
   name: String,
@@ -33,13 +26,19 @@ fun parseOpenClawAndroidVersionCode(
 
 val openClawAndroidPhoneVersionCode =
   parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_VERSION_CODE", requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE"))
-val explicitOpenClawAndroidWearVersionCode = providers.gradleProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE").orNull
+val explicitOpenClawAndroidWearVersionCode =
+  providers.gradleProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE").orNull
+    ?: if (!providers.gradleProperty("OPENCLAW_ANDROID_VERSION_CODE").isPresent) {
+      openClawAndroidVersionDefaults.get().getProperty("OPENCLAW_ANDROID_WEAR_VERSION_CODE")
+    } else {
+      null
+    }
 val openClawAndroidWearVersionCode =
   if (explicitOpenClawAndroidWearVersionCode != null) {
     parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_WEAR_VERSION_CODE", explicitOpenClawAndroidWearVersionCode)
   } else {
     check(openClawAndroidPhoneVersionCode % 100 in 1..49) {
-      "Android pinned build number must be 01 through 49; Wear reserves 51 through 99."
+      "Android local build number must be 01 through 49; Wear reserves 51 through 99."
     }
     parseOpenClawAndroidVersionCode("OPENCLAW_ANDROID_WEAR_VERSION_CODE", (openClawAndroidPhoneVersionCode + 50).toString())
   }

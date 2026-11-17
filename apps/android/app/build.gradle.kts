@@ -92,24 +92,17 @@ abstract class GenerateGatewayProtocol : Exec() {
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
-val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
-val openClawAndroidVersionProperties =
-  Properties().apply {
-    if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
-    }
-    openClawAndroidVersionFile.inputStream().use(::load)
-  }
+val openClawAndroidVersionDefaults: Provider<Properties> by rootProject.extra
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionDefaults.get().getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name from Android runtime version metadata.")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
 val openClawAndroidVersionCode =
   requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_CODE").toIntOrNull()
-    ?: error("OPENCLAW_ANDROID_VERSION_CODE must be an integer in Config/Version.properties.")
+    ?: error("OPENCLAW_ANDROID_VERSION_CODE must be an integer in Android runtime version metadata.")
 
 fun optionalOpenClawBuildProperty(name: String): String? =
   providers

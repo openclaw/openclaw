@@ -5061,11 +5061,13 @@ describe("package acceptance workflow", () => {
     return { file, jobName, checkoutName, consumerName, toolingPath, toolingRef };
   }
 
-  function runAndroidPin(pin: string, tag = "v2026.9.1") {
+  function runAndroidPin(pin: string | null, tag = "v2026.9.1") {
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const root = tempDirs.make("release-android-pin-");
     mkdirSync(join(root, "apps/android"), { recursive: true });
-    writeJson(join(root, "apps/android/version.json"), { version: pin });
+    if (pin !== null) {
+      writeJson(join(root, "apps/android/version.json"), { version: pin });
+    }
     for (const [command, sha] of [
       ["git", "a"],
       ["gh", "c"],
@@ -7050,6 +7052,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
   );
 
   it.each([
+    ["v2026.9.1", null, false],
     ["v2026.9.1", "2026.7.4", false],
     ["v2026.9.1", "2026.9.1", true],
     ["v2026.9.1-1", "2026.9.1", true],
@@ -7096,7 +7099,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     inputs.publish_openclaw_npm = false;
     expect(admitted("qualify_android_native")).toBe(false);
     expect(admitted("publish_android")).toBe(false);
-    expect(outputs.android_pin_version).toBe(pin);
+    expect(outputs.android_pin_version).toBe(pin ?? "");
     expect(workflowStep(target, "Checkout release tag").with?.["sparse-checkout"]).toContain(
       "apps/android/version.json",
     );
@@ -7104,7 +7107,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     if (tag.includes("beta") || native) {
       return;
     }
-    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run pnpm android:version:pin -- --from-gateway before the next tag.`;
+    const note = "- Android APK: skipped — Android releases are independent of Gateway releases.";
     expect(readFileSync(summaryPath, "utf8")).toContain(note);
     expect(outputs.android_release_note).toBe(note);
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");

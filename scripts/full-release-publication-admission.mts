@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -244,9 +245,12 @@ function projectSource(
       if (!selection.publishOpenclawNpm || train !== "stable") {
         return false;
       }
-      const pin = JSON.parse(
-        readFileSync(join(snapshot, "apps/android/version.json"), "utf8"),
-      )?.version;
+      const legacyPinPath = join(snapshot, "apps/android/version.json");
+      // Build-time version defaults do not opt new Gateway releases into APK publication.
+      if (!existsSync(legacyPinPath)) {
+        return false;
+      }
+      const pin = JSON.parse(readFileSync(legacyPinPath, "utf8"))?.version;
       // Match the publisher's exact pin syntax before comparing the parsed base.
       if (typeof pin !== "string" || !/^[0-9]{4}\.([1-9]|1[0-2])\.[0-9]{1,3}$/u.test(pin)) {
         throw new Error("apps/android/version.json must pin an exact YYYY.M.PATCH Android version");

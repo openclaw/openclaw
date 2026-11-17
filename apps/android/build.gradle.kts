@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application) apply false
   alias(libs.plugins.android.library) apply false
@@ -6,6 +8,14 @@ plugins {
   alias(libs.plugins.kotlin.compose) apply false
   alias(libs.plugins.kotlin.serialization) apply false
 }
+
+// Resolve local defaults once; release callers supply all three Gradle properties.
+val openClawAndroidVersionDefaults by extra(
+  providers.exec {
+    workingDir(rootDir.resolve("../.."))
+    commandLine("node", "--import", "./scripts/tsx.mjs", "scripts/android-version.ts", "--for-build", "--shell")
+  }.standardOutput.asText.map { text -> Properties().apply { text.reader().use(::load) } },
+)
 
 subprojects {
   plugins.withId("com.android.application") {

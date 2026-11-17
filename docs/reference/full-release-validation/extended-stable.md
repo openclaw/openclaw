@@ -109,7 +109,9 @@ Evidence reuse requires the same coverage policy, exact package version, target
 context, and effective inputs; a beta or historical full receipt cannot silently
 replace stable npm qualification.
 
-Native publication owns the deferred qualification. For an npm-stable release,
+Native publication owns the deferred qualification. Current source has no
+Android version manifest, so Gateway publication skips Android. The following
+Android path remains for legacy tagged-source recovery. For an npm-stable release,
 `OpenClaw Release Publish` starts an exact-source full CI run with Android enabled
 in parallel with core publication. Only successful native qualification and core
 publication permit the separate Android job to issue a v3 approval receipt and

@@ -21,7 +21,6 @@ function createFixture(): string {
   mkdirSync(path.join(fixtureRoot, "recovery"));
   for (const [file, contents] of Object.entries({
     "package.json": '{"version":"2026.9.2-beta.1"}\n',
-    "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
     ".gitignore":
       "scripts\nFastfile\norigin.git/\nrecovery/\napps/android/build/\napps/android/fastlane/\n",
   })) {
@@ -227,7 +226,7 @@ type LaneResult = {
   error?: string;
   events: string[];
   tracks: unknown;
-  pinned_notes?: string;
+  manual_notes?: string;
   wear_code?: string;
   committed_config?: Record<string, boolean | null>;
   committed_query?: Record<string, boolean>;
@@ -272,7 +271,7 @@ end
 FileUtils.mkdir_p(File.join(android_root, "build", "release-artifacts"))
 play_release_artifact_paths("2026.9.20").each { |file| File.write(file, "synthetic signed bundle") }
 notes_path = File.join(play_metadata_path, "en-US", "release_notes.txt")
-File.write(notes_path, "Pinned archive notes stay unchanged.\n")
+File.write(notes_path, "Manual archive notes stay unchanged.\n")
 File.write(File.join(play_metadata_path, "en-US", "title.txt"), "Store listing title")
 File.write(File.join(play_metadata_path, "en-US", "images", "icon.png"), "synthetic icon")
 plan_path = File.join($root, "recovery", "android-plan.json")
@@ -295,7 +294,7 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
     destination = { "internal" => "internal", "invalid-destination" => "production" }[scenario]
     options = destination ? { destination: destination } : {}
     $run_lane.call(:release_upload, options)
-    { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
+    { events: $events, tracks: $tracks, manual_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
   end
 end
 STDOUT.puts JSON.generate(results)
@@ -333,7 +332,7 @@ STDOUT.puts JSON.generate(results)
       expect(result?.error).toBeUndefined();
       expect(result?.tracks).toEqual(tracks);
       expect(result).toMatchObject({
-        pinned_notes: "Pinned archive notes stay unchanged.\n",
+        manual_notes: "Manual archive notes stay unchanged.\n",
         committed_config: reviewConfig(null),
       });
       expect([eventCount(result, "commit"), eventCount(result, "upload")]).toEqual([1, 2]);

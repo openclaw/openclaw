@@ -1206,7 +1206,6 @@ describe("scripts/changed-lanes", () => {
   it("keeps release metadata commits off the full changed gate", () => {
     const result = detectChangedLanes([
       "CHANGELOG/records/2026.9.4.md",
-      "apps/android/version.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
     ]);
@@ -1215,7 +1214,6 @@ describe("scripts/changed-lanes", () => {
     const commands = plan.commands.map((command) => command.args[0]);
     expect(commands).not.toContain("tsgo:all");
     expect(commands).not.toContain("ios:version:check");
-    expect(commands).toContain("android:version:check");
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--staged"]);

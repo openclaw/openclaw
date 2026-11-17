@@ -160,7 +160,7 @@ release SHA, then dispatches `OpenClaw NPM Release` after plugin npm succeeds.
 Stable Windows promotion is optional: supply both an exact `windows_node_tag`
 and candidate-approved `windows_node_installer_digests` to dispatch its signed
 installers after GitHub release finalization. Omit both to skip Windows.
-For npm-stable evidence, when the tagged `apps/android/version.json` matches
+For legacy npm-stable evidence, when the tagged `apps/android/version.json` matches
 the stable tag's base version, a separate native qualification job starts full
 CI for the exact release SHA with Android enabled. A successful result is revalidated
 after core publication before the separate Android job creates its existing
@@ -171,9 +171,10 @@ approval; core npm and GitHub release finalization do not wait for it. The whole
 parent can remain active after core publication while native qualification
 finishes. Existing full evidence and macOS's independent validation retain their
 native qualification contracts. A mismatched Android pin skips both native
-qualification and APK publication, with the pin, release train, and Android
-version pinning (`pnpm android:version:pin -- --from-gateway`) remedy recorded
-in the parent summary and release proof.
+qualification and APK publication. Current source has no Android version
+manifest, so Gateway publication skips Android; current Android releases use
+the independent Play workflow instead. Legacy tagged-source recovery retains
+its existing eligibility, qualification, and protected approval requirements.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
 preflight and Full Release Validation evidence as a core publish.

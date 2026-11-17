@@ -2049,6 +2049,14 @@ function checkCandidateAndroidVersion(targetSha: string, tag: string) {
   if (release?.channel !== "stable") {
     return undefined;
   }
+  const manifestPath = run(
+    "git",
+    ["ls-tree", "--name-only", targetSha, "--", "apps/android/version.json"],
+    { capture: true },
+  ).trim();
+  if (!manifestPath) {
+    return undefined;
+  }
   const manifest: unknown = JSON.parse(
     run("git", ["show", `${targetSha}:apps/android/version.json`], { capture: true }),
   );
@@ -2064,7 +2072,7 @@ function checkCandidateAndroidVersion(targetSha: string, tag: string) {
     targetVersion,
     message: matches
       ? `PASS: Android version ${androidVersion} matches release train ${targetVersion}.`
-      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/android-pin-version.ts --version ${targetVersion} before tagging, or accept that Android will not ship for this release.`,
+      : `WARNING: Legacy Android version ${androidVersion} does not match release train ${targetVersion}; Android APK publication is skipped.`,
   };
 }
 
