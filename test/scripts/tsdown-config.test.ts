@@ -62,6 +62,44 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   return (entry as Record<string, unknown>)[name] === source;
 }
 
+it("keeps source worker preloads outside the packaged import closure", async () => {
+  const selected = configs.find((config) =>
+    hasWorkerEntry(
+      config,
+      "infra/fs-safe-copy.worker",
+      path.resolve("src/infra/fs-safe-copy.worker.ts"),
+    ),
+  );
+  if (!selected) {
+    throw new Error("Missing private fs-safe copy worker build config");
+  }
+  const root = createTempDir("openclaw-worker-preload-build-");
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { "infra/runtime-worker-url": "src/infra/runtime-worker-url.ts" },
+    outDir: path.join(root, "dist"),
+    dts: false,
+    logLevel: "silent",
+  });
+  try {
+    const files = bundles.flatMap((bundle) =>
+      bundle.chunks.map((chunk) => `dist/${chunk.fileName}`),
+    );
+    expect(
+      collectPackageDistImportErrors({
+        files,
+        readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
+      }),
+    ).toEqual([]);
+    expect(files.some((file) => file.endsWith("runtime-worker-loader.mjs"))).toBe(false);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
 it("keeps retirement reads outside the Doctor restoration graph", async () => {
   const selected = configs.find((config) =>
     hasWorkerEntry(
@@ -1889,6 +1927,7 @@ console.log("relocated session card renders with bundled fonts");
       WORKER_DEPLOY_BUILD: "true",
       SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
+      PACKAGED_RUNTIME_BUILD: "true",
     });
     expect(workerConfig?.alias).toMatchObject({
       bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -1909,11 +1948,12 @@ console.log("relocated session card renders with bundled fonts");
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
-    expect(receiverConfig?.define).toBeUndefined();
+    expect(receiverConfig?.define).toEqual({ PACKAGED_RUNTIME_BUILD: "true" });
     for (const config of [relayConfig, anchorConfig]) {
       expect(config?.define).toEqual({
         WORKER_DEPLOY_BUILD: "true",
         SEALED_RUNTIME_BUILD: "true",
+        PACKAGED_RUNTIME_BUILD: "true",
       });
     }
     for (const config of [receiverConfig, relayConfig, anchorConfig]) {

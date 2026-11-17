@@ -6,6 +6,7 @@ import { resolveRuntimeProcessDistRoot } from "../../runtime-process-bootstrap.g
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
+declare const PACKAGED_RUNTIME_BUILD: boolean;
 
 /** Resolve an explicit installed root, source sibling, or stable packaged worker path. */
 export function resolveRuntimeWorkerUrl(params: {
@@ -85,8 +86,11 @@ export function resolveRuntimeWorkerThreadExecArgv(
   url: URL,
   execPath = process.execPath,
 ): string[] {
-  // Sealed runtimes contain compiled workers and must not retain source-loader assets.
-  if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
+  // Packaged and sealed runtimes contain compiled workers, not source-loader assets.
+  if (
+    (typeof PACKAGED_RUNTIME_BUILD === "boolean" && PACKAGED_RUNTIME_BUILD) ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
     return [];
   }
   return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)

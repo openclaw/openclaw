@@ -1176,6 +1176,8 @@ for (const config of configs) {
   if (typeof config.dts === "object" && config.dts.emitDtsOnly) {
     continue;
   }
+  // Source-only worker preloads must not leave asset references in any packaged chunk.
+  config.define = { ...config.define, PACKAGED_RUNTIME_BUILD: "true" };
   config.plugins = [config.plugins, createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })]
     .flat()
     .filter(Boolean);
