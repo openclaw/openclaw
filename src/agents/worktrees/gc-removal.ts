@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import {
   hasMissingManagedWorktreeGitdir,
   inspectManagedWorktreeCheckout,
@@ -401,7 +401,7 @@ export function createWorktreeGcRemoval(context: {
             }),
           );
           try {
-            await withWorktreeAllocationLease(custody, async (guard) => {
+            await withWorktreeMutationLease({ ...custody, id: record.id }, async (guard) => {
               const assertClaim = createWorktreeRemovalClaimsGuard(env, [record.id], token);
               if (!(await hasMissingManagedWorktreeGitdir(record))) {
                 throw new WorktreeRemovalLockError(

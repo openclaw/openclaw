@@ -10,6 +10,8 @@ import type {
 export interface SpawnBrokerHost extends ReturnType<typeof createBrokerCommands> {
   readonly entryPath: string;
   readonly pid: number | undefined;
+  readonly hasOpenNativeResourceClaims: boolean;
+  readonly nativeResourceAdmissionClosed: boolean;
   ready(): Promise<void>;
   readFile(filePath: string, signal?: AbortSignal): Promise<Buffer>;
   readonly readFilePage: BrokerFileReads["readPage"];

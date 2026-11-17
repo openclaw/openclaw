@@ -60,8 +60,7 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease } from "./resource-host.js";
-export type { SpawnBrokerHost } from "./host-contract.js";
+export type { BrokerNativeResourceLease, SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
@@ -149,6 +148,12 @@ class BrokerHost implements SpawnBrokerHost {
 
   get pid(): number | undefined {
     return this.process?.pid;
+  }
+  get hasOpenNativeResourceClaims(): boolean {
+    return this.resourceClaims?.hasOpenClaims ?? false;
+  }
+  get nativeResourceAdmissionClosed(): boolean {
+    return this.resourceClaims?.admissionClosed ?? false;
   }
   ready(): Promise<void> {
     return this.closing
