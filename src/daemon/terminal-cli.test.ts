@@ -214,6 +214,76 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
     expect(f.warnings.join("\n")).toContain("Shell PATH setup skipped");
   });
 
+  it.each([false, true])(
+    "preserves HOME and external startup-directory modes when publication fails=%s",
+    async (fail) => {
+      const f = await fixture("permissions", "/bin/zsh");
+      const directory = path.join(f.root, "external zsh");
+      await fs.chmod(f.home, 0o755);
+      await fs.mkdir(directory);
+      await fs.chmod(directory, 0o751);
+      f.env.ZDOTDIR = directory;
+      const file = path.join(directory, ".zshrc");
+      await fs.writeFile(file, "# operator settings\n");
+      await fs.writeFile(path.join(f.home, ".bashrc"), "# existing Bash settings\n");
+      if (fail) {
+        const { replaceFileAtomic: replace } = await vi.importActual<
+          typeof import("@openclaw/fs-safe/atomic")
+        >("@openclaw/fs-safe/atomic");
+        vi.mocked(replaceFileAtomic).mockImplementation((options) =>
+          replace({
+            ...options,
+            beforeRename: () => {
+              if (options.filePath === file) {
+                throw new Error("fixture publication refusal");
+              }
+            },
+          }),
+        );
+      }
+      await f.install();
+      expect((await fs.stat(f.home)).mode & 0o777).toBe(0o755);
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o751);
+      expect(await fs.readFile(file, "utf8")).toContain("# operator settings\n");
+      if (fail) {
+        expect(await fs.readFile(file, "utf8")).toBe("# operator settings\n");
+        expect(f.warnings.join("\n")).toContain("fixture publication refusal");
+      } else {
+        expect(f.warnings).toEqual([]);
+        expect(await fs.readFile(file, "utf8")).toContain("command -v openclaw");
+      }
+    },
+  );
+
+  it("preserves invalid UTF-8 shell bytes and reports unsupported input", async () => {
+    const f = await fixture();
+    const file = path.join(f.home, ".bashrc");
+    const bytes = Buffer.from([0x23, 0x20, 0xff, 0x0a]);
+    await fs.writeFile(file, bytes);
+    await fs.chmod(file, 0o640);
+    await f.install();
+    expect(await fs.readFile(file)).toEqual(bytes);
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o640);
+    expect(f.warnings.join("\n")).toContain(file + " must be valid UTF-8");
+    expect(f.run().profile).toBe("default");
+  });
+
+  it("does not split operator hardlinked startup files", async () => {
+    const f = await fixture();
+    const file = path.join(f.home, ".bashrc");
+    const peer = path.join(f.root, "operator bashrc");
+    await fs.writeFile(peer, "# shared operator settings\n");
+    await fs.link(peer, file);
+    const before = await fs.stat(peer);
+    await f.install();
+    const after = await fs.stat(file);
+    expect(after.ino).toBe(before.ino);
+    expect(after.nlink).toBe(2);
+    expect(await fs.readFile(file, "utf8")).toBe("# shared operator settings\n");
+    expect(await fs.readFile(peer, "utf8")).toBe("# shared operator settings\n");
+    expect(f.warnings.join("\n")).toContain("Shell PATH setup skipped " + file);
+  });
+
   it("makes the CLI available after a real interactive Bash PATH reset", async () => {
     const f = await fixture("bash");
     await fs.writeFile(path.join(f.home, ".bashrc"), "export PATH=/usr/bin:/bin\n");
@@ -410,26 +480,29 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
     },
   );
 
-  it("retains only the installed runtime dependency, not service credentials, in the terminal child", async () => {
-    const f = await fixture();
-    await fs.writeFile(
-      f.entrypoint,
-      "console.log(JSON.stringify({sqlite:process.env.OPENCLAW_SQLITE_LIBRARY,token:process.env.OPENCLAW_GATEWAY_TOKEN}));",
-    );
-    await installGatewayTerminalCli({
-      env: f.env,
-      command: {
-        programArguments: [process.execPath, f.entrypoint, "gateway"],
-        environment: {
-          OPENCLAW_SQLITE_LIBRARY: "/fixture path/libsqlite3.dylib",
-          OPENCLAW_GATEWAY_TOKEN: "not-a-real-secret",
+  it.each([undefined, "/fixture path/libsqlite3.dylib"])(
+    "retains only the present installed runtime dependency (%s), not service credentials",
+    async (sqlite) => {
+      const f = await fixture();
+      await fs.writeFile(
+        f.entrypoint,
+        "console.log(JSON.stringify({sqlite:process.env.OPENCLAW_SQLITE_LIBRARY,token:process.env.OPENCLAW_GATEWAY_TOKEN}));",
+      );
+      await installGatewayTerminalCli({
+        env: f.env,
+        command: {
+          programArguments: [process.execPath, f.entrypoint, "gateway"],
+          environment: {
+            OPENCLAW_SQLITE_LIBRARY: sqlite,
+            OPENCLAW_GATEWAY_TOKEN: "not-a-real-secret",
+          },
         },
-      },
-      warn: (message) => f.warnings.push(message),
-    });
-    expect(f.run()).toEqual({ sqlite: "/fixture path/libsqlite3.dylib" });
-    expect(f.warnings).toEqual([]);
-  });
+        warn: (message) => f.warnings.push(message),
+      });
+      expect(f.run()).toEqual(sqlite ? { sqlite } : {});
+      expect(f.warnings).toEqual([]);
+    },
+  );
 
   it("makes POSIX sh login setup usable without zsh", async () => {
     const f = await fixture("shell", "/bin/sh");
