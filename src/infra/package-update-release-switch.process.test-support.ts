@@ -61,6 +61,15 @@ if (layout === "journal") {
     worker,
     'console.log(JSON.stringify({ postCoreExecutor: "stdin-pid-start-v1", mutationProtocol: "original-cancellation-v1" }));\n',
   );
+  // A published package names its module type and carries its dist inventory:
+  // the next update verifies an installed candidate against both before it settles.
+  const root = params.stage.packageRoot;
+  const write = (file: string, value: object) =>
+    fs.writeFileSync(path.join(root, file), JSON.stringify(value));
+  write("package.json", { name: "openclaw", version: "2026.12.1", type: "module" });
+  write("dist/build-info.json", { version: "2026.12.1", buildId: "build-new" });
+  const { writePackageDistInventory } = await import("../../scripts/lib/package-dist-inventory.js");
+  await writePackageDistInventory(root);
 }
 fs.writeFileSync(path.join(dir, "candidate"), params.stage.packageRoot);
 

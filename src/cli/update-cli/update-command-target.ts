@@ -129,6 +129,7 @@ export async function resolveUpdateCommandTarget(
       if (prepared.nodeSecurityWarning) {
         recordNodeSecurityWarning(prepared.nodeSecurityWarning);
       }
+      prepared.packageActivationSteps?.forEach(recordPreflightStep);
       const resolveMode = async (): Promise<UpdateRunResult["mode"]> => {
         if (malformedConfig) {
           return updateInstallKind === "git" ? "git" : "unknown";
