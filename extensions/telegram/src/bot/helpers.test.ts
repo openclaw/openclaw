@@ -23,6 +23,45 @@ function replyTarget(reply: Record<string, unknown>, extra: Record<string, unkno
 }
 
 describe("describeReplyTarget", () => {
+  it.each([
+    { richTexts: ["S07 selected switch"] },
+    { richTexts: [{ type: "bold", text: ["S07 ", { type: "italic", text: "selected switch" }] }] },
+  ])("preserves rich-only selected quotes (%j)", ({ richTexts }) => {
+    expect(
+      replyTarget(
+        { text: "S01 other switch\nS07 selected switch" },
+        { quote: { text: "", rich_texts: richTexts, position: 17, is_manual: true } },
+      ),
+    ).toMatchObject({
+      kind: "quote",
+      body: "S07 selected switch",
+      quoteText: "S07 selected switch",
+      quotePosition: 17,
+      quoteSourceText: "S01 other switch\nS07 selected switch",
+    });
+  });
+
+  it("keeps rich quote fragments separate without trimming selected whitespace", () => {
+    expect(
+      replyTarget({}, { quote: { text: "", rich_texts: [" S07 ", "S08\n"], position: 3 } }),
+    ).toMatchObject({ quoteText: " S07 \nS08\n", kind: "quote", quotePosition: 3 });
+  });
+
+  it.each([[], [""], ["\u0000binary"]])(
+    "falls back from empty or unsafe rich quotes (%j)",
+    (...richTexts) => {
+      expect(
+        replyTarget({ text: "Parent" }, { quote: { text: "", rich_texts: richTexts } }),
+      ).toMatchObject({ body: "Parent", kind: "reply" });
+    },
+  );
+
+  it("prefers plain quote text when both representations are present", () => {
+    expect(
+      replyTarget({}, { quote: { text: "plain selection", rich_texts: ["rich selection"] } }),
+    ).toMatchObject({ quoteText: "plain selection", kind: "quote" });
+  });
+
   it("handles non-string reply text gracefully (issue #27201)", () => {
     expect(replyTarget({ text: { some: "object" } })).toBeNull();
   });

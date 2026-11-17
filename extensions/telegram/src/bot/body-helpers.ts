@@ -92,7 +92,7 @@ function joinRichText(parts: string[]): string {
   return parts.map(compactRichText).filter(Boolean).join("\n");
 }
 
-function renderRichInlineText(value: RichText | undefined): string {
+export function renderRichInlineText(value: RichText | undefined): string {
   if (value === undefined) {
     return "";
   }

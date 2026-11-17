@@ -4,6 +4,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it } from "vitest";
+import { describeReplyTarget } from "./bot/helpers.js";
 import { resolveProviderObservedTelegramThreadSpec } from "./message-cache-codec.js";
 import {
   type PersistedTelegramMessageCacheValue,
@@ -82,6 +83,23 @@ const reply = (id: number, reply_to_message: Message, fields = {}) =>
 
 describe("Telegram retained message history", () => {
   const fixture = useMessageCacheFixture("telegram-history-", true);
+  it("restores rich selected quotes separately from their parent", async () => {
+    const quote = { text: "", rich_texts: ["S07 selected switch"], position: 17, is_manual: true };
+    await record(
+      createCache(),
+      reply(2, message(1, { text: "S01 other switch\nS07 selected switch" }), { quote }),
+    );
+    resetTelegramMessageCacheForTest();
+    resetPluginStateStoreForTests();
+    const restored = await get(createCache(), 2);
+    expect(restored?.sourceMessage.quote).toEqual(quote);
+    expect(describeReplyTarget(restored!.sourceMessage)).toMatchObject({
+      kind: "quote",
+      quoteText: "S07 selected switch",
+      quotePosition: 17,
+      quoteSourceText: "S01 other switch\nS07 selected switch",
+    });
+  });
   function openStores() {
     return {
       bounded: fixture.store<unknown>(),

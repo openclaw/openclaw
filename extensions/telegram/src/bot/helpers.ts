@@ -1,4 +1,4 @@
-import type { Chat, Message } from "grammy/types";
+import type { Chat, Message, RichText } from "grammy/types";
 import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
@@ -30,6 +30,7 @@ import {
   isBinaryContent,
   joinTelegramTextParts,
   normalizeForwardedContext,
+  renderRichInlineText,
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessagePlaceholder,
@@ -479,9 +480,10 @@ export type TelegramReplyTarget = {
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const quote =
+  // Bot API 10.4 rich quotes are not yet represented in the pinned grammY types.
+  const quote: (NonNullable<Message["quote"]> & { rich_texts?: RichText[] }) | undefined =
     msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
-  const rawQuoteText = quote?.text;
+  const rawQuoteText = quote?.text || quote?.rich_texts?.map(renderRichInlineText).join("\n");
   const quoteText = resolveTelegramTextContent(rawQuoteText);
   let body = quoteText.trim();
   const kind: TelegramReplyTarget["kind"] = body ? "quote" : "reply";

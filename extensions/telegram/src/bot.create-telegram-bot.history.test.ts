@@ -343,14 +343,20 @@ it.each(["business", "spoof"])("preserves %s reply attribution", async (kind) =>
   expect(input.ReplyChain?.[0]?.sender).toBe(sender);
 });
 
-it("preserves selected quote bytes and identity", async () => {
+it.each([false, true])("preserves selected quote bytes and identity (rich: %s)", async (rich) => {
+  const quote = {
+    text: rich ? "" : " summarize this\n",
+    position: 8,
+    ...(rich
+      ? {
+          rich_texts: [[" ", { type: "bold", text: "summarize" }, " this\n"]],
+          is_manual: true as const,
+        }
+      : { entities: [{ type: "bold" as const, offset: 1, length: 9 }] }),
+  };
   const input = await replyInput("check this", {
     reply_to_message: reply("Can you summarize this?", { message_id: 9001 }),
-    quote: {
-      text: " summarize this\n",
-      position: 8,
-      entities: [{ type: "bold", offset: 1, length: 9 }],
-    },
+    quote,
   });
   expect(input).toMatchObject({
     BodyForAgent: "check this",
@@ -358,7 +364,8 @@ it("preserves selected quote bytes and identity", async () => {
     ReplyToIsQuote: true,
     ReplyToQuoteText: " summarize this\n",
     ReplyToQuotePosition: 8,
-    ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],
+    ReplyToQuoteEntities: rich ? undefined : [{ type: "bold", offset: 1, length: 9 }],
+    ReplyToQuoteSourceText: "Can you summarize this?",
   });
 });
 
