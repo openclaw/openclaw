@@ -5,6 +5,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsRow } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { CronAccountPicker } from "./view-account.tsx";
 import { CronSelect, CronInput, ToggleRow, FieldRow, errorIdForField } from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
@@ -77,6 +78,11 @@ export function DeliverySection(
             help={t("cron.form.channelHelp")}
             options={channelOptions()}
             channel
+          />
+          <CronAccountPicker
+            {...props}
+            field="deliveryAccountId"
+            channel={props.form.deliveryChannel}
           />
           {props.form.deliveryTarget !== "owner" ? (
             <CronInput
@@ -239,15 +245,6 @@ export function Advanced(
           ) : undefined}
           {props.isAgentTurn ? (
             <>
-              <CronInput
-                {...props}
-                field="deliveryAccountId"
-                label={t("cron.form.accountId")}
-                help={t("cron.form.accountIdHelp")}
-                list="cron-delivery-account-suggestions"
-                disabled={props.selectedDeliveryMode !== "announce"}
-                placeholder="default"
-              />
               <ToggleRow
                 {...props}
                 field="payloadLightContext"
@@ -413,11 +410,10 @@ function FailureAlertRows(
               { value: "webhook", label: t("cron.form.failureAlertWebhook") },
             ]}
           />
-          <CronInput
+          <CronAccountPicker
             {...props}
             field="failureAlertAccountId"
-            label={t("cron.form.failureAlertAccountId")}
-            placeholder={t("cron.form.failureAlertAccountPlaceholder")}
+            channel={props.form.failureAlertChannel}
           />
         </>
       ) : undefined}

@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
@@ -171,5 +172,12 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     deliveryToSuggestions,
     failureAlertToSuggestions,
     accountSuggestions,
+    accountCatalog: {
+      accounts: channels.channelsSnapshot?.channelAccounts,
+      loading: channels.channelsLoading,
+      error: channels.channelsError,
+    },
+    onRetryAccountCatalog: () =>
+      void page.context().acquireChannels(createChannelCapability).refresh(false),
   };
 }
