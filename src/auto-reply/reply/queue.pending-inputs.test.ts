@@ -299,7 +299,7 @@ describe("followup queue durable input consumption", () => {
           .stageSessionPendingInput(scope(), {
             runId: "native-different",
             message,
-            retryRelinquished: true,
+            reattachInputId: original.inputId,
             assertCurrent() {},
           })
           .then((receipt) => {
@@ -309,6 +309,14 @@ describe("followup queue durable input consumption", () => {
             return receipt;
           }),
       ).rejects.toThrow("Pending input idempotency key conflicts with the accepted input");
+      await expect(
+        pendingInputs.stageSessionPendingInput(scope(), {
+          runId: "native-original",
+          message,
+          reattachInputId: "another-queued-input",
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("Pending input ownership ended");
       expect((await pending()).items).toMatchObject([
         { runId: "native-original", state: "queued", message },
       ]);
@@ -352,7 +360,7 @@ describe("followup queue durable input consumption", () => {
           pendingInputs.stageSessionPendingInput(target, {
             runId,
             message,
-            retryRelinquished: true,
+            reattachInputId: original.inputId,
             assertCurrent() {},
           }),
         ),

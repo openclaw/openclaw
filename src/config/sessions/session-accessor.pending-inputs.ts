@@ -241,8 +241,8 @@ type PendingInputStageOptions = PendingInputRequest & {
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
-  /** Only the original recorder may reattach after its confirmed relinquishment. */
-  retryRelinquished?: boolean;
+  /** Exact queued row authorized by its relinquished recorder or current startup replay. */
+  reattachInputId?: string;
   /**
    * Durable channel redelivery mints a new run for the same source turn. It may
    * reopen only its own byte-identical attempt that was cancelled before consumption.
@@ -338,9 +338,7 @@ async function stagePreparedPendingInput(
     return guard();
   };
   const assertCurrent = () =>
-    options.authority
-      ? options.authority.withCurrent(() => options.assertCurrent())
-      : options.assertCurrent();
+    options.authority?.withCurrent(options.assertCurrent) ?? options.assertCurrent();
   try {
     const identity = {
       sessionKey: store.sessionKey,
@@ -426,10 +424,11 @@ async function stagePreparedPendingInput(
         };
       }
       assertUnowned();
-      // A queued row alone does not prove relinquishment: terminal settlement may
-      // have failed after authority ended. Only its original recorder can retry it.
+      // A queued row alone does not authorize retry after failed terminal settlement.
+      // The original recorder or startup replay must retain this exact input ID.
       const canRetry =
-        options.trackCompletion || (existing.state === "queued" && options.retryRelinquished);
+        options.trackCompletion ||
+        (existing.state === "queued" && options.reattachInputId === existing.input_id);
       if (
         (!options.requestFingerprint && !canRetry && !reclaimsCancelledSourceTurn) ||
         (existing.state !== "queued" && !reopensCancelled) ||

@@ -152,6 +152,7 @@ describe("prepareChatSendUserTurn", () => {
           {
             target: {
               ...target,
+              inputId: "queued-requester-input",
               runId: "run-1",
               message: buildPersistedUserTurnMessage({ text: "hello", timestamp: 1 }),
               requestHash: "request:queued-requester",

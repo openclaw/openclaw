@@ -473,6 +473,7 @@ it("readmits a retained queued input only from its admitted physical store", () 
             storePath,
             sessionKey: session.sessionKey,
             sessionId: loaded.entry.sessionId,
+            inputId: "retained-queued-input",
             runId: session.clientRunId,
             message,
             requestHash: "retained-queued-input",

@@ -116,6 +116,7 @@ export function createUserTurnTranscriptRecorder(
   let pendingInput: Awaited<ReturnType<typeof stageUserTurnPendingInput>>;
   // The committed input keeps its run identity across later preparation attempts.
   let acceptedPendingInputRunId: string | undefined;
+  let acceptedPendingInputId: string | undefined;
   let staging: Promise<boolean> | undefined;
   const processing = createUserTurnProcessingCompletion(
     () => pendingInput,
@@ -559,13 +560,14 @@ export function createUserTurnTranscriptRecorder(
           const runId = acceptedPendingInputRunId ?? options.runId;
           const adopt = (receipt: NonNullable<typeof pendingInput>) => {
             acceptedPendingInputRunId ??= runId;
+            acceptedPendingInputId ??= receipt.inputId;
             adoptPendingInput(receipt);
           };
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
             runId,
-            // A retained run ID without a receipt means this recorder confirmed relinquishment.
-            retryRelinquished: acceptedPendingInputRunId !== undefined,
+            // A retained ID without a receipt means this recorder confirmed relinquishment.
+            reattachInputId: acceptedPendingInputId,
             requestFingerprint: params.pendingInputRequestFingerprint,
             reclaimCancelledSourceTurn: params.reclaimCancelledSourceTurn,
             trackCompletion: params.trackInputCompletion,

@@ -289,9 +289,10 @@ outage persists, the fresh input receives a retryable refusal instead of overtak
 them. Other sessions remain available; no timer or background retry loop is added.
 This preserves input, not execution permissions: Stop, reset, deletion, revocation,
 and queue-policy refusals retain their recorded terminal causes and do not replay.
-A relinquished follow-up retries through its original input recorder after
-relinquishment is confirmed. A failed terminal settlement does not authorize a
-fresh same-key send to take over the still-queued row.
+A relinquished follow-up retries through its original input recorder, or through
+startup replay of that exact durable input. Both revalidate current authority.
+A failed terminal settlement does not authorize a fresh same-key send to take over
+the still-queued row.
 Host sleep that preserves the process can continue the existing queue normally.
 
 Channel messages retained by durable ingress remain retryable when a queued

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
@@ -15,7 +16,10 @@ import {
   captureSessionQueuedInputsForRestart,
   readSessionQueuedInputPage,
 } from "../config/sessions/session-pending-input-history.js";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
@@ -35,6 +39,7 @@ import {
   persistDevices,
 } from "./operator-run-recovery.test-support.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
+import * as dashboardAuthority from "./server-methods/chat-send-dashboard-authority.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
@@ -253,6 +258,45 @@ it.each([
     lifetime.abort();
     fixture.context.agentDatabaseStartup = undefined;
   }
+});
+
+it("retries relinquished startup input after a post-staging authority outage exactly once", async () => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  expectStarted(await fixture.send());
+  const retained = await retireOriginalInputs(fixture);
+  const outage = new GatewayOperatorAccessUnavailableError();
+  using authority = vi
+    .spyOn(dashboardAuthority, "createChatSendDashboardAuthority")
+    .mockRejectedValueOnce(outage);
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+
+  const deferred = expectDefined(
+    await continueSessionQueuedInputs(fixture.context, retained.target, retained),
+    "deferred startup replay",
+  );
+  expect(deferred.error).toMatchObject({ message: outage.message });
+  expect(authority).toHaveBeenCalledOnce();
+  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  expect((await readSessionQueuedInputPage(retained.target)).rows).toMatchObject([
+    {
+      input_id: retained.queuedInputIds[0],
+      run_id: fixture.params.idempotencyKey,
+      state: "queued",
+      lifecycle_generation: getAgentEventLifecycleGeneration(),
+    },
+  ]);
+
+  await deferred.resume();
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+  await deferred.resume();
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
 it.each(["missing source", "different sender", "revoked device"] as const)(

@@ -105,7 +105,13 @@ export async function continueSessionQueuedInputs(
         dispatchAttempted = true;
         await queuedChatInputAdmission.run(
           {
-            target: { ...target, runId: row.run_id, message, requestHash: row.request_hash },
+            target: {
+              ...target,
+              inputId: row.input_id,
+              runId: row.run_id,
+              message,
+              requestHash: row.request_hash,
+            },
             requestFingerprint: row.request_hash.startsWith("request:")
               ? row.request_hash.slice(8)
               : row.request_hash,

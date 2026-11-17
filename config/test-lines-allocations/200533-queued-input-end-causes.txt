@@ -13,4 +13,5 @@
 # Settlement observation stays outside owner joins and verifies post-outage execution once.
 # Native-owner guards preserve accepted run identity and single execution during reattachment races.
 # Failed terminal settlement cannot authorize a fresh same-key send to reattach queued input.
-1503
+# Deferred startup replay retains exact input identity across post-staging authority outages.
+1557
