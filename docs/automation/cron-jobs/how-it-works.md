@@ -16,6 +16,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Automation runs are recorded in cron run history.
+- An automation's restored authority follows its chat across edits, resets, and compaction. Deleting the chat or revoking its operator credentials still ends that authority. Interrupted condition checks remain retryable and do not increase the job's failure streak.
 - A run-now request is authorized when it is queued. If it targets the requesting conversation, it starts after that turn ends, using the job's current scheduled authority. Removing or disabling the job before launch still stops it. Skipped runs and failures before agent execution add a notice to the owning conversation with the reason and the next step.
 - A started scheduled turn finishes under the configuration it started with; configuration edits apply to the next run. Stop, cancellation, revoked source authority, and agent deletion still end it. An unstarted occurrence can be re-admitted under the current configuration, with at most two retries.
 - Main-session system events use ordinary session admission and remain running until the exact turn settles. A restart before adoption records one interrupted failure; it does not report success or replay the reminder.

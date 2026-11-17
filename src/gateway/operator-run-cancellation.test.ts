@@ -227,13 +227,9 @@ async function createCancellationFixture(cfg: OpenClawConfig, stateDir: string) 
 }
 
 describe("operator access cancellation", () => {
-  it.each([
-    { sender: "agent:main:cron-sender", end: "occurrence retired" },
-    { sender: "agent:main:guest-and-staff", end: "occurrence retired" },
-    { sender: "agent:main:cron-sender", end: "sender session cleaned up" },
-  ] as const)(
-    "an accepted turn sent from $sender keeps its authority after $end",
-    cancellationCase(async (f, { sender, end }) => {
+  it.each(["agent:main:cron-sender", "agent:main:guest-and-staff"] as const)(
+    "an accepted turn sent from %s keeps its authority after the occurrence retires",
+    cancellationCase(async (f, sender) => {
       const profile = ensureProfileForEmail("scheduled-sender@example.test");
       const occurrence = await recoveryFixture(f.stateDir, profile.id, {
         device: pairedOperator(),
@@ -252,17 +248,9 @@ describe("operator access cancellation", () => {
         const target = await f.register("sent-turn");
         const retained = await target.retain(client);
         retained.armCancellation();
-        if (end === "occurrence retired") {
-          occurrence.retire();
-        } else {
-          // An isolated run's exact-run session is removed when the run finishes.
-          await replaceSessionEntry(occurrence.target, {
-            ...occurrence.entry,
-            sessionId: "next-run-session",
-          });
-        }
+        occurrence.retire();
         expect(restored.authority.assertCurrent).toThrow();
-        expect(restored.authority.signal?.aborted).toBe(end !== "occurrence retired");
+        expect(restored.authority.signal?.aborted).toBe(false);
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();

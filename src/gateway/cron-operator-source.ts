@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
 import { CronOperatorSourceError } from "../cron/operator-source-error.js";
@@ -16,7 +15,6 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   agentId: string;
   sessionKey: string;
-  entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">;
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {
@@ -33,8 +31,7 @@ export async function restoreCronOperatorSource(params: {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
-    // Stored automation authority follows the conversation key. The restored live run
-    // below still binds its actual transcript and is revoked by identity mutations.
+    // Stored automation authority follows the conversation key, including edits and resets.
     let admitted = false;
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -68,11 +65,10 @@ export async function restoreCronOperatorSource(params: {
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      // The restored authority lives as long as the session this run executes in.
+      // The restored authority lives until the chat this run executes in is deleted.
       target: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-        sessionId: params.entry.sessionId,
       },
       context,
       assertCurrent,

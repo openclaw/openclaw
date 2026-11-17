@@ -13,7 +13,10 @@ import { createWriteTool } from "../agents/sessions/tools/write.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
@@ -543,6 +546,28 @@ describe("scheduled authenticated operator source", () => {
     );
   });
 
+  it("keeps restored authority through edits and resets; deleting the chat ends it", () =>
+    withRecovery(async (fixture) => {
+      using restored = await restoreFixture(fixture);
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        sessionId: "edited-session",
+      });
+      expectCurrent(restored.authority);
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        sessionId: "edited-session",
+        lifecycleRevision: "reset-lifecycle",
+      });
+      expectCurrent(restored.authority);
+      await deleteSessionEntryLifecycle({
+        archiveTranscript: false,
+        storePath: fixture.target.storePath,
+        target: { canonicalKey: fixture.target.sessionKey, storeKeys: [fixture.target.sessionKey] },
+      });
+      expectRevoked(restored.authority);
+    }));
+
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
       using restored = await restoreFixture(fixture);
@@ -861,7 +886,7 @@ describe("scheduled authenticated operator source", () => {
     }),
   );
 
-  it.each(["claim retired", "device revoked", "session replaced"] as const)(
+  it.each(["claim retired", "device revoked", "session deleted"] as const)(
     "fences retained recovered authority after %s",
     (change) =>
       withRecovery(async (fixture) => {
@@ -873,10 +898,14 @@ describe("scheduled authenticated operator source", () => {
         if (change === "device revoked") {
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
         }
-        if (change === "session replaced") {
-          await replaceSessionEntry(fixture.target, {
-            ...fixture.entry,
-            sessionId: "replacement-session",
+        if (change === "session deleted") {
+          await deleteSessionEntryLifecycle({
+            archiveTranscript: false,
+            storePath: fixture.target.storePath,
+            target: {
+              canonicalKey: fixture.target.sessionKey,
+              storeKeys: [fixture.target.sessionKey],
+            },
           });
         }
         expect(restored.authority.assertCurrent).toThrow();

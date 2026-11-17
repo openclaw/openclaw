@@ -77,7 +77,6 @@ export async function runCronSessionTurn(
         job,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-        entry: expectedTarget,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });

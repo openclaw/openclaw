@@ -7,12 +7,14 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
+import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 import { needsCronTimerMaintenance, resolveJobErrorBackoffUntilMs } from "./jobs-scheduling.js";
 import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
@@ -49,7 +51,7 @@ it("retains the last meaningful result across quiet checks and execution failure
 
 function outcomeFixture(
   runAt: number,
-  overrides: Partial<CronJob> = {},
+  overrides: Partial<CronStoredJob> = {},
   deps: Partial<Parameters<typeof createCronServiceState>[0]> = {},
 ) {
   const job = {
@@ -101,6 +103,52 @@ function restartFailure() {
     endedAt: startedAt + 1,
   } as const;
 }
+
+it.each([
+  { code: "aborted", enabled: true },
+  { code: "internal_error", enabled: false },
+] as const)(
+  "a watcher with nine failures preserves its streak after $code: enabled=$enabled",
+  ({ code, enabled }) => {
+    const operatorSource: RestartRecoveryOperatorSource = {
+      version: 1,
+      agentId: "main",
+      sessionKey: "agent:main:watcher-owner",
+      sessionId: "owner-session",
+      sourceRunId: "creator-run",
+      snapshot: {
+        profileId: "fixture-operator",
+        scopes: ["operator.write"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "fixture-generation",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: true,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    };
+    const { job, apply } = outcomeFixture(startedAt, {
+      trigger: { script: "return { fire: false }" },
+      state: { consecutiveErrors: 9 },
+      operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
+    });
+    apply({
+      status: "error",
+      error: `cron trigger evaluation failed (${code})`,
+      ...cronScriptFailureMetadata("trigger", code),
+    });
+    expect(job.enabled).toBe(enabled);
+    expect(job.state.consecutiveErrors).toBe(code === "aborted" ? 9 : 10);
+    expect(job.state.nextRunAtMs !== undefined).toBe(enabled);
+  },
+);
 
 it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
   const { job, apply } = outcomeFixture(startedAt, {
@@ -343,7 +391,7 @@ it.each([
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
-    { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
+    { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronStoredJob>,
     { enqueueSessionEvent, sendCronFailureAlert, defaultAgentId: "main" },
   );
 
@@ -381,7 +429,7 @@ it.each([
             }
           : undefined,
       },
-    } as Partial<CronJob>);
+    } as Partial<CronStoredJob>);
 
     apply({ status: "error", error: "tenth failure" });
 
