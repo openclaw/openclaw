@@ -110,6 +110,7 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
   }
   const trialFile = path.join(slot.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
   const raw = await fs.readFile(trialFile, "utf8").catch(ignoreMissingPath);
+  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
   const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
   if (trial?.target === slot.target) {
     await fs.rm(trialFile, { force: true });

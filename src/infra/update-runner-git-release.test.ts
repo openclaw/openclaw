@@ -13,6 +13,7 @@ const target = vi.hoisted(() => ({
   runtimeVerified: false,
   runningRoot: "",
 }));
+// mock-isolation: the build runs as a fixture; the real preflight would install and compile a checkout.
 vi.mock("./update-runner-git-preflight.js", () => ({
   // The first release is built from the commit that serves now.
   runGitCandidatePreflight: async (params: {

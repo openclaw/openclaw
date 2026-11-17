@@ -149,12 +149,14 @@ if (trial && counts) {
     // already-restored companions and never removes them as the trial's own.
     if (!trial.restoring) {
       trial.restoring = [];
+      // File timestamps come from a coarse kernel clock that can trail Date.now() by a tick.
+      const since = trial.createdAt - 1000;
       for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
         retirePlans(path.dirname(prefix), generation);
         const suffix = ".pre-" + generation;
-        const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
+        const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
         const config = trial.config;
-        if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
+        if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= since) {
           files.push(config);
         }
         trial.restoring.push({ suffix, files });

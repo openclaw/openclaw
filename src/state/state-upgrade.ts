@@ -72,7 +72,7 @@ const WORK_PREFIX = ".upgrade-";
 // them: commits of one version can each upgrade, and a failed Git release trial restores
 // exactly what its build replaced. A build without a build ID names them by version, as
 // every build did before; those files stay readable and prunable by the same rules.
-const GENERATION = resolveRuntimeServiceBuildId() ?? VERSION;
+const generation = () => resolveRuntimeServiceBuildId() ?? VERSION;
 // An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
 // Git release trial reads it to remove the files that upgrade added (no `.pre-*` to restore).
 const APPLIED_PREFIX = ".upgraded-";
@@ -272,12 +272,12 @@ function recordDiagnostics(
     );
     insert.run(UPGRADE_REPORT_SCOPE, `${VERSION}:${now}`, JSON.stringify(report), now, now);
     if (pinned) {
-      insert.run(UPGRADE_PIN_SCOPE, GENERATION, JSON.stringify({ version: VERSION }), now, now);
+      insert.run(UPGRADE_PIN_SCOPE, generation(), JSON.stringify({ version: VERSION }), now, now);
     }
     for (const entry of setAside) {
       insertSetAsideRows(
         db,
-        { ...entry.report, previousFile: `.pre-${GENERATION}` },
+        { ...entry.report, previousFile: `.pre-${generation()}` },
         entry.rows,
         now,
       );
@@ -316,7 +316,7 @@ function finish(
 ): void {
   pruneGenerations(
     stateDir,
-    GENERATION,
+    generation(),
     new Set([
       ...readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
       ...resumedGenerations,
@@ -324,7 +324,7 @@ function finish(
     ownedFiles,
   );
   const kept = new Set(
-    [GENERATION, ...resumedGenerations].map((g) => `${APPLIED_PREFIX}${g}.json`),
+    [generation(), ...resumedGenerations].map((g) => `${APPLIED_PREFIX}${g}.json`),
   );
   for (const entry of fs.readdirSync(stateDir)) {
     if (entry.startsWith(APPLIED_PREFIX) && !kept.has(entry)) {
@@ -429,7 +429,7 @@ export async function upgradeStateDirectory(params: {
     return resumed ? { status: "resumed" } : { status: "current" };
   }
   // A per-attempt name keeps a shadow Doctor orphaned by a crash out of the next attempt.
-  const workDir = path.join(stateDir, `${WORK_PREFIX}${GENERATION}-${process.pid}-${Date.now()}`);
+  const workDir = path.join(stateDir, `${WORK_PREFIX}${generation()}-${process.pid}-${Date.now()}`);
   const shadowRoot = path.join(workDir, "state");
   const configInside = !path.relative(stateDir, configPath).startsWith("..");
   const shadowConfig = configInside
@@ -623,7 +623,7 @@ export async function upgradeStateDirectory(params: {
         setAside: setAsideCount,
         warnings,
         retiredBackups: retired,
-        preserved: `.pre-${GENERATION}`,
+        preserved: `.pre-${generation()}`,
         pinned,
       },
       setAside,
@@ -647,17 +647,17 @@ export async function upgradeStateDirectory(params: {
       fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
-    writePlan(workDir, { appVersion: GENERATION, ops });
+    writePlan(workDir, { appVersion: generation(), ops });
     planWritten = true;
-    applyPlan({ appVersion: GENERATION, ops });
-    retainAppliedPlan(stateDir, { appVersion: GENERATION, ops });
+    applyPlan({ appVersion: generation(), ops });
+    retainAppliedPlan(stateDir, { appVersion: generation(), ops });
     if (fs.existsSync(chainLog)) {
       // The chain's own output stays next to the other logs for diagnosis.
       fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });
       fs.copyFileSync(chainLog, path.join(stateDir, "logs", `state-upgrade-${VERSION}.log`));
     }
     finish(stateDir, workDir, new Set(ops.map((op) => op.live).filter((file) => !skip(file))));
-    const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${GENERATION}.`;
+    const summary = `State upgraded to ${VERSION} by ${mode === "chain" ? "migration chain" : "generic copy"}; previous files kept as *.pre-${generation()}.`;
     if (pinned) {
       params.log.warn(
         `${summary} ${failedStep ? `Chain step ${failedStep} failed. ` : ""}${setAsideCount} row(s) set aside in diagnostic_events (${UPGRADE_SET_ASIDE_SCOPE}); conservation: ${mismatches.join("; ") || "ok"}. The previous generation is pinned; run openclaw doctor to review.`,
