@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                 |
-| -------------------------------------------- | ---------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922). |
-| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835). |
-| Owed steps after the commit point            | Proposed.                                                              |
-| Stop, publish, and rollback in the candidate | Not designed.                                                          |
+| Slice                                        | Status                                                                                                                     |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).                                                     |
+| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835).                                                     |
+| Owed steps after the commit point            | First slice merged in [#200331](https://github.com/openclaw/openclaw/pull/200331); convergence and Doctor are in progress. |
+| Stop, publish, and rollback in the candidate | Not designed.                                                                                                              |
 
 ## Why change it
 
@@ -543,6 +543,21 @@ something the source showed.
   moves the directory back. The first version refused before any change when
   `releases/` is on another filesystem; under decision 8 that run takes the
   swap.
+- **The plain swap.** A run that takes the swap without a publication journal
+  (pnpm, Bun, npm when no journal is prepared, and the in-place replacement of
+  a service-bound release) moved the old package to its backup name, captured
+  local overrides, and then moved the candidate in. Killed at any of six
+  boundaries in between, it left the package path empty with no journal and no
+  command able to run. [#200366](https://github.com/openclaw/openclaw/pull/200366)
+  replays overrides while the old package still serves, gives the candidate
+  the backup name, and publishes with the same exchange call adoption uses. The
+  two names end as the moves would leave them, so rollback and retirement are
+  unchanged. Without an exchange the two moves run and the step says so.
+  The journaled npm publication, which a prefix the user manages takes on a
+  normal update, still moves the old package out before the new one in. Its
+  three names rotate, so one exchange leaves a state its recovery readers
+  refuse today. Teaching the journal owner that state is a separate change in
+  progress.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
@@ -626,6 +641,44 @@ as owed with its reason, and the next Gateway start or `openclaw update`
 retries it: plugin convergence, service definition refresh, shell completion,
 and collection. Required migrations, refused config writes, and readiness stay
 blocking.
+
+#### First slice as built
+
+[#200331](https://github.com/openclaw/openclaw/pull/200331) adds the contract
+and its first two steps, a shell completion refresh and a Gateway service
+definition refresh.
+
+- **The row.** An owed step is a `finalize:owed:<id>` step in the run's
+  existing `steps` JSON: status `skipped` while owed, `completed` once settled,
+  the reason in `detail`. It uses no new field, status, or schema, so published
+  readers accept it. The ids are a closed set in one module.
+- **Who decides.** The newest of the last 50 runs that mentions a step decides
+  whether it is owed. Failed and rolled-back runs neither owe nor decide. A
+  run that still owes a step an earlier run recorded writes its own row and
+  leaves the earlier one alone, so the earlier run owes the step again if the
+  later run fails. The first version settled the earlier row on takeover and
+  lost the step in that case.
+- **Finished runs.** Only the owed-step writers may write to a finished run
+  that kept its result. Every other writer still treats finished runs as
+  immutable.
+- **Retry.** The next `openclaw update` retries, also when the core is already
+  current, and `openclaw update repair` settles after its own finalization. A
+  retry that fails keeps the step owed, warns, and never fails its command.
+  Gateway startup does not retry; this differs from the paragraph above
+  because startup runs no package manager and the two first steps need none
+  of its state.
+- **Reporting.** The update's report, `openclaw update status`, and the JSON
+  field `owedSteps` name the step, its reason, and what settles it. The
+  finalize child's `status` does not change for an owed step, because a
+  parent updater, including a published one, reads it as the plugin and
+  Doctor outcome.
+- **First hop.** The installed updater finishes the first update to a release
+  with this change, so nothing is recorded on that run unless the update
+  migrated state and the candidate finishes it.
+
+Plugin convergence and an unexpected post-plugin Doctor failure still roll the
+package back. Moving them to owed steps is the next slice. Backup retirement
+after a verified activation and collection follow.
 
 ### B3: stop, publish, and rollback authority
 
@@ -796,6 +849,11 @@ existing handoff carries stop, publish, or rollback authority.
 - The adoption exchange ran on macOS arm64 and in linux/arm64 containers, with
   the updater killed at every file system boundary. Not confirmed: native x64, an
   installation made by `install-cli.sh`, and `osascript` under launchd.
+- The plain-swap exchange ran through a kill at every boundary on macOS arm64,
+  and once in the in-place Docker cell on linux/arm64 with published
+  `2026.10.9`. pnpm and Bun ran through fixtures only. Owed steps ran through
+  the update command with fixture services; no published-driver cell, live
+  shell, launchd, systemd, or Windows service exercised them.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
