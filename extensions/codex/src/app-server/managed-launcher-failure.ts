@@ -31,6 +31,13 @@ export function observeManagedCodexLauncherFailure(
         prefix,
       )?.[1];
     } else if (
+      /syscall: ['"]execve['"]/u.test(prefix) &&
+      /^\s+path: (['"])([^\r\n]*)\1,?\r?$/mu.exec(prefix)?.[2] === nativeCommand
+    ) {
+      launchCode = /\bcode: ['"](ENOENT|EACCES|EBADARCH|Unknown system error -86)['"]/u.exec(
+        prefix,
+      )?.[1];
+    } else if (
       /Error: Missing optional dependency @openai\/codex-[\w-]+\. Reinstall Codex:/u.test(prefix)
     ) {
       launchCode = "ENOENT";

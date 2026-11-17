@@ -218,11 +218,7 @@ export async function createCodexInferenceProxy(params: {
     for (const [key, value] of incoming.searchParams) {
       target.searchParams.append(key, value);
     }
-    return {
-      target,
-      path: incoming.pathname,
-      query: incoming.searchParams,
-    };
+    return { target, path: incoming.pathname, query: incoming.searchParams };
   };
   const { prepare, prepareHttp } = createCodexInferenceDispatch({
     context,
@@ -268,7 +264,7 @@ export async function createCodexInferenceProxy(params: {
         }
         if (catalog) {
           stage = "upstream";
-          await relayCodexCatalogRequest(req, res, target, upstreamPolicy, signal, assertCurrent);
+          await relayCodexCatalogRequest(req, res, target, undefined, signal, assertCurrent);
           return;
         }
         releasePermit = await acquireUpload(signal, deadlineAtMs);

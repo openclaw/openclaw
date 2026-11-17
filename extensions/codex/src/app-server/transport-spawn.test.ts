@@ -104,6 +104,38 @@ describe("Codex app-server OS launch failure", () => {
 });
 
 describe("managed launcher diagnostic attribution", () => {
+  it.each(["'", '"'])(
+    "attributes execve diagnostics with %s quoting to the native path",
+    (quote) => {
+      for (const matches of [true, false]) {
+        const native = `/synthetic/codex-${randomUUID()}`;
+        const child: RegistrationTestChildProcess &
+          Pick<CodexAppServerTransport, "startupFailure"> = new RegistrationTestChildProcess(1);
+        observeManagedCodexLauncherFailure(child, native);
+        const diagnostic = `Error: EACCES, Permission denied
+  code: ${quote}EACCES${quote},
+  path: ${quote}${matches ? native : "/other/codex"}${quote},
+  syscall: ${quote}execve${quote}
+`;
+        for (const chunk of [diagnostic.slice(0, 25), diagnostic.slice(25)]) {
+          child.stderr.emit("data", Buffer.from(chunk));
+        }
+        child.exitCode = 1;
+        child.emit("exit", 1);
+        child.emit("close", 1);
+        if (matches) {
+          expect(child.startupFailure?.error).toMatchObject({
+            name: "CodexAppServerSpawnError",
+            command: native,
+            cause: expect.objectContaining({ code: "EACCES" }),
+          });
+        } else {
+          expect(child.startupFailure?.error).toBeUndefined();
+        }
+      }
+    },
+  );
+
   it.each([
     { name: "matching Bun diagnostic", accepted: true },
     { name: "different header command", header: "/other/codex", accepted: false },
