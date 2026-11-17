@@ -36,6 +36,7 @@ import { assertRelayTabCreation } from "./tab-creation.test-support.js";
 
 declare const chrome: {
   runtime: { sendMessage: (message: unknown) => Promise<Record<string, unknown>> };
+  tabs: { query: (query: object) => Promise<Array<{ url?: string; autoDiscardable?: boolean }>> };
 };
 
 const runE2E =
@@ -53,6 +54,12 @@ const expectSuccess = (response: BrowserDispatchResponse) =>
   expect(response.status, JSON.stringify(response.body)).toBe(200);
 const sendExtensionMessage = (page: Page, message: Record<string, unknown>) =>
   page.evaluate((payload) => chrome.runtime.sendMessage(payload), message);
+const tabAutoDiscardable = (page: Page, urlPrefix: string) =>
+  page.evaluate(
+    async (prefix) =>
+      (await chrome.tabs.query({})).find((tab) => tab.url?.startsWith(prefix))?.autoDiscardable,
+    urlPrefix,
+  );
 const expectDoctorCheck = (response: BrowserDispatchResponse, check: Record<string, unknown>) => {
   expectSuccess(response);
   expect(response.body).toMatchObject({
@@ -425,6 +432,9 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         const playwrightTabsResponse = await dispatch("/tabs");
         expectSuccess(playwrightTabsResponse);
         expect(playwrightTabsResponse.body).toMatchObject({ running: true });
+        // An attached tab must stay out of Memory Saver: a discarded tab keeps its
+        // attachment but never answers, which stalls every client of the relay.
+        await expect.poll(() => tabAutoDiscardable(extensionPage, "data:text/html")).toBe(false);
         const matchingDoctor = await dispatch("/doctor");
         expectDoctorCheck(matchingDoctor, {
           id: "extension-version",
@@ -768,6 +778,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         await expect
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.tabId === tabId))
           .toBe(false);
+        await expect.poll(() => tabAutoDiscardable(extensionPage, "data:text/html")).toBe(true);
 
         const installedManifestPath = path.join(installed, "manifest.json");
         const installedManifest = JSON.parse(await fs.readFile(installedManifestPath, "utf8")) as {

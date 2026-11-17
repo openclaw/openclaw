@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectType,
   expectResult,
+  expectNoTabMutation,
   expectUnused,
   deferredScope,
   holdNext,
@@ -239,7 +240,8 @@ describe("authenticated relay debugger lifetime", () => {
       gate.resolve();
       await flush();
       await f.attach(next);
-      expectUnused(f.h.debuggerSendCommand, f.h.tabsUpdate, f.h.windowsUpdate);
+      expectUnused(f.h.debuggerSendCommand, f.h.windowsUpdate);
+      expectNoTabMutation(f.h.tabsUpdate);
       if (type === "createTab") {
         expect(f.h.tabsRemove).toHaveBeenCalledExactlyOnceWith(tabId + 1);
         expect(await f.h.tabsQuery()).toEqual([expect.objectContaining({ id: tabId })]);

@@ -1,3 +1,31 @@
+/**
+ * Chrome's Memory Saver may discard a background tab while it is attached. The
+ * attachment survives, but the discarded tab never answers page commands, so
+ * one sleeping tab stalls every CDP client that enumerates targets. Keep an
+ * attached tab resident and hand Chrome's own setting back on release. A tab
+ * that is already non-discardable belongs to someone else and is left alone.
+ */
+async function holdTabResident(tabId, tab) {
+  if (tab?.autoDiscardable === false) {
+    return false;
+  }
+  try {
+    await chrome.tabs.update(tabId, { autoDiscardable: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function releaseTabResidency(record) {
+  const held = await record.residency;
+  record.residency = undefined;
+  if (held) {
+    // The tab may already be gone; there is nothing left to restore then.
+    await chrome.tabs.update(record.tabId, { autoDiscardable: true }).catch(() => undefined);
+  }
+}
+
 /** Physical debugger attachments and cleanup debt belong to exact native acquisitions. */
 export function createRelayDebugger({ policy, requireAutomationAllowed }) {
   function throwCleanupErrors(errors) {
@@ -63,6 +91,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         }
       }
       record.closed = true;
+      await releaseTabResidency(record);
       forget(record);
     });
     record.cleaning = cleaning;
@@ -166,12 +195,13 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         assertAcquisition();
         await requireAutomationAllowed();
         assertAcquisition();
-        await policy.requireTab(tabId, epoch);
+        const tab = await policy.requireTab(tabId, epoch);
         assertAcquisition();
         await chrome.debugger.attach({ tabId }, "1.3");
         // Mint only on native success. Identity discovery is cleanup authority
         // even when access/socket closure overtakes the native callback.
         record.native = {};
+        record.residency = holdTabResident(tabId, tab);
         if (!record.closed) {
           const result = await chrome.debugger.sendCommand({ tabId }, "Target.getTargetInfo", {});
           const targetId = result?.targetInfo?.targetId;

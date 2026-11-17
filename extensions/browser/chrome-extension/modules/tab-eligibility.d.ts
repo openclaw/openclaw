@@ -7,6 +7,7 @@ export type BrowserTabSnapshot = {
   active?: boolean;
   incognito?: boolean;
   discarded?: boolean;
+  autoDiscardable?: boolean;
   groupId?: number;
   windowId?: number;
 };

@@ -397,7 +397,9 @@ export async function loadBackground({
           tabsRemovedListener?.(tabId);
         }
       }),
-      update: vi.fn(async () => undefined),
+      update: vi.fn(
+        async (_tabId: number, _change: Record<string, unknown>): Promise<undefined> => undefined,
+      ),
       onRemoved: {
         addListener: vi.fn((listener: (tabId: number) => void) => {
           tabsRemovedListener = listener;

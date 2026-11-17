@@ -3,6 +3,7 @@ import {
   cdp,
   connectRelay,
   expectType,
+  expectNoTabMutation,
   expectUnused,
   loadConfiguredBackground,
   runtime,
@@ -86,7 +87,8 @@ describe("commanded existing document navigation", () => {
     expectType(await h.command("Tracing.end"));
     h.updateTab(7, { url: "about:blank" });
     expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({ accessible: false });
-    expectUnused(h.tabsRemove, h.tabsUpdate);
+    expectUnused(h.tabsRemove);
+    expectNoTabMutation(h.tabsUpdate);
   });
   it.each([
     ["https://example.com/next", "result"],

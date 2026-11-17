@@ -144,6 +144,15 @@ export const expectResult = (response: unknown, result: Record<string, unknown>)
 export const expectUnused = (...mocks: unknown[]) =>
   mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
 
+/** Attached tabs are held resident; that is not a visible tab mutation. */
+export function expectNoTabMutation(tabsUpdate: Mock) {
+  expect(
+    tabsUpdate.mock.calls.filter(
+      ([, change]) => !(change && Object.keys(change).join(",") === "autoDiscardable"),
+    ),
+  ).toEqual([]);
+}
+
 export async function waitCalled(mock: unknown, ...args: unknown[]) {
   await vi.waitFor(() =>
     args.length ? expect(mock).toHaveBeenCalledWith(...args) : expect(mock).toHaveBeenCalled(),
