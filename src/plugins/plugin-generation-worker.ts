@@ -2,6 +2,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
@@ -438,6 +439,27 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
     return codec.decode(reply.value);
   }
+  /**
+   * Captures used to run unbounded: a wedged preparation worker (native-load child,
+   * staging copy) idled Doctor's Config-repairs phase forever at zero CPU
+   * (openclaw#178359). Keep the budget generous — package size and filesystem
+   * latency scale it — but finite, with an operator override for slow hosts.
+   */
+  function resolvePluginCaptureTimeoutMs(): number {
+    const raw = Number(process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS);
+    if (Number.isFinite(raw) && raw > 0) {
+      return Math.min(Math.max(raw, 1_000), 60 * 60_000);
+    }
+    return 15 * 60_000;
+  }
+  function captureTimeoutError(error: unknown, captureTimeoutMs: number): Error {
+    return new Error(
+      `Plugin capture did not complete within ${(captureTimeoutMs / 1000).toFixed(1)}s ` +
+        `(capture ${captureId}, root ${params.rootDir}); the preparation worker stayed silent. ` +
+        "Raise OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS for slower hosts, then retry.",
+      { cause: error },
+    );
+  }
   async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
@@ -457,19 +479,32 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           },
         });
       }
+      const captureTimeoutMs =
+        command.operation === "capture" || sourceCapture
+          ? resolvePluginCaptureTimeoutMs()
+          : 120_000;
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
         {
           // Capture cost scales with package size and filesystem latency. Its owner
-          // controls retirement; an arbitrary deadline can reject healthy plugins.
-          ...(command.operation === "capture" || sourceCapture ? {} : { timeoutMs: 120_000 }),
+          // controls retirement; the budget stays generous but no longer unbounded.
+          timeoutMs: captureTimeoutMs,
           progressSignal: waitSignal,
           transferList: (value) =>
             value.operation === "capture" && value.callbackPort ? [value.callbackPort] : [],
         },
       );
       pendingNativeLoads.clear();
-      const value = accept(await task.result, metrics);
+      let reply: GenerationWorkerReply;
+      try {
+        reply = await task.result;
+      } catch (error) {
+        if (error instanceof WorkerTaskError && error.code === "timeout") {
+          throw captureTimeoutError(error, captureTimeoutMs);
+        }
+        throw error;
+      }
+      const value = accept(reply, metrics);
       // Async preparation/disposal joins the captured admission owner. Sync lazy
       // imports only queue facts, so they cannot block the host's async writes.
       await settlePluginNativeAdmissionState(admission);
@@ -526,14 +561,24 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       }
     };
     try {
+      // Recovery and custody copies share the capture budget; ordinary synchronous
+      // methods stay bounded well below it.
+      const captureTimeoutMs = sourceCapture ? resolvePluginCaptureTimeoutMs() : 30_000;
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
-        // Recovery and custody copies have the same owner-controlled lifetime as
-        // initial capture. Keep ordinary synchronous methods bounded.
-        { progressSignal: waitSignal, ...(sourceCapture ? {} : { timeoutMs: 30_000 }) },
+        { progressSignal: waitSignal, timeoutMs: captureTimeoutMs },
       );
       pendingNativeLoads.clear();
-      return accept(join(task), metrics);
+      let reply: GenerationWorkerReply;
+      try {
+        reply = join(task);
+      } catch (error) {
+        if (error instanceof WorkerTaskError && error.code === "timeout") {
+          throw captureTimeoutError(error, captureTimeoutMs);
+        }
+        throw error;
+      }
+      return accept(reply, metrics);
     } finally {
       try {
         if (task) {
