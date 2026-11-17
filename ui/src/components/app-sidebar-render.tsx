@@ -71,8 +71,12 @@ export function sidebarCollapsedByChoice(host: AppSidebarRenderHost): boolean {
  * Sessions with the sidebar open it opens the agent (or workspace) switcher.
  */
 function railSessionsItem(host: AppSidebarRenderHost) {
+  // A page that brings its own sidebar list, like Systems, is not the Sessions list.
   const current = () =>
-    host.navigationVisible && !host.onExitSettings && host.navigationView === "sessions";
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    host.navigationView === "sessions" &&
+    !host.contextualSidebar;
   const menuReady = () => current() && (isMobileNavLayout() || !host.navigationCollapsed);
   return {
     // Like the other rail views, the item reads as selected only while its panel is open.
