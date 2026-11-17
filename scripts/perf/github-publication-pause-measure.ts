@@ -121,12 +121,11 @@ import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
 import { DefaultSerializer, getHeapStatistics } from "node:v8";
-import { MessagePort, Worker } from "node:worker_threads";
+import { MessagePort } from "node:worker_threads";
 import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
 import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
 import * as workerMessages from "../infra/worker-message-metrics.js";
-import { NativeWorkerTaskPort } from "../infra/worker-native-task-port.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -254,18 +253,12 @@ it("measures immutable object acquisition beside a live guest", async () => {
       catch { counter.unsupported++; }
     }
   };
-  // Outbound observation runs after native transfer; measure before buffers detach.
-  const postTask = NativeWorkerTaskPort.prototype.postMessage;
-  using taskPort = traffic ? vi.spyOn(NativeWorkerTaskPort.prototype, "postMessage") : undefined;
-  taskPort?.mockImplementation(function (message, transfers) {
+  // Observe native task/control ports before transfer, including Worker.postMessage's port.
+  const postPort = MessagePort.prototype.postMessage;
+  using port = traffic ? vi.spyOn(MessagePort.prototype, "postMessage") : undefined;
+  port?.mockImplementation(function (message, transfers) {
     measureEnvelope(message, "to_worker");
-    postTask.call(this, message, transfers);
-  });
-  const postWorker = Worker.prototype.postMessage;
-  using workerPort = traffic ? vi.spyOn(Worker.prototype, "postMessage") : undefined;
-  workerPort?.mockImplementation(function (message, transfers) {
-    measureEnvelope(message, "to_worker");
-    postWorker.call(this, message, transfers);
+    postPort.call(this, message, transfers);
   });
   const observe = workerMessages.observeWorkerMessage;
   using observer = traffic ? vi.spyOn(workerMessages, "observeWorkerMessage") : undefined;
