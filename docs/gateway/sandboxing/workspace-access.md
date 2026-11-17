@@ -284,7 +284,9 @@ file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A
 content-fetch failure leaves saved work available for retry. Refresh preserves
-saved guest files, ignored guest data, and empty directories. The operation returns the exact
+saved guest files, ignored guest data, and empty directories. Preparation reads the
+existing Git object store and reuses the accepted inventory for unchanged source
+files instead of creating two complete temporary checkouts. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
