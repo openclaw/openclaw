@@ -576,11 +576,15 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
     fixture.params.message = "Raw follow-up awaiting approval.";
     fixture.context.dedupe.clear();
     rotateAgentEventLifecycleGeneration();
-    expect((await fixture.send()).mock.calls[0]).toMatchObject({
-      0: true,
-      1: { status: "ok", runId: fixture.params.idempotencyKey },
-      3: { cached: true },
-    });
+    // A new followup does not revive the original refused input, even after restart.
+    expect(await fixture.send()).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: { reason: "chat-input-cancelled", endCause: "policy-refused" },
+      }),
+    );
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {
