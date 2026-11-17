@@ -1,10 +1,11 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For } from "solid-js";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
 import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { formSentenceFrequency, scheduleKindPatch } from "./schedule-sentence.ts";
 import { EventSourceFields } from "./view-event-source.tsx";
 import {
   FieldRow,
@@ -15,6 +16,7 @@ import {
   TrayInput,
 } from "./view-fields.tsx";
 import { describeJobNextRun } from "./view-job-status.tsx";
+import { ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -107,6 +109,12 @@ export const TRAY_SCHEDULE_FIELDS = ["scheduleAt", "everyAmount", "cronExpr", "c
 /** The Repeat choice and its per-kind fields, compact enough to share the prompt's tray. */
 export function ScheduleControls(props: CronProps) {
   const form = () => props.form;
+  // Choosing Custom keeps an expression the sentence could say as an expression.
+  const [forcedCustom, setForcedCustom] = createSignal(false);
+  const frequency = () => {
+    const read = formSentenceFrequency(form());
+    return read && form().scheduleKind === "cron" && forcedCustom() ? "custom" : read;
+  };
   const isOnExit = () => form().scheduleKind === "on-exit";
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
@@ -142,24 +150,22 @@ export function ScheduleControls(props: CronProps) {
   };
   return (
     <>
-      <SettingsSegmented<CronFormState["scheduleKind"]>
-        class="settings-segmented--compact cron-tray-segmented"
-        value={form().scheduleKind}
-        options={kinds()}
-        ariaLabel={t("cron.form.repeat")}
-        onChange={(value) =>
-          props.onFormChange({
-            scheduleKind: value,
-            ...(value === "event" ? { triggerEnabled: false, deleteAfterRun: false } : {}),
-            ...(value === "at" &&
-            (form().scheduleKind === "every" || form().scheduleKind === "cron")
-              ? { deleteAfterRun: true }
-              : value === "every" || value === "cron"
-                ? { deleteAfterRun: false }
-                : {}),
-          })
-        }
-      />
+      {frequency() ? (
+        <ScheduleSentence
+          {...props}
+          frequency={frequency()!}
+          kinds={kinds()}
+          onCustom={setForcedCustom}
+        />
+      ) : (
+        <SettingsSegmented<CronFormState["scheduleKind"]>
+          class="settings-segmented--compact cron-tray-segmented"
+          value={form().scheduleKind}
+          options={kinds()}
+          ariaLabel={t("cron.form.repeat")}
+          onChange={(value) => props.onFormChange(scheduleKindPatch(form(), value))}
+        />
+      )}
       {form().scheduleKind === "at" ? (
         <TrayInput
           {...props}
@@ -199,7 +205,7 @@ export function ScheduleControls(props: CronProps) {
           </span>
         </span>
       ) : undefined}
-      {form().scheduleKind === "cron" ? (
+      {form().scheduleKind === "cron" && frequency() === "custom" ? (
         <>
           <TrayInput
             {...props}

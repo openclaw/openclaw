@@ -10,7 +10,7 @@ import {
   findToggleByLabel,
   getButtonByText,
   getElement,
-  selectSegmented,
+  chooseSchedule,
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
@@ -23,7 +23,7 @@ function picker(container: Element, id: string) {
 }
 
 function selectSchedule(container: Element, kind: string) {
-  selectSegmented(getElement(container, testId(`cron-schedule-kind-${kind}`), HTMLElement));
+  chooseSchedule(container, kind);
 }
 
 function expectInvalidField(container: Element, id: string, errorId: string, message: string) {
@@ -101,12 +101,10 @@ describe("cron view editor", () => {
     const everyContainer = await renderEditor({ scheduleKind: "every" }, { onFormChange });
     expect(everyContainer.querySelector("#cron-every-amount")).not.toBeNull();
     expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
-    const activeEvery = getElement(
-      everyContainer,
-      '[data-test-id="cron-schedule-kind-every"] input',
-      HTMLInputElement,
-    );
-    expect(activeEvery.checked).toBe(true);
+    expect(
+      getElement(everyContainer, '[data-test-id="cron-schedule-frequency"]', HTMLElement)
+        .textContent,
+    ).toBe("Every");
     selectSchedule(everyContainer, "cron");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
     selectSchedule(everyContainer, "at");
@@ -115,7 +113,7 @@ describe("cron view editor", () => {
       (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
     ).not.toBeNull();
     const cronContainer = await renderEditor(
-      { scheduleKind: "cron", deleteAfterRun: true },
+      { scheduleKind: "cron", cronExpr: "*/15 * * * *", deleteAfterRun: true },
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();

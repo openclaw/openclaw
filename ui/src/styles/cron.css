@@ -1299,3 +1299,129 @@
 .cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
 }
+
+/* Schedule sentence: each part is quiet text that opens its own small menu. */
+.cron-sentence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-sentence__part {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.8);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cron-sentence__part:hover,
+.cron-sentence__part[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__part:disabled {
+  cursor: default;
+  background: none;
+}
+
+.cron-sentence__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.cron-sentence__text svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.cron-sentence__menu {
+  min-width: 180px;
+  padding: 6px;
+}
+
+.cron-sentence__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cron-sentence__choice {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.7);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.cron-sentence__choice:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__choice[aria-pressed="true"] {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.cron-sentence__days {
+  display: flex;
+  gap: 4px;
+}
+
+.cron-sentence__day {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cron-sentence__day[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.cron-sentence__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.cron-sentence__field input {
+  min-width: 0;
+  width: 120px;
+}
+
+.cron-sentence__range {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 4px;
+}

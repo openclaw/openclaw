@@ -9,7 +9,7 @@ import {
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
 import { cronRpc } from "./cron-rpc.test-support.ts";
-import { getElement, selectSegmented } from "./view.test-support.ts";
+import { chooseSchedule, getElement } from "./view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -36,7 +36,7 @@ it("blocks saves until discovery and schema validation finish, then submits the 
   expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
   button("new-task").click();
   await page.settle();
-  selectSegmented(getElement(page, '[data-test-id="cron-schedule-kind-event"]', HTMLElement));
+  chooseSchedule(page, "event");
   page.patchForm({
     name: "Deployment alerts",
     payloadText: "Summarize the deployment.",

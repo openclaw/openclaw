@@ -15,7 +15,7 @@ import {
   getButtonByText,
   openCronMenu,
   scheduledJob,
-  selectSegmented,
+  chooseSchedule,
 } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -59,7 +59,7 @@ async function submitWhenReady(page: ReturnType<typeof harness.createPage>) {
 }
 
 async function chooseOneTime(page: ReturnType<typeof harness.createPage>) {
-  selectSegmented(page.querySelector(dom.testId("cron-schedule-kind-at")) as HTMLElement);
+  chooseSchedule(page, "at");
   await page.settle();
   dom.fillInput(page, "#cron-schedule-at", "2099-01-01T12:00");
 }
