@@ -452,7 +452,7 @@ async function runEmbeddedAttemptOwned(
                     )) ||
                   event.toolResults.some(
                     (result) =>
-                      preparedSessionRuntime.agentSession.codeModeExecToolNames?.has(
+                      preparedSessionRuntime.agentSession.codeModeControlToolNames?.has(
                         result.toolName,
                       ) &&
                       isRecord(result.details) &&

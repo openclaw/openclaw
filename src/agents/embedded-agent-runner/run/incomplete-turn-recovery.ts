@@ -224,9 +224,14 @@ function readSettledToolCalls(
   });
 }
 
+type SettledToolBatchAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  "messagesSnapshot" | "currentAttemptAssistant" | "itemLifecycle" | "toolMetas" | "lastToolError"
+>;
+
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
 export function resolveSettledToolBatchEvidence(
-  attempt: IncompleteTurnAttempt,
+  attempt: SettledToolBatchAttempt,
   // Set only when the attempt stopped before its next model call: a user message after
   // the current attempt's batch was steered into this run and does not start a new turn.
   options?: { midTurn?: boolean },
@@ -262,7 +267,7 @@ export function resolveSettledToolBatchEvidence(
     }),
   );
   // Transcript proof: every call in the batch has its result persisted. Nested
-  // code-mode work (exec status "waiting") keeps lifecycle items active while
+  // code-mode work (exec or wait status "waiting") keeps lifecycle items active while
   // the outer result is already recorded, so this is the weaker of the two.
   const allToolCallsRecorded =
     requestedToolCalls.length > 0 &&
@@ -276,7 +281,7 @@ export function resolveSettledToolBatchEvidence(
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0;
   // Producer-recorded fact from the tool completion handler: one of this batch's
-  // exec results parked a Code Mode run, which is the only legitimate reason a
+  // exec or wait results parked a Code Mode run, which is the only legitimate reason a
   // fully recorded batch still shows active lifecycle items.
   const parkedCodeModeRun =
     allToolCallsRecorded &&
@@ -329,6 +334,26 @@ export function resolveSettledToolBatchEvidence(
     hasUnsettledToolError,
     intentionalTermination,
   };
+}
+
+/**
+ * Mid-turn compaction continues the recorded transcript and never replays the
+ * assistant call. Generic tools must be settled; only a batch whose Code Mode
+ * exec or wait result parked a run (producer-recorded) may continue with
+ * lifecycle items active, because the Code Mode run registry owns that nested
+ * work and resumes it through `wait`, exactly as across turns.
+ */
+export function canCompactAndContinueMidTurn(
+  attempt: SettledToolBatchAttempt &
+    Pick<EmbeddedRunAttemptResult, "replayMetadata" | "currentAttemptReplayMetadata">,
+): boolean {
+  if (isCurrentAttemptReplaySafe(attempt)) {
+    return true;
+  }
+  const { allToolsProvenSettled, parkedCodeModeRun } = resolveSettledToolBatchEvidence(attempt, {
+    midTurn: true,
+  });
+  return (allToolsProvenSettled || parkedCodeModeRun) && !hasAsyncActivity(attempt.toolMetas);
 }
 
 /** True when the settled turn ended at the output token limit rather than by choice. */

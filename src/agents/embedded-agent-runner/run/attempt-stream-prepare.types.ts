@@ -23,7 +23,7 @@ export type PrepareEmbeddedAttemptStreamInput = {
     | "builtinToolNames"
     | "coreBuiltinToolNames"
     | "replaySafeToolNames"
-    | "codeModeExecToolNames"
+    | "codeModeControlToolNames"
     | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"

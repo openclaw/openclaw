@@ -109,6 +109,7 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    canCompactMidTurn: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -487,6 +488,7 @@ export function installEmbeddedAttemptStreamGuards(
         previousRequest,
         measuredContextTokens:
           previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+        canCompactMidTurn: callbacks.canCompactMidTurn,
       });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(

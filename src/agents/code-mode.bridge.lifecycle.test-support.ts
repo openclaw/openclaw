@@ -86,7 +86,7 @@ export function createSubscribedCodeModeHarness(params: {
       sourceReplyCapableToolNames: new Set(),
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
-      codeModeExecToolNames: new Set(),
+      codeModeControlToolNames: new Set(),
       sideEffectToolOwners: new Map(),
       trustedLocalMediaToolNames: new Set(),
     },

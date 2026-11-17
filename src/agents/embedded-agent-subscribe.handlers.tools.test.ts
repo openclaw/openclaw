@@ -1145,23 +1145,21 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
-  it("marks a parked Code Mode exec only when the tool is the marked control tool", async () => {
+  it("marks a parked Code Mode run only for a marked exec or wait control", async () => {
     const { ctx } = createTestContext();
-    ctx.params.codeModeExecToolNames = new Set(["exec"]);
+    for (const controls of [["exec", "wait"], []]) {
+      ctx.params.codeModeControlToolNames = new Set(controls);
+      for (const toolName of ["exec", "wait"]) {
+        await endTool(ctx, {
+          toolName,
+          toolCallId: `tool-${toolName}-${controls.length}`,
+          result: { details: { status: "waiting", runId: "cm_parked", reason: "pending_tools" } },
+        });
+      }
+    }
 
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-code-mode-waiting",
-      result: { details: { status: "waiting", runId: "cm_parked", reason: "pending_tools" } },
-    });
-    ctx.params.codeModeExecToolNames = new Set();
-    await endTool(ctx, {
-      toolName: "exec",
-      toolCallId: "tool-plain-exec-waiting",
-      result: { details: { status: "waiting", runId: "cm_impostor" } },
-    });
-
-    expect(ctx.state.toolMetas.map((entry) => entry.codeModeSuspended)).toEqual([true, undefined]);
+    const parked = ctx.state.toolMetas.map((entry) => entry.codeModeSuspended);
+    expect(parked).toEqual([true, true, undefined, undefined]);
   });
 
   it("records intentional termination with its exact tool call id", async () => {

@@ -145,11 +145,13 @@ describe("installEmbeddedAttemptContextGuards", () => {
     const guards = installEmbeddedAttemptContextGuards(input as never);
     const request = {
       context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
+      canCompactMidTurn: () => true,
     };
     input.activeSession[agentSessionDeferThresholdCompaction] = true;
     await expect(
       guards.checkMidTurnPrecheck({
         context: { messages: [{ role: "user", content: "x".repeat(3_200), timestamp: 1 }] },
+        canCompactMidTurn: () => true,
       }),
     ).resolves.toBeLessThan(1_024);
     expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
@@ -177,6 +179,28 @@ describe("installEmbeddedAttemptContextGuards", () => {
     guards.remove();
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
+  });
+
+  it("sends a fitting request instead of stopping when its batch cannot continue after compaction", async () => {
+    const guards = installEmbeddedAttemptContextGuards(createInput() as never);
+    // Provider-measured occupancy above the 768-token maintenance threshold of
+    // the 1,024-token window starts proactive compaction.
+    const request = (canCompact: boolean) => ({
+      context: { messages: [{ role: "user" as const, content: "x".repeat(3_600), timestamp: 1 }] },
+      measuredContextTokens: 800,
+      canCompactMidTurn: () => canCompact,
+    });
+
+    const estimate = await guards.checkMidTurnPrecheck(request(false));
+    expect(estimate).toBeGreaterThan(768);
+    expect(estimate).toBeLessThanOrEqual(1_024);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+
+    await expect(guards.checkMidTurnPrecheck(request(true))).rejects.toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+      estimatedPromptTokens: estimate,
+      promptBudgetBeforeReserve: 768,
+    });
   });
 
   it("hydrates current images and their failure notice before context transforms", async () => {

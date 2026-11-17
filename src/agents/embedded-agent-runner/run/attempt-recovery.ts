@@ -42,7 +42,10 @@ import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { buildErrorAgentMeta } from "./helpers.js";
 import { hasComposedVisibleAnswerAfterSettledTools } from "./incomplete-turn-classification.js";
-import { resolveSettledToolBatchEvidence } from "./incomplete-turn-recovery.js";
+import {
+  canCompactAndContinueMidTurn,
+  resolveSettledToolBatchEvidence,
+} from "./incomplete-turn-recovery.js";
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -219,15 +222,9 @@ export async function recoverEmbeddedRunAttempt(input: {
   // Side effects still forbid replaying the original prompt or switching models.
   const canContinueSettledIdleTimeout =
     idleTimedOut && settledEvidence.allToolsProvenSettled && toolsAllowContinuation;
-  // Mid-turn overflow continues from the persisted tool results and never
-  // replays the assistant call. Generic tools must still be fully settled; only
-  // a batch whose exec result parked a Code Mode run (producer-recorded) may
-  // continue with lifecycle items active — the nested call stays owned by the
-  // code-mode run registry and resumes through `wait`, exactly as across turns.
-  const midTurnBatchSettled =
-    settledEvidence.allToolsProvenSettled || settledEvidence.parkedCodeModeRun;
+  // The provider-boundary precheck asked this same question before stopping.
   const canContinueSettledMidTurnOverflow =
-    midTurnPrecheck && midTurnBatchSettled && !asyncActivity;
+    midTurnPrecheck && canCompactAndContinueMidTurn(attempt);
   // A provider can reject the next prompt after writes have settled. Compact
   // their recorded results under this owner without replaying the original task.
   const canRecoverSettledToolResults =

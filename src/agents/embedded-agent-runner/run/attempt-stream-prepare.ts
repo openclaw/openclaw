@@ -367,7 +367,7 @@ function prepareStream(
     builtinToolNames: agentSession.builtinToolNames,
     coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
     replaySafeToolNames: agentSession.replaySafeToolNames,
-    codeModeExecToolNames: agentSession.codeModeExecToolNames,
+    codeModeControlToolNames: agentSession.codeModeControlToolNames,
     sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
     toolUsageRecorder: attempt.toolUsageRecorder,

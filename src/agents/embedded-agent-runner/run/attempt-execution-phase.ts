@@ -18,6 +18,7 @@ import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { replayToolResultPromptProjections } from "../tool-result-projection-replay.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { findCurrentAttemptAssistantMessage } from "./attempt-context-engine-helpers.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   createEmbeddedAttemptIdleInterruption,
@@ -28,7 +29,10 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
+import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import { canCompactAndContinueMidTurn } from "./incomplete-turn-recovery.js";
+import { readSubscriptionCompletionEvidence } from "./subscription-completion-evidence.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
@@ -66,6 +70,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
+  const canCompactMidTurnRef: { current?: () => boolean } = {};
   const {
     normalizeToolCallIds,
     onModelRequest,
@@ -84,6 +89,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       }
     },
     diagnosticOwner,
+    canCompactMidTurn: () => canCompactMidTurnRef.current?.() ?? false,
   });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
@@ -207,6 +213,31 @@ export async function runEmbeddedAttemptExecutionPhase(
     isInFlight: () => activeSession.isCompacting,
   });
   queueHandleRef.current = preparedStream.queueHandle;
+  // Ask recovery's own question with live evidence before stopping for compaction.
+  canCompactMidTurnRef.current = () => {
+    const evidence = readSubscriptionCompletionEvidence(preparedStream.subscription);
+    const messagesSnapshot = activeSession.messages;
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot,
+      prePromptMessageCount: sessionRuntime.state.prePromptMessageCount,
+    });
+    // Subscription events trail the agent loop in order. Until every call in the
+    // batch has terminal evidence, the answer is unknown, so defer compaction.
+    const batchRecorded = (currentAttemptAssistant?.content ?? []).every(
+      (block) =>
+        block.type !== "toolCall" ||
+        evidence.toolMetas.some((entry) => entry.toolCallId === block.id),
+    );
+    return (
+      batchRecorded &&
+      canCompactAndContinueMidTurn({
+        ...evidence,
+        currentAttemptReplayMetadata: buildAttemptReplayMetadata(evidence),
+        messagesSnapshot,
+        currentAttemptAssistant,
+      })
+    );
+  };
 
   const attemptTimeout = prepareEmbeddedAttemptTimeout({
     attempt,

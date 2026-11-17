@@ -404,6 +404,27 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
   });
 
+  it("records only the marked Code Mode exec and wait controls as run-parking tools", () => {
+    const controls = createCodeModeTools({
+      config: CODE_MODE_CONFIG,
+      catalogRef: createToolSearchCatalogRef(),
+      ...RUN_CONTEXT,
+    });
+    const plainExec = createStubTool("exec");
+    const plainWait = createStubTool("wait");
+
+    expect(
+      prepare({ effectiveTools: controls, uncompactedEffectiveTools: controls })
+        .codeModeControlToolNames,
+    ).toEqual(new Set(["exec", "wait"]));
+    expect(
+      prepare({
+        effectiveTools: [plainExec, plainWait],
+        uncompactedEffectiveTools: [plainExec, plainWait],
+      }).codeModeControlToolNames,
+    ).toEqual(new Set());
+  });
+
   it("collects exact local-media trust from core policy and plugin metadata", () => {
     const trustedPluginTool = pluginTool("plugin_media", "trusted-plugin", {
       trustedLocalMedia: true,

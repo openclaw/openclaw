@@ -6,7 +6,7 @@ import {
 } from "../../../plugins/tool-metadata.js";
 import { toClientToolDefinitions, toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { isCoreToolResultMediaTrustedName } from "../../embedded-agent-tool-media.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
@@ -127,11 +127,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
       params.uncompactedEffectiveTools,
       params.replaySafetyOptions,
     );
-    // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
-    // the same name must never be mistaken for one at tool completion. The marked
-    // controls exist only on the post-catalog `effectiveTools` surface.
-    const codeModeExecToolNames = new Set(
-      effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
+    // Only the marked Code Mode exec and wait controls own a resumable run; a plain
+    // shell exec or plugin wait of the same name must never be mistaken for one at
+    // tool completion. The marked controls exist only on the post-catalog
+    // `effectiveTools` surface.
+    const codeModeControlToolNames = new Set(
+      effectiveTools.filter(isCodeModeControlTool).map((tool) => tool.name),
     );
     // Only a tool author can opt a tool into delivering its result as the source reply.
     // Names are policy-normalized because completion and terminal hooks compare them so.
@@ -207,7 +208,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       clientToolDefs,
       replaySafeToolNames,
       replaySafeTools,
-      codeModeExecToolNames,
+      codeModeControlToolNames,
       sourceReplyCapableToolNames,
       sideEffectToolOwners,
       toolUsageIdsByName,
@@ -235,7 +236,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "builtinToolNames",
         "coreBuiltinToolNames",
         "replaySafeToolNames",
-        "codeModeExecToolNames",
+        "codeModeControlToolNames",
         "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {

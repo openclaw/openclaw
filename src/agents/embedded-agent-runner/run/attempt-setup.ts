@@ -443,7 +443,11 @@ export function installEmbeddedAttemptContextGuards(input: {
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
         "context" | "previousRequest" | "fixedTokenPressure"
-      > & { measuredContextTokens?: number },
+      > & {
+        measuredContextTokens?: number;
+        /** Whether recovery can compact and continue this attempt's transcript now. */
+        canCompactMidTurn: () => boolean;
+      },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.
       const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
@@ -460,8 +464,9 @@ export function installEmbeddedAttemptContextGuards(input: {
         !deferThreshold &&
         compaction?.enabled !== false &&
         (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      const { canCompactMidTurn, ...pressureRequest } = request;
       const decision = resolveProjectedRequestPressure({
-        ...request,
+        ...pressureRequest,
         // Provider projections may contain text that the transcript owner cannot rewrite.
         estimateRecoverableToolResultChars: () =>
           estimateToolResultReductionPotential({
@@ -490,6 +495,24 @@ export function installEmbeddedAttemptContextGuards(input: {
         },
       });
       await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
+      // Compaction headroom is maintenance, not a provider limit. When the batch
+      // cannot continue after compaction, send a request that fits the window
+      // and compact at the next boundary that can continue or after the turn.
+      if (
+        decision.route !== "fits" &&
+        decision.effectiveReserveTokens > 0 &&
+        decision.estimatedPromptTokens <= contextTokenBudget &&
+        !canCompactMidTurn()
+      ) {
+        log.info(
+          `[context-overflow-midturn-precheck] deferred compaction until the tool batch can continue ` +
+            `sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
+            `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
+            `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
+            `contextTokenBudget=${contextTokenBudget}`,
+        );
+        return decision.estimatedPromptTokens;
+      }
       if (decision.route !== "fits") {
         pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
         throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);

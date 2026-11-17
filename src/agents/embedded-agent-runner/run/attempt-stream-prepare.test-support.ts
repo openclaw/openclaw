@@ -85,7 +85,7 @@ export function prepareCatalogExecutor(options?: {
       sourceReplyCapableToolNames: new Set(),
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
-      codeModeExecToolNames: new Set(),
+      codeModeControlToolNames: new Set(),
       toolUsageIdsByName: new Map(),
       sideEffectToolOwners: new Map(),
       trustedLocalMediaToolNames: new Set(options?.trustedLocalMediaToolNames),

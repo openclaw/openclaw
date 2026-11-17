@@ -20,6 +20,13 @@ const settledExecAssistant = buildEmbeddedRunnerAssistant({
   timestamp: 1,
 });
 const settledExecResult = makeTextToolResult("call-exec", "exec", "command completed", false, 2);
+// Code Mode resumes a parked exec run through `wait`, which can park it again.
+const waitAssistant = buildEmbeddedRunnerAssistant({
+  content: [{ type: "toolCall" as const, id: "call-wait", name: "wait", arguments: {} }],
+  stopReason: "toolUse" as const,
+  timestamp: 3,
+});
+const waitResult = makeTextToolResult("call-wait", "wait", "still waiting", false, 4);
 
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -56,9 +63,12 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
   codeModeEngaged?: boolean;
   codeModeSuspended?: boolean;
   steeredAfterResult?: boolean;
+  parkedAgainByWait?: boolean;
 }) {
   const activeCount = params?.activeCount ?? 0;
   const resultRecorded = params?.resultRecorded ?? true;
+  const parkedAgainByWait = params?.parkedAgainByWait === true;
+  const batchAssistant = parkedAgainByWait ? waitAssistant : settledExecAssistant;
   return session.makeAttemptResult({
     ...(params?.codeModeEngaged ? { codeModeEngaged: true } : {}),
     promptError: makeOverflowError("Context overflow: prompt too large (mid-turn precheck)."),
@@ -69,12 +79,13 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
       estimatedPromptTokens: 201_000,
     },
     assistantTexts: [],
-    lastAssistant: settledExecAssistant,
-    currentAttemptAssistant: settledExecAssistant,
+    lastAssistant: batchAssistant,
+    currentAttemptAssistant: batchAssistant,
     messagesSnapshot: resultRecorded
       ? [
           settledExecAssistant,
           settledExecResult,
+          ...(parkedAgainByWait ? [waitAssistant, waitResult] : []),
           ...(params?.steeredAfterResult
             ? [{ role: "user" as const, content: "also check the logs", timestamp: 3 }]
             : []),
@@ -88,6 +99,16 @@ function makeReplayUnsafeMidTurnOverflow(params?: {
         asyncStarted: params?.asyncStarted ?? false,
         ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
       },
+      ...(parkedAgainByWait
+        ? [
+            {
+              toolName: "wait",
+              toolCallId: "call-wait",
+              replaySafe: false,
+              ...(params?.codeModeSuspended ? { codeModeSuspended: true } : {}),
+            },
+          ]
+        : []),
     ],
     itemLifecycle: {
       startedCount: 1,
@@ -328,36 +349,43 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("compacts while a code-mode exec still waits on nested tool work", async () => {
-    // exec returned status "waiting" (result persisted) but its nested call keeps
-    // a lifecycle item active; the run stays resumable through `wait`.
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeReplayUnsafeMidTurnOverflow({
-          activeCount: 1,
-          codeModeEngaged: true,
-          codeModeSuspended: true,
+  it.each([
+    ["exec", false],
+    ["wait after exec", true],
+  ])(
+    "compacts while a code-mode %s still waits on nested tool work",
+    async (_label, parkedAgainByWait) => {
+      // The control returned status "waiting" (result persisted) but its nested call
+      // keeps a lifecycle item active; the run stays resumable through `wait`.
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(
+          makeReplayUnsafeMidTurnOverflow({
+            activeCount: 1,
+            codeModeEngaged: true,
+            codeModeSuspended: true,
+            parkedAgainByWait,
+          }),
+        )
+        .mockResolvedValueOnce(session.makeAttemptResult());
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted while exec waits",
+          firstKeptEntryId: "entry-waiting-exec",
+          tokensBefore: 201_000,
         }),
-      )
-      .mockResolvedValueOnce(session.makeAttemptResult());
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted while exec waits",
-        firstKeptEntryId: "entry-waiting-exec",
-        tokensBefore: 201_000,
-      }),
-    );
+      );
 
-    const result = await runEmbeddedAgent({
-      ...session.runParams,
-      runId: "run-midturn-waiting-exec",
-    });
+      const result = await runEmbeddedAgent({
+        ...session.runParams,
+        runId: `run-midturn-waiting-${parkedAgainByWait ? "wait" : "exec"}`,
+      });
 
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
+      expect(mockedCompactDirect).toHaveBeenCalledOnce();
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expectRetryContinuesFromTranscript();
+      expect(result.meta.error).toBeUndefined();
+    },
+  );
 
   it.each([
     ["with a nested tool item still active", 1],
@@ -412,6 +440,8 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     if (expectsWarning) {
+      // The boundary stops only an over-window request, so overflow copy is accurate.
+      expect(result.payloads?.[0]?.text).toContain("Context overflow");
       expect(result.payloads?.[0]?.text).toContain(
         "some tool actions may have already been executed",
       );

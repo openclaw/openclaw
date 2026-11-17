@@ -167,12 +167,12 @@ export async function prepareToolExecutionEnd(
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
-  // A Code Mode exec that returns "waiting" parked a run the model resumes via
-  // `wait`; record that here so recovery can tell parked nested work apart
-  // from any other still-active lifecycle item.
+  // A Code Mode exec or wait that returns "waiting" parked a run the model
+  // resumes via `wait`; record that here so recovery can tell parked nested
+  // work apart from any other still-active lifecycle item.
   const codeModeSuspended =
     !isToolError &&
-    ctx.params.codeModeExecToolNames?.has(toolName) === true &&
+    ctx.params.codeModeControlToolNames?.has(toolName) === true &&
     readToolResultDetails(sanitizedResult)?.status === "waiting";
   const resultRecord = asOptionalObjectRecord(result);
   const terminate =

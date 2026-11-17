@@ -91,7 +91,10 @@ During tool loops, completed provider usage triggers this maintenance before the
 next request. The request boundary also checks projected occupancy, including
 new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
-path. Native Codex and Claude CLI keep their own compaction policies.
+path. Reaching the maintenance threshold never fails a turn: if the current tool
+batch cannot continue after compaction, a request that still fits the window is
+sent and compaction waits for a later boundary. Native Codex and Claude CLI keep
+their own compaction policies.
 
 If tool-result trimming cannot change the saved context, recovery falls through
 to compaction instead of retrying the same oversized request. Same-turn retries

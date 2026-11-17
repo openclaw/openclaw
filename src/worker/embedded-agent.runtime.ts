@@ -11,6 +11,10 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { projectMemoryFlushTools } from "../agents/agent-tools.memory-flush.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
+import {
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+} from "../agents/code-mode-control-tools.js";
 import { disposeAllCodeModeRuns } from "../agents/code-mode-state.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/defaults.js";
 import { classifyAssistantTurn } from "../agents/embedded-agent-runner/run/incomplete-turn-classification.js";
@@ -399,7 +403,11 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       runId: params.runId,
       sessionKey: params.sessionKey,
       terminalLifecyclePhase: "finishing",
-      codeModeExecToolNames: new Set(toolSurfaceRuntime?.codeModeControlsEnabled ? ["exec"] : []),
+      codeModeControlToolNames: new Set(
+        toolSurfaceRuntime?.codeModeControlsEnabled
+          ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
+          : [],
+      ),
     });
     const unsubscribe = session.subscribe(liveRuntime.handleSessionEvent);
     const existingProcesses = new Set(listRunningSessions().map(({ id }) => id));

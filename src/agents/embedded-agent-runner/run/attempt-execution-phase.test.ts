@@ -317,6 +317,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           runId: "async-fragment",
           sessionId: fixture.input.attempt.sessionId,
         }),
+        canCompactMidTurn: () => true,
       });
       const modelState = createEmbeddedModelState(
         {

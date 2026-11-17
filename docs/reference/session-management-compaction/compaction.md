@@ -74,7 +74,13 @@ previous response's usage; it does not add a compaction reserve to the hard
 window. Text tool results use the same CJK-aware character estimate as other
 text, with dense encoded-data accounting. The hard check uses nominal occupancy;
 compaction planning retains its separate safety margin. Deferring threshold maintenance does not disable
-hard admission. Recovery still requires settled, replay-safe tool work.
+hard admission. Recovery still requires settled, replay-safe tool work; a
+Code Mode `exec` or `wait` result that parks its run counts as settled. When the
+current batch cannot continue after compaction (for example, asynchronous tool
+work is still pending), threshold pressure does not stop the request: a request
+that fits the full window is sent, and compaction waits for the next boundary
+that can continue or for the end of the turn. Only a request larger than the
+window itself stops the run.
 
 ## Compaction settings
 

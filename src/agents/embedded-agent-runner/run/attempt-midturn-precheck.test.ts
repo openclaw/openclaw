@@ -54,6 +54,7 @@ type AdmissionOptions = Partial<{
   compatibleBudget: boolean;
   strictReplay: boolean;
   responseSchema: boolean;
+  deferCompaction: boolean;
 }>;
 
 describe("provider request admission", () => {
@@ -86,6 +87,8 @@ describe("provider request admission", () => {
     ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
     ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
     ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"deferred compaction pressure"}      | ${23_000} | ${12_000}  | ${16_000} | ${true}  | ${{ deferCompaction: true }}
+    ${"deferred over-window request"}      | ${30_000} | ${12_000}  | ${16_000} | ${false} | ${{ deferCompaction: true }}
     ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
     ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
   `(
@@ -109,6 +112,7 @@ describe("provider request admission", () => {
         compatibleBudget,
         strictReplay,
         responseSchema,
+        deferCompaction,
       },
     }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
@@ -402,6 +406,8 @@ describe("provider request admission", () => {
           runId: fixture.input.attempt.runId,
           sessionId: session.sessionId,
         }),
+        // Deferral models a batch that compaction recovery could not continue.
+        canCompactMidTurn: () => deferCompaction !== true,
       });
       const modelState = createEmbeddedModelState(
         {

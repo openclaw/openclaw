@@ -70,7 +70,7 @@ describe("usage at the embedded completion boundary", () => {
       agentId: "main",
       toolUsageRecorder: recorder,
       toolUsageIdsByName,
-      codeModeExecToolNames: new Set(["exec"]),
+      codeModeControlToolNames: new Set(["exec"]),
       sessionExtras: { sessionManager: manager },
     });
     const catalogRef = createToolSearchCatalogRef();
@@ -196,7 +196,7 @@ describe("usage at the embedded completion boundary", () => {
       agentId: "main",
       toolUsageRecorder: recorder,
       toolUsageIdsByName: bindToolUsageIds([meetings, dispatch, codeMode], []),
-      codeModeExecToolNames: new Set(["exec"]),
+      codeModeControlToolNames: new Set(["exec"]),
       sessionExtras: { sessionManager: manager },
     });
     const catalogRef = createToolSearchCatalogRef();
