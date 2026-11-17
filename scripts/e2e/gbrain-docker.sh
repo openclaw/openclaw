@@ -268,8 +268,8 @@ seed "Project Avocet" "Our Avocet seal code is $CW7." >/dev/null 2>&1
 step fault-rotate-recovered turn "e2e-after-rotate-$RANDOM" "What is our Avocet seal code?" "$CW7" || fail "recall after rotation"
 
 # 6. gbrain upgrade with no plugin change: one release back, then GBrain upgrades itself.
-step upgrade-downgrade compose exec -T gbrain sh -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version'
-step upgrade-run compose exec -T gbrain sh -c 'gbrain upgrade; gbrain --version'
+step upgrade-downgrade compose exec -T gbrain sh -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version' || fail "gbrain downgrade"
+step upgrade-run compose exec -T gbrain sh -c 'gbrain upgrade && v="$(gbrain --version)" && echo "$v" && [ "$v" != "gbrain 0.60.732.0" ]' || fail "gbrain upgrade"
 step upgrade-restart compose restart gbrain
 gbrain_healthy 180
 CW8="$(codeword)"

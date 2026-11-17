@@ -277,8 +277,8 @@ step fault-rotate-recovered turn "e2e-after-rotate-$RANDOM" "What is our Avocet 
 
 # 6. gbrain upgrade with no plugin change: go back one release, then let GBrain upgrade itself.
 PREV="$(gbrain --version)"
-step upgrade-downgrade bash -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version'
-step upgrade-run bash -c 'gbrain upgrade; gbrain --version'
+step upgrade-downgrade bash -c 'bun install -g "github:garrytan/gbrain#v0.60.732.0" && gbrain --version' || fail "gbrain downgrade"
+step upgrade-run bash -c 'gbrain upgrade && v="$(gbrain --version)" && echo "$v" && [ "$v" != "gbrain 0.60.732.0" ]' || fail "gbrain upgrade"
 health_ok 120
 CW8="$(codeword)"
 seed "Project Godwit" "Our Godwit beacon code is $CW8." >/dev/null 2>&1
