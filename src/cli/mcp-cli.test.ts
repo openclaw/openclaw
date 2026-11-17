@@ -5,6 +5,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
@@ -363,6 +365,20 @@ it.each([
     expect(competitorWon).toBe(true);
   }
   expect(await readServer()).toEqual({ command: "node", args: [script] });
+});
+
+it("probes a new server while holding state ownership for its launch", async () => {
+  const owned: boolean[] = [];
+  setCreateSessionMcpRuntimeOverride((params) =>
+    probeRuntime(params, "cli-probe-custody", async () => {
+      // Docker launches require this custody; a probe outside it fails before connecting.
+      owned.push(captureGatewayStateOwner(resolveOpenClawStateSqlitePath()) !== undefined);
+      return catalog({ docs: { serverName: "docs", launchSummary: "node", toolCount: 0 } });
+    }),
+  );
+  await mcp("add", "docs", "--command", "node");
+  expect(owned).toEqual([true]);
+  expect(await readServer()).toEqual({ command: "node" });
 });
 
 const filteredServer = {
