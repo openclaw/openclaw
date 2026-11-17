@@ -6277,15 +6277,14 @@ jobs:
               process.stdout.write(pair?.phone.udid ?? "");
             ' "$simulator_id"
           )"
-          # XCTest connects through the paired phone, which can differ from IOS_SIMULATOR_ID.
-          # Prepare it while Xcode builds; join before starting Watch operations.
-          companion_boot_pid=
-          trap 'if [[ -n "$companion_boot_pid" ]]; then kill "$companion_boot_pid" 2>/dev/null || true; wait "$companion_boot_pid" 2>/dev/null || true; fi' EXIT
+          # Boot the paired phone during the build; XCTest needs it before Watch operations.
+          boot_pid=
+          trap 'if [[ -n "$boot_pid" ]]; then kill "$boot_pid" 2>/dev/null || true; wait "$boot_pid" 2>/dev/null || true; fi' EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
           if [[ -n "$companion_id" ]]; then
             xcrun simctl bootstatus "$companion_id" -b &
-            companion_boot_pid=$!
+            boot_pid=$!
           fi
           # Reuse the Watch products already compiled by the generic iOS build.
           # Resolve the selected target product from Xcode, not its DerivedData naming.
@@ -6322,11 +6321,9 @@ jobs:
                 process.stdout.write(path.join(TARGET_BUILD_DIR, FULL_PRODUCT_NAME));
               '
           )"
-          if [[ -n "$companion_boot_pid" ]]; then
-            companion_boot_status=0
-            wait "$companion_boot_pid" || companion_boot_status=$?
-            companion_boot_pid=
-            if (( companion_boot_status != 0 )); then exit "$companion_boot_status"; fi
+          if [[ -n "$boot_pid" ]]; then
+            wait "$boot_pid"
+            boot_pid=
           fi
           trap - EXIT INT TERM
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
