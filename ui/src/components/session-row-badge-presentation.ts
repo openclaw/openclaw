@@ -19,7 +19,7 @@ export function sidebarSessionBadgeFacts(
   team: boolean,
   initialPullRequest = row.pullRequest,
 ) {
-  const attention = row.ownAttention ?? row.attention;
+  const attention = row.attention;
   return (
     row.snapshot ?? {
       hasApproval:

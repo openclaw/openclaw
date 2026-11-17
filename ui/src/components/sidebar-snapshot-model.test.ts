@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
@@ -277,4 +278,18 @@ it("omits incognito-only section metadata and counts while preserving existing e
     "pinned",
   ]);
   expect(JSON.stringify(admitted)).not.toContain("private");
+});
+
+it("retains descendant approval badges when the parent has no own attention", () => {
+  const row = {
+    ...displayRow("agent:main:parent", "Parent"),
+    snapshot: undefined,
+    attention: {
+      kind: "question",
+      requests: [{ kind: "approval", id: "child-approval", preview: "", count: 1, createdAtMs: 1 }],
+    } as const,
+    ownAttention: { kind: "none" } as const,
+  };
+  const facts = sidebarSessionBadgeFacts({ summary: () => undefined, count: () => 0 }, row, false);
+  expect(facts.hasApproval).toBe(true);
 });
