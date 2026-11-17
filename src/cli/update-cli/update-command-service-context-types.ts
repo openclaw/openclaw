@@ -42,12 +42,17 @@ export type ManagedGatewayServiceObservation = {
   serviceManagerUid?: number;
 };
 
-export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
+export type ManagedGatewayRuntimeObservation = ManagedGatewayServiceObservation & {
+  running: boolean;
+  serviceDefinitionEnv?: NodeJS.ProcessEnv;
+  serviceNodeRunner?: string;
+};
+
+export type PreManagedServiceStop = ManagedGatewayRuntimeObservation & {
   stoppedAtMs?: number;
   stopped: boolean;
   inspected: boolean;
   runtimeInspected: boolean;
-  running: boolean;
   /** Verified native service process, used only to correlate legacy Gateway locks. */
   servicePid?: number;
   /** Native enable policy captured before our stop; absence is unknown. */
@@ -60,8 +65,6 @@ export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
   serviceMutationSkipMessage?: string;
   blockMessage?: string;
   blockFailureFacts?: UpdateFailureFact[];
-  serviceDefinitionEnv?: NodeJS.ProcessEnv;
-  serviceNodeRunner?: string;
   servicePort?: number;
   /** Original service generation, which can differ from the invoking CLI package. */
   serviceIdentity?: { version: string; buildId?: string };
@@ -117,6 +120,7 @@ export type ManagedServicePackageUpdatePlan = {
   serviceRoot?: string;
   nodeRunner?: string;
   serviceUnitTarget?: string;
+  service?: ManagedGatewayRuntimeObservation;
 };
 
 export type ManagedServiceStopParams = {
