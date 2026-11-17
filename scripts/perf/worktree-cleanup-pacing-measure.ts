@@ -568,8 +568,8 @@ const scheduler = new GatewayScheduler({
         const timer = setTimeout(() => void run(), delayMs);
         return () => clearTimeout(timer);
       }
-      // Park the independent five-minute Git recurrence and hourly sweep.
-      if (delayMs > 60_000 || (scratchOrder && delayMs >= 60_000)) {
+      // Park hourly sweeps; cleanup pressure continuations can wait five minutes.
+      if (delayMs > 10 * 60_000 || (scratchOrder && delayMs >= 60_000)) {
         return () => {};
       }
       const timer = setTimeout(() => {
@@ -580,6 +580,21 @@ const scheduler = new GatewayScheduler({
     },
   },
 });
+// Periodic Git maintenance is independent of this cleanup measurement. Cancel
+// that job by identity so its deadline cannot suppress a cleanup continuation.
+const scope = scheduler.scope.bind(scheduler);
+scheduler.scope = () => {
+  const owner = scope();
+  const schedule = owner.schedule;
+  owner.schedule = (params) => {
+    const job = schedule(params);
+    if (!observeMs && params.id === "maintenance:worktrees:git") {
+      job.cancel();
+    }
+    return job;
+  };
+  return owner;
+};
 const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 let scratchCompleted: (() => void) | undefined;
