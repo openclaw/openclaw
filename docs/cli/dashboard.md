@@ -24,6 +24,37 @@ openclaw dashboard --yes
 - `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.
 
+## Browser selection
+
+Dashboard opening and browser-first onboarding keep your default browser unless its
+installed version is known to lack required Control UI features. If a compatible
+installed alternative is found, OpenClaw explains the choice and opens it for this
+session only. It does not install browsers, change defaults, or use agent browser
+automation profiles. The selected browser receives a fresh one-time pairing link
+through the existing private local-file handoff, never in process arguments.
+
+- **macOS:** reads browser registrations and application metadata, including
+  `/Applications` and `~/Applications`.
+- **Windows:** reads HTTPS browser registration and installed executable version
+  metadata. This covers the native CLI, not the independently released Windows Hub.
+- **Linux:** reads the HTTPS XDG desktop association and versions of normal
+  Chrome, Chromium, Edge, and Firefox executables on `PATH`. Custom desktop
+  wrappers, Flatpak-only installs, and a `BROWSER` override may remain unknown.
+- **WSL:** retains the existing Windows desktop opener; Linux browser discovery
+  does not select a browser for the Windows desktop.
+
+Version estimates are not browser-side feature verification. Unknown browsers or
+versions retain the existing default-opening path, and the Control UI still checks
+its required features before starting. Alternatives are considered in a fixed
+order: Chrome, Firefox, Edge, then Safari on macOS or Chromium on Linux.
+
+Remote and headless sessions retain manual connection guidance instead of opening
+a browser on another machine. If no compatible alternative is identified, use an
+up-to-date browser or `openclaw tui`. After a failed launch or an expired or used
+pairing link, run `openclaw dashboard` again for a fresh link. Opening a browser is
+not proof of a Gateway connection; onboarding still waits for a newly connected
+Control UI client.
+
 ## Gateway service and state compatibility
 
 The OpenClaw CLI and the background Gateway service are separate. A service-installation

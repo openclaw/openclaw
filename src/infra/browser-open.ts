@@ -1,9 +1,15 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { spawnAndWait } from "../process/spawn-utils.js";
 import { detectBinary } from "./detect-binary.js";
 import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
+
+export type BrowserOpenOptions = {
+  /** Installed dashboard browser only; the private handoff path is appended separately. */
+  browserCommand?: readonly string[];
+};
 
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */
 async function resolveBrowserOpenCommand(): Promise<string[] | null> {
@@ -71,7 +77,10 @@ export async function openUrl(url: string): Promise<boolean> {
  * The target file itself is the caller's responsibility (for example a
  * mode-0600 document inside a mode-0700 directory).
  */
-export async function openLocalFile(filePath: string): Promise<boolean> {
+export async function openLocalFile(
+  filePath: string,
+  options?: BrowserOpenOptions,
+): Promise<boolean> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return false;
   }
@@ -87,16 +96,29 @@ export async function openLocalFile(filePath: string): Promise<boolean> {
     return false;
   }
   const normalizedPath = pathToFileURL(platformPath.resolve(filePath), { windows }).toString();
-  return await openBrowserPath(normalizedPath);
+  return await openBrowserPath(normalizedPath, options);
 }
 
-async function openBrowserPath(normalizedPath: string): Promise<boolean> {
-  const argv = await resolveBrowserOpenCommand();
+async function openBrowserPath(
+  normalizedPath: string,
+  options?: BrowserOpenOptions,
+): Promise<boolean> {
+  const argv = options?.browserCommand ?? (await resolveBrowserOpenCommand());
   if (!argv) {
     return false;
   }
   const command = [...argv, normalizedPath];
   try {
+    if (options?.browserCommand && process.platform !== "darwin") {
+      // A cold GUI process lives until its window closes. Acknowledge startup,
+      // not process exit; onboarding separately verifies the client connection.
+      const child = await spawnAndWait({
+        argv: command,
+        options: { detached: true, stdio: "ignore", windowsHide: true },
+      });
+      child.unref();
+      return true;
+    }
     const result = await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return result.code === 0 && result.termination === "exit";
   } catch {

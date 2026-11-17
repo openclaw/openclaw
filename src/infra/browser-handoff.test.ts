@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { openUrlPrivately } from "./browser-handoff.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import * as tmpRoot from "./tmp-openclaw-dir.js";
 import * as windowsPrivate from "./windows-private-directory.js";
 
 const { openLocalFileMock } = vi.hoisted(() => ({
@@ -68,6 +69,9 @@ it.runIf(process.platform !== "win32")(
         const close = () => fsSync.closeSync(fd);
         return { fd, close, [Symbol.dispose]: close };
       });
+    // Keep the simulated Windows ACL case on the native host’s actual temp root.
+    const root = resolvePreferredOpenClawTmpDir();
+    using _tmp = vi.spyOn(tmpRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     using _ = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     await expect(openUrlPrivately(targetUrl)).resolves.toBe(true);
     const file = openedPath();

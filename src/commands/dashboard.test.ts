@@ -11,6 +11,11 @@ const resolveGatewayPort = vi.hoisted(() => vi.fn());
 const detectBrowserOpenSupport = vi.hoisted(() => vi.fn());
 const openUrl = vi.hoisted(() => vi.fn());
 const openUrlPrivately = vi.hoisted(() => vi.fn());
+const resolveControlUiBrowser = vi.hoisted(() => vi.fn());
+vi.mock("../infra/control-ui-browser.js", async (original) => ({
+  ...(await original<typeof import("../infra/control-ui-browser.js")>()),
+  resolveControlUiBrowser,
+}));
 const formatControlUiSshHint = vi.hoisted(() => vi.fn());
 const copyToClipboard = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapToken = vi.hoisted(() => vi.fn());
@@ -116,6 +121,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   inspectPortUsage.mockReset();
   openUrlPrivately.mockReset().mockResolvedValue(true);
+  resolveControlUiBrowser.mockReset().mockResolvedValue({ canOpen: true });
   runtime.exit.mockReset();
   issueDeviceBootstrapToken
     .mockReset()
@@ -348,4 +354,30 @@ describe("verified custom-bind handoff", () => {
     expect(startGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
     expectHandoffFailure(copyToClipboard, issueDeviceBootstrapToken, inspectPortUsage);
   });
+});
+
+it("delivers a newly issued pairing to the selected browser on every recovery run", async () => {
+  const openOptions = { browserCommand: ["/usr/bin/firefox"] };
+  resolveControlUiBrowser.mockResolvedValue({
+    canOpen: true,
+    openOptions,
+    notice: "Opening Firefox for this session.",
+  });
+  issueDeviceBootstrapToken
+    .mockResolvedValueOnce({ token: "fixture-first", expiresAtMs: 1 })
+    .mockResolvedValueOnce({ token: "fixture-fresh", expiresAtMs: 2 });
+  await dashboardCommand(runtime);
+  await dashboardCommand(runtime);
+  expect(openUrlPrivately).toHaveBeenNthCalledWith(
+    1,
+    expect.stringContaining("bootstrapToken=fixture-first"),
+    openOptions,
+  );
+  expect(openUrlPrivately).toHaveBeenNthCalledWith(
+    2,
+    expect.stringContaining("bootstrapToken=fixture-fresh"),
+    openOptions,
+  );
+  expect(output()).not.toContain("fixture-first");
+  expect(output()).not.toContain("fixture-fresh");
 });

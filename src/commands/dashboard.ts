@@ -4,6 +4,7 @@ import { promptYesNo } from "../cli/prompt.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import { resolveControlUiBrowser } from "../infra/control-ui-browser.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -350,19 +351,29 @@ export async function dashboardCommand(
   let hint: string | undefined;
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
-    if (browserSupport.ok) {
+    const browser = browserSupport.ok ? await resolveControlUiBrowser() : { canOpen: false };
+    if (browser.notice) {
+      runtime.log(browser.notice);
+    }
+    if (browserSupport.ok && browser.canOpen) {
       // The handoff URL carries the one-time pairing credential in its
       // fragment. Open it through a private file handoff so the credential
       // never appears in a browser-opener process argument, where another
       // OS user could read it from /proc on default procfs hosts.
-      opened = await openUrlPrivately(browserUrl);
+      opened = browser.openOptions
+        ? await openUrlPrivately(browserUrl, browser.openOptions)
+        : await openUrlPrivately(browserUrl);
     }
-    if (!browserSupport.ok || (!opened && !copied && isRemoteEnvironment())) {
+    if (!browserSupport.ok || (!opened && (!copied || !browser.canOpen) && isRemoteEnvironment())) {
       hint = formatControlUiSshHint({
         port,
         basePath,
         tlsEnabled: tlsConfig?.enabled === true,
       });
+    } else if (!browser.canOpen) {
+      hint = copied
+        ? "Automatic browser opening skipped. Open the copied one-time pairing URL in a compatible browser."
+        : "Automatic browser opening skipped. Run `openclaw dashboard --json` for a fresh one-time pairing URL, or use `openclaw tui`.";
     } else {
       hint = opened
         ? undefined

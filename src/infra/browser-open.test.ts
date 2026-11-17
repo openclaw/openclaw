@@ -1,9 +1,10 @@
+import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
-const { detect, execFile, readRelease, launch, success } = vi.hoisted(() => {
+const { detect, execFile, readRelease, launch, launchDetached, success } = vi.hoisted(() => {
   const result: SpawnResult = {
     stdout: "",
     stderr: "",
@@ -14,6 +15,7 @@ const { detect, execFile, readRelease, launch, success } = vi.hoisted(() => {
   };
   return {
     success: result,
+    launchDetached: vi.fn(),
     detect: vi.fn<typeof import("./detect-binary.js").detectBinary>(async () => false),
     execFile: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
     readRelease: vi.fn<() => Promise<string>>(),
@@ -41,6 +43,11 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+vi.mock("../process/spawn-utils.js", async (original) => ({
+  ...(await original<typeof import("../process/spawn-utils.js")>()),
+  spawnAndWait: launchDetached,
+}));
+
 let detectSupport: typeof import("./browser-open.js").detectBrowserOpenSupport;
 let openUrl: typeof import("./browser-open.js").openUrl;
 let openLocalFile: typeof import("./browser-open.js").openLocalFile;
@@ -51,6 +58,7 @@ const openedWith = (...argv: string[]) =>
 
 beforeEach(async () => {
   vi.resetModules();
+  launchDetached.mockReset().mockResolvedValue(new ChildProcess());
   ({
     detectBrowserOpenSupport: detectSupport,
     openUrl,
@@ -82,6 +90,45 @@ afterEach(() => {
 });
 
 describe("openLocalFile", () => {
+  it("reports a selected browser startup failure without trying the unsupported default", async () => {
+    mockProcessPlatform("linux");
+    launchDetached.mockRejectedValueOnce(new Error("ENOENT"));
+    expect(await openLocalFile("/tmp/handoff.html", { browserCommand: ["/missing/firefox"] })).toBe(
+      false,
+    );
+    expect(launch).not.toHaveBeenCalled();
+  });
+  it.each([
+    [
+      "darwin",
+      ["/usr/bin/open", "-a", "/Applications/Google Chrome.app"],
+      "/tmp/handoff.html",
+      "file:///tmp/handoff.html",
+    ],
+    ["linux", ["/usr/bin/firefox"], "/tmp/handoff.html", "file:///tmp/handoff.html"],
+    [
+      "win32",
+      ["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"],
+      "C:\\Temp\\handoff.html",
+      "file:///C:/Temp/handoff.html",
+    ],
+  ] as const)(
+    "opens the private handoff in the selected %s browser",
+    async (platform, command, file, expected) => {
+      mockProcessPlatform(platform);
+      await expect(openLocalFile(file, { browserCommand: command })).resolves.toBe(true);
+      if (platform === "darwin") {
+        openedWith(...command, expected);
+      } else {
+        expect(launchDetached).toHaveBeenCalledExactlyOnceWith({
+          argv: [...command, expected],
+          options: { detached: true, stdio: "ignore", windowsHide: true },
+        });
+        expect(launch).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("passes only the private file:// path to the opener, never a credential URL", async () => {
     mockProcessPlatform("linux");
     vi.stubEnv("DISPLAY", ":0");
