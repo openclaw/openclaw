@@ -175,10 +175,38 @@ suite.define(() => {
             await toggle.click();
           }
           await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
-          // The lone Sessions list already shows every row, so the snapshot holds
-          // the expanded list. Let the debounced capture of the toggles above
-          // start (500 ms timer, then idle within 1 s) before waiting for its write.
-          await page.waitForTimeout(1_600);
+          // data-snapshot-saved stays true from the earlier save until the
+          // debounced capture of the toggles above starts, so read the committed
+          // snapshot itself before reloading.
+          await expect
+            .poll(
+              () =>
+                page.evaluate(
+                  async ({ shown, hidden }) => {
+                    const result = <T>(request: IDBRequest<T>) =>
+                      new Promise<T>((resolve, reject) => {
+                        request.addEventListener("success", () => resolve(request.result));
+                        request.addEventListener("error", () =>
+                          reject(request.error ?? new Error("Snapshot request failed")),
+                        );
+                      });
+                    const database = await result(indexedDB.open("openclaw-chat-snapshots"));
+                    const rows = JSON.stringify(
+                      await result(
+                        database
+                          .transaction("sidebarSnapshots")
+                          .objectStore("sidebarSnapshots")
+                          .getAll(),
+                      ),
+                    );
+                    database.close();
+                    return rows.includes(`"key":"${shown}"`) && !rows.includes(`"key":"${hidden}"`);
+                  },
+                  { shown: childKeys[0]!, hidden: collapsedChildKey },
+                ),
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBe(true);
           await saved().waitFor();
           await viewport.evaluate((element) => {
             element.scrollTop = 0;
