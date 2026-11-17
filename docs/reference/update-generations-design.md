@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                                                                     |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).                                                     |
-| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835).                                                     |
-| Owed steps after the commit point            | First slice merged in [#200331](https://github.com/openclaw/openclaw/pull/200331); convergence and Doctor are in progress. |
-| Stop, publish, and rollback in the candidate | Not designed.                                                                                                              |
+| Slice                                        | Status                                                                                                                                                                                   |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).                                                                                                                   |
+| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835).                                                                                                                   |
+| Owed steps after the commit point            | Two slices merged: [#200331](https://github.com/openclaw/openclaw/pull/200331) and [#200507](https://github.com/openclaw/openclaw/pull/200507). Backup retirement and collection remain. |
+| Stop, publish, and rollback in the candidate | Not designed.                                                                                                                                                                            |
 
 ## Why change it
 
@@ -691,9 +691,39 @@ definition refresh.
   with this change, so nothing is recorded on that run unless the update
   migrated state and the candidate finishes it.
 
-Plugin convergence and an unexpected post-plugin Doctor failure still roll the
-package back. Moving them to owed steps is the next slice. Backup retirement
-after a verified activation and collection follow.
+#### Second slice as built
+
+[#200507](https://github.com/openclaw/openclaw/pull/200507) adds two steps,
+`plugin-convergence` and `post-plugin-doctor`. Before it, either failure
+rolled a replaced core back.
+
+- **Plugin convergence is owed only when the previous plugin set stands.**
+  That needs a plugin cohort whose rollback succeeded, a throw before any
+  record or config was published, and no channel config that only this
+  update can restore. A refused config write, a Doctor refusal, lost
+  authority, pending recovery, and a child whose exit is unconfirmed still
+  fail the update.
+- **Where it is not owed.** On an already-current core and in
+  `openclaw update repair`, plugin installs commit one by one, so a throw
+  there still fails the command and the step stays owed. This narrows the
+  "never fails its command" rule above for this one step.
+- **Post-plugin Doctor is owed only after Doctor started** and when the
+  failure carries no fact from Doctor itself. A Doctor process that exits
+  nonzero was already a warning. A missing entrypoint, a Gateway that could
+  not be parked, a migration or config refusal, and data at risk stay
+  blocking. Config validation and readiness still run and still decide
+  whether the Gateway starts.
+- **When the row is written.** Plugin work runs before activation, so the
+  row is written in post-update maintenance, after the Gateway is verified. A
+  failed or rolled-back run records nothing.
+- **Settling.** A later plugin phase settles an owed step only when its own
+  convergence completed. A phase deferred because config changed settles
+  nothing. The Doctor step also needs a full Doctor run after plugins changed.
+- **First hop.** Released updaters through 2026.11.5-beta.4 retain no plugin
+  cohort, so the first update from them gains nothing: the new child still
+  fails and the old parent rolls back. This is read from source, not run.
+
+Backup retirement after a verified activation and collection follow.
 
 ### B3: stop, publish, and rollback authority
 
@@ -872,7 +902,10 @@ existing handoff carries stop, publish, or rollback authority.
   `perl`. Not run: a kill around the exchange on Linux, power loss, and an
   older release executed against the waiting state. Owed steps ran through
   the update command with fixture services; no published-driver cell, live
-  shell, launchd, systemd, or Windows service exercised them.
+  shell, launchd, systemd, or Windows service exercised them. The owed
+  plugin steps used a real ledger, cohort, package directory, and config
+  with a simulated service manager and Gateway; no managed npm install ran
+  under a cohort.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
