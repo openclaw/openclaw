@@ -587,6 +587,31 @@ describe("scheduled authenticated operator source", () => {
     );
   });
 
+  it("keeps key-linked authority current when an unrelated session is created", () =>
+    withRecovery(async (fixture) => {
+      const { agentId, sessionKey, storePath } = fixture.target;
+      const restored = await restoreGatewayOperatorSource({
+        snapshot: fixture.snapshot,
+        target: { agentId, sessionKey },
+        context: fixture.context,
+        assertCurrent: () => {},
+      });
+      using _ = { [Symbol.dispose]: restored.release };
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(
+        { agentId, sessionKey: `agent:${agentId}:unrelated`, storePath },
+        { sessionId: "unrelated-session", updatedAt: 1 },
+      );
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        sessionId: "replacement-session",
+      });
+      expectRevoked(restored.authority);
+    }));
+
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
       using restored = await restoreFixture(fixture);
