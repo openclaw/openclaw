@@ -24,10 +24,7 @@ import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
-import {
-  resolveUpdateRehearsalRoot,
-  UPDATE_CANDIDATE_INSTALL_ROOT_ENV,
-} from "./update-rehearsal-paths.js";
+import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
@@ -53,6 +50,14 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
   };
+  const isPrivateLookup = (specifier: string) => {
+    const absolute = specifier.startsWith("file:")
+      ? fileURLToPath(specifier)
+      : path.isAbsolute(specifier)
+        ? specifier
+        : undefined;
+    return !absolute || isPathInside(privateRoot, absolute);
+  };
   const sources = new Set(params.config.plugins?.load?.paths ?? []);
   for (const record of [
     ...Object.values(params.installRecords ?? {}),
@@ -73,26 +78,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   if (!candidateRoot) {
     throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
-  const candidatePackageRoot = await fs.realpath(candidateRoot);
-  // The staging owner includes hoisted dependencies and pnpm/bun stores. Older
-  // drivers without this handoff retain the package-only dependency boundary.
-  const candidateInstallRoot = await fs.realpath(
-    params.env[UPDATE_CANDIDATE_INSTALL_ROOT_ENV] ?? candidatePackageRoot,
-  );
-  if (!isPathInside(candidateInstallRoot, candidatePackageRoot)) {
-    throw new Error("Staged OpenClaw package is outside its update installation");
-  }
-  const dependencyRoots = [privateRoot, candidateInstallRoot];
-  const isDependencySource = (file: string) =>
-    dependencyRoots.some((root) => isPathInside(root, file));
-  const isDependencyLookup = (specifier: string) => {
-    const absolute = specifier.startsWith("file:")
-      ? fileURLToPath(specifier)
-      : path.isAbsolute(specifier)
-        ? specifier
-        : undefined;
-    return !absolute || isDependencySource(absolute);
-  };
+  const dependencyRoots = [privateRoot, await fs.realpath(candidateRoot)];
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
     deduplicate: true,
@@ -131,14 +117,14 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       continue;
     }
     for (const reference of copiedGraph.references) {
-      // Explicit external imports retain their source semantics. Lookups naming
-      // rehearsal or staged paths must not escape through a symlink.
-      if (isDependencySource(reference.source) && isDependencyLookup(reference.specifier)) {
+      // Only the private plugin copy is constrained. Explicit external imports
+      // and the trusted candidate's own dependency resolution retain their semantics.
+      if (isPathInside(privateRoot, reference.source) && isPrivateLookup(reference.specifier)) {
         assertContained(reference.target, dependencyRoots);
       }
     }
     const unresolvedPrivate = copiedGraph.unresolved.filter(
-      ({ source, specifier }) => isPathInside(privateRoot, source) && isDependencyLookup(specifier),
+      ({ source, specifier }) => isPathInside(privateRoot, source) && isPrivateLookup(specifier),
     );
     if (unresolvedPrivate.length === 0) {
       continue;

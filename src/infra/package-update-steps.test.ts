@@ -116,13 +116,6 @@ describe("runGlobalPackageUpdateSteps", () => {
       runCommand: createRootRunner(path.join(base, "shell", "lib", "node_modules")),
       runStep,
       timeoutMs: 1000,
-      validateCandidate: async (candidate, installRoot) => {
-        expect(installRoot).toBeDefined();
-        const layout = resolveNpmGlobalPrefixLayoutFromPrefix(installRoot!);
-        expect(candidate).toBe(path.join(layout.globalRoot, "openclaw"));
-        expect(path.dirname(installRoot!)).toBe(managedRoot);
-        return [];
-      },
     });
 
     expect(result).toMatchObject({

@@ -3,7 +3,6 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { UPDATE_CANDIDATE_INSTALL_ROOT_ENV } from "../../infra/update-rehearsal-paths.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -348,12 +347,9 @@ export async function executeMutableUpdate(
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
   let mutationStarted = false;
-  const validateCandidate = async (root: string, installRoot?: string) => {
+  const validateCandidate = async (root: string) => {
     await waitForCurrent();
-    const env = {
-      ...(ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env),
-      [UPDATE_CANDIDATE_INSTALL_ROOT_ENV]: installRoot,
-    };
+    const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
     await recordPhase("validating");
     assertExecutionCurrent();
     try {

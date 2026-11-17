@@ -1700,15 +1700,14 @@ durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Candidate Doctor accepts plugin dependencies inside the private rehearsal copy
-or the staged installation, including nested and hoisted `node_modules` and
-installation-local pnpm or bun stores. The staging updater passes its exact
-installation root through validation; Doctor checks that the candidate package
-belongs to it. Private host links deliberately target the staged package; on
-Windows these are junctions. Dependency paths must remain inside those roots
-after resolving links. Plugin entries and repair writes remain confined to the
-private copy. Both the updater and candidate need the installation-root handoff
-for dependencies outside the package root. Older updaters retain the narrower
-package boundary, which still accepts nested candidate dependencies.
+or the staged OpenClaw package, including its nested `node_modules`. Private host
+links deliberately target that staged package; on Windows these are junctions.
+Containment applies to references from the private plugin copy. The trusted
+candidate's own dependencies retain their package-manager resolution, including
+hoisted dependencies and installation-local stores. Plugin entries and repair
+writes remain private-only, and private dependency links into the serving
+installation or user directories remain rejected. The candidate must contain
+this fix; older installed updaters need no new marker or protocol.
 
 Candidate validation uses separate size-aware allowances for snapshots and each
 runtime check. Slow snapshots and Doctor no longer consume the next check's
