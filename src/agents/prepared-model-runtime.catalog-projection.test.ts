@@ -19,6 +19,7 @@ const { mocks } = fixture;
 it("retains the prepared plugin generation during deferred catalog normalization", async () => {
   const config = {};
   mocks.configuredAgentIds = ["default"];
+  await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
