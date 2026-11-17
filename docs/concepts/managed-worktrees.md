@@ -1094,6 +1094,7 @@ the cause, run `openclaw worktrees remove <id> --retry-preserved` to explicitly 
 The flag also works with `--force` or `--exact-state`, but not `--if-lossless`.
 It does not bypass preservation checks or authorize deleting unpreserved content.
 `gc --retry-deferred` remains the explicit retry for a cleanup sweep.
+The Control UI shows the preservation reason and offers a separate **Retry** confirmation that keeps snapshot safety enabled.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome.
 

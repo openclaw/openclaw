@@ -182,7 +182,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 });
 
 it("records nested repositories as terminal preserved checkouts across restart", async () => {
-  const { env, materialize } = await fixture();
+  const { root, env, materialize } = await fixture();
   const [record] = await materialize(["nested-preserved"]);
   const nested = path.join(record!.path, "nested");
   await fs.mkdir(nested);
@@ -230,6 +230,15 @@ it("records nested repositories as terminal preserved checkouts across restart",
   expect(snapshot).toHaveBeenCalledOnce();
   expect(retryState(env, record!.id)?.attempts).toBe(2);
   expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const rescued = path.join(root, "rescued");
+  await fs.rename(nested, rescued);
+  expect(await service.removeIfLossless(record!.id)).toBe(false);
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).resolves.toMatchObject({
+    removed: true,
+  });
+  expect(await read(rescued, "valuable.txt")).toBe("uncommitted inner work\n");
 });
 
 it("caps permission failures and preserves bytes until an explicit repaired retry", async () => {
