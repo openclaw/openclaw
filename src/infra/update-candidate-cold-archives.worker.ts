@@ -5,7 +5,7 @@ import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-s
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { isHardlinkFallbackError } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
+import { isMissingPathError } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
@@ -90,7 +90,7 @@ export async function measureColdArchiveBytes(
       try {
         bytes += (await fs.stat(payload)).size;
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
+        if (!isMissingPathError(error)) {
           throw error;
         }
         missing.push(payload);
@@ -122,7 +122,7 @@ export async function copyColdArchives(
       );
     } catch (error) {
       // Missing files and dangling symlinks alike stay missing in the rehearsal.
-      if (!hasErrnoCode(error, "ENOENT")) {
+      if (!isMissingPathError(error)) {
         throw error;
       }
     }
