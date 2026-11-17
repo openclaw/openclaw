@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+The candidate CLI and Matrix plugin keep explicit `matrix doctor inspect` and
+`matrix doctor recover --account <id> --accept-snapshot-rollback` available through
+the separate Doctor contract when an unfinished migration withholds normal Matrix
+commands. Recovery retains snapshot validation and exclusive crypto custody. It
+never runs automatically or settles the deferred migration: after explicit
+recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
+the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
+
 Gateway update handoff preparation and its parent-side lease reads, identity checks,
 and cleanup run in the existing handoff worker. Slow coordinator filesystem work
 does not block the serving Gateway. Parking and terminal commit still await exact
