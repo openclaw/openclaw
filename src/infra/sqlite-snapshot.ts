@@ -15,6 +15,7 @@ import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -738,6 +739,8 @@ async function verifyAndPublishSqliteSnapshot(
     );
   } finally {
     if (!privateSourcePath) {
+      // Retire the staged database admission before unlinking its private bytes.
+      retireSqliteDatabaseAdmissionForPath(stagedPath);
       await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
     }
   }
