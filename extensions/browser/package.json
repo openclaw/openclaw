@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.11.3",
+  "version": "2026.11.4",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
@@ -18,7 +18,7 @@
     "@modelcontextprotocol/sdk": "1.32.2",
     "@openclaw/plugin-sdk": "workspace:*",
     "@types/yargs-parser": "21.0.3",
-    "undici": "8.12.3"
+    "undici": "8.12.4"
   },
   "openclaw": {
     "build": {

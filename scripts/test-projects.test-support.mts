@@ -46,6 +46,7 @@ import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-tele
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
+  gatewayServerIsolatedTestFiles,
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
@@ -3446,7 +3447,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
-    [dockerBuild, dockerE2e, pluginPrerelease, "bundled-plugin-install-uninstall-probe"],
+    [dockerBuild, dockerE2e, pluginPrerelease],
   ],
   ["scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh", ["plugin-update-unchanged-docker"]],
   ["scripts/e2e/lib/plugin-update/probe.mjs", ["plugin-update-unchanged-docker"]],
@@ -5123,7 +5124,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
     gatewayPluginTestFiles.includes(relative) &&
     (beforeDatabaseWorkerOwnership || !gatewayDatabaseWorkerTestFiles.includes(relative))
   ) {
-    return "gatewayMethods";
+    return gatewayServerIsolatedTestFiles.includes(relative) ? "gateway" : "gatewayMethods";
   }
   if (beforeDatabaseWorkerOwnership) {
     const formerFastKind = databaseWorkerCoreFormerFastKinds.get(relative);

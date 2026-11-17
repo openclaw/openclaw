@@ -26,8 +26,8 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import * as voiceSessionReads from "./client-voice-session-read.js";
 import { createClientVoiceSessionSource } from "./client-voice-session-source.js";
+import * as voiceWriters from "./client-voice-session-source.js";
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
-import * as voiceWriters from "./client-voice-session-write.js";
 import {
   completeRun,
   createCompletedMutationSession,
@@ -188,6 +188,7 @@ it.each(["current", "runtime-entry", "worker-preparation"] as const)(
     await seedSession("agent:main:main");
     const coldTarget = { agentId: "cold-prepared", sessionKey: "agent:cold-prepared:main" };
     const writer = voiceWriters.captureClientVoiceSessionWriter(coldTarget);
+    await writer.prepare();
     const controller = new AbortController();
     const revoke = () => controller.abort(new Error("prepared requester revoked"));
     let bootstrap = false;
@@ -273,11 +274,13 @@ it.each(["concurrent", "implicit", "alias", "retargeted-alias"] as const)(
     await seedSession(target.sessionKey);
     await createVoiceSession({ voiceSessionId });
     const writerA = voiceWriters.captureClientVoiceSessionWriter(target);
+    await writerA.prepare();
     const sourceA = writerA.source;
     setTestEnvValue("OPENCLAW_STATE_DIR", otherState);
     await seedSession(target.sessionKey);
     await createVoiceSession({ voiceSessionId });
     const writerB = voiceWriters.captureClientVoiceSessionWriter(target);
+    await writerB.prepare();
     const sourceB = writerB.source;
     const writerGate = createEnteredGate();
     let blocker: Promise<void> | undefined;

@@ -15,6 +15,7 @@ import { waitForAgentDatabasePreparation } from "../../../state/agent-database-p
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import {
   SubagentCompletionSourceChangedError,
@@ -41,7 +42,6 @@ import {
 import {
   assertRequesterSettleWakeBatchCurrent,
   mutateRequesterSettleWakeBatch,
-  settleRequesterSettleWakeBatch,
   createRequesterWakeSettlement,
   hasPendingRequesterSettlement,
   isRetainedRequesterSettleWakeMember,
@@ -350,7 +350,7 @@ export function scheduleRequesterSettleWake(
   const completeBatch = async (
     batch: readonly SubagentRunRecord[],
     rearmGeneration: number | undefined,
-    outcome?: Parameters<typeof settleRequesterSettleWakeBatch>[3],
+    outcome?: SubagentAnnounceDeliveryResult,
     onCommitted?: () => void | Promise<void>,
   ) => {
     // A retirement may have replaced the pause notice this evaluation was delivering.
@@ -406,12 +406,23 @@ export function scheduleRequesterSettleWake(
                   settledEntry: entry,
                   isSourceCurrent,
                   onAccepted: releasePreparation,
+                  recordRequesterDelivery: async (batch, fact, onPublished) => {
+                    await mutateRequesterSettleWakeBatch(
+                      context,
+                      batch,
+                      admittedWake?.rearmGeneration,
+                      { kind: "requesterDelivery", fact },
+                      stateContext,
+                      {},
+                      onPublished,
+                    );
+                  },
                   onDescendantsPending: (deadline) => {
                     if (isSourceCurrent()) {
                       descendantWait = { entry, deadline };
                     }
                   },
-                  transitionBatch: async (batch, state, onPublished) => {
+                  transitionBatch: async (batch, state, onPublished, requesterDelivery) => {
                     // New transitions need the whole batch; retained receipts may reconcile survivors.
                     if (!isSourceCurrent()) {
                       return;
@@ -459,7 +470,7 @@ export function scheduleRequesterSettleWake(
                             context,
                             members,
                             state.rearmGeneration,
-                            { kind: "transition", state },
+                            { kind: "transition", state, requesterDelivery },
                             stateContext,
                             receipt,
                             onPublished,
@@ -596,8 +607,6 @@ export function scheduleRequesterSettleWake(
                   agentId: entry.requesterAgentId,
                   sessionKey: requesterSessionKey,
                   storePath: entry.requesterStorePath,
-                  expectedSessionId: entry.completionRequesterSessionId,
-                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
                   idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
                   text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
                   assertCurrent: () => {

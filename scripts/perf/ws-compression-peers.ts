@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { WebSocket } from "ws";
 
-export type CompressionPeerReport = { received: number[]; hashes: string[]; bytes: number };
+export type CompressionPeerReport = {
+  received: number[];
+  hashes: string[];
+  wireHashes: string[];
+  bytes: number;
+};
 
 // The parent owns this private benchmark protocol and validates these options.
 const { port, clients, windows } = JSON.parse(process.argv[2]!) as {
@@ -13,6 +18,7 @@ const { port, clients, windows } = JSON.parse(process.argv[2]!) as {
 };
 const received = Array<number>(clients).fill(0);
 const hashes = Array.from({ length: clients }, () => createHash("sha256"));
+const wireHashes = Array.from({ length: clients }, () => createHash("sha256"));
 let connected = 0;
 let batchReceived = 0;
 let measuring = false;
@@ -23,6 +29,13 @@ process.on("message", (message: string) => {
     const index = connected++;
     const peer = new WebSocket(`ws://127.0.0.1:${port}`, {
       perMessageDeflate: { serverMaxWindowBits: windows[index % windows.length] },
+    });
+    peer.on("upgrade", (response) => {
+      response.socket.on("data", (chunk: Buffer) => {
+        if (measuring) {
+          wireHashes[index]!.update(chunk);
+        }
+      });
     });
     peer.on("error", (error) => process.send?.({ type: "error", error: error.message }));
     peer.on("message", (raw, binary) => {
@@ -41,6 +54,11 @@ process.on("message", (message: string) => {
     measuring = true;
     process.send?.({ type: "ready" });
   } else if (message === "finish") {
-    process.send?.({ received, hashes: hashes.map((hash) => hash.digest("hex")), bytes });
+    process.send?.({
+      received,
+      hashes: hashes.map((hash) => hash.digest("hex")),
+      wireHashes: wireHashes.map((hash) => hash.digest("hex")),
+      bytes,
+    });
   }
 });

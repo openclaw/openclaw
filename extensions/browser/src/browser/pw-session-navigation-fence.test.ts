@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { setImmediate as nextTick } from "node:timers/promises";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "./navigation-guard.js";
@@ -15,6 +17,7 @@ async function fence(
     detach?: () => Promise<void>;
     isClosed?: () => boolean;
     assertCurrent?: () => void;
+    standingSsrfPolicy?: SsrFPolicy;
     handleDocument?: Parameters<typeof installNavigationAuthorityFence>[3];
   } = {},
 ) {
@@ -39,12 +42,19 @@ async function fence(
   const errors: unknown[] = [];
   const dispose = await installNavigationAuthorityFence(
     page as unknown as Page,
-    { assertNavigationCurrent: options.assertCurrent ?? (() => {}) },
+    {
+      assertNavigationCurrent: options.assertCurrent ?? (() => {}),
+      standingSsrfPolicy: options.standingSsrfPolicy,
+    },
     (error) => errors.push(error),
     options.handleDocument,
   );
   const pause = (requestId: string, url = "http://127.0.0.1/target") =>
-    session.emit("Fetch.requestPaused", { requestId, resourceType: "Document", request: { url } });
+    session.emit("Fetch.requestPaused", {
+      requestId,
+      resourceType: "Document",
+      request: { url, headers: {} },
+    });
   return { send, detach, session, page, errors, dispose, pause };
 }
 
@@ -79,12 +89,16 @@ describe("navigation authority fence lifecycle", () => {
     });
     releaseBarrier.resolve();
     await expect(cleanup).resolves.toBeUndefined();
-    expect(send).toHaveBeenCalledWith("Fetch.disable", undefined);
+    expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+      requestId: "interception",
+      errorReason: "Aborted",
+    });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
   });
 
   it("settles a document completed by the operation-owned interceptor", async () => {
     const releaseFulfillment = Promise.withResolvers<void>();
-    const { send, detach, session, dispose } = await fence({
+    const { send, session, dispose } = await fence({
       send: async (method) => {
         if (method === "Fetch.failRequest") {
           await releaseFulfillment.promise;
@@ -114,16 +128,20 @@ describe("navigation authority fence lifecycle", () => {
     const cleanup = dispose();
     releaseFulfillment.resolve();
     await expect(cleanup).resolves.toBeUndefined();
-    expect(detach).toHaveBeenCalledOnce();
   });
 
   it("keeps a pending document redirect fenced after its initiating action returns", async () => {
     vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
-    const { send, detach, session, dispose } = await fence();
+    const { send, session, dispose } = await fence();
     session.emit("Network.requestWillBeSent", { requestId: "document", type: "Document" });
-    const cleanup = dispose();
-    await Promise.resolve();
-    expect(detach).not.toHaveBeenCalled();
+    let released = false;
+    const cleanup = dispose().then(() => {
+      released = true;
+    });
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    expect(released).toBe(false);
     session.emit("Fetch.requestPaused", {
       requestId: "redirect",
       networkId: "document",
@@ -135,7 +153,6 @@ describe("navigation authority fence lifecycle", () => {
     await cleanup;
     expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "redirect" });
     expect(send).not.toHaveBeenCalledWith("Page.stopLoading");
-    expect(detach).toHaveBeenCalledOnce();
   });
 
   it("stops a timed-out committed document before waiting for cleanup", async () => {
@@ -151,7 +168,7 @@ describe("navigation authority fence lifecycle", () => {
   });
 
   it("retires committed bodies while retaining a simultaneous child redirect", async () => {
-    const { send, detach, session, dispose } = await fence();
+    const { send, session, dispose } = await fence();
     for (const frameId of ["main", "child"]) {
       session.emit("Network.requestWillBeSent", {
         requestId: frameId + "-document",
@@ -159,46 +176,145 @@ describe("navigation authority fence lifecycle", () => {
         frameId,
       });
     }
-    const cleanup = dispose();
+    let released = false;
+    const cleanup = dispose().then((error) => {
+      released = true;
+      return error;
+    });
     await vi.waitFor(() =>
       expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
     );
     session.emit("Page.frameNavigated", { frame: { id: "main" } });
     await Promise.resolve();
-    expect(detach).not.toHaveBeenCalled();
+    expect(released).toBe(false);
     // Neither body reaches EOF. Only the child's own commit retires its chain.
     session.emit("Page.frameNavigated", { frame: { id: "child" } });
     await expect(cleanup).resolves.toBeUndefined();
     expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
-    expect(detach).toHaveBeenCalledOnce();
   });
 
-  it("removes the paused-request listener before detachment releases interception", async () => {
-    let detached = false;
-    const lateCommands: string[] = [];
-    const { session, errors, dispose } = await fence({
-      send: async (method) => {
-        if (detached) {
-          lateCommands.push(method);
-          throw new Error("Invalid InterceptionId");
-        }
-      },
-      detach: async () => {
-        detached = true;
-        session.emit("Fetch.requestPaused", {
-          requestId: "late-resource",
-          resourceType: "Other",
-          request: { url: "https://example.com/favicon.ico" },
-        });
+  it("lets documents load once the invocation releases its claim", async () => {
+    const { send, detach, dispose, pause } = await fence({
+      handleDocument: async (route) => {
+        await route.preserve();
       },
     });
     expect(await dispose()).toBeUndefined();
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
+    pause("unclaimed");
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "unclaimed" }),
+    );
+    expect(send).not.toHaveBeenCalledWith("Fetch.failRequest", expect.anything());
+    expect(detach).not.toHaveBeenCalled();
+  });
+
+  it("returns the tab to its standing policy when the invocation releases its claim", async () => {
+    const { send, dispose, pause } = await fence({
+      standingSsrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      handleDocument: async (route) => {
+        await route.continue();
+      },
     });
-    expect(lateCommands).toEqual([]);
-    expect(errors).toEqual([]);
-    expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
+    pause("granted", "http://127.0.0.1/during");
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "granted" }),
+    );
+    expect(await dispose()).toBeUndefined();
+    pause("private", "http://127.0.0.1/after");
+    pause("public", "http://93.184.216.34/after");
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "private",
+        errorReason: "BlockedByClient",
+      });
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "public" });
+    });
+  });
+
+  it("starts the next invocation's document tracking after the last release is acknowledged", async () => {
+    // A transport that applies the release when it answers it.
+    const disabled = Promise.withResolvers<void>();
+    let releasing = false;
+    let tracking = false;
+    const { send, page, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Network.enable") {
+          tracking = true;
+        }
+        if (method === "Network.disable") {
+          releasing = true;
+          await disabled.promise;
+          tracking = false;
+        }
+      },
+    });
+    let returned = false;
+    const released = dispose().finally(() => {
+      returned = true;
+    });
+    await vi.waitFor(() => expect(releasing).toBe(true));
+    const next = installNavigationAuthorityFence(page as unknown as Page, {}, () => {});
+    await nextTick();
+    const returnedBeforeAcknowledged = returned;
+    disabled.resolve();
+    expect(await released).toBeUndefined();
+    await next;
+    expect({ returnedBeforeAcknowledged, tracking }).toEqual({
+      returnedBeforeAcknowledged: false,
+      tracking: true,
+    });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
+  });
+
+  it("fails the next invocation when the last release is never acknowledged", async () => {
+    vi.useFakeTimers();
+    const { send, page, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Network.disable") {
+          await new Promise(() => {});
+        }
+      },
+    });
+    const enables = () => send.mock.calls.filter(([method]) => method === "Network.enable").length;
+    const enabledBefore = enables();
+    const released = dispose();
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Network.disable", undefined));
+    let outcome: unknown = "pending";
+    void installNavigationAuthorityFence(page as unknown as Page, {}, () => {}).then(
+      () => {
+        outcome = "claimed";
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect({ outcome, enabledAfterRelease: enables() - enabledBefore }).toEqual({
+      outcome: new Error("Browser navigation interception was not released in time"),
+      enabledAfterRelease: 0,
+    });
+    // It started nothing, so it leaves the tab as it found it.
+    expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    expect(send.mock.calls.filter(([method]) => method === "Network.disable")).toHaveLength(1);
+    expect(await released).toEqual(
+      new Error("Browser navigation did not settle before authority cleanup"),
+    );
+  });
+
+  it("fails an invocation whose document tracking does not start", async () => {
+    let refused = false;
+    const { page, dispose } = await fence({
+      send: async (method) => {
+        if (refused && method === "Network.enable") {
+          throw new Error("tracking refused");
+        }
+      },
+    });
+    expect(await dispose()).toBeUndefined();
+    refused = true;
+    await expect(
+      installNavigationAuthorityFence(page as unknown as Page, {}, () => {}),
+    ).rejects.toThrow("tracking refused");
   });
 
   it("retains interception until target close when revoked loading cannot be stopped", async () => {
@@ -269,6 +385,35 @@ describe("navigation authority fence lifecycle", () => {
     expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
   });
 
+  it("does not make a later invocation wait on a document its refused tab abandoned", async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    const { session, page, dispose } = await fence({ isClosed: () => closed });
+    session.emit("Network.requestWillBeSent", {
+      requestId: "never-answers",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+    const abandoned = dispose();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(await abandoned).toEqual(
+      new Error("Browser navigation did not settle before authority cleanup"),
+    );
+    const next = await installNavigationAuthorityFence(page as unknown as Page, {}, () => {});
+    let result: unknown = "pending";
+    void next().then((error) => {
+      result = error;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    try {
+      expect(result).toBeUndefined();
+    } finally {
+      closed = true;
+      page.emit("close");
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+  });
+
   it.each(["revoked", "closing"] as const)(
     "rechecks awaited policy while authority is %s",
     async (state) => {
@@ -282,7 +427,7 @@ describe("navigation authority fence lifecycle", () => {
         },
       );
       let current = true;
-      const { send, detach, session, errors, dispose, pause } = await fence({
+      const { send, detach, errors, dispose, pause } = await fence({
         send: async (method) => {
           if (method === "Fetch.failRequest" || method === "Fetch.continueRequest") {
             stopped.resolve();
@@ -317,8 +462,6 @@ describe("navigation authority fence lifecycle", () => {
         expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "redirect-hop" });
         expect(errors).toEqual([]);
       }
-      expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
-      expect(detach).toHaveBeenCalledOnce();
     },
   );
 

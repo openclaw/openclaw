@@ -210,13 +210,23 @@ it("preserves a newer composer draft while an accepted edit is saving", async ()
   expect(await pending).toBe(true);
   expect(host.chatMessage).toBe("A newer conversation draft");
 });
-it("keeps completed goals read-only rather than clearing or resuming them", async () => {
+it("starts a new goal after completion without editing, clearing, or resuming the old one", async () => {
   const { host, row } = fixture();
   row.goal.status = "complete";
-  expect(await handleSendChat(host)).toBe(false);
+  host.chatMessage = "Write rollout notes";
+  expect(
+    await handleSendChat(host, undefined, {
+      intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
+    }),
+  ).toBe(true);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
-  expect(host.chatError).toContain("Goal editing is unavailable");
+  expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
+  expect(requestCalls(host.request, "chat.send")[0]?.[1]).toMatchObject({
+    message: "Write rollout notes",
+    intent: { kind: "session-goal-start" },
+  });
+  expect(host.chatMessage).toBe("");
 });
 it.each(["status", "edit", "pause", "resume", "complete", "done", "block", "blocked", "clear"])(
   "leaves explicit %s syntax alone",

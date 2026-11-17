@@ -66,6 +66,10 @@ order without blocking the Gateway main thread on filesystem checks. Normal
 shutdown drains queued writes; forced process exit retains a synchronous rescue
 for records that have not started writing.
 
+If initial directory preparation fails, later records retry it. Once the path is
+repaired, writing resumes without a restart. Records dropped during the failure
+are not replayed.
+
 Silent logging does not prepare a file. Requests that report or tail the log path
 wait for its directory to pass the same ownership, permission, and ancestor checks
 used by writes; they never report an unqualified fallback path.
@@ -166,9 +170,11 @@ and store fields.
 
 ### Slow SQLite transcript hydration and appends
 
-Slow `sessions.transcript-hydration.*` read transactions,
-`session.transcript.append-turn` writes, and `session.lifecycle.delete` include
-native statement attribution on the existing slow-hold warning. `statementExecutionMs` sums native execution calls;
+Slow transcript, session metadata, trajectory, audit writer, and knowledge transactions
+(`session.transcript.*`, `sessions.transcript-*`, `session.metadata.*`, `trajectory.*`,
+`audit.writer.*`, and `knowledge.*`), `session context snapshot read`, and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
 `callbackOtherMs` is the remaining callback wall time, including JavaScript,
 statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
 reports `callbackGcMs` from the current isolate's native GC sampler on Node;

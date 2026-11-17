@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
@@ -28,11 +27,8 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   /** Condition/script runners supply the same current Gateway owner explicitly. */
   context?: GatewayRequestContext;
-  target?: {
-    agentId: string;
-    sessionKey: string;
-    entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">;
-  };
+  /** The chat this run executes in, by key; the restored authority lives until that chat is deleted. */
+  target?: { agentId: string; sessionKey: string };
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {
@@ -47,11 +43,7 @@ export async function restoreCronOperatorSource(params: {
       params.target ??
       (source.kind === "gateway"
         ? undefined
-        : {
-            agentId: source.agentId,
-            sessionKey: source.sessionKey,
-            entry: source,
-          });
+        : { agentId: source.agentId, sessionKey: source.sessionKey });
     const context =
       params.context ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
     const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
@@ -59,11 +51,7 @@ export async function restoreCronOperatorSource(params: {
       throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
     }
     const fence = params.deliveryAttemptFence;
-    // An in-session run executes in the captured conversation and must match its
-    // incarnation. A child runs in its own session; occurrence admission owns the
-    // parent's lifecycle, so a reset parent still rechecks device and grant here.
-    const inSession =
-      source.kind !== "gateway" && params.job.sessionTarget === `session:${source.sessionKey}`;
+    // The source's conversation is linked by key: edits and resets of that chat keep it.
     let admitted = false;
     const assertCurrent = () => {
       params.signal?.throwIfAborted();
@@ -93,12 +81,7 @@ export async function restoreCronOperatorSource(params: {
                 current.payload.kind === "command")
             ) ||
             current.owner?.sessionKey !== source.sessionKey ||
-            !isCronOperatorSourceParent(current, source.sessionKey) ||
-            (inSession &&
-              target &&
-              (target.sessionKey !== source.sessionKey ||
-                target.entry.sessionId !== source.sessionId ||
-                target.entry.lifecycleRevision !== source.lifecycleRevision)))) ||
+            !isCronOperatorSourceParent(current, source.sessionKey))) ||
         !isDeepStrictEqual(current.operatorSource, captured)
       ) {
         throw new Error(
@@ -109,14 +92,7 @@ export async function restoreCronOperatorSource(params: {
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      // The restored authority lives as long as the session this run executes in.
-      target: target
-        ? {
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            sessionId: target.entry.sessionId,
-          }
-        : undefined,
+      target,
       context,
       assertCurrent,
     });
@@ -132,11 +108,7 @@ export async function restoreCronOperatorSource(params: {
     if (params.signal?.aborted || isAbortError(error)) {
       throw error;
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new CronOperatorSourceError(
-      `The operator authority that created this automation was refused (device, access grant, role or definition changed); recreate it from an authenticated turn. Cause: ${reason}`,
-      { cause: error },
-    );
+    throw new CronOperatorSourceError(error);
   }
 }
 
@@ -147,26 +119,8 @@ export async function restoreCronScriptOperatorSource(
   scope: ReturnType<typeof createHeadlessDeadlineScope>,
   deliveryAttemptFence: CronCompletionDeliveryFence | null,
 ) {
-  const source = job.operatorSource?.source;
-  // In-session conditions have the same conversation boundary as their model turn.
-  // Comparing the stored source to itself would let a reset source read or act first.
-  const target =
-    source && source.kind !== "gateway" && job.sessionTarget === `session:${source.sessionKey}`
-      ? {
-          agentId: source.agentId,
-          sessionKey: source.sessionKey,
-          entry: await scope.wait(
-            import("../auto-reply/reply/session-event-target.js").then(
-              ({ captureSessionEventTargetForHost }) =>
-                captureSessionEventTargetForHost(source.agentId, source.sessionKey, {
-                  assertCurrent: () => scope.signal.throwIfAborted(),
-                }),
-            ),
-          ),
-        }
-      : undefined;
   const operator = await scope.wait(
-    restoreCronOperatorSource({ job, context, target, signal: scope.signal, deliveryAttemptFence }),
+    restoreCronOperatorSource({ job, context, signal: scope.signal, deliveryAttemptFence }),
   );
   if (!operator) {
     return undefined;

@@ -43,7 +43,7 @@ export function createChatModelSearchView(
   const scope = createMemo(() => ({ active: read().activeProvider, providers: read().providers }), {
     equals: (a, b) => a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
   });
-  // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+  // Closing and selection reset provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
     selected?: string;
@@ -156,6 +156,12 @@ export function createChatModelSearchView(
     toggleProvider(provider: string) {
       updateDisclosure((draft) => {
         draft.selected = provider;
+      });
+    },
+    resetProvider() {
+      const current = scope();
+      updateDisclosure((draft) => {
+        draft.selected = current.active ?? current.providers[0];
       });
     },
     expandMore(provider: string, event: MouseEvent) {

@@ -175,7 +175,7 @@ describe("worktree GC inventories", () => {
   });
 
   it.each(["inner", ".openclaw/tmp/inner"])(
-    "retries nested-repository protection after removing %s",
+    "requires explicit retry after repairing nested repository %s",
     async (nestedPath) => {
       const {
         repo: repoRoot,
@@ -190,9 +190,17 @@ describe("worktree GC inventories", () => {
 
       const first = await service.gc();
       expect(first.removed).toEqual([]);
-      expect(first.protectionReasons).toEqual({
-        "worktree contains a nested repository": 1,
-        "branch-moved": 1,
+      expect(first.protectionReasons["branch-moved"]).toBe(1);
+      expect(first.issues).toContainEqual(
+        expect.objectContaining({
+          id: nested!.id,
+          reason: expect.stringContaining("nested-repository; automatic retries stopped"),
+        }),
+      );
+      expect(getRegistryWorktree(env, nested!.id)?.gcRetry).toMatchObject({
+        stage: "nested-repository",
+        attempts: 1,
+        retryAt: null,
       });
       expect(inspections).toHaveBeenCalled();
       inspections.mockClear();
@@ -202,12 +210,14 @@ describe("worktree GC inventories", () => {
       expect((await service.gc()).removed).toEqual([]);
       expect(inspections).not.toHaveBeenCalled();
 
-      // External repair changes the checkout fingerprint, not its registry revision.
+      // Terminal preservation does not scan for external repairs until explicitly retried.
       await fs.rm(path.join(nested!.path, nestedPath), { recursive: true });
       expect(getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
-      expect((await service.gc()).removed).toEqual([nested!.id]);
+      expect((await service.gc()).removed).toEqual([]);
+      expect(inspections).not.toHaveBeenCalled();
+      expect((await service.gc({ retryDeferred: true })).removed).toEqual([nested!.id]);
       expect(inspections.mock.calls.length).toBeGreaterThan(0);
-      expect(inspections.mock.calls.every(([record]) => record.id === nested!.id)).toBe(true);
+      expect(inspections.mock.calls.some(([record]) => record.id === nested!.id)).toBe(true);
       inspections.mockClear();
       await git(moved!.path, "checkout", moved!.branch);
       expect(getRegistryWorktree(env, moved!.id)?.lastActiveAt).toBe(1);

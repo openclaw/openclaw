@@ -492,7 +492,7 @@ it("warns that interrupted CLI background work may have completed", () => {
 
   expect(payload?.text).toContain("Some work may have completed");
   expect(payload?.text).toContain("Check its results before trying again");
-  expect(payload?.text).toContain("task time limit in the Control UI settings");
+  expect(payload?.text).toContain("task time limit in the OpenClaw app settings");
 });
 
 it("surfaces Codex app-server bridge failures instead of generic copy", async () => {

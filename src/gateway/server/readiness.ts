@@ -22,7 +22,7 @@ export type PreparedReadinessChecker = ReadinessChecker & {
 };
 
 export type StartupResult =
-  | { ok: true; status: "started"; uptimeMs: number }
+  | { ok: true; status: "started"; uptimeMs: number; gatewayBootId?: string }
   | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
   | { ok: false; status: "draining"; uptimeMs: number };
 
@@ -39,9 +39,10 @@ const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
 
 /** Startup waits for admission settlement; readiness retains its own agent policy. */
 export function createStartupChecker(
-  deps: GatewayStartupStateDeps,
+  deps: GatewayStartupStateDeps & { gatewayBootId?: string },
   getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[],
 ): StartupChecker {
+  const { gatewayBootId } = deps;
   return (): StartupResult => {
     const uptimeMs = Date.now() - deps.startedAt;
     if (deps.getGatewayDraining?.()) {
@@ -62,7 +63,12 @@ export function createStartupChecker(
         pendingReason,
       };
     }
-    return { ok: true, status: "started", uptimeMs };
+    return {
+      ok: true,
+      status: "started",
+      uptimeMs,
+      ...(gatewayBootId === undefined ? {} : { gatewayBootId }),
+    };
   };
 }
 

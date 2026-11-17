@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import {
   formatConcreteConfigPath,
   parseConcreteConfigPath,
@@ -14,6 +15,23 @@ export function describeDelegatedChangePolicyApproval(
   operation: SystemAgentOperation,
   config?: OpenClawConfig,
 ): string | undefined {
+  if (operation.kind === "plugin-install") {
+    if (operation.capabilityReview) {
+      return "Review and approve these declared plugin capabilities. Source approval does not accept new capabilities.";
+    }
+    const plan = resolvePluginInstallSourcePlan({ raw: operation.spec, mode: "install" });
+    return plan.ok && plan.acknowledgement
+      ? "Explicit approval is required to acknowledge this non-ClawHub plugin source."
+      : undefined;
+  }
+  if (
+    operation.kind === "template-install" &&
+    (operation.acknowledgeClawHubRisk ||
+      operation.acknowledgeCapabilities?.some((entry) => entry.acknowledgeRiskWarning) ||
+      operation.acknowledgeSkillWarnings?.length)
+  ) {
+    return "This Template or one of its dependencies has a trust warning. Review the exact artifact and warnings above. Trust exceptions require this exact human approval; Full Access and model-supplied acknowledgements alone do not grant consent. Deny to keep it uninstalled.";
+  }
   if (
     operation.kind !== "config-set" &&
     operation.kind !== "config-unset" &&

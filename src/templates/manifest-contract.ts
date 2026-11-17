@@ -55,9 +55,16 @@ export type TemplateDiagnostic = {
   phase: "parse" | "schema" | "policy" | "plan" | "mutation";
   path: string;
   message: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
 };
 
 export type TemplateOpenClawAgentSettings = {
+  /**
+   * Author's preferred model as an exact `provider/model` ref. A preference, not a
+   * requirement: Add applies it only when the receiving host offers that model.
+   */
+  model?: string;
   groupChat?: {
     mentionPatterns?: string[];
   };

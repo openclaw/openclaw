@@ -930,55 +930,103 @@ describe("loadPluginManifestRegistry", () => {
   type CompatibilityCase = Omit<Parameters<typeof compatibilityCandidate>[0], "rootDir"> & {
     version?: string;
     recorded?: boolean;
+    unmatchedRecord?: boolean;
+    effectivePluginId?: string;
   };
-  it.each<[string, CompatibilityCase, string?, string?]>([
+  type CompatibilityDiagnostic = Pick<
+    Registry["diagnostics"][number],
+    "message" | "level" | "configDisposition"
+  >;
+  const invalidHostDiagnostic: CompatibilityDiagnostic = {
+    level: "error",
+    message:
+      'plugin manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form ">=x.y.z[-prerelease][+build]"',
+  };
+  it.each<[string, CompatibilityCase, CompatibilityDiagnostic?]>([
     [
-      "invalid host minimum",
-      { minHostVersion: "2026.3.22" },
-      "plugin manifest invalid | openclaw.install.minHostVersion must use",
+      "invalid host minimum before malformed API",
+      { minHostVersion: "2026.3.22", pluginApi: 20260527 },
+      invalidHostDiagnostic,
     ],
     [
-      "unknown host",
-      { minHostVersion: ">=2026.3.22", version: "unknown" },
-      "host version could not be determined",
-      "warn",
+      "unknown host before malformed API",
+      { minHostVersion: ">=2026.3.22", version: "unknown", pluginApi: 20260527 },
+      {
+        level: "warn",
+        message:
+          "plugin requires OpenClaw >=2026.3.22, but this host version could not be determined; skipping load",
+      },
+    ],
+    [
+      "older host before malformed API",
+      { minHostVersion: ">=2026.5.27", version: "2026.5.26", pluginApi: 20260527 },
+      {
+        level: "warn",
+        message: "plugin requires OpenClaw >=2026.5.27, but this host is 2026.5.26; skipping load",
+      },
     ],
     ["recorded legacy minimum", { idHint: "codex", minHostVersion: "2026.3.22", recorded: true }],
     [
+      "unmatched recorded legacy minimum",
+      { minHostVersion: "2026.3.22", recorded: true, unmatchedRecord: true },
+      invalidHostDiagnostic,
+    ],
+    [
+      "config origin with recorded legacy minimum",
+      { minHostVersion: "2026.3.22", recorded: true, origin: "config" },
+      invalidHostDiagnostic,
+    ],
+    [
       "future API",
-      { pluginApi: ">=2026.5.27", version: "2026.5.10-beta.1" },
-      "plugin requires plugin API >=2026.5.27",
-      "warn",
+      {
+        pluginApi: ">=2026.5.27",
+        version: "2026.5.10-beta.1",
+        effectivePluginId: "selected-plugin",
+      },
+      {
+        level: "warn",
+        configDisposition: "preserve",
+        message:
+          'plugin requires plugin API >=2026.5.27, but this host is 2026.5.10-beta.1; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
+      },
     ],
     [
       "malformed API",
       { pluginApi: 20260527, version: "2026.5.27" },
-      "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
-      "error",
+      {
+        level: "error",
+        message:
+          "plugin manifest invalid | package.json openclaw.compat.pluginApi must be a string",
+      },
     ],
     ["beta on API floor", { pluginApi: ">=2026.5.27", version: "2026.5.27-beta.1" }],
-    ["bundled exemption", { pluginApi: ">=2026.5.27", version: "2026.4.1", origin: "bundled" }],
-  ])("enforces package compatibility: %s", (_name, params, error, level) => {
+    [
+      "bundled exemption",
+      { minHostVersion: "invalid", pluginApi: 20260527, version: "2026.4.1", origin: "bundled" },
+    ],
+  ])("enforces package compatibility: %s", (_name, params, diagnostic) => {
     const id = params.idHint ?? "synology-chat";
     const dir = makePluginDir(id);
     const candidate = compatibilityCandidate({ ...params, rootDir: dir });
+    candidate.effectivePluginId = params.effectivePluginId;
+    const installPath = params.unmatchedRecord ? makeTempDir() : dir;
     const registry = loadPluginManifestRegistryCore({
-      installRecords: params.recorded ? { [id]: { source: "npm", installPath: dir } } : {},
+      installRecords: params.recorded ? { [id]: { source: "npm", installPath } } : {},
       candidates: [params.recorded ? recordPluginCandidateInstallOwner(candidate, id) : candidate],
-      ...(params.version ? { env: { OPENCLAW_VERSION: params.version } } : {}),
+      env: { OPENCLAW_VERSION: params.version ?? "2026.5.27" },
     });
-    if (error) {
+    if (diagnostic) {
       expect(registry.plugins).toStrictEqual([]);
-      expectRegistryDiagnosticContains(registry, error);
-      if (level) {
-        expectDiagnosticFields(registry, { level, messageIncludes: error });
-      }
+      expect(registry.diagnostics).toStrictEqual([
+        {
+          ...diagnostic,
+          pluginId: params.effectivePluginId ?? id,
+          source: path.join(dir, "package.json"),
+        },
+      ]);
     } else {
       expect(registry.plugins.map((plugin) => plugin.id)).toEqual([id]);
-      expectNoRegistryDiagnosticContains(
-        registry,
-        params.recorded ? "openclaw.install.minHostVersion must use" : "requires plugin API",
-      );
+      expect(registry.diagnostics).toStrictEqual([]);
     }
   });
 

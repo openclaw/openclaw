@@ -59,6 +59,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        version: number;
       };
     } & ChatHistoryLoadRequest)
   | {
@@ -260,6 +261,14 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
+/** A global key routes to the selected agent, so another agent's read proves nothing about it. */
+function isAcceptedForSelectedAgent(state: ChatState, requestAgentId: string | undefined) {
+  return (
+    !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId
+  );
+}
+
 /** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
 export function getAcceptedChatHistorySession(state: ChatState) {
   const accepted = chatHistoryRequests(state).acceptedHistory;
@@ -269,8 +278,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === accepted.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId &&
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
@@ -290,7 +298,8 @@ export function isChatSessionProvenAbsent(
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
-    accepted.sessionKey === sessionKey
+    accepted.sessionKey === sessionKey &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId)
   );
 }
 
@@ -320,8 +329,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     state.sessions === accepted.sessions &&
     (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
     accepted.sessionKey === state.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId === state.currentSessionId
   ) {
     return false;

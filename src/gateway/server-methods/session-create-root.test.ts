@@ -1,6 +1,7 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
@@ -37,28 +38,37 @@ function prepare(options: Partial<Parameters<typeof prepareSessionCreateFilesyst
   });
 }
 
-it("admits a configured workspace alias and returns the canonical root", () => {
+it("admits a configured workspace alias and returns the canonical root", async () => {
   cfg.agents!.entries!.main!.workspace = state.path("workspace-alias");
   const project = path.join(workspace, "project");
-  expect(prepare({ sessionCwd: project })).toEqual({
+  using realpath = vi.spyOn(syncFs, "realpathSync");
+  using stat = vi.spyOn(syncFs, "statSync");
+  expect(await prepare({ sessionCwd: project })).toEqual({
     ok: true,
     value: { sessionRoot: project, sessionCwd: project },
   });
+  expect(realpath).not.toHaveBeenCalled();
+  expect(stat).not.toHaveBeenCalled();
 });
 
-it("rejects a leaf symlink escape against only the selected agent", () => {
-  expect(prepare({ sessionCwd: path.join(workspace, "escape") })).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "sessions.create cwd is outside the sandboxed agent workspace",
-    },
-  });
-});
+it.each([undefined, true])(
+  "rejects a leaf symlink escape against only the selected agent (required=%s)",
+  async (sandboxRequired) => {
+    expect(
+      await prepare({ sessionCwd: path.join(workspace, "escape"), sandboxRequired }),
+    ).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create cwd is outside the sandboxed agent workspace",
+      },
+    });
+  },
+);
 
 it("fails closed for a missing workspace without creating the missing path", async () => {
   cfg.agents!.entries!.main!.workspace = state.path("missing-workspace");
-  expect(prepare({ sessionCwd: path.join(workspace, "project") })).toMatchObject({
+  expect(await prepare({ sessionCwd: path.join(workspace, "project") })).toMatchObject({
     ok: false,
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("cwd is unavailable:") },
   });
@@ -73,16 +83,16 @@ it("fails closed for a missing workspace without creating the missing path", asy
 it("creates an omitted workspace through its alias and leaves cwd unset", async () => {
   const missing = state.path("workspace-alias", "new-workspace");
   cfg.agents!.entries!.main!.workspace = missing;
-  expect(prepare()).toEqual({
+  expect(await prepare()).toEqual({
     ok: true,
     value: { sessionRoot: path.join(workspace, "new-workspace"), sessionCwd: undefined },
   });
   expect((await fs.stat(missing)).isDirectory()).toBe(true);
 });
 
-it("does not resolve remote node paths on the Gateway", () => {
+it("does not resolve remote node paths on the Gateway", async () => {
   const sessionCwd = "C:\\remote\\missing";
-  expect(prepare({ requestedExecNode: "remote", sessionCwd })).toEqual({
+  expect(await prepare({ requestedExecNode: "remote", sessionCwd })).toEqual({
     ok: true,
     value: { sessionCwd },
   });

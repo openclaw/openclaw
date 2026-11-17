@@ -88,6 +88,23 @@ describe("agent-runner-utils", () => {
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
+  it.each([true, undefined] as const)(
+    "carries admitted restart board authoring, not provenance (%s)",
+    async (admitted) => {
+      const resolved = await buildExecution({
+        run: makeRun({
+          inputProvenance: { kind: "internal_system", sourceTool: "restart" },
+          internalEventExecution: {
+            pinnedWidgetAuthoring: admitted,
+            onStarted: () => {},
+            onTerminal: () => {},
+          },
+        }),
+      });
+      expect(resolved.pinnedWidgetAuthoring).toBe(admitted);
+    },
+  );
+
   describe("message action turn capabilities", () => {
     const source = {
       agentId: "agent-1",
