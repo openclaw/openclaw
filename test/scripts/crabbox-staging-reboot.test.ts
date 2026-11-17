@@ -28,11 +28,18 @@ const injected = vi.hoisted(() => ({
   onRevalidate: undefined as (() => void) | undefined,
   beforeRemove: undefined as ((path: string) => void) | undefined,
 }));
-vi.mock("../../scripts/crabbox-staging-provenance.mts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../scripts/crabbox-staging-provenance.mts")>()),
-  currentProcessProvenance: () => injected.provenance,
-  currentBootTimeNs: () => injected.bootTimeNs,
-}));
+vi.mock("../../scripts/crabbox-staging-provenance.mts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../scripts/crabbox-staging-provenance.mts")>();
+  return {
+    ...actual,
+    currentProcessProvenance: () => injected.provenance,
+    currentBootTimeNs: () => injected.bootTimeNs,
+    // The real default reads its lexical provider, so pass the fixture's provenance explicitly.
+    processDomain: (provenance = injected.provenance) =>
+      provenance ? actual.processDomain(provenance) : undefined,
+  };
+});
 vi.mock("../../scripts/crabbox-staging-users.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-users.mts")>()),
   verifyNoStagingUsers: async () => {
@@ -266,6 +273,18 @@ function changeOwner(fixture: Fixture) {
   });
   return fixture.read();
 }
+
+posixIt("uses injected process-domain defaults while preserving explicit provenance", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../scripts/crabbox-staging-provenance.mts")
+  >("../../scripts/crabbox-staging-provenance.mts");
+  expect(processDomain()).toBe(actual.processDomain(oldHost));
+  injected.provenance = newHost;
+  expect(processDomain()).toBe(actual.processDomain(newHost));
+  injected.provenance = undefined;
+  expect(processDomain()).toBeUndefined();
+  expect(processDomain(oldHost)).toBe(actual.processDomain(oldHost));
+});
 
 posixIt("records provenance; same-host reboot recovery never probes reused PID", async () => {
   const fixture = stage();
