@@ -52,6 +52,7 @@ import { registerGatewayCronMutationAuthorityTests } from "./server-cron.mutatio
 import { createWatchedRun, runExit } from "./server-cron.process.test-support.js";
 import { registerGatewayCronPublicationTests } from "./server-cron.publication.test-support.js";
 import { registerGatewayCronQueueTests } from "./server-cron.queue.test-support.js";
+import { registerGatewayCronRearmTests } from "./server-cron.rearm.test-support.js";
 import { registerGatewayCronSystemJobTests } from "./server-cron.system-jobs.test-support.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -947,87 +948,14 @@ describe("buildGatewayCronService", () => {
     },
   );
 
-  it.each([
-    { command: "true", exitTiming: "after" },
-    { command: "echo rearmed", exitTiming: "after" },
-    { command: "true", exitTiming: "before" },
-    { command: "echo rearmed", exitTiming: "before" },
-  ])(
-    "re-arms on-exit $command when its next exit arrives $exitTiming the previous payload finishes",
-    async ({ command, exitTiming }) => {
-      const first = createWatchedRun(false);
-      const second = createWatchedRun(false);
-      const firstExit = first.exit;
-      const secondExit = second.exit;
-      const releasePayload = createDeferred();
-      const payloadFinished = createDeferred();
-      const { spawn } = mockCronSupervisor(first, second);
-      const runSessionEvent = vi
-        .fn<NonNullable<CronServiceState["deps"]["runSessionEvent"]>>()
-        .mockResolvedValue({ status: "ok" })
-        .mockImplementationOnce(async () => {
-          await releasePayload.promise;
-          return { status: "ok" };
-        });
-      const state = loadCronService(createCronConfig("server-cron-on-exit-rearm"));
-      getCronDeps(state).runSessionEvent = runSessionEvent;
-      let nowMs = 1_700_000_000_000;
-      getCronDeps(state).nowMs = () => nowMs;
-      const cron = getConcreteCron(state);
-      const run = cron.runOnExit.bind(cron);
-      vi.spyOn(cron, "runOnExit").mockImplementationOnce(async (...args) => {
-        try {
-          return await run(...args);
-        } finally {
-          payloadFinished.resolve();
-        }
-      });
-
-      try {
-        const job = await addSystemEventJob(state, "watch and rearm", "done", {
-          schedule: { kind: "on-exit", command: "true" },
-          sessionTarget: "main",
-          wakeMode: "now",
-        });
-        await state.reconcileExitWatchers();
-        firstExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
-        await vi.waitFor(() => expect(runSessionEvent).toHaveBeenCalledOnce());
-        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
-        await state.reconcileExitWatchers();
-        expect(spawn).toHaveBeenCalledOnce();
-
-        const rearmed = await state.cron.update(job.id, {
-          enabled: true,
-          schedule: { kind: "on-exit", command },
-        });
-        expect(rearmed.updatedAtMs).toBe(job.updatedAtMs);
-        await state.reconcileExitWatchers();
-        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
-
-        if (exitTiming === "before") {
-          secondExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
-          await waitForImmediate();
-          expect(state.cron.getJob(job.id)?.enabled).toBe(true);
-        }
-        nowMs += 1;
-        releasePayload.resolve();
-        await payloadFinished.promise;
-        if (exitTiming === "after") {
-          await state.reconcileExitWatchers();
-          expect(state.cron.getJob(job.id)?.enabled).toBe(true);
-          secondExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
-        }
-        await vi.waitFor(() => expect(runSessionEvent).toHaveBeenCalledTimes(2));
-        expect(spawn).toHaveBeenCalledTimes(2);
-        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
-      } finally {
-        releasePayload.resolve();
-        firstExit.resolve(runExit());
-        secondExit.resolve(runExit());
-        await state.cron.stopAndDrain?.();
-      }
-    },
-  );
+  registerGatewayCronRearmTests({
+    createCronConfig,
+    loadCronService,
+    getCronDeps,
+    getConcreteCron,
+    mockCronSupervisor,
+    addSystemEventJob,
+  });
 
   it("persists an existing watcher exit during drain but fences its new scheduled run", async () => {
     resetGatewayWorkAdmission();

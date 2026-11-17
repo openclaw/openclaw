@@ -138,6 +138,8 @@ it.each([
       renderPaneModelControl(controls.composerControls, container, true);
       return expectDefined(rendered.mock.calls.at(-1)?.[0], "mounted composer control props");
     };
+    // This exercises retained settings, not the cold picker chunk transfer.
+    await import("./components/chat-model-picker-panel.tsx");
     const props = draw();
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
