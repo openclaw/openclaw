@@ -86,7 +86,6 @@ export class DraftPlaceBrowser {
   private projectSearchArgs: readonly unknown[] = [];
   // Plugin repository search loads on first use, outside the New Session startup bundle.
   private repositorySearch: RepositorySourceSearch | undefined;
-  private repositorySearchLoad: Promise<RepositorySourceSearch> | undefined;
   private projectSearchReadValue: ProjectSearchRead | null = null;
   private finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
   private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
@@ -190,7 +189,8 @@ export class DraftPlaceBrowser {
     this.finishProjectSearch = undefined;
     this.projectSearchReadValue = null;
     const [client, advertised, query] = args;
-    this.searchRepositorySources(args, projectCloneInput(query) ? null : client, query);
+    // A failed chunk load reaches the console; the next query retries it.
+    void this.searchRepositorySources(args, projectCloneInput(query) ? null : client, query);
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
@@ -237,33 +237,23 @@ export class DraftPlaceBrowser {
     return this.repositorySearch?.groups ?? [];
   }
 
-  private searchRepositorySources(
+  private async searchRepositorySources(
     args: readonly unknown[],
     client: Parameters<RepositorySourceSearch["search"]>[0],
     query: string,
   ) {
-    if (this.repositorySearch) {
-      this.repositorySearch.search(client, this.repositorySources, query);
-      return;
+    if (!this.repositorySearch) {
+      if (!client || query.length < 2 || this.repositorySources.length === 0) {
+        return;
+      }
+      const { RepositorySourceSearch: Search } = await import("./repository-source-search.ts");
+      // A newer query owns the search; it starts its own request after loading.
+      if (this.projectSearchArgs !== args) {
+        return;
+      }
+      this.repositorySearch ??= new Search(() => this.callbacks.changed());
     }
-    if (!client || query.length < 2 || this.repositorySources.length === 0) {
-      return;
-    }
-    this.repositorySearchLoad ??= import("./repository-source-search.ts").then(
-      ({ RepositorySourceSearch: Search }) =>
-        (this.repositorySearch ??= new Search(() => this.callbacks.changed())),
-    );
-    this.repositorySearchLoad.then(
-      (search) => {
-        // A newer query owns the search; it starts its own request after loading.
-        if (this.projectSearchArgs === args) {
-          search.search(client, this.repositorySources, query);
-        }
-      },
-      () => {
-        this.repositorySearchLoad = undefined;
-      },
-    );
+    this.repositorySearch.search(client, this.repositorySources, query);
   }
 
   projectSubmissionBlocked(checkoutSubmissionBlocked: boolean): boolean | undefined {
