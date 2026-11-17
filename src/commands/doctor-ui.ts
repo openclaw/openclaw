@@ -144,11 +144,28 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
   ].join("\n");
 }
 
+async function controlUiRepairDisabled(): Promise<boolean> {
+  // Source read only: this runs after Doctor has already opened config, and it
+  // must not take database admission or plugin validation.
+  const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+  const config = await readSourceConfigBestEffort();
+  return config.gateway?.controlUi?.enabled === false;
+}
+
 export async function maybeRepairUiProtocolFreshness(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  for (const issue of await detectUiProtocolFreshnessIssues()) {
+  const issues = await detectUiProtocolFreshnessIssues();
+  const canRepair = issues.some((issue) => issue.canBuild && !issue.installOwner);
+  if (canRepair && (await controlUiRepairDisabled())) {
+    note(
+      "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+      "UI",
+    );
+    return;
+  }
+  for (const issue of issues) {
     const stale = issue.kind === "stale-assets";
     note(formatUiProtocolFreshnessIssue(issue), stale ? "UI Freshness" : "UI");
     if (issue.installOwner) {

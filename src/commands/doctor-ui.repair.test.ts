@@ -35,6 +35,8 @@ import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 
 const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let prompter: DoctorPrompter;
+let configPath = "";
+const originalConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 
 async function writeIndex(html: string) {
   const index = path.join(mocks.root, "dist/control-ui/index.html");
@@ -52,6 +54,9 @@ beforeEach(async () => {
   mocks.root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-ui-repair-")),
   );
+  configPath = path.join(mocks.root, "openclaw.json");
+  await fs.writeFile(configPath, "{}\n");
+  process.env.OPENCLAW_CONFIG_PATH = configPath;
   await fs.mkdir(path.join(mocks.root, "ui"), { recursive: true });
   await fs.writeFile(path.join(mocks.root, "ui", "package.json"), "{}");
   mocks.ensureControlUiAssetsBuilt.mockImplementation(async (_runtime, opts) => {
@@ -64,7 +69,29 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  if (originalConfigPath === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+  }
   await fs.rm(mocks.root, { recursive: true, force: true });
+});
+
+it("skips Control UI asset repair when the web app is disabled", async () => {
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify({ gateway: { controlUi: { enabled: false } } })}\n`,
+  );
+
+  await maybeRepairUiProtocolFreshness(runtime, prompter);
+
+  expect(mocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
+  expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+  expect(prompter.confirmAggressiveAutoFix).not.toHaveBeenCalled();
+  expect(mocks.note).toHaveBeenCalledWith(
+    "Control UI is disabled (gateway.controlUi.enabled: false), so asset repair was skipped.",
+    "UI",
+  );
 });
 
 it("routes missing app-owned assets to the host without package or git commands", async () => {
