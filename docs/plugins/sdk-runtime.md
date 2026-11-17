@@ -490,7 +490,7 @@ structured cloning do not cross this boundary.
 `before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
 envelopes with shared, frozen transcript payload leaves. Treat nested history as
 read-only and return contribution fields instead of mutating message content.
-Non-owned values still receive detached snapshots with shared-memory checks.
+Values without an immutability proof receive detached snapshots with shared-memory checks.
 See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
