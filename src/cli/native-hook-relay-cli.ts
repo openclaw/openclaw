@@ -41,10 +41,7 @@ class NativeHookRelayDeadlineError extends Error {
 }
 
 /** Parse and run the internal native relay directly from the process argument vector. */
-export async function runNativeHookRelayCliFromArgv(
-  argv: string[],
-  startedAtMs?: number,
-): Promise<number> {
+export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<number> {
   const relayIndex = argv.findIndex((arg, index) => arg === "relay" && argv[index - 1] === "hooks");
   if (relayIndex < 0) {
     throw new Error("native hook relay command path is required");
@@ -64,7 +61,7 @@ export async function runNativeHookRelayCliFromArgv(
     }
     opts[key] = value;
   }
-  return await runNativeHookRelayCli(opts, startedAtMs);
+  return await runNativeHookRelayCli(opts);
 }
 
 /**
@@ -74,10 +71,7 @@ export async function runNativeHookRelayCliFromArgv(
  * kills as non-blocking. The deadline therefore counts from process start
  * (`performance.now()` origin), so slow startup still leaves time to refuse.
  */
-export async function runNativeHookRelayCli(
-  opts: NativeHookRelayCliOptions,
-  startedAtMs = 0,
-): Promise<number> {
+export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Promise<number> {
   const { stdin, stdout, stderr } = process;
   const provider = readRequiredOption(opts.provider, "provider");
   const relayId = readRequiredOption(opts.relayId, "relay-id");
@@ -91,7 +85,7 @@ export async function runNativeHookRelayCli(
     return 1;
   }
 
-  const deadline = createNativeHookRelayDeadline(timeoutMs, startedAtMs);
+  const deadline = createNativeHookRelayDeadline(timeoutMs);
   const writeResponse = (response: NativeHookRelayProcessResponse): number => {
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
@@ -290,9 +284,10 @@ function formatRelayCliError(prefix: string, error: unknown): string {
   return `${prefix}: ${message}\n`;
 }
 
-function createNativeHookRelayDeadline(timeoutMs: number, startedAtMs: number) {
+function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
-  const expiresAtMs = startedAtMs + timeoutMs;
+  // performance.now() counts from process start, where Codex's hook timeout began.
+  const expiresAtMs = timeoutMs;
   const timer = setSafeTimeout(
     () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
     expiresAtMs - performance.now(),

@@ -28,12 +28,10 @@ function relayFixture() {
     run: (
       options: Parameters<typeof runNativeHookRelayCliForTest>[0],
       deps: Parameters<typeof runNativeHookRelayCliForTest>[1],
-      startedAtMs?: number,
     ) =>
       runNativeHookRelayCliForTest(
         { ...relayOptions, ...options },
         { stdin: Readable.from(["{}"]), stdout, stderr, ...deps },
-        startedAtMs,
       ),
   };
 }
@@ -268,12 +266,11 @@ describe("native hook relay CLI", () => {
     const response = createDeferred<NativeHookRelayProcessResponse>();
     const { stdout, stderr, run } = relayFixture();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const processStartedAtMs = performance.now();
-    // Codex's timeout includes process startup, which used most of this budget.
-    vi.advanceTimersByTime(20);
     const pending = run(
       { event: "pre_tool_use", timeout: "25" },
       {
+        // Codex's timeout includes process startup, which used most of this budget.
+        processAgeMs: 20,
         invokeBridge: ({ signal }) => {
           if (!signal) {
             throw new Error("Relay transport requires its cancellation signal");
@@ -282,7 +279,6 @@ describe("native hook relay CLI", () => {
           return response.promise;
         },
       },
-      processStartedAtMs,
     );
     try {
       const signal = await awaitGateBeforeSettlement(

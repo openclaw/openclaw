@@ -12,6 +12,8 @@ type NativeHookRelayCliTestDeps = {
   stderr?: NodeJS.WritableStream;
   invokeBridge?: typeof bridge.invokeNativeHookRelayBridge;
   callGateway?: typeof import("../gateway/call.js").callGateway;
+  /** How long the simulated hook process has been running when the relay starts. */
+  processAgeMs?: number;
 };
 
 async function withRelayTestDeps(
@@ -20,6 +22,20 @@ async function withRelayTestDeps(
 ): Promise<number> {
   const restore: Array<() => void> = [];
   try {
+    // The relay deadline counts from process start (the performance.now() origin),
+    // and the test runner is not a fresh hook process: move the origin to the call.
+    // Wrap whatever clock the test installed (fake timers or its own spy).
+    const clock = Object.getOwnPropertyDescriptor(performance, "now");
+    const now = performance.now.bind(performance);
+    const origin = now() - (deps.processAgeMs ?? 0);
+    Object.defineProperty(performance, "now", { configurable: true, value: () => now() - origin });
+    restore.push(() => {
+      if (clock) {
+        Object.defineProperty(performance, "now", clock);
+      } else {
+        Reflect.deleteProperty(performance, "now");
+      }
+    });
     if (deps.invokeBridge) {
       const spy = vi
         .spyOn(bridge, "invokeNativeHookRelayBridge")
@@ -50,20 +66,16 @@ async function withRelayTestDeps(
   }
 }
 
-// The test runner is not a fresh hook process: count the deadline from the call
-// unless a test supplies the process start it simulates.
 export function runNativeHookRelayCliForTest(
   options: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliTestDeps,
-  startedAtMs = performance.now(),
 ): Promise<number> {
-  return withRelayTestDeps(deps, () => runNativeHookRelayCli(options, startedAtMs));
+  return withRelayTestDeps(deps, () => runNativeHookRelayCli(options));
 }
 
 export function runNativeHookRelayCliFromArgvForTest(
   argv: string[],
   deps: NativeHookRelayCliTestDeps,
-  startedAtMs = performance.now(),
 ): Promise<number> {
-  return withRelayTestDeps(deps, () => runNativeHookRelayCliFromArgv(argv, startedAtMs));
+  return withRelayTestDeps(deps, () => runNativeHookRelayCliFromArgv(argv));
 }
