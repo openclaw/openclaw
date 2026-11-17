@@ -45,6 +45,13 @@ backup.
 
 ## Update implementation contract
 
+When a CLI launcher forwards Ctrl-C or SIGTERM to `openclaw update` (including
+the root `--update` spelling), it allows up to 35 minutes for the updater to join
+its commands, release checkout ownership, and recover an interrupted activation
+before escalating termination. Other commands retain their existing stop budgets.
+The installed launcher must contain this fix; downloading a newer candidate
+cannot change the signal timer of an already-running older launcher.
+
 Managed systemd Gateway activation also covers packages replaced outside
 `openclaw update`. Before ordinary startup admission, the native service reader
 must identify this process as the running unit's MainPID. Only older database
