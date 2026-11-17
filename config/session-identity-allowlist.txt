@@ -1397,7 +1397,6 @@ src/infra/update-database-backup.ts	1
 src/infra/update-database-generations.ts	2
 src/infra/update-doctor-migration-attribution.ts	1
 src/infra/update-doctor-process-custody.ts	4
-src/infra/update-doctor-result.ts	1
 src/infra/update-doctor-scan-receipts.ts	3
 src/infra/update-failure-report-prepare.ts	2
 src/infra/update-immutable-activation.ts	3

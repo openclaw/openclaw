@@ -539,12 +539,15 @@ whole-store image for classification. A reader-pinned WAL or rollback journal re
 private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
-Candidate Doctor also accepts an empty WAL index appearing or disappearing
-between an older updater's capture and migration admission, provided the database
-identity and committed contents still match and the index contains no write
-evidence. This preserves the installed updater's original fingerprint format.
-Changed committed data or write evidence still refuses migration and automatic
-restoration. The candidate must contain this repair.
+Candidate Doctor separates its initial database admission from the updater's
+rollback baseline. If databases changed after the updater captured them, Doctor
+warns and continues from the current observed state rather than aborting an
+otherwise valid migration. The receipt permanently disables automatic database
+restoration for that update, so a later failure cannot overwrite newer data with
+the stale backup. Existing integrity, schema, and maintenance-ownership checks
+still apply, as do checks for writes after admission. The candidate must contain
+this repair; the installed updater's capture and backup checks are unchanged.
+Empty WAL-index transitions without write evidence remain rollback-eligible.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
