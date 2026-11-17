@@ -4,7 +4,7 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
-import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
+import { expectAllSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI community card E2E",
@@ -46,7 +46,7 @@ suite.define(() => {
           const close = card.getByRole("button", { name: "Dismiss and don't show again" });
           await close.waitFor();
           // Home is outside the paged task list.
-          await expandSidebarSessions(page.locator(".sidebar-shell__body"), sessions.length - 1);
+          await expectAllSidebarSessions(page.locator(".sidebar-shell__body"), sessions.length - 1);
           const list = page.locator(".sidebar-shell__body");
           const lastSession = page.locator('[data-session-key="agent:main:task-31"]');
           await expect

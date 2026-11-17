@@ -9,7 +9,7 @@ import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts"
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
+import { expectAllSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -718,7 +718,7 @@ suite.define(() => {
             .first();
           await row.waitFor();
           if (route === "dashboards") {
-            await expandSidebarSessions(scroller, 30);
+            await expectAllSidebarSessions(scroller, 30);
             await revealSidebarTarget(
               scroller,
               page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),

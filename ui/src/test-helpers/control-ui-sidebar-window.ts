@@ -20,7 +20,20 @@ export async function revealSidebarTarget(
       element.scrollTop = 0;
     });
     await commit();
-    while (!(await target.count())) {
+    // A long window can publish a step's rows several frames after the scroll
+    // under load; check each step before scrolling past it.
+    const mountedAfterStep = async () => {
+      const stepDeadline = Math.min(deadline, Date.now() + 500);
+      do {
+        // Scroll publication and measured-height reconciliation occupy separate frames.
+        await commit();
+        if (await target.count()) {
+          return true;
+        }
+      } while (Date.now() < stepDeadline);
+      return false;
+    };
+    while (!(await mountedAfterStep())) {
       if (Date.now() >= deadline) {
         throw new Error("Sidebar target was not mounted after scrolling");
       }
@@ -28,8 +41,6 @@ export async function revealSidebarTarget(
         const bottom = Math.max(0, element.scrollHeight - element.clientHeight);
         element.scrollTop = Math.min(bottom, element.scrollTop + element.clientHeight * 0.75);
       });
-      // Scroll publication and measured-height reconciliation occupy separate frames.
-      await commit();
     }
   }
   await target.scrollIntoViewIfNeeded({ timeout: Math.max(1, deadline - Date.now()) });

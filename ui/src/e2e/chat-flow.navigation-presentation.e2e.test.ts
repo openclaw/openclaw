@@ -645,16 +645,13 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Pinned rows sit above, and do not occupy, the fifteen-row Sessions page.
+    // Pinned rows sit above the Sessions list, which shows every row when alone.
     const pinnedLink = page.locator(
       `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 16));
-    const more = page.getByRole("button", { name: "Show more", exact: true });
-    await more.click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
-    expect(await more.count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Show more", exact: true }).count()).toBe(0);
 
     await page
       .locator(

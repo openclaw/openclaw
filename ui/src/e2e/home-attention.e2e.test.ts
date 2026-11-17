@@ -234,8 +234,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         if (width > 768) {
-          // Expand the capped list so the compact header still leaves a real scroll range.
-          await page.getByRole("button", { name: "Show more", exact: true }).click();
+          // The lone session list shows every row, so the compact header still leaves a real scroll range.
           await page.setViewportSize({ width, height: 500 });
           const sidebar = page.locator(".sidebar-shell__body");
           await expect.poll(() => sidebar.getAttribute("class")).toContain("scroll-top");

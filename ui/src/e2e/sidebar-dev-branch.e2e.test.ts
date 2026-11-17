@@ -67,7 +67,8 @@ suite.define(() => {
         const body = sidebar.locator(".sidebar-shell__body");
         await body.waitFor();
         await sidebar.locator(".sidebar-identity-card").waitFor();
-        await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
+        // A lone session list shows every loaded row, so the 20th is reached by scrolling.
+        expect(await sidebar.locator(".sidebar-session-pagination").count()).toBe(0);
         const last = sidebar.getByText("CI timer", { exact: true });
         await expect
           .poll(async () => {

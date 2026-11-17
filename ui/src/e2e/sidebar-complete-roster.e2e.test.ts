@@ -175,34 +175,10 @@ suite.define(() => {
             await toggle.click();
           }
           await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
-          const expansion = await page.evaluateHandle(() => {
-            // oxlint-disable-next-line typescript/unbound-method -- preserve the IDB store receiver below.
-            const put = IDBObjectStore.prototype.put;
-            return {
-              done: new Promise<void>((resolve) => {
-                IDBObjectStore.prototype.put = function (this: IDBObjectStore, value, key) {
-                  const request = put.call(this, value, key);
-                  if (
-                    this.name === "sidebarSnapshots" &&
-                    value.model?.sections?.some(
-                      (section: { visibleLimit: number }) => section.visibleLimit > 10,
-                    )
-                  ) {
-                    IDBObjectStore.prototype.put = put;
-                    this.transaction.addEventListener("complete", () => resolve(), { once: true });
-                  }
-                  return request;
-                };
-              }),
-            };
-          });
-          await sidebar
-            .locator(".sidebar-session-content .sidebar-session-pagination__button")
-            .filter({ hasText: "Show more" })
-            .first()
-            .click();
-          await expansion.evaluate((observation) => observation.done);
-          await expansion.dispose();
+          // The lone Sessions list already shows every row, so the snapshot holds
+          // the expanded list. Let the debounced capture of the toggles above
+          // start (500 ms timer, then idle within 1 s) before waiting for its write.
+          await page.waitForTimeout(1_600);
           await saved().waitFor();
           await viewport.evaluate((element) => {
             element.scrollTop = 0;

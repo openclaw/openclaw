@@ -16,7 +16,7 @@ import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
-import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
+import { expectAllSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -59,7 +59,7 @@ suite.define(() => {
           const body = page.locator(".sidebar-shell__body");
           const nav = page.locator(".shell-nav");
           const resizer = page.getByRole("separator", { name: "Resize sidebar" });
-          await expandSidebarSessions(body, 40);
+          await expectAllSidebarSessions(body, 40);
           await revealSidebarTarget(
             body,
             body.locator('[data-session-key="agent:main:divider-session-39"]'),
