@@ -26,7 +26,9 @@ import {
   runUpdateCandidateSnapshotWorker,
 } from "./update-candidate-state.test-support.js";
 
-it.each(["valid", "missing", "corrupt"] as const)(
+// Windows symlinks need a privilege; the dangling-link case runs where links are free.
+const archiveConditions = ["valid", "missing", "corrupt"] as const;
+it.each(process.platform === "win32" ? archiveConditions : [...archiveConditions, "dangling"])(
   "rehearses file-backed cold history while preserving live %s archive diagnostics",
   async (condition) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -48,12 +50,16 @@ it.each(["valid", "missing", "corrupt"] as const)(
       }
       const file = resolveSessionColdArchivePath(fixture.scope.storePath, archive.archive_name);
       const bytes = await fs.readFile(file);
-      if (condition === "missing") {
+      const lost = condition === "missing" || condition === "dangling";
+      if (lost) {
         await fs.unlink(file);
+        if (condition === "dangling") {
+          await fs.symlink(`${file}.gone`, file);
+        }
       } else if (condition === "corrupt") {
         await fs.writeFile(file, Buffer.alloc(bytes.length));
       }
-      const error = condition === "missing" ? "missing or unreadable" : "failed verification";
+      const error = lost ? "missing or unreadable" : "failed verification";
       if (condition !== "valid") {
         await expect(restoreSessionColdTranscript(fixture.scope)).rejects.toThrow(error);
       }
@@ -69,7 +75,7 @@ it.each(["valid", "missing", "corrupt"] as const)(
         path.join(targetStateDir, relative),
         archive.archive_name,
       );
-      if (condition === "missing") {
+      if (lost) {
         // The rehearsal mirrors lost live payloads; only a step that reads one fails.
         await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.access(projected)).rejects.toMatchObject({ code: "ENOENT" });
@@ -87,13 +93,13 @@ it.each(["valid", "missing", "corrupt"] as const)(
           copy.prepare("SELECT archive_blob FROM session_transcript_cold_archives").get(),
         ).toEqual({ archive_blob: null });
       }
-      if (condition !== "missing") {
-        const linked = await fs.stat(projected, { bigint: true });
+      if (!lost) {
+        const projectedFile = await fs.stat(projected, { bigint: true });
         const source = await fs.stat(file, { bigint: true });
-        expect({ dev: linked.dev, ino: linked.ino }).toEqual({
-          dev: source.dev,
-          ino: source.ino,
-        });
+        // Hard links share the payload; Windows always takes a private copy.
+        expect(projectedFile.dev === source.dev && projectedFile.ino === source.ino).toBe(
+          process.platform !== "win32",
+        );
       }
       // A rehearsal must not depend on any live database or cold file after capture.
       await fs.rename(state.stateDir, state.path("unavailable-source"));

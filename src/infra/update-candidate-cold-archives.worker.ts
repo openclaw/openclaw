@@ -115,32 +115,36 @@ export async function copyColdArchives(
   targetStorePath: string,
 ): Promise<void> {
   for (const name of readColdArchiveNames(database)) {
-    const source = resolveSessionColdArchivePath(sourceStorePath, name);
-    const target = resolveSessionColdArchivePath(targetStorePath, name);
-    let regularFile: boolean;
     try {
-      regularFile = (await fs.lstat(source)).isFile();
+      await projectColdArchive(
+        resolveSessionColdArchivePath(sourceStorePath, name),
+        resolveSessionColdArchivePath(targetStorePath, name),
+      );
     } catch (error) {
+      // Missing files and dangling symlinks alike stay missing in the rehearsal.
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
       }
-      continue;
     }
-    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-    // Cold publication never overwrites an existing file; reset only unlinks it.
-    // Do not chmod a shared inode. Symlinks instead get an independent file copy.
-    // Windows always copies: unlinking a hard link where POSIX delete is unavailable
-    // (for example an SMB share) clears the shared file's read-only attribute.
-    if (process.platform !== "win32" && regularFile) {
-      try {
-        await fs.link(source, target);
-        continue;
-      } catch (error) {
-        if (!isHardlinkFallbackError(error)) {
-          throw error;
-        }
+  }
+}
+
+async function projectColdArchive(source: string, target: string): Promise<void> {
+  const regularFile = (await fs.lstat(source)).isFile();
+  await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+  // Cold publication never overwrites an existing file; reset only unlinks it.
+  // Do not chmod a shared inode. Symlinks instead get an independent file copy.
+  // Windows always copies: unlinking a hard link where POSIX delete is unavailable
+  // (for example an SMB share) clears the shared file's read-only attribute.
+  if (process.platform !== "win32" && regularFile) {
+    try {
+      await fs.link(source, target);
+      return;
+    } catch (error) {
+      if (!isHardlinkFallbackError(error)) {
+        throw error;
       }
     }
-    await fs.copyFile(source, target, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
   }
+  await fs.copyFile(source, target, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
 }
