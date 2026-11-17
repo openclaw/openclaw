@@ -14,6 +14,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import { createClaudeCliUserInput } from "./cli-runtime-input.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
@@ -43,6 +44,7 @@ type ClaudeCliTurn = {
   /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
   promptInputUuid: string;
   sawTerminalResult: boolean;
+  completed: boolean;
   interrupted: boolean;
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
@@ -243,23 +245,6 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(
-  context: CliBackendExecuteContext,
-  text: string,
-  uuid: string,
-  hostGenerated = false,
-) {
-  return {
-    type: "user",
-    message: { role: "user", content: text },
-    parent_tool_use_id: null,
-    uuid,
-    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
-    ...(hostGenerated ? { isSynthetic: true } : {}),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
-}
-
 function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
   for (const input of turn.injectedInputs.values()) {
     input.started.reject(error);
@@ -290,7 +275,7 @@ async function injectInput(
     turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
     written = session.transport.send(
-      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+      createClaudeCliUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
     );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
@@ -326,6 +311,7 @@ function closeSession(session: ClaudeCliSession, error?: unknown) {
 }
 
 function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
+  turn.completed = true;
   // Nested Agent and Workflow descendants can outlive their foreground parent without a
   // parent-lane receipt. A warm process would lend them the next turn's tool and MCP authority.
   const holdsBackgroundTasks =
@@ -605,6 +591,12 @@ export async function* executeClaudeCli(
     reusable.handle.close("abort");
     reusable = undefined;
   }
+  // Do not reuse a session whose transport is already closing or closed.
+  // This prevents false "user declined" responses when the control channel is dead.
+  if (reusable?.transport && !reusable.transport.isOpen()) {
+    reusable.handle.close("abort");
+    reusable = undefined;
+  }
   if (!reusable && capability) {
     await capability.restart();
   }
@@ -627,6 +619,7 @@ export async function* executeClaudeCli(
     promptSubmitted: false,
     promptInputUuid: inputUuid,
     sawTerminalResult: false,
+    completed: false,
     interrupted: false,
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
@@ -672,9 +665,14 @@ export async function* executeClaudeCli(
             }
             const admittedTurn = activeTurn(session);
             const response = await handleRequest(session, request, signal);
-            // The transport invokes this synchronously at its final write, after all awaits.
+            // The transport invokes this callback at its final write, after all awaits.
+            // If the admitted turn completed normally, allow context save.
+            // If it was interrupted/aborted, deny tool requests to avoid false "user declined".
             return () => {
-              if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
+              const turnStillActive =
+                admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted;
+              const turnCompletedNormally = admittedTurn?.completed === true;
+              if (turnStillActive || turnCompletedNormally) {
                 // Saved turn context leaves here, so it takes the private-input check too.
                 return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
                   ? {}
@@ -746,7 +744,9 @@ export async function* executeClaudeCli(
         },
       });
       const hostGenerated = context.promptOrigin === "host";
-      await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
+      await transport.send(
+        createClaudeCliUserInput(context, context.prompt, turn.inputUuid, hostGenerated),
+      );
       context.registerMessageInjection?.({
         isAvailable: () => canInjectInput(session, turn),
         queueMessage: (text, withCurrent, options) =>
@@ -771,7 +771,7 @@ export async function* executeClaudeCli(
     context.abortSignal?.removeEventListener("abort", abort);
     // Iterator.return() is cancellation too; a partially consumed turn cannot stay warm.
     if (session.currentTurn === turn) {
-      if (turn.sawTerminalResult && !session.closed) {
+      if (turn.completed && !session.closed) {
         session.currentTurn = undefined;
         session.idleTimer = setTimeout(() => session.handle.close("idle"), IDLE_TIMEOUT_MS);
         session.idleTimer.unref();
