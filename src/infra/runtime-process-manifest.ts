@@ -247,6 +247,10 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("browser", "native-host-entry", "relay-daemon-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "relay-daemon-entry.js" },
   },
+  browserProfileFilesystem: {
+    ...pluginRuntimeProcess("browser", "profile-filesystem", "profile-filesystem.worker"),
+    package: { name: "@openclaw/browser-plugin", distWorkerPath: "profile-filesystem.worker.js" },
+  },
   browserSetup: {
     ...pluginRuntimeProcess("browser", "setup-entry", "setup-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "setup-entry.js" },
