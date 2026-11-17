@@ -6,8 +6,6 @@ extension ChatTranscriptRow {
         let messages: [OpenClawChatMessage]
         let durationMilliseconds: Double?
         var isLive = false
-        var rollupID: UUID?
-        var rollupMessages: [OpenClawChatMessage]?
 
         var id: UUID {
             // Keep the disclosure distinct from its anchor row, including
@@ -26,9 +24,7 @@ extension ChatTranscriptRow {
                 anchorID: self.anchorID,
                 messages: visible,
                 durationMilliseconds: self.durationMilliseconds,
-                isLive: self.isLive,
-                rollupID: self.rollupID,
-                rollupMessages: self.rollupMessages?.filter(isVisible))
+                isLive: self.isLive)
         }
     }
 
@@ -107,31 +103,20 @@ extension ChatTranscriptRow {
                 }
             }
             let chunks = ChatWorkChunks.project(parts, kind: { $0.kind })
-            let allWork = chunks.filter(\.isWork).flatMap { $0.parts.compactMap(\.row.workMessage) }
-            // History prepends extend the frozen work; the last work row of the
-            // turn is stable, while the first changes with older pages.
-            let rollupID = isLive ? nil : allWork.last?.presentationID
-            var ownsRollup = true
             let projected = chunks.enumerated().flatMap { chunkIndex, chunk -> [Self] in
                 guard chunk.isWork else { return chunk.parts.map(\.row) }
                 let messages = chunk.parts.compactMap(\.row.workMessage)
                 guard let last = messages.last else { return [] }
                 // History prepends change the first work row, but not the visible
                 // boundary that follows it (including a continuing steer turn).
-                let boundary = chunks.prefix(chunkIndex).last?.parts.last?.row.id ??
-                    (start > 0 ? turn[start - 1].id : nil)
-                let anchor = isLive ? (Self.liveAnchor(for: messages, boundary: boundary) ?? last.presentationID) :
+                let anchor = isLive ? (Self.liveAnchor(for: messages) ?? last.presentationID) :
                     (chunks.dropFirst(chunkIndex + 1).first?.parts.first?.row.id ??
                         continuations[index].flatMap { turns[$0].first?.id } ?? last.presentationID)
-                let summary = ownsRollup && !isLive ? allWork : nil
-                ownsRollup = false
                 return [.completedWork(CompletedWork(
                     anchorID: anchor,
                     messages: messages,
                     durationMilliseconds: nil,
-                    isLive: isLive && chunkIndex == chunks.count - 1,
-                    rollupID: rollupID,
-                    rollupMessages: summary))]
+                    isLive: isLive && chunkIndex == chunks.count - 1))]
             }
             return Array(turn[..<start]) + projected + Array(turn[(end + 1)...])
         }
@@ -232,12 +217,9 @@ extension OpenClawChatMessage {
     }
 
     var isCollapsibleWork: Bool {
-        !self.hasWorkMedia && (!self.hasWorkReplyContent || self.workPhase == "commentary") && !self
-            .isForwardedTurnBoundary && !self
-            .isRealtimeVoiceTranscript &&
+        !self.hasWorkReplyContent && !self.isForwardedTurnBoundary && !self.isRealtimeVoiceTranscript &&
             (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
-                (self.role.lowercased() == "assistant" &&
-                    (self.workPhase == "commentary" || self.content.contains(where: \.isWorkContent))))
+                (self.role.lowercased() == "assistant" && self.content.contains(where: \.isWorkContent)))
     }
 
     fileprivate var hasUnresolvedWork: Bool {
@@ -276,13 +258,8 @@ extension ChatTranscriptRow {
 
     /// A live section must keep its disclosure identity when the first recorded
     /// row replaces the pending projection, so anchor on the call's stable key.
-    private static func liveAnchor(for messages: [OpenClawChatMessage], boundary: UUID?) -> UUID? {
+    private static func liveAnchor(for messages: [OpenClawChatMessage]) -> UUID? {
         guard let first = messages.first else { return nil }
-        // Canonical history can prepend work or replace the first pending row.
-        // The preceding user/reply boundary does not change during that handoff.
-        if let boundary {
-            return Self.pendingCallID(runID: first.workRunID, callID: "segment:\(boundary)")
-        }
         if let block = first.content.first(where: { $0.isToolCall }), let callID = block.id {
             return Self.pendingCallID(runID: first.workRunID, callID: callID)
         }

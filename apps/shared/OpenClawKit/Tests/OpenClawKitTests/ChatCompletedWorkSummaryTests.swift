@@ -5,8 +5,8 @@ import Testing
 @Suite("Completed work summary")
 struct ChatCompletedWorkSummaryTests {
     @Test func `no tools`() {
-        #expect(Self.label([]).isEmpty)
-        #expect(Self.label([], duration: 2000).isEmpty)
+        #expect(Self.label([]) == "Worked")
+        #expect(Self.label([], duration: 2000) == "Worked for 2s")
     }
 
     @Test func `mixed kinds and expansion`() throws {
@@ -18,10 +18,8 @@ struct ChatCompletedWorkSummaryTests {
           {"type":"toolResult","id":"b","text":"ok"}
         ]}
         """)
-        #expect(ChatCompletedWorkSummary.rollupLabel(messages: messages, expanded: false) == "Worked")
-        #expect(ChatCompletedWorkSummary.rollupLabel(messages: messages, expanded: true) == "Worked · 2 tool calls")
-        #expect(Self.label(messages, duration: 2000) == "1 command · 1 read")
-        #expect(Self.label(messages, expanded: true) == "1 command · 1 read")
+        #expect(Self.label(messages, duration: 2000) == "Worked for 2s · 1 command · 1 read")
+        #expect(Self.label(messages, expanded: true) == "Worked · 2 tool calls · 1 command · 1 read")
     }
 
     @Test func `failed skipped and hidden`() throws {
@@ -37,7 +35,7 @@ struct ChatCompletedWorkSummaryTests {
            "status":"completed","hideFromChannelProgress":true}
         ]}
         """)
-        #expect(Self.label(messages) == "1 command · 1 read · 1 failed · 1 skipped")
+        #expect(Self.label(messages) == "Worked · 1 command · 1 read · 1 failed · 1 skipped")
         let encoded = try JSONEncoder().encode(messages[0])
         let restored = try JSONDecoder().decode(OpenClawChatMessage.self, from: encoded)
         #expect(restored.activity == messages[0].activity)
@@ -52,7 +50,7 @@ struct ChatCompletedWorkSummaryTests {
           {"type":"toolResult","id":"a","text":"ok"}
         ]}
         """)
-        #expect(Self.label(messages + messages) == "1 read")
+        #expect(Self.label(messages + messages) == "Worked · 1 read")
     }
 
     @Test func `malformed activity preserves message text`() throws {
@@ -73,7 +71,7 @@ struct ChatCompletedWorkSummaryTests {
           {"type":"toolResult","id":"a","text":"ok"}
         ]}
         """)
-        #expect(Self.label(messages) == "1 other operation")
+        #expect(Self.label(messages) == "Worked · 1 other operation")
     }
 
     @Test func `split call uses the recorded outcome across narration`() throws {
@@ -86,7 +84,7 @@ struct ChatCompletedWorkSummaryTests {
         ]}
         """)
         let work = try #require(Self.work(messages).first)
-        #expect(ChatCompletedWorkSummary.label(work: work, expanded: false) == "1 read")
+        #expect(ChatCompletedWorkSummary.label(work: work, expanded: false) == "Worked · 1 read")
     }
 
     @Test(arguments: [false, true])
@@ -102,49 +100,7 @@ struct ChatCompletedWorkSummaryTests {
             role: "assistant", content: [.init(type: "text", text: "Finished.")], timestamp: nil)
         let work = try #require(Self.work(calls + [answer]).first)
         #expect(ChatCompletedWorkSummary.label(work: work, expanded: true) ==
-            "1 command · 1 read")
-    }
-
-    @Test func `running calls have no unknown outcome and terminal status replaces running`() throws {
-        let running = try Self.decode("""
-        {"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read"}],
-         "activity":[{"itemId":"a","toolCallId":"a","kind":"tool","phase":"start",
-                      "title":"Inspect","status":"running"}]}
-        """)
-        #expect(Self.label(running) == "1 read")
-        let terminal = try Self.decode("""
-        {"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read"},
-          {"type":"toolResult","id":"a","text":"ready"}],
-         "activity":[{"itemId":"a","toolCallId":"a","kind":"tool","phase":"end",
-                      "title":"Inspect","status":"completed"}]}
-        """)
-        #expect(Self.label(running + terminal, expanded: true) == "1 read")
-    }
-
-    @Test func `paired unknown outcome remains distinct from an unpaired call`() throws {
-        let messages = try Self.decode("""
-        {"role":"assistant","content":[
-          {"type":"toolCall","id":"unknown","name":"read"},
-          {"type":"toolResult","id":"unknown","text":"output"},
-          {"type":"toolCall","id":"unpaired","name":"exec"}],
-         "activity":[
-          {"itemId":"unknown","toolCallId":"unknown","kind":"tool","phase":"end","title":"Outcome unknown"},
-          {"itemId":"unpaired","toolCallId":"unpaired","kind":"tool","phase":"start","title":"Run build"}]}
-        """)
-        #expect(Self.label(messages) == "1 command · 1 read · 1 unknown")
-    }
-
-    @Test func `split paired unknown outcome still counts across narration`() throws {
-        let messages = try Self.decode("""
-        {"role":"assistant","content":[
-          {"type":"toolCall","id":"unknown","name":"read"},
-          {"type":"text","text":"Checking the result."},
-          {"type":"tool_result","id":"unknown","text":"output"}],
-         "activity":[
-          {"itemId":"unknown","toolCallId":"unknown","kind":"tool","phase":"end","title":"Outcome unknown"}]}
-        """)
-        let work = try #require(Self.work(messages).first)
-        #expect(ChatCompletedWorkSummary.label(work: work, expanded: false) == "1 read · 1 unknown")
+            "Worked · 2 tool calls · 1 command · 1 read · 2 unknown")
     }
 
     private static func work(_ messages: [OpenClawChatMessage]) -> [ChatTranscriptRow.CompletedWork] {

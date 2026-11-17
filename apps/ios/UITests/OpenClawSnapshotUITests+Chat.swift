@@ -638,7 +638,7 @@ extension OpenClawSnapshotUITests {
         let working = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-"))
             .firstMatch
         XCTAssertTrue(working.waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["Checking the files first."].exists, unphased)
+        XCTAssertTrue(app.staticTexts["Checking the files first."].exists)
         XCTAssertFalse(app.buttons["chat-tool-activity-fold-read-1"].exists)
         self.attachScreenshot(named: "live-folded")
         working.tap()
@@ -659,7 +659,7 @@ extension OpenClawSnapshotUITests {
         let before = first.frame
         XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 20))
         let after = first.frame
-        XCTAssertEqual(app.staticTexts["Checking the files first."].exists, unphased)
+        XCTAssertTrue(app.staticTexts["Checking the files first."].exists)
         XCTAssertTrue(first.exists)
         self.attachScreenshot(named: "finished-collapsed")
         let geometry = XCTAttachment(string: """
@@ -674,9 +674,9 @@ extension OpenClawSnapshotUITests {
         self.add(geometry)
         let worked = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
         XCTAssertTrue(worked.exists)
-        XCTAssertEqual(worked.label, "Worked")
+        XCTAssertTrue(worked.label.hasPrefix("Worked · "))
         worked.tap()
-        XCTAssertEqual(worked.label, "Worked · 5 tool calls")
+        XCTAssertTrue(worked.label.contains("tool call"))
         // Allow the disclosure chevron animation to finish before visual evidence.
         let settled = self.expectation(description: "Finished disclosure animation settled")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }

@@ -36,7 +36,6 @@ public struct OpenClawChatView: View {
     #endif
     @State private var isKeyboardVisible = false
     @State private var hoveredMessageID: UUID?
-    @State private var expandedWorkTurns: Set<UUID> = []
     @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
@@ -665,7 +664,7 @@ extension OpenClawChatView {
         }
 
         #if os(iOS)
-        ForEach(ChatAssistantListCell.cells(shownGroups, expandedWorkTurns: self.expandedWorkTurns)) { cell in
+        ForEach(ChatAssistantListCell.cells(shownGroups)) { cell in
             Group {
                 if cell.group.runID != nil {
                     ChatAssistantRunFrame(
@@ -814,7 +813,6 @@ extension OpenClawChatView {
                     contextWindowTokens: contextWindowTokens,
                     showsActions: !isGrouped)
             }
-            .environment(\.openClawExpandedWorkTurns, self.$expandedWorkTurns)
         }
     }
 

@@ -7,29 +7,8 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
     @State private var isExpanded = false
 
-    @Environment(\.openClawExpandedWorkTurns) private var expandedTurns
-
     var body: some View {
-        if let turn = self.work.rollupID {
-            if let messages = self.work.rollupMessages {
-                self.disclosure(
-                    label: ChatCompletedWorkSummary.rollupLabel(
-                        messages: messages, expanded: self.expandedTurns.wrappedValue.contains(turn)),
-                    expanded: Binding(
-                        get: { self.expandedTurns.wrappedValue.contains(turn) },
-                        set: { expanded in
-                            if expanded { self.expandedTurns.wrappedValue.insert(turn) } else {
-                                self.expandedTurns.wrappedValue.remove(turn)
-                            }
-                        })) {
-                    self.segment
-                }
-            } else if self.expandedTurns.wrappedValue.contains(turn) {
-                self.segment
-            }
-        } else {
-            self.segment
-        }
+        self.segment
     }
 
     private var segment: some View {
@@ -79,9 +58,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
 
     private var label: String {
         guard self.work.isLive else {
-            let summary = ChatCompletedWorkSummary.label(work: self.work, expanded: false)
-            // Commentary-only segments have no category counts; keep the button named.
-            return summary.isEmpty ? String(localized: "Worked") : summary
+            return ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
         }
         return ChatCompletedWorkSummary.liveLabel(work: self.work)
     }
@@ -116,7 +93,3 @@ private struct ChatCompletedWorkDisclosureStyle: DisclosureGroupStyle {
     }
 }
 #endif
-
-extension EnvironmentValues {
-    @Entry var openClawExpandedWorkTurns: Binding<Set<UUID>> = .constant([])
-}

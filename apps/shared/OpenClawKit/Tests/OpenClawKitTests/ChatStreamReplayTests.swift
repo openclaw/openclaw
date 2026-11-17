@@ -352,7 +352,7 @@ struct ChatLiveAssistantPhaseTests {
         let rows = ChatTranscriptRow.collapseCompletedWork(
             ChatTranscriptRow.build(from: harness.vm.transcriptMessages), runWorking: true)
         #expect(rows.contains { row in
-            if case let .completedWork(work) = row { return work.messages.contains { $0.id == original.id } }
+            if case let .message(message) = row { return message.id == original.id }
             return false
         })
         await harness.handleAndSettle(event("A visible intermediate answer.", seq: 4, phase: nil, item: "answer"))
@@ -791,9 +791,9 @@ struct ChatStreamReplayTests {
             harness.vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == narration }
         }
         func apply(_ payload: OpenClawChatHistoryPayload) async {
-            #expect(harness.vm.applyHistoryPayload(
+            #expect(await harness.vm.applyHistoryPayload(
                 payload, for: harness.vm.beginHistoryRequest(), preservingOptimisticLocalMessages: true,
-                decodedMessages: await OpenClawChatViewModel.decodeMessages(
+                decodedMessages: OpenClawChatViewModel.decodeMessages(
                     payload.messages ?? [], activity: payload.activity)))
         }
 
@@ -806,9 +806,9 @@ struct ChatStreamReplayTests {
         let beforeLiveEvent = harness.vm.beginHistoryRequest()
         harness.vm.handleTransportEvent(replayNarrationEvent(
             runId: runId, itemId: "unsaved", text: narration, seq: 2, timestamp: now + 200))
-        #expect(harness.vm.applyHistoryPayload(
+        #expect(await harness.vm.applyHistoryPayload(
             history([user], active: false), for: beforeLiveEvent, preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages([user])))
+            decodedMessages: OpenClawChatViewModel.decodeMessages([user])))
         #expect(hasNarration())
 
         let beforeTerminal = harness.vm.beginHistoryRequest()
@@ -818,9 +818,9 @@ struct ChatStreamReplayTests {
         await harness.converge("terminal event releases the run") { $0.pendingRunCount == 0 }
         await apply(history([user], active: false))
         #expect(hasNarration())
-        _ = harness.vm.applyHistoryPayload(
+        _ = await harness.vm.applyHistoryPayload(
             history([user, final], active: false), for: beforeTerminal, preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages([user, final]))
+            decodedMessages: OpenClawChatViewModel.decodeMessages([user, final]))
         #expect(hasNarration())
         await apply(history([user, final]))
         #expect(hasNarration())
@@ -1000,11 +1000,11 @@ struct ChatStreamReplayTests {
         let stale = replayHistory(
             messages: history.messages ?? [],
             inFlightRun: .init(runId: "recovered-run", text: "The answer is streaming.", events: [older]))
-        #expect(harness.vm.applyHistoryPayload(
+        #expect(await harness.vm.applyHistoryPayload(
             stale,
             for: request,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 stale.messages ?? [], activity: stale.activity)))
         #expect(!harness.vm.transcriptMessages.contains {
             ChatMessageVisibleText.visibleText(in: $0) == "Retracted before reconnect"

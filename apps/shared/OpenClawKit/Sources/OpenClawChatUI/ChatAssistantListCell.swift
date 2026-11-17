@@ -15,19 +15,8 @@ struct ChatAssistantListCell: Identifiable {
     let joinsAbove: Bool
     let joinsBelow: Bool
 
-    static func cells(
-        _ groups: ArraySlice<ChatAssistantRunGroup>,
-        expandedWorkTurns: Set<UUID> = []) -> [Self]
-    {
-        groups.flatMap { originalGroup in
-            var group = originalGroup
-            // Remove hidden segments before assigning native cells and joined chrome.
-            // An empty disclosure inside a List cell still draws the assistant frame.
-            group.parts.removeAll { part in
-                guard case let .row(.completedWork(work)) = part,
-                      let turn = work.rollupID, work.rollupMessages == nil else { return false }
-                return !expandedWorkTurns.contains(turn)
-            }
+    static func cells(_ groups: ArraySlice<ChatAssistantRunGroup>) -> [Self] {
+        groups.flatMap { group in
             let count = group.parts.count + (group.includesLive ? 1 : 0)
             var cells = group.parts.enumerated().map { index, part in
                 let id: ID = switch part {
