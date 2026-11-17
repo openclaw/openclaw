@@ -20,7 +20,6 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   normalizePendingInputReceiptRunIds,
   projectPendingInputReceipts,
   resolvePendingInputHistoryLimit,
@@ -265,6 +264,7 @@ export function createSessionActorMemoryPending(
               state: "queued",
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,
+              end_cause: null,
             }
           : {
               seq:
@@ -283,6 +283,7 @@ export function createSessionActorMemoryPending(
               state: "queued",
               accepted_at: Date.now(),
               consumed_event_id: null,
+              end_cause: null,
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
@@ -323,9 +324,7 @@ export function createSessionActorMemoryPending(
         state.pendingInputs.set(input.idempotencyKey, {
           ...row,
           state: input.disposition,
-          ...(input.cancelledByUser
-            ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-            : {}),
+          end_cause: input.endCause,
         });
         if (input.disposition === "cancelled") {
           receipt.withdrawnInputId = input.inputId;

@@ -48,6 +48,16 @@ function render(
   );
 }
 
+it("shows the recorded user-stop cause on cancelled history input without a message marker", () => {
+  const inputs = pending({ role: "user", content: "Retained request" }, "cancelled");
+  inputs[0]!.endCause = "user-stop";
+  expect(render([], inputs)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ kind: "notice", text: expect.stringContaining("user-stop") }),
+    ]),
+  );
+});
+
 afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {

@@ -8,19 +8,33 @@ import type {
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
 import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
 
+export type SessionPendingInputEndCause =
+  | "user-stop"
+  | "delete"
+  | "reset"
+  | "revoked"
+  | "restart-unrecoverable"
+  | "overflow"
+  | "policy-refused"
+  | "failed";
+
 export type SessionPendingInput = {
   id: string;
   runId: string;
   message: PersistedUserTurnMessage;
   acceptedAt: number;
   state: SessionPendingInputState;
+  endCause?: SessionPendingInputEndCause;
 };
 export type SessionPendingInputPage = {
   items: SessionPendingInput[];
   total: number;
   nextBefore?: number;
 };
-export type SessionPendingInputRow = Selectable<SessionPendingInputs>;
+export type SessionPendingInputRow = Omit<Selectable<SessionPendingInputs>, "end_cause"> & {
+  /** Older same-version databases do not have this first-use column yet. */
+  end_cause?: string | null;
+};
 /** Transported facts do not grant custody; the host retains and checks the exact live owner. */
 export type SessionPendingInputWorkerFacts = {
   agentId?: string;

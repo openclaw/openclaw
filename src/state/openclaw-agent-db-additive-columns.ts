@@ -5,7 +5,7 @@ type BareNullableSqliteDatatype = "INTEGER" | "TEXT";
 type LazyAdditiveAgentColumnDefinition = {
   columnName: string;
   dataType: BareNullableSqliteDatatype;
-  tableName: "session_nodes" | "session_key_contract";
+  tableName: "session_nodes" | "session_key_contract" | "session_pending_inputs";
 };
 
 // Session responsibility is feature-local and remains absent until the first
@@ -34,6 +34,7 @@ export const FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS = [
   ...SESSION_OWNER_COLUMN_DEFINITIONS,
   LEGACY_ACP_MIGRATION_COLUMN_DEFINITION,
   CANONICAL_READY_COLUMN_DEFINITION,
+  { tableName: "session_pending_inputs", columnName: "end_cause", dataType: "TEXT" },
 ] as const satisfies readonly LazyAdditiveAgentColumnDefinition[];
 
 // Startup installs these on every existing table before exposing session readers.

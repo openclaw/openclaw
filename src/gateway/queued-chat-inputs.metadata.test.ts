@@ -12,6 +12,8 @@ import {
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -19,6 +21,7 @@ import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { readMentionInbox } from "./mention-inbox.test-support.js";
+import * as operatorRecovery from "./operator-run-recovery.js";
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
@@ -153,6 +156,31 @@ it("retains each accepted input's scope ceiling when the same person sends throu
   await fixture.finishDispatch();
   expect(dispatchedScopes).toEqual([["operator.read", "operator.write"], ["operator.admin"]]);
 });
+
+it.each([
+  new GatewayOperatorAccessUnavailableError(),
+  new GatewayDispatchUnavailableError("chat.send", true),
+])(
+  "keeps accepted FIFO rows queued when restart admission is temporarily unavailable: %s",
+  async (error) => {
+    const created = await createFixture();
+    await using fixture = created.fixture;
+    expectStarted(await fixture.send());
+    const retained = await retireOriginalInputs(fixture);
+    const restore = vi
+      .spyOn(operatorRecovery, "restoreGatewayQueuedOperatorRecovery")
+      .mockRejectedValueOnce(error);
+    try {
+      await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+        { id: retained.queuedInputIds[0], state: "queued" },
+      ]);
+    } finally {
+      restore.mockRestore();
+    }
+  },
+);
 
 it.each(["missing source", "different run", "revoked device"] as const)(
   "cancels queued input with %s despite the sender's local administrator role",

@@ -565,7 +565,7 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
         },
       });
     } finally {
-      queued?.finish("interrupted");
+      queued?.finish("interrupted", "failed");
       await queued?.settled?.();
       releaseExecution();
       await operation.ownerSettlement;
@@ -692,7 +692,7 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
     });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
       setUserProfileRole(profile.id, "reader");
       const warn = vi.fn();
@@ -708,7 +708,7 @@ it("settles source-less queued sends even when the recorded owner cannot resume"
         message: { content: "Accepted before restart" },
       });
     } finally {
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
       releaseAgentRunContext("revoked-owner-work", claim);
     }
@@ -751,7 +751,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
     try {
       const captured = await captureSessionQueuedInputsForRestart(target);
       captured.preserve();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
       await continueSessionQueuedInputs(context, target, {
         signal: new AbortController().signal,
@@ -768,7 +768,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
       );
     } finally {
       send.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
   }));
@@ -821,7 +821,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
     const [crashed, live] = receipts;
     const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
     try {
-      crashed!.finish("interrupted");
+      crashed!.finish("interrupted", "failed");
       await crashed!.settled?.();
       database.db
         .prepare(
@@ -857,7 +857,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       resume.mockRestore();
       discover.mockRestore();
       dispatch.mockRestore();
-      live!.finish("cancelled");
+      live!.finish("cancelled", "failed");
       await live!.settled?.();
     }
   }));

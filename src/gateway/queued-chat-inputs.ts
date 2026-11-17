@@ -4,9 +4,13 @@ import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
-import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
+import type {
+  SessionPendingInputEndCause,
+  SessionPendingInputRow,
+} from "../config/sessions/session-pending-input.types.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
+import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
@@ -25,6 +29,7 @@ async function failQueuedInput(
   target: Target,
   row: SessionPendingInputRow,
   assertCurrent: () => void,
+  endCause: SessionPendingInputEndCause,
 ) {
   const store = await preparePendingInputStore(target, assertCurrent);
   try {
@@ -39,6 +44,7 @@ async function failQueuedInput(
         lifecycleGeneration: row.lifecycle_generation,
         inputId: row.input_id,
         disposition: "cancelled",
+        endCause,
       },
       assertCurrent,
     );
@@ -67,6 +73,7 @@ export async function continueSessionQueuedInputs(
     const message = parseSessionPendingInputMessage(row.message_json);
     const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
     let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
+    let dispatchAttempted = false;
     try {
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
@@ -98,6 +105,7 @@ export async function continueSessionQueuedInputs(
       });
       let execution: Promise<void> | undefined;
       try {
+        dispatchAttempted = true;
         await queuedChatInputAdmission.run(
           {
             target: { ...target, runId: row.run_id, message, requestHash: row.request_hash },
@@ -168,27 +176,43 @@ export async function continueSessionQueuedInputs(
       }
     } catch (error) {
       assertCurrent();
+      // Before dispatch, an unclassified failure means the stored source cannot be restored.
+      const endCause = resolvePendingInputEndCause(
+        undefined,
+        error,
+        dispatchAttempted ? "failed" : "restart-unrecoverable",
+      );
+      if (endCause === undefined) {
+        context.logGateway.warn(
+          `Queued input ${row.run_id} is waiting for restart authority: ${String(error)}`,
+        );
+        return false;
+      }
       context.logGateway.warn(
         `Queued input ${row.run_id} was not sent after restart: ${String(error)}`,
       );
-      await failQueuedInput(target, row, assertCurrent);
+      await failQueuedInput(target, row, assertCurrent, endCause);
     } finally {
       admitted?.release();
     }
+    return true;
   };
   // History pages are bounded newest-first; admit the older page before this one.
-  const continuePage = async (before?: number): Promise<void> => {
+  const continuePage = async (before?: number): Promise<boolean> => {
     assertCurrent();
     const page = await readSessionQueuedInputPage(target, {
       before,
       queuedInputIds: options.queuedInputIds,
     });
-    if (page.nextBefore !== undefined) {
-      await continuePage(page.nextBefore);
+    if (page.nextBefore !== undefined && !(await continuePage(page.nextBefore))) {
+      return false;
     }
     for (const row of page.rows.toReversed()) {
-      await admit(row);
+      if (!(await admit(row))) {
+        return false;
+      }
     }
+    return true;
   };
   await continuePage();
 }

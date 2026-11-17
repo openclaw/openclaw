@@ -3,7 +3,10 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionPendingInputAuthority } from "./session-pending-input-authority.js";
 import type { SessionPendingInputState } from "./session-pending-input-receipt.types.js";
-import type { SessionPendingInputWorkerFacts } from "./session-pending-input.types.js";
+import type {
+  SessionPendingInputEndCause,
+  SessionPendingInputWorkerFacts,
+} from "./session-pending-input.types.js";
 
 export type SessionPendingInputOwner = Omit<
   SessionPendingInputWorkerFacts,
@@ -29,7 +32,12 @@ export type SessionPendingInputOwner = Omit<
   promotedOwner?: SessionPendingInputOwner;
   /** Prompt authority is revoked; this owner still holds terminal disposition custody. */
   settling?: true;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">, userInitiated?: true) => void;
+  finish: (
+    disposition: Exclude<SessionPendingInputState, "queued">,
+    endCause: SessionPendingInputEndCause,
+  ) => void;
+  /** Release process custody without changing the durable input disposition. */
+  release: () => void;
   /** Host-only staged retry custody; inbound dedupe spends it once. */
   dedupeRetryAvailable?: true;
   /** Graceful shutdown leaves this accepted input for the session's ordinary FIFO. */

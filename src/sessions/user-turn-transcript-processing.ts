@@ -1,6 +1,19 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
+import {
+  isUserInitiatedAgentRunAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../agents/run-termination.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input.types.js";
+import {
+  isOperatorAuthorityUnavailable,
+  readOperatorAuthorityFailure,
+} from "../infra/operator-authority-error.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
@@ -22,6 +35,57 @@ export async function completeUserTurnProcessing(
   }
   return undefined;
 }
+/** Undefined retains queued custody while restart authority or dispatch is unavailable. */
+export function resolvePendingInputEndCause(
+  signal?: AbortSignal,
+  failure?: unknown,
+  defaultEndCause: SessionPendingInputEndCause = "failed",
+): SessionPendingInputEndCause | undefined {
+  if (
+    isOperatorAuthorityUnavailable(failure) ||
+    (failure instanceof GatewayDispatchUnavailableError && failure.retryable)
+  ) {
+    return undefined;
+  }
+  const reason = resolveAgentRunAbortLifecycleFields(signal).stopReason;
+  return isUserInitiatedAgentRunAbortReason(signal?.reason)
+    ? "user-stop"
+    : reason === "auth-revoked" ||
+        failure instanceof GatewayOperatorRecoveryAuthorizationError ||
+        readOperatorAuthorityFailure(failure)
+      ? "revoked"
+      : reason === "superseded"
+        ? "reset"
+        : reason === "restart"
+          ? "restart-unrecoverable"
+          : defaultEndCause;
+}
+
+/** The recorder releases consumed custody, retains outages, and records every other ending. */
+export async function settleUserTurnPendingInput(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  signal?: AbortSignal,
+  failure?: unknown,
+  deleted = false,
+  disposition: "cancelled" | "interrupted" = "cancelled",
+): Promise<void> {
+  const consumed = recorder?.isPendingInputConsumed?.();
+  const endCause = consumed
+    ? undefined
+    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : "failed");
+  if (!consumed && endCause === undefined) {
+    return;
+  }
+  try {
+    if (consumed) {
+      recorder?.releasePendingInput?.();
+    } else if (endCause !== undefined) {
+      recorder?.finishPendingInput?.(disposition, endCause);
+    }
+  } finally {
+    await recorder?.waitForPendingInputSettlement?.();
+  }
+}
 
 /** The recorder owns one completion attempt, including its failure and native settlement. */
 export function createUserTurnProcessingCompletion(
@@ -35,13 +99,26 @@ export function createUserTurnProcessingCompletion(
       const pendingInput = readPendingInput();
       return pendingInput ? pendingInput.run(run) : run();
     },
-    finishPendingInput: (disposition: "cancelled" | "interrupted", userInitiated?: true) => {
+    finishPendingInput: (
+      disposition: "cancelled" | "interrupted",
+      endCause: SessionPendingInputEndCause,
+    ) => {
       const pendingInput = readPendingInput();
       if (pendingInput) {
-        pendingInput.finish(disposition, userInitiated);
+        pendingInput.finish(disposition, endCause);
       } else {
         for (const source of sources ?? []) {
-          source.finishPendingInput?.(disposition, userInitiated);
+          source.finishPendingInput?.(disposition, endCause);
+        }
+      }
+    },
+    releasePendingInput: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput) {
+        pendingInput.release();
+      } else {
+        for (const source of sources ?? []) {
+          source.releasePendingInput?.();
         }
       }
     },

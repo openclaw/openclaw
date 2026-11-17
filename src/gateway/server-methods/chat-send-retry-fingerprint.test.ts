@@ -131,7 +131,7 @@ describe("chat.send persisted request identity", () => {
       if (source === "transcript") {
         expect((await recorder.persistApproved())?.appended).toBe(true);
       } else {
-        recorder.finishPendingInput?.("cancelled");
+        recorder.finishPendingInput?.("cancelled", "failed");
         await recorder.waitForPendingInputSettlement?.();
       }
       await fixture.finishDispatch();

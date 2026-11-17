@@ -487,7 +487,7 @@ describe("committed human mentions", () => {
       ]);
       expect(await fixture.read()).toEqual([]);
       expect(recorder.isPendingInputConsumed?.()).toBe(true);
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
       await recorder.waitForPendingInputSettlement?.();
       fixture.releaseDispatch();
       fixture.activeRun?.complete();
@@ -914,7 +914,7 @@ describe("committed human mentions", () => {
       fixture.params.message += " Robo, please review too.";
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
-        recorder?.finishPendingInput?.("cancelled");
+        recorder?.finishPendingInput?.("cancelled", "failed");
       }
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();

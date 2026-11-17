@@ -29,6 +29,7 @@ import { isCronSessionKey } from "../../routing/session-key.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
@@ -314,8 +315,7 @@ function enqueueSessionEventAttempt(
     settlement = "settling";
     const complete = async () => {
       try {
-        inputRecorder?.finishPendingInput?.("cancelled");
-        await inputRecorder?.waitForPendingInputSettlement?.();
+        await settleUserTurnPendingInput(inputRecorder, signal, failure, isDeletionBlocked?.());
       } catch (error) {
         failure ??= error instanceof Error ? error : String(error);
       }

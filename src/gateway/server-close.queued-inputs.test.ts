@@ -98,7 +98,7 @@ it.for([false, true])(
               agentId: "main",
               runId,
               timeoutMs: 60_000,
-              onCancel: () => pending?.finish("cancelled"),
+              onCancel: () => pending?.finish("cancelled", "failed"),
             });
             assert(registration.entry);
             retained = await retainGatewayOperatorRun({

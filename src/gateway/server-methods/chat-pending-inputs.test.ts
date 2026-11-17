@@ -84,7 +84,7 @@ function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
     },
     async [Symbol.asyncDispose]() {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     },
@@ -397,7 +397,7 @@ describe("pending input read boundary", () => {
           ],
         },
       });
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
       const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
       const displayId = `pending:${receipt.inputId}`;
@@ -507,7 +507,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         items: [{ runId: "retained-20" }],
       });
       expect(requestRpcSourceCancellation(retainedSource)).toBe(true);
-      retained[0]?.finish("cancelled");
+      retained[0]?.finish("cancelled", "failed");
       await retained[0]?.settled?.();
       const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
       expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });

@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
@@ -98,7 +99,7 @@ export function projectChatSystemNotice(
     status: PendingInputStatus;
     key: string;
     timestamp: number;
-    cancelledByUser?: true;
+    endCause?: ChatPendingInputsPage["items"][number]["endCause"];
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
 ): ChatItem[] {
@@ -122,13 +123,13 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending?.status === "cancelled" && pending.cancelledByUser
-      ? undefined
-      : pending && agentUpdate && pending.status === "cancelled"
-        ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
-        : pending && pending.status !== "queued"
-          ? t(`chat.pendingInputs.${pending.status}`)
-          : undefined;
+    pending && pending.status !== "queued"
+      ? t(
+          agentUpdate && pending.status === "cancelled"
+            ? "chat.pendingInputs.agentUpdate.cancelled"
+            : `chat.pendingInputs.${pending.status}`,
+        ) + (pending.endCause ? ` (${pending.endCause})` : "")
+      : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
       ? [

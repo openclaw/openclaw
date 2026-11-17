@@ -82,6 +82,7 @@ async function withdrawSessionPendingInputs(
   const input: SessionPendingInputWithdrawal = {
     sessionKey: logical.sessionKey,
     sessionId: target.sessionId,
+    endCause: "lifecycleGeneration" in selection ? "restart-unrecoverable" : "delete",
     ...selection,
   };
   const captured = await captureSessionStoreReadTarget(

@@ -137,7 +137,7 @@ registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
   for (const owner of owners.live.values()) {
     try {
-      owner.finish("cancelled");
+      owner.finish("cancelled", "reset");
     } catch (error) {
       failures.push(error);
     }
@@ -164,6 +164,7 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   owner.assertReadCurrent = owner.assertCurrent;
   owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
+  owner.release = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
 }

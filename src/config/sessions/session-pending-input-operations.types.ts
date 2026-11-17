@@ -4,6 +4,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type {
   SessionPendingInputRow,
+  SessionPendingInputEndCause,
   SessionInputCompletion,
 } from "./session-pending-input.types.js";
 
@@ -64,7 +65,7 @@ export type PendingInputMutation =
       kind: "finish";
       inputId: string;
       disposition: "cancelled" | "interrupted";
-      cancelledByUser?: true;
+      endCause: SessionPendingInputEndCause;
     });
 
 export type PendingInputMutationReceipt = PendingInputIdentity & {

@@ -91,7 +91,7 @@ it("skips covered empty history and reads a newly staged input after its owner c
       });
     } finally {
       history.mockRestore();
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
       await actor.release();
     }
@@ -163,7 +163,7 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
       expect(older.nextBefore).toBeUndefined();
     } finally {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
       await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
     }
@@ -207,13 +207,13 @@ it.each(["context", "id"] as const)(
       );
       try {
         inputId = receipt.inputId;
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
         expect(read().rows).toEqual([]);
         expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
         expect(await readSessionPendingInput(scope, inputId)).toBeUndefined();
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     });
@@ -253,7 +253,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
     if (!stale) {
       throw new Error("Expected stale fixture");
     }
-    stale.finish("interrupted");
+    stale.finish("interrupted", "failed");
     await stale.settled?.();
     // A persisted pre-restart row has no process-local custody.
     database.db
@@ -274,7 +274,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
     expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
@@ -293,7 +293,7 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
       ),
       "Expected accepted input",
     );
-    crashed.finish("interrupted");
+    crashed.finish("interrupted", "failed");
     await crashed.settled?.();
     // A crash leaves durable text without process-local custody.
     database.db
@@ -318,7 +318,7 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
     ).toEqual([]);
     captured.preserve();
     for (const receipt of receipts) {
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
     expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });

@@ -35,7 +35,10 @@ import {
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
-import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import {
+  completeUserTurnProcessing,
+  settleUserTurnPendingInput,
+} from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -581,14 +584,14 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
-  userInitiated?: true,
+  signal?: AbortSignal,
+  failure?: unknown,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
-      await prepared.recorder?.waitForPendingInputSettlement?.();
+      await settleUserTurnPendingInput(prepared.recorder, signal, failure, false, disposition);
     } finally {
       releaseExecApprovalFollowupRuntimeHandoff({
         handoffId: prepared.claimedExecApprovalFollowupHandoffId,
@@ -615,7 +618,7 @@ export async function releasePreparedAgentRunUserTurnAfterFailure(
   disposition: "cancelled" | "interrupted" = "cancelled",
 ): Promise<unknown> {
   try {
-    await releasePreparedAgentRunUserTurn(prepared, disposition);
+    await releasePreparedAgentRunUserTurn(prepared, disposition, AbortSignal.abort(error), error);
     return error;
   } catch (cleanupError) {
     return new AgentRunUserTurnCleanupError(error, cleanupError);

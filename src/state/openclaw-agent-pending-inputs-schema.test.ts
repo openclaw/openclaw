@@ -58,7 +58,7 @@ async function stage(
     message: { role: "user", content, timestamp: 1, idempotencyKey: `${runId}:user` },
     assertCurrent() {},
   });
-  receipt!.finish("interrupted");
+  receipt!.finish("interrupted", "failed");
   await receipt!.settled?.();
   return receipt!;
 }
@@ -247,6 +247,35 @@ describe("pending input additive schema", () => {
       } finally {
         database.close();
       }
+    },
+  );
+  it.each(["end_cause"] as const)(
+    "reads absent %s without installing it until the pending-input writer runs",
+    async (column) => {
+      const options = fixture();
+      const scope = {
+        ...options,
+        sessionKey: "agent:main:optional-column",
+        sessionId: "optional-column",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await stage(scope, "old-input", "Retain accepted bytes");
+      const filename = openOpenClawAgentDatabase(options).path;
+      const old = await previousDatabase(filename);
+      old.exec(`ALTER TABLE session_pending_inputs DROP COLUMN ${column}`);
+      const version = old.prepare("PRAGMA user_version").get();
+      old.close();
+      expect(await listSessionPendingInputs(scope)).toEqual({ total: 0, items: [] });
+      await closeAgents();
+      {
+        using read = new DatabaseSync(filename, { readOnly: true });
+        expect(tableHasColumn(read, "session_pending_inputs", column)).toBe(false);
+      }
+      await stage(scope, "new-input", "Install only through the writer");
+      await closeAgents();
+      using written = new DatabaseSync(filename, { readOnly: true });
+      expect(tableHasColumn(written, "session_pending_inputs", column)).toBe(true);
+      expect(written.prepare("PRAGMA user_version").get()).toEqual(version);
     },
   );
 });

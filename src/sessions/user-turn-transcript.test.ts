@@ -186,7 +186,7 @@ describe("user turn transcript persistence", () => {
       } finally {
         releaseTarget.resolve();
         for (const current of recorders) {
-          current.finishPendingInput?.("cancelled");
+          current.finishPendingInput?.("cancelled", "failed");
         }
         await Promise.all(
           recorders.map(async (current) => current.waitForPendingInputSettlement?.()),

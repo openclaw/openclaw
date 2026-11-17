@@ -53,7 +53,7 @@ async function readOnly<T>(run: () => Promise<T>) {
 }
 afterEach(async () => {
   for (const receipt of receipts) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await Promise.allSettled(receipts.splice(0).map(async (receipt) => receipt.settled?.()));
 });

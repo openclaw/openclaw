@@ -837,7 +837,7 @@ describe("ordinary chat input admission", () => {
         if (restart) {
           rotateAgentEventLifecycleGeneration();
         } else {
-          originalRecorder.finishPendingInput?.("cancelled");
+          originalRecorder.finishPendingInput?.("cancelled", "failed");
           await originalRecorder.waitForPendingInputSettlement?.();
         }
         await fixture.finishDispatch();
@@ -878,7 +878,7 @@ describe("ordinary chat input admission", () => {
       fixture.params.message += " Robo, please review too.";
       const { recorder, original } = await admitPending(fixture);
       if (change === "cancelled") {
-        recorder?.finishPendingInput?.("cancelled");
+        recorder?.finishPendingInput?.("cancelled", "failed");
       }
       rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();

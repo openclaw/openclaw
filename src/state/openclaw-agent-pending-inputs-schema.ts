@@ -48,8 +48,14 @@ export function ensureSessionPendingInputsSchema(db: EngineConnection): void {
     return;
   }
   ensurePendingTable(db);
-  if (!hasPendingInputConsumptionColumn(db)) {
-    runSqliteImmediateTransactionSync(db, () => ensurePendingInputConsumptionColumn(db));
+  if (
+    !hasPendingInputConsumptionColumn(db) ||
+    !tableHasColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause")
+  ) {
+    runSqliteImmediateTransactionSync(db, () => {
+      ensurePendingInputConsumptionColumn(db);
+      ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause TEXT");
+    });
   }
 }
 

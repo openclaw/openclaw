@@ -26,7 +26,7 @@ import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.te
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -117,7 +117,7 @@ describe("Doctor canonical completion receipt repair", () => {
       f.create();
       const first = await f.stage();
       await first.completeAsync!(stopped);
-      first.finish("interrupted");
+      first.finish("interrupted", "failed");
       const before = f.rows();
       f.database(true).db.exec("DROP TABLE session_input_completions");
       await f.restart();
@@ -129,7 +129,7 @@ describe("Doctor canonical completion receipt repair", () => {
       expect(retry.completion).toEqual(stopped);
       expect(() => retry.run(() => "replayed work")).toThrow("already completed");
       expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
-      retry.finish("interrupted");
+      retry.finish("interrupted", "failed");
       const deleted = await deleteSessionEntryLifecycle({
         agentId: "main",
         storePath: f.scope(true).storePath,

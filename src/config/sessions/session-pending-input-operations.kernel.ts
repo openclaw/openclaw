@@ -13,7 +13,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
-  hasSessionPendingInputsSchema,
   SESSION_INPUT_COMPLETIONS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -45,7 +44,6 @@ import type {
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 
@@ -180,9 +178,7 @@ export function mutatePendingInput(
         }
         withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
         if (input.kind === "stage") {
-          if (!hasSessionPendingInputsSchema(current.db)) {
-            ensureSessionPendingInputsSchema(current.db);
-          }
+          ensureSessionPendingInputsSchema(current.db);
           if (input.trackCompletion && !tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
@@ -196,6 +192,7 @@ export function mutatePendingInput(
                   state: "queued",
                   run_id: input.runId,
                   lifecycle_generation: input.lifecycleGeneration,
+                  end_cause: null,
                 })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
@@ -235,11 +232,10 @@ export function mutatePendingInput(
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
         } else if (row) {
+          ensureSessionPendingInputsSchema(current.db);
           const changes = {
             state: input.disposition,
-            ...(input.cancelledByUser
-              ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-              : {}),
+            end_cause: input.endCause,
           };
           const result = executeSqliteQuerySync(
             current.db,

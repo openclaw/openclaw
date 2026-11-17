@@ -12,7 +12,10 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  ensureSessionPendingInputsSchema,
+  hasSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
@@ -21,6 +24,7 @@ import type {
   PendingInputOrphanTarget,
 } from "./session-pending-input-history.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input.types.js";
 
 /** Read the pending-input index once per store, never once per session. */
 export function readOrphanedSessionPendingInputTargetsInWorker(
@@ -59,6 +63,7 @@ export function readOrphanedSessionPendingInputTargetsInWorker(
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
+  endCause: SessionPendingInputEndCause;
 } & ({ runId: string } | { inputIds: readonly string[] } | { lifecycleGeneration: string });
 
 export type RetiredPendingInputDismissalOutcome =
@@ -105,6 +110,7 @@ export function discardSessionPendingInputInWorker(
         );
       }
       const db = getSessionKysely(current.db);
+      ensureSessionPendingInputsSchema(current.db);
       if ("lifecycleGeneration" in input) {
         const entry = readSessionEntryRow(current, input.sessionKey, "list")?.entry;
         const marked =
@@ -118,7 +124,7 @@ export function discardSessionPendingInputInWorker(
           current.db,
           db
             .updateTable("session_pending_inputs")
-            .set({ state: "cancelled" })
+            .set({ state: "cancelled", end_cause: input.endCause })
             .where("session_key", "=", input.sessionKey)
             .where("session_id", "=", input.sessionId)
             .where("state", "=", "queued")
@@ -141,7 +147,7 @@ export function discardSessionPendingInputInWorker(
       }
       const query = db
         .selectFrom("session_pending_inputs")
-        .select(["input_id", "run_id", "state", "message_json"])
+        .select(["input_id", "run_id", "state", "message_json", "end_cause"])
         .where("session_key", "=", input.sessionKey)
         .where("session_id", "=", input.sessionId)
         .where("consumed_event_id", "is", null);
@@ -184,6 +190,7 @@ export function discardSessionPendingInputInWorker(
             .updateTable("session_pending_inputs")
             .set({
               state: "cancelled",
+              end_cause: input.endCause,
               message_json: JSON.stringify({ ...message, display: false }),
             })
             .where("input_id", "=", row.input_id)

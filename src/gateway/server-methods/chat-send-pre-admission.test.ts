@@ -46,17 +46,56 @@ import {
 const submittedInput = vi.hoisted(() =>
   vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
 );
+const submittedSource = vi.hoisted(() => ({
+  value: {} as {
+    source?: "pending";
+    state?: "cancelled" | "queued";
+    endCause?: "user-stop" | "restart-unrecoverable";
+  },
+}));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   readSessionSubmittedInput: vi.fn(
     async (_scope: unknown, _key: string, options?: { includeSource: true }) => {
       const message = await submittedInput();
       return message && options?.includeSource
-        ? { message, source: "transcript" as const }
+        ? { message, source: "transcript" as const, ...submittedSource.value }
         : message;
     },
   ),
 }));
+
+it.each(["user-stop", "restart-unrecoverable", undefined] as const)(
+  "returns recorded cancellation instead of cached success (%s)",
+  async (endCause) => {
+    const message = submittedMessage(params);
+    cacheSuccess(params, 100, params.request.requestIdentity);
+    params.context.chatRunState.getOrCreate(params.session.clientRunId).abortMarker =
+      createChatAbortMarker(200);
+    submittedInput.mockResolvedValue(message);
+    submittedSource.value = { source: "pending", state: "cancelled", endCause };
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectFailure(params.respond, {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining(endCause ?? "legacy cancellation"),
+      details: {
+        reason: "chat-input-cancelled",
+        endCause: endCause ?? "unknown (legacy cancellation)",
+      },
+    });
+  },
+);
+
+it("reports durable queued input in flight instead of a cached terminal response", async () => {
+  submittedInput.mockResolvedValue(submittedMessage(params));
+  submittedSource.value = { source: "pending", state: "queued" };
+  cacheSuccess(params, 100, params.request.requestIdentity);
+  expect(await runChatSendPreAdmission(params)).toBe(false);
+  expectCached(
+    { runId: params.session.clientRunId, status: "in_flight" },
+    { cached: true, runId: params.session.clientRunId },
+  );
+});
 type RetryParams = Parameters<typeof respondChatSendRetry>[0];
 
 function createFixture() {
@@ -158,6 +197,7 @@ let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
   vi.mocked(readSessionSubmittedInput).mockClear();
   submittedInput.mockReset().mockResolvedValue(undefined);
+  submittedSource.value = {};
   params = createFixture();
 });
 
@@ -422,6 +462,7 @@ it("readmits a retained queued input only from its admitted physical store", () 
       clientRunId: session.clientRunId,
       submitted: message,
       source: "pending" as const,
+      state: "queued" as const,
     };
     for (const storePath of [loaded.readSource.path, foreignStorePath]) {
       params.respond.mockClear();
@@ -446,7 +487,7 @@ it("readmits a retained queued input only from its admitted physical store", () 
       } else {
         expect(handled).toBe(true);
         expectCached(
-          { runId: session.clientRunId, status: "ok" },
+          { runId: session.clientRunId, status: "in_flight" },
           { cached: true, runId: session.clientRunId },
         );
       }

@@ -2,6 +2,7 @@ import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import type {
+  SessionPendingInputEndCause,
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
 } from "./session-pending-input.types.js";
@@ -35,6 +36,9 @@ export function hydratePendingInputWorkerOwner(
     assertReadCurrent: assertCurrent,
     finish: () => {
       throw new Error("Worker custody cannot finish its host owner");
+    },
+    release: () => {
+      throw new Error("Worker custody cannot release its host owner");
     },
   });
   return hydrate(facts);
@@ -138,17 +142,31 @@ export async function collectForeignLiveSessionPendingInputEntries(
 export function finishPendingInputSources(
   sources: readonly SessionPendingInputOwner[],
   disposition: "cancelled" | "interrupted",
-  userInitiated?: true,
+  endCause: SessionPendingInputEndCause,
 ): void {
   const failures: unknown[] = [];
   for (const source of sources) {
     try {
-      source.finish(disposition, userInitiated);
+      source.finish(disposition, endCause);
     } catch (error) {
       failures.push(error);
     }
   }
   if (failures.length) {
     throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
+}
+
+export function releasePendingInputSources(sources: readonly SessionPendingInputOwner[]): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.release();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to release collected input custody");
   }
 }

@@ -13,6 +13,7 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PendingInputHistoryQuery,
@@ -28,12 +29,7 @@ function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
         eb("input_id", "in", [...query.queuedInputIds]),
         ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
       ])
-    : eb.or([
-        eb("state", "=", "cancelled"),
-        ...(query.liveInputIds?.length
-          ? [eb.and([eb("state", "=", "queued"), eb("input_id", "in", [...query.liveInputIds])])]
-          : []),
-      ]);
+    : eb("state", "in", ["cancelled", "queued"]);
 }
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
@@ -135,6 +131,10 @@ function readPendingInputPageInDatabase(
       ])
       .select((eb) => [
         (hasConsumption ? eb.ref("input.consumed_event_id") : eb.val(null)).as("consumed_event_id"),
+        (tableHasColumn(database.db, "session_pending_inputs", "end_cause")
+          ? eb.ref("input.end_cause")
+          : eb.val(null)
+        ).as("end_cause"),
         eb
           .case()
           .when(

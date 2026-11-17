@@ -82,7 +82,7 @@ describe("followup queue durable input consumption", () => {
   afterEach(async () => {
     clearFollowupQueue(sessionKey);
     for (const recorder of recorders.splice(0)) {
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
     }
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();

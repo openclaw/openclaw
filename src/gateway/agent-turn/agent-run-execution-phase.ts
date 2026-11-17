@@ -5,7 +5,6 @@ import {
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
-import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
@@ -179,7 +178,7 @@ async function executeAgentRun(
         await releasePreparedAgentRunUserTurn(
           prepared.userTurn,
           "cancelled",
-          isUserInitiatedAgentRunAbortReason(abortController.signal.reason) ? true : undefined,
+          abortController.signal,
         );
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
