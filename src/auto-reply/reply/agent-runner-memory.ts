@@ -85,6 +85,7 @@ import {
   resolveCompactionThreshold,
   resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
+  settleFailedPreflightCompaction,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
@@ -461,7 +462,12 @@ export async function runSessionCompactionIfNeeded(params: {
         return compactionStore[compactionSessionKey] ?? entry;
       }
       await notifyCompaction("incomplete");
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      return settleFailedPreflightCompaction(
+        entry,
+        reason,
+        tokenCountForCompaction,
+        contextWindowTokens,
+      );
     }
 
     if (params.replyOperation && admissionTransition) {
