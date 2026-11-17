@@ -184,7 +184,7 @@ it.each([
 
 it("keeps Pages flat and rail pins independently ordered", async () => {
   const stylesheet = document.createElement("style");
-  stylesheet.textContent = ["sidebar-reorder", "sidebar-rail"]
+  stylesheet.textContent = ["sidebar-reorder", "sidebar-rail", "sidebar-pages"]
     .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))
     .join("\n");
   document.head.append(stylesheet);

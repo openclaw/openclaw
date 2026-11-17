@@ -164,6 +164,19 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it.each(["modelNotFound", "policyCapacityUnavailable", "inferenceHookDenied"])(
+    "surfaces %s from both error notifications and failed terminal snapshots",
+    async (codexErrorInfo) => {
+      for (const completed of [false, true]) {
+        const projector = await createProjector();
+        const message = "The requested model could not run.";
+        await fail(projector, { message, codexErrorInfo }, completed);
+        expectTerminal(fixture.result(projector), message, "prompt");
+        expect(projector.getCompletedTurnStatus()).toBe(completed ? "failed" : undefined);
+      }
+    },
+  );
+
   const denialBody = {
     error: "middleware_denied",
     reason_code: "request_credential_denied",
