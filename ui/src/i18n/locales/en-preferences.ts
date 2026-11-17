@@ -137,6 +137,8 @@ const enPreferences = {
     },
     personal: {
       deviceOnly: "This preference is saved only on this device.",
+      groupsConflict:
+        "Personal groups changed elsewhere or exceed their limit. Your local layout is retained; review the other layout before retrying.",
       shortcutsLocalOnly:
         "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
       browserOnly: en.quickSettings.personal.browserOnly,

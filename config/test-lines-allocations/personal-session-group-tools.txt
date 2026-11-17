@@ -1,0 +1,3 @@
+546
+# Guest collection tooling: authority/CAS, local adoption, durable inverse and non-tail insertion intent, conflict isolation/localization, real-Gateway lost-ACK/reconnect proof.
+# Exactly 77 + 319 - 2 + 3 + 149 net test LF against prepared base b59c593c; shared scalar unchanged.

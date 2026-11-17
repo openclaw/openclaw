@@ -3,6 +3,8 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import type { AgentToolGatewayRequestCaller } from "../../../src/agents/tools/in-process-gateway.ts";
+import { runPersonalSessionGroups } from "../../../src/agents/tools/sessions-personal-groups.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -33,7 +35,7 @@ const otherKey = "agent:main:dashboard:groups-other";
 const people = ["groups-owner@example.test", "groups-other@example.test"];
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Promise<T> {
+function rpc<T>(page: Page, method: string, params: unknown): Promise<T> {
   return evaluateControlUiContext(
     page,
     async (app, request) => {
@@ -48,7 +50,7 @@ function rpc<T>(page: Page, method: string, params: Record<string, unknown>): Pr
 }
 
 suite.define(() => {
-  it("preserves children and browser-local groups with only session permissions", async (test) => {
+  it("preserves children and profile groups through agent edits with only session permissions", async (test) => {
     let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
     let gateway: GatewayServer | undefined;
     const proxies: ViteDevServer[] = [];
@@ -181,14 +183,70 @@ suite.define(() => {
           },
           async ({ page }) => {
             const methods: string[] = [];
+            const preferenceWrites: Record<string, unknown>[] = [];
             page.on("websocket", (socket) =>
               socket.on("framesent", (frame) => {
                 const request = JSON.parse(frame.payload.toString());
                 if (request.type === "req" && request.method !== "connect") {
                   methods.push(request.method);
+                  if (request.method === "users.prefs.set") {
+                    preferenceWrites.push(request.params.entries);
+                  }
                 }
               }),
             );
+            let hold:
+              | { phase: "request" | "response"; captured: boolean; seen: boolean }
+              | undefined;
+            let offline = false;
+            let closeGuestConnection = () => Promise.resolve();
+            await page.routeWebSocket(urls[0]!, async (socket) => {
+              if (offline) {
+                await socket.close();
+                return;
+              }
+              closeGuestConnection = () => socket.close();
+              const server = socket.connectToServer();
+              let blockedResponseId: string | undefined;
+              socket.onMessage((message) => {
+                const frame: {
+                  type?: string;
+                  method?: string;
+                  id?: string;
+                  params?: { entries?: Record<string, unknown> };
+                } = JSON.parse(message.toString());
+                const groups = frame.params?.entries?.["ui.personalSessionGroups"];
+                if (
+                  hold &&
+                  !hold.captured &&
+                  frame.type === "req" &&
+                  frame.method === "users.prefs.set" &&
+                  Array.isArray(groups) &&
+                  groups.some((item) => item.label === "Pending")
+                ) {
+                  hold.captured = true;
+                  if (hold.phase === "request") {
+                    hold.seen = true;
+                    return;
+                  }
+                  blockedResponseId = frame.id;
+                }
+                server.send(message);
+              });
+              server.onMessage((message) => {
+                const frame: { type?: string; id?: string; ok?: boolean } = JSON.parse(
+                  message.toString(),
+                );
+                if (blockedResponseId && frame.type === "res" && frame.id === blockedResponseId) {
+                  if (!frame.ok || !hold) {
+                    throw new Error("Held collection save did not commit");
+                  }
+                  hold.seen = true;
+                  return;
+                }
+                socket.send(message);
+              });
+            });
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(page);
             const sidebar = page.locator("openclaw-app-sidebar");
@@ -232,6 +290,21 @@ suite.define(() => {
             }
             await sidebar.getByRole("link", { name: /Verification notes/ }).waitFor();
             methods.length = 0;
+            for (const phase of ["request", "response"] as const) {
+              // Exercise a real dropped request and a real committed save whose ACK
+              // is lost with the tab. Only the existing browser outbox survives reload.
+              hold = { phase, captured: false, seen: false };
+              await create("Pending", "Reliability Tracker");
+              await expect.poll(() => hold?.seen).toBe(true);
+              await menu("Pending", "Remove section");
+              await page.reload();
+              await waitForControlUiGatewayReady(page);
+              await expect.poll(() => group("Pending").count()).toBe(0);
+              await expect
+                .poll(() => rpc(editor, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+                .toMatchObject({ entries: { "ui.personalSessionGroups": [] } });
+              hold = undefined;
+            }
             await create("Focus", "Reliability Tracker");
             await group("Focus")
               .getByRole("link", { name: /Verification notes/ })
@@ -253,12 +326,76 @@ suite.define(() => {
             await expect
               .poll(() => sidebar.getByRole("link", { name: /Updated verification notes/ }).count())
               .toBe(2);
-            await create("Later", "Release checklist");
-            await menu("Later", "Move up");
+            const focusId = await group("Focus").getAttribute("data-personal-session-group");
+            if (!focusId) {
+              throw new Error("Visible Focus collection has no identity");
+            }
+            const observed = [{ id: focusId, label: "Focus", sessionKeys: [parentKey] }];
+            await expect
+              .poll(
+                async () =>
+                  await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
+              )
+              .toMatchObject({ entries: { "ui.personalSessionGroups": observed } });
+            const agentRequest: AgentToolGatewayRequestCaller = <T>({
+              method,
+              params,
+            }: Parameters<AgentToolGatewayRequestCaller>[0]) => rpc<T>(page, method, params ?? {});
+            expect(
+              (
+                await runPersonalSessionGroups(
+                  "personal_group_list",
+                  { action: "personal_group_list" },
+                  agentRequest,
+                )
+              ).details,
+            ).toEqual({ status: "ok", groups: observed, expectedGroups: observed });
+            const later = { id: "agent-later", label: "Later", sessionKeys: [otherKey] };
+            await runPersonalSessionGroups(
+              "personal_group_set",
+              {
+                action: "personal_group_set",
+                groups: [...observed, later],
+                expectedGroups: observed,
+              },
+              agentRequest,
+            );
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
+            await group("Later").waitFor();
+            await group("Focus").waitFor();
             const order = () =>
               sidebar
                 .locator("[data-personal-session-group] .sidebar-session-group-toggle")
                 .allTextContents();
+            // The UI intentionally disables new sections while disconnected. Queue its
+            // real creation before delivery, reorder it, then lose the connection/tab.
+            hold = { phase: "request", captured: false, seen: false };
+            await create("Pending");
+            await expect.poll(() => hold?.seen).toBe(true);
+            await menu("Pending", "Move up");
+            await menu("Pending", "Move up");
+            await expect.poll(order).toEqual(["Pending", "Focus", "Later"]);
+            offline = true;
+            await closeGuestConnection();
+            await expect
+              .poll(() => evaluateControlUiContext(page, (app) => app.gateway.snapshot.phase))
+              .not.toBe("connected");
+            hold = undefined;
+            offline = false;
+            await page.reload();
+            await waitForControlUiGatewayReady(page);
+            await expect.poll(order).toEqual(["Pending", "Focus", "Later"]);
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({
+                entries: { "ui.personalSessionGroups": [{ label: "Pending" }, ...observed, later] },
+              });
+            await menu("Pending", "Remove section");
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({ entries: { "ui.personalSessionGroups": [...observed, later] } });
+            await menu("Later", "Move up");
             await expect.poll(order).toEqual(["Later", "Focus"]);
             await menu("Focus", "Edit section");
             const dialog = page.getByRole("dialog", { name: "Edit section", exact: true });
@@ -271,9 +408,14 @@ suite.define(() => {
             await page.reload();
             await waitForControlUiGatewayReady(page);
             await expect.poll(order).toEqual(["Later", "This week"]);
-            expect(
-              await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
-            ).toMatchObject({ status: "ok", entries: {} });
+            await expect
+              .poll(() => rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }))
+              .toMatchObject({
+                status: "ok",
+                entries: {
+                  "ui.personalSessionGroups": [later, { ...observed[0], label: "This week" }],
+                },
+              });
             const freshContext = await suite.newBrowserContext({
               reducedMotion: "reduce",
               storageState: initialStorage,
@@ -281,13 +423,12 @@ suite.define(() => {
             const fresh = await freshContext.newPage();
             await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(fresh);
-            expect(await fresh.locator("[data-personal-session-group]").count()).toBe(0);
+            await expect.poll(() => fresh.locator("[data-personal-session-group]").count()).toBe(2);
             await suite.closeBrowserContext(freshContext);
             await menu("This week", "Remove section");
             await expect.poll(order).toEqual(["Later"]);
             expect(await sidebar.locator(`[data-session-key="${parentKey}"]`).count()).toBe(1);
             const forbidden = new Set([
-              "users.prefs.set",
               "sessions.patch",
               "sessions.patchMany",
               "sessions.delete",
@@ -301,6 +442,14 @@ suite.define(() => {
               "config.set",
             ]);
             expect(methods.filter((method) => forbidden.has(method))).toEqual([]);
+            expect(preferenceWrites.length).toBeGreaterThan(0);
+            expect(
+              preferenceWrites.every(
+                (entries) =>
+                  Object.keys(entries).length === 1 &&
+                  Object.hasOwn(entries, "ui.personalSessionGroups"),
+              ),
+            ).toBe(true);
             if (artifactDir) {
               await writeFile(
                 path.join(artifactDir, "runtime.json"),

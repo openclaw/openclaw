@@ -1,10 +1,10 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import type { PersonalSessionGroup } from "../../../src/shared/personal-session-groups.js";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { readSessionDragData, sessionDragActive } from "../lib/sessions/drag.ts";
-import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import { showToast } from "../lib/toast.ts";
 import type { SidebarSessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
