@@ -605,21 +605,23 @@ export const startSubagentAnnounceCleanupFlow = (
         )?.protocolRunId;
         await commit((draft) => recordRequesterHandoff(draft, blockingRunId));
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
-          ...announceParams,
-          controllerInput,
-          childAgentId: entry.childAgentId,
-          childSessionIdentity: entry.childSessionIdentity,
-          signal: deadline.signal,
-          onAccepted: releasePreparation,
-          // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => {
-            releasePreparation();
-            clearTimeout(deadlineTimer);
-          },
-        }),
-      );
+      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, (authority) => {
+        const deliver = () =>
+          params.runSubagentAnnounceFlow({
+            ...announceParams,
+            controllerInput,
+            childAgentId: entry.childAgentId,
+            childSessionIdentity: entry.childSessionIdentity,
+            signal: deadline.signal,
+            onAccepted: releasePreparation,
+            // Delivery expiry bounds admission; the requester owns its execution budget.
+            onExecutionStarted: () => {
+              releasePreparation();
+              clearTimeout(deadlineTimer);
+            },
+          });
+        return authority ? authority.runWithRequester(deliver) : deliver();
+      });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;

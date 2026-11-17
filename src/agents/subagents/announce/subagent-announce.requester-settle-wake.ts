@@ -601,7 +601,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             if (!isSourceSessionEffectsAllowed()) {
               throw new Error("Requester completion source changed before continuation admission.");
             }
-            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+            return subagentRuns.runWithCompletionBatchAuthority(settledBatch, (authority) =>
+              authority ? authority.runWithRequester(deliver) : deliver(),
+            );
           },
         );
       };

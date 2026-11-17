@@ -15,6 +15,10 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import {
+  hasSharedSubagentCompletionRequester,
+  hasSameSubagentCompletionSource,
+} from "./subagent-completion-source.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
@@ -360,7 +364,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
   }
 
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
+  runWithCompletionAuthority<T>(
+    observed: SubagentRunRecord,
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
@@ -372,7 +379,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
       throw new Error("Subagent completion authority is no longer active");
     }
-    return custody ? custody.authority.run(run) : run();
+    return custody ? custody.authority.run(() => run(custody.authority)) : run();
   }
 
   private isCancellationNotice(entry: SubagentRunRecord): boolean {
@@ -382,35 +389,32 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     );
   }
 
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+  runWithCompletionBatchAuthority<T>(
+    observed: readonly SubagentRunRecord[],
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     const batch = observed.map((entry) => this.currentValue(entry));
     batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
+    const sources = batch.map(
+      (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
+    );
+    const sameRequester = hasSharedSubagentCompletionRequester(sources);
     const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
     if (!resultEntry) {
-      const sources = batch.map(
-        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
-      );
       const first = sources[0];
-      const original = first?.operatorAuthority;
       // A cancellation-only cohort can share its retained requester. Otherwise its
       // independently admitted cancellation caller still owns the notices.
       if (
-        !first ||
-        !original ||
-        sources.some(
-          (source) =>
-            source?.operatorAuthority?.source !== original.source ||
-            source?.operatorAuthority?.invocation !== original.invocation ||
-            !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
-        )
+        !first?.operatorAuthority ||
+        !sameRequester ||
+        sources.some((source) => !hasSameSubagentCompletionSource(source, first))
       ) {
         return run();
       }
       sources.forEach((source) => source?.assertCurrent());
-      return first.run(run);
+      return first.run(() => run(first));
     }
     const firstCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry));
-    const first = firstCustody?.authority.operatorAuthority;
     // Mixed waves must still prove the cancelled member's original source is live and identical.
     // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
     for (const entry of batch) {
@@ -419,17 +423,15 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         throw new Error("Subagent completion authority is no longer active");
       }
       custody?.authority.assertCurrent();
-      const source = custody?.authority.operatorAuthority;
-      if (
-        source?.source !== first?.source ||
-        source?.invocation !== first?.invocation ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes) ||
-        !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
-      ) {
+      if (!hasSameSubagentCompletionSource(custody?.authority, firstCustody?.authority)) {
         throw new Error("Subagent completion batch has incompatible operator authority");
       }
     }
-    return this.runWithCompletionAuthority(resultEntry, run);
+    // Mixed humans keep the existing operator-owned delivery path. Never select
+    // one member's personal identity for the whole wave, or strand its results.
+    return this.runWithCompletionAuthority(resultEntry, (authority) =>
+      run(sameRequester ? authority : undefined),
+    );
   }
 
   /** Committed replacement transfers custody without reviving a retired source. */

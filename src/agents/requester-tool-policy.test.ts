@@ -241,6 +241,7 @@ describe("resolveRequesterToolPolicies", () => {
 
   it.each([
     "current",
+    "retained channel owner",
     "revoked",
     "stale requester",
     "external sender",
@@ -291,6 +292,16 @@ describe("resolveRequesterToolPolicies", () => {
       sessionId:
         authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
       ...(authority === "external sender" ? { senderId: "mallory" } : {}),
+      ...(authority === "retained channel owner"
+        ? {
+            senderId: "alice",
+            requesterOrigin: {
+              sessionKey: targetSessionKey,
+              messageProvider: "discord",
+              senderId: "alice",
+            },
+          }
+        : {}),
       modelProvider: consumption.provider,
       modelId: consumption.model,
       inputProvenance: {
@@ -302,7 +313,7 @@ describe("resolveRequesterToolPolicies", () => {
       trustedInternalHandoff,
     };
     const result = await resolvePolicy(request);
-    if (authority !== "current") {
+    if (authority !== "current" && authority !== "retained channel owner") {
       expect(result.delegated).toBe(false);
       expect(result.senderPolicy).toEqual(runtimeDeny);
       return;
