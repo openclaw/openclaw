@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSessionStore } from "../config/sessions/session-accessor.sqlite-reset.js";
+import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
@@ -83,6 +84,13 @@ it("rehearses file-backed cold transcripts without the source archive directory"
 
   expect(copied.storage).toBe("file");
   await expect(restoreFromRehearsal(target, copied)).resolves.toBeDefined();
+  // Doctor's full agent-database backup (legacy session-entry repair) embeds every archive.
+  const backup = `${target}.doctor-backup`;
+  await fs.copyFile(target, backup);
+  using database = openNodeSqliteDatabase(backup);
+  await expect(
+    embedSessionColdArchivesInSnapshot({ database, sourceStorePath: target }),
+  ).resolves.toBeUndefined();
   expect(await fs.readFile(source)).toEqual(original);
 });
 
