@@ -90,6 +90,7 @@ vi.mock("../../agents/model-selection.js", () => ({
 
 // mock-isolation: Keep host discovery outside command prompt fixtures.
 vi.mock("../../agents/system-prompt-params.js", () => ({
+  resolveSystemPromptRepoRoot: async () => undefined,
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
   })),
