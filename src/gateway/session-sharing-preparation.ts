@@ -689,6 +689,7 @@ export async function prepareSessionMutationFacts(
         assertSource();
         return readFacts();
       } catch (error) {
+        SessionMutationFactsUnavailableError.report(error, [active, invalidated, initialDiscovery]);
         throw error instanceof SessionMutationFactsUnavailableError
           ? error
           : new SessionMutationFactsUnavailableError({ cause: error });

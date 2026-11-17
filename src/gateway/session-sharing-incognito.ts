@@ -10,6 +10,23 @@ type IncognitoSessionSharingTarget = {
 };
 
 export class SessionMutationFactsUnavailableError extends Error {
+  static report(
+    error: unknown,
+    [active, invalidated, initialDiscovery]: readonly [boolean, boolean, boolean],
+  ): void {
+    const frames = (value: unknown) =>
+      value instanceof Error
+        ? value.stack?.match(/(?:src|packages|test)\/[A-Za-z0-9_./-]+:\d+:\d+/g)
+        : undefined;
+    console.error("[session-facts-diagnostic]", {
+      active,
+      invalidated,
+      initialDiscovery,
+      frames: frames(error),
+      causeFrames: frames(error instanceof Error ? error.cause : undefined),
+    });
+  }
+
   constructor(options?: ErrorOptions) {
     super("Session access facts are unavailable; retry after session storage is ready.", options);
     this.name = "SessionMutationFactsUnavailableError";
