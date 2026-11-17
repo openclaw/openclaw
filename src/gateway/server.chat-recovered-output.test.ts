@@ -221,6 +221,11 @@ it.each(scenarios)(
     });
     const completed = await gateway.client.request<{
       status: string;
+      error?: string;
+      stopReason?: string;
+      livenessState?: string;
+      timeoutPhase?: string;
+      providerStarted?: boolean;
       terminalReply?: { text?: string };
     }>("agent.wait", { runId, timeoutMs: 60_000 }, { timeoutMs: 65_000 });
     const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
@@ -268,7 +273,40 @@ it.each(scenarios)(
       });
       expect(assistantTexts(display.chatMessages)).toEqual(assistantTexts(history.messages));
     } else {
-      expect(completed).toMatchObject({ status: "ok", terminalReply: { text: answer } });
+      let waitDiagnostic: string | undefined;
+      if (completed.status !== "ok") {
+        const { redactSupportDiagnosticLine } =
+          await import("../logging/diagnostic-support-redaction.js");
+        const redact = (value: string | undefined) =>
+          value === undefined
+            ? undefined
+            : redactSupportDiagnosticLine(
+                value,
+                {
+                  env: process.env,
+                  stateDir: path.join(home.tempHome, ".openclaw"),
+                },
+                512,
+              );
+        const errorEvent = terminal.findLast((event) => event.state === "error");
+        waitDiagnostic = `[recovered-output-wait] ${JSON.stringify({
+          status: redact(completed.status),
+          error: redact(completed.error),
+          stopReason: redact(completed.stopReason),
+          livenessState: redact(completed.livenessState),
+          timeoutPhase: redact(completed.timeoutPhase),
+          providerStarted: completed.providerStarted,
+          requestCount: requests.get(scenario)?.length ?? 0,
+          terminalCount: terminal.length,
+          terminalError: redact(errorEvent?.errorMessage),
+          terminalErrorKind: redact(errorEvent?.errorKind),
+          terminalStopReason: redact(errorEvent?.stopReason),
+        })}`;
+      }
+      expect(completed, waitDiagnostic).toMatchObject({
+        status: "ok",
+        terminalReply: { text: answer },
+      });
       expect(messageText(history.messages.at(-1))).toBe(answer);
       expect(
         terminal.filter((event) => "message" in event && messageText(event.message) === answer),
