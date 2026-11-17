@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -583,12 +584,14 @@ describe("retained npm package integrity", () => {
       expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
       expect(result.step.stderrTail).toContain(JSON.stringify(relative));
       const steps = updateRunStepsFromResultStep(result.step);
+      const failedStep = steps[0];
+      assert(failedStep, "package-swap failure step is missing");
       const local = steps.find((step) => step.step === "diagnostic:package-swap")?.detail;
       expect(local).toContain(JSON.stringify(relative));
       expect(local).toContain('"size":{"before":"3","after":"7"}');
       expect(local).toContain("mtimeNs");
       expect(local).not.toContain("z-drift.js");
-      expect(steps[0].failureFacts).toEqual([
+      expect(failedStep.failureFacts).toEqual([
         expect.objectContaining({
           code: "baseline-scan-failed",
           message: expect.stringMatching(
@@ -617,12 +620,21 @@ describe("retained npm package integrity", () => {
       shape: "sibling dependency link",
       cause: "Package rollback symlink leaves the retained tree",
     },
-    { shape: "unavailable inode", cause: "Package rollback filesystem identity is unavailable" },
+    { shape: "unavailable inode", cause: "Package rollback original inode unavailable" },
+    {
+      shape: "unavailable inode after admission",
+      cause: "Package rollback original inode unavailable",
+    },
     { shape: "timed-out scan", cause: "Package rollback verification timed out" },
   ] as const)(
     "records the baseline scan failure for $shape before service preparation or live mutation",
     async ({ shape, cause }) => {
       const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
+      const unavailableInode = shape.startsWith("unavailable inode");
+      const unavailableEntry = path.join(packageRoot, "dist", "private-inode-entry.js");
+      if (unavailableInode) {
+        await fs.writeFile(unavailableEntry, "unchanged");
+      }
       let timedOut = false;
       if (shape === "sibling dependency link") {
         const dependency = path.join(globalRoot, "fixture-dependency");
@@ -633,15 +645,28 @@ describe("retained npm package integrity", () => {
         await fs.symlink("../../fixture-dependency", link);
         expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
       }
-      if (shape === "unavailable inode" || shape === "timed-out scan") {
+      if (unavailableInode || shape === "timed-out scan") {
         const lstat = fs.lstat.bind(fs);
+        let clearOriginalInode: (() => void) | undefined;
         vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
           if (timedOut && String(args[0]) === packageRoot) {
             throw new Error("identity fallback unavailable");
           }
           const stat = await lstat(...args);
-          if (shape === "unavailable inode" && typeof stat.ino === "bigint") {
-            Object.assign(stat, { ino: 0n });
+          if (
+            unavailableInode &&
+            String(args[0]) === unavailableEntry &&
+            typeof stat.ino === "bigint"
+          ) {
+            if (shape === "unavailable inode after admission" && !clearOriginalInode) {
+              clearOriginalInode = () => {
+                Object.assign(stat, { ino: 0n });
+              };
+            } else {
+              // Set both retained and current observations to zero at final inspection.
+              clearOriginalInode?.();
+              Object.assign(stat, { ino: 0n });
+            }
           }
           return stat;
         });
@@ -665,7 +690,7 @@ describe("retained npm package integrity", () => {
       expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
       const steps = updateRunStepsFromResultStep(result.step);
       expect(steps[0]).toMatchObject({
-        detail: expect.stringContaining("Baseline package scan failed"),
+        detail: expect.stringContaining(unavailableInode ? cause : "Baseline package scan failed"),
         failureFacts: [
           {
             check: "package-swap",
@@ -674,6 +699,12 @@ describe("retained npm package integrity", () => {
           },
         ],
       });
+      if (unavailableInode) {
+        const diagnostic = steps.find((step) => step.step === "diagnostic:package-swap")?.detail;
+        expect(diagnostic).toContain('entry="dist/private-inode-entry.js"');
+        expect(diagnostic).toContain("ino=0");
+        expect(diagnostic).not.toContain("changed: fields=");
+      }
       const report = await prepareUpdateFailureReport(
         {
           attemptId: "baseline-failure",
@@ -683,13 +714,14 @@ describe("retained npm package integrity", () => {
         { env: {}, stateDir: base },
       );
       expect(report.body).toContain("baseline-scan-failed");
-      if (shape === "timed-out scan") {
+      if (shape === "timed-out scan" || unavailableInode) {
         expect(report.body).toContain(cause);
       } else {
         expect(report.body).not.toContain(cause);
         expect(report.body).toContain("[redacted-diagnostic]");
       }
       expect(report.body).not.toContain("identity fallback unavailable");
+      expect(report.body).not.toContain("private-inode-entry.js");
       expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
       expectNoCalls(beforeActivate, onLiveMutation);

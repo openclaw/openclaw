@@ -81,6 +81,7 @@ describe("diagnostic support redaction", () => {
     "startup ran out of memory",
     "Package rollback stat changed: fields=size,mtimeNs,ctimeNs",
     "Package rollback stat changed: fields=dev,ino,mode,uid,gid,nlink,size,mtimeNs,ctimeNs",
+    "Package rollback original inode unavailable",
   ])("admits only the exact public diagnostic template %s", (message) => {
     const context = { env: {}, stateDir: tempDir };
     expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);

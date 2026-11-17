@@ -241,6 +241,32 @@ export function packageStatUnchanged(left: BigIntStats, right: BigIntStats): boo
   );
 }
 
+function packageTreeStatMismatchError(
+  relative: string,
+  stat: BigIntStats,
+  current = stat,
+): PackageIntegrityMismatchError {
+  const entry = JSON.stringify(relative || ".");
+  if (stat.ino === 0n) {
+    return new PackageIntegrityMismatchError(
+      `Package rollback original inode unavailable; entry=${entry}; ino=0`,
+      ["Package rollback original inode unavailable"],
+    );
+  }
+  const fields = (
+    ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const
+  ).filter((field) => stat[field] !== current[field]);
+  const changes = Object.fromEntries(
+    fields.map((field) => [field, { before: String(stat[field]), after: String(current[field]) }]),
+  );
+  // Keep relative paths and primitive values locally; public reports
+  // project only closed classifications in differences.
+  return new PackageIntegrityMismatchError(
+    `Package rollback tree changed during verification; entry=${entry}; changes=${JSON.stringify(changes)}`,
+    [`Package rollback stat changed: fields=${fields.join(",")}`],
+  );
+}
+
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
 export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
   const now = () => performance.now();
@@ -438,7 +464,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (fileFailed) {
         await drainFiles();
       }
-      if (stat.ino === 0n || (device !== undefined && device !== stat.dev)) {
+      if (stat.ino === 0n) {
+        throw packageTreeStatMismatchError(relative, stat);
+      }
+      if (device !== undefined && device !== stat.dev) {
         throw new Error("Package rollback filesystem identity is unavailable");
       }
       if (!relative) {
@@ -583,21 +612,10 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
           observed.slice(start, start + 32).map(async ({ file, stat }) => {
             const current = await read(() => fs.lstat(file, { bigint: true }));
             if (!packageStatUnchanged(stat, current)) {
-              const fields = (
-                ["dev", "ino", "mode", "uid", "gid", "nlink", "size", "mtimeNs", "ctimeNs"] as const
-              ).filter((field) => stat[field] !== current[field]);
-              const entry = path.relative(root, file).split(path.sep).join("/") || ".";
-              const changes = Object.fromEntries(
-                fields.map((field) => [
-                  field,
-                  { before: String(stat[field]), after: String(current[field]) },
-                ]),
-              );
-              // Keep relative paths and primitive values locally; public reports
-              // project only the closed stat-field classification in differences.
-              throw new PackageIntegrityMismatchError(
-                `Package rollback tree changed during verification; entry=${JSON.stringify(entry)}; changes=${JSON.stringify(changes)}`,
-                [`Package rollback stat changed: fields=${fields.join(",")}`],
+              throw packageTreeStatMismatchError(
+                path.relative(root, file).split(path.sep).join("/"),
+                stat,
+                current,
               );
             }
           }),

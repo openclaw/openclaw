@@ -57,7 +57,9 @@ When a package baseline's final rescan detects stat drift, the update still
 refuses package replacement. Local failure output and `openclaw update status --json`
 diagnostics identify the first entry relative to the package root (`.` for the
 root), changed stat fields, and their before/after values. Public failure reports
-retain only the changed field names. These observations do not identify the writer
+retain only the changed field names. An unavailable original inode still refuses
+inspection, identifying the entry and zero inode locally and only the closed
+unavailable-inode classification publicly. These observations do not identify the writer
 or establish why a Windows update failed. The installed updater must contain this
 diagnostic change; a newer candidate cannot change an older updater's scan.
 

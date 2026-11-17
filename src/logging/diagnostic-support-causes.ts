@@ -10,9 +10,9 @@ export function readPublicSupportCauses(value: string): string[] {
     .map((cause) => cause.replace(/^permission denied$/u, "Permission denied"))
     .concat(value.match(SQLITE_SNAPSHOT_STABILIZATION_DETAILS) ?? [])
     .concat(
-      // Stat field names classify a package scan refusal without entry paths or values.
+      // Closed stat classifications never contain entry paths or values.
       value.match(
-        /^Package rollback stat changed: fields=(?:dev|ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs)(?:,(?:dev|ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs)){0,8}$/gmu,
+        /^Package rollback (?:original inode unavailable|stat changed: fields=(?:dev|ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs)(?:,(?:dev|ino|mode|uid|gid|nlink|size|mtimeNs|ctimeNs)){0,8})$/gmu,
       ) ?? [],
     )
     .concat(
