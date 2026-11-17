@@ -264,20 +264,6 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (binding.connectionScope === "supervision") {
     return { binding };
   }
-  const clearBinding = async () => {
-    const cleared = await params.bindingStore.mutate(
-      params.identity,
-      { kind: "clear", threadId: binding.threadId, clientId: binding.clientId },
-      params.assertCurrent,
-      params.authority,
-    );
-    if (!cleared) {
-      throw new Error(
-        "Codex startup binding changed during rotation; retry with its current owner.",
-      );
-    }
-    return { binding: undefined };
-  };
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
