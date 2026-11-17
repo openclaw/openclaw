@@ -1931,6 +1931,7 @@ src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
 src/process/spawn-broker/context.ts
+src/process/spawn-broker/context-state.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-output.ts
 src/process/spawn-broker/file-reads.ts
