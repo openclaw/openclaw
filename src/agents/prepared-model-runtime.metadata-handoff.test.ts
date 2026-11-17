@@ -1,20 +1,9 @@
-import { createDeferred } from "../../test/helpers/promise.js";
-import { withinTest } from "../../test/helpers/promise.js";
-import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
-import { advancePreparedModelRuntimeConfig } from "./prepared-model-runtime.js";
-import { beginPreparedModelRuntimePluginDrain } from "./prepared-model-runtime.js";
-import { loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch } from "./prepared-model-runtime.js";
-import { markPreparedModelRuntimeSnapshotsStale as markStale } from "./prepared-model-runtime.js";
-import { prepareModelRuntimeSnapshot as prepare } from "./prepared-model-runtime.js";
-import { publishPreparedModelRuntimeSnapshot as publish } from "./prepared-model-runtime.js";
-import { refreshPreparedModelRuntimeSnapshots as refresh } from "./prepared-model-runtime.js";
-import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.js";
-import { type PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { type ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-model-runtime-scope.js";
@@ -32,6 +21,16 @@ import { type ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { type PreparedModelCatalogAuth } from "./prepared-model-runtime-auth.js";
+import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
+import { advancePreparedModelRuntimeConfig } from "./prepared-model-runtime.js";
+import { beginPreparedModelRuntimePluginDrain } from "./prepared-model-runtime.js";
+import { loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch } from "./prepared-model-runtime.js";
+import { markPreparedModelRuntimeSnapshotsStale as markStale } from "./prepared-model-runtime.js";
+import { prepareModelRuntimeSnapshot as prepare } from "./prepared-model-runtime.js";
+import { publishPreparedModelRuntimeSnapshot as publish } from "./prepared-model-runtime.js";
+import { refreshPreparedModelRuntimeSnapshots as refresh } from "./prepared-model-runtime.js";
+import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.js";
+import { type PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -342,6 +341,9 @@ describe("auth replacement publication", () => {
     const cleanups: (() => void)[] = [];
 
     return {
+      defer(cleanup: () => void) {
+        cleanups.push(cleanup);
+      },
       gate<T>(fallback: T) {
         const started = createDeferred();
         const pending = createDeferred<T>();

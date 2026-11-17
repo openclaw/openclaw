@@ -586,7 +586,7 @@ it("names added, changed, and removed extension keys without exposing values", (
     changedEnvelope: "private original envelope value",
     removedEnvelope: "private removed envelope value",
   };
-  const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
   beginOpenAIObservation({ sessionId, messages: [message] });
   block.thinkingSignature = "private rewritten signature";
   block.changedBlock = "private rewritten block value";

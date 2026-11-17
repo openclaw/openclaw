@@ -243,16 +243,10 @@ describe("context overflow model fallback", () => {
       },
     });
   });
-  it.each(["replay-invalid", "delivered"] as const)(
+  it.each(["replay-invalid", "delivered", "empty override"] as const)(
     "does not replay %s overflow results",
     async (guard) => {
-      const failure =
-        guard === "TPM ceiling"
-          ? blocked(
-              "context_overflow",
-              "413 Request too large for model `fixture` on tokens per minute (TPM): Limit 8000, Requested 12000, please reduce your message size and try again.",
-            )
-          : blocked();
+      const failure = blocked();
       if (guard === "replay-invalid") {
         failure.meta.replayInvalid = true;
       } else if (guard === "delivered") {

@@ -1440,6 +1440,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/session-path-alias.conformance.test.ts",
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-participant-capacity.conformance.test.ts",
+  "src/agents/embedded-agent-runner/run-entry.cyber-failover.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.foreground.test.ts",
+  "src/agents/prepared-model-runtime.catalog-projection.test.ts",
+  "src/agents/prepared-model-runtime.metadata-handoff.test.ts",
+  "src/agents/prepared-model-runtime.descriptor-reuse.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

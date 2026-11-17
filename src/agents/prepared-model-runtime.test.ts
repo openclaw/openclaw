@@ -792,19 +792,19 @@ describe("prepared runtime generation admission", () => {
     mocks.configuredAgentIds = ["default", "secondary"];
     await refresh({});
     const refreshError = new Error("queued auth refresh failed");
-    await using configWrite = holdNextBuild();
+    const configWrite = holdNextBuild();
     mocks.ensureOpenClawModelsJson
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({})
       .mockRejectedValueOnce(refreshError);
 
-    const refresh = configWrite.track(refresh({}));
+    const refreshing = configWrite.track(refresh({}));
     await configWrite.started;
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
     mocks.mutationListener?.({ affectsInheritedStores: true });
     configWrite.finish();
 
-    await expect(refresh).rejects.toBe(refreshError);
+    await expect(refreshing).rejects.toBe(refreshError);
     for (const [agentDir, workspaceDir] of [
       [fixture.state.agentDir("default"), "/tmp/unused-workspace"],
       [fixture.state.agentDir("secondary"), "/tmp/workspace-secondary"],
