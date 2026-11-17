@@ -76,6 +76,8 @@ describe("finalized tool descriptor snapshots", () => {
       const cold = attempt([first]);
       const bytes = JSON.stringify(cold.tool().parameters);
       await cold.settle();
+      // Retirement publishes metadata; provider conversion belongs to an actual request.
+      expect(prewarm).not.toHaveBeenCalled();
       const prepared = attempt([createMessageTool({ config })]).tool().parameters;
       publish.mockClear();
       prewarm.mockClear();

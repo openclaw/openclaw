@@ -13,14 +13,14 @@ export function retainPluginNativeRoot(root: PluginNativeCaptureRoot) {
   const owner = {};
   const owners = snapshotOwners.get(root)!;
   owners.add(owner);
-  let lastOwnerRelease: boolean | undefined;
+  let released = false;
   const release = () => {
-    if (lastOwnerRelease !== undefined) {
-      return lastOwnerRelease;
+    if (released) {
+      return false;
     }
+    released = true;
     owners.delete(owner);
-    // A failed last-owner disposal still belongs to this lease when cleanup retries.
-    return (lastOwnerRelease = owners.size === 0);
+    return owners.size === 0;
   };
   const lease = {
     directory: root.directory,

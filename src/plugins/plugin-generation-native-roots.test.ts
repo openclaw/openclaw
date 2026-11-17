@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retirePluginCache, withPluginCache } from "./plugin-cache.js";
@@ -11,32 +10,11 @@ import {
   adoptPluginNativeAdmissions,
   nativeAdmissionStateFor,
 } from "./plugin-native-admission-state.js";
-import { createPluginNativeCaptureState } from "./plugin-native-capture-state.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("keeps an unknown native disposal failure without replaying its physical owner", async () => {
-  const failure = new CommandProcessCleanupError();
-  const dispose = vi.fn();
-  const disposeAsync = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
-  const root = createPluginNativeCaptureState({
-    directory: "unconfirmed-native-capture",
-    commit: () => {},
-    dispose,
-    disposeAsync,
-  });
-  const generation = createPluginGenerationNativeRoots();
-  generation.allocate(root);
-  await expect(generation.close()).rejects.toBe(failure);
-  await expect(generation.close()).rejects.toBe(failure);
-  root.dispose();
-  expect(disposeAsync).toHaveBeenCalledTimes(1);
-  expect(dispose).not.toHaveBeenCalled();
-  expect(() => root.commit()).toThrow("Plugin native capture has been disposed");
-});
 
 it.each([
   ["fresh", "accepted"],

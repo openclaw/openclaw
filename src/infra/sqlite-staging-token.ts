@@ -7,12 +7,7 @@ import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission
 import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
-import {
-  assertDatabaseFileIdentity,
-  databaseFileIdentityKey,
-  readDatabaseIdentityBirthtime,
-  type DatabaseFileIdentity,
-} from "./sqlite-worker-identity.js";
+import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -21,14 +16,8 @@ export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite-shm",
 ] as const;
 
-export type SqliteStagingRetirementIdentity = {
-  directory: { dev: string; ino: string };
-  token: DatabaseFileIdentity;
-};
-
 export type SqliteStagingToken = ((retiring?: boolean) => void) & {
   beginRetirement: () => SqliteStagingToken;
-  releaseForRetirement: () => SqliteStagingRetirementIdentity;
 };
 
 export class SqliteStagingRetiredError extends Error {
@@ -59,7 +48,6 @@ export function acquireSqliteStagingToken(
         settle(() => token.beginRetirement());
         return settled;
       },
-      releaseForRetirement: () => settle(() => token.releaseForRetirement()),
     },
   );
   return settled;
@@ -174,24 +162,7 @@ function acquireStagingToken(
       retireSqliteDatabaseAdmissionForPath(location);
     }
   };
-  let retirementIdentity: SqliteStagingRetirementIdentity | undefined;
-  const releaseForRetirement = (): SqliteStagingRetirementIdentity => {
-    if (retirementIdentity) {
-      return retirementIdentity;
-    }
-    assertIdentity();
-    // The retiring worker reacquires these original inodes before committing its marker.
-    release();
-    retirementIdentity = {
-      directory: { dev: directoryIdentity.dev.toString(), ino: directoryIdentity.ino.toString() },
-      token: {
-        key: `file:${databaseFileIdentityKey(tokenIdentity)}`,
-        birthtime: readDatabaseIdentityBirthtime(tokenIdentity),
-      },
-    };
-    return retirementIdentity;
-  };
-  const token = Object.assign(release, { beginRetirement, releaseForRetirement });
+  const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
     if (exclusive) {
