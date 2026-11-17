@@ -211,6 +211,9 @@ afterAll(async () => {
 it.each(scenarios)(
   "Responses HTTP chat.send retains only the selected output after %s",
   async (scenario) => {
+    if (scenario === "continuation") {
+      console.info("[session-facts-diagnostic] recovered continuation reproduction entry");
+    }
     const sessionKey = `agent:${scenario}:main`;
     await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
     const { runId } = await gateway.client.request<{ runId: string }>("chat.send", {

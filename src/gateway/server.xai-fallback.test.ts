@@ -102,6 +102,7 @@ it(
     timeout: 180_000,
   },
   async ({ signal }) => {
+    console.info("[session-facts-diagnostic] xAI fallback reproduction entry");
     // Retry timing is covered by the retry owner; keep Gateway I/O timers real.
     vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (_, sig) => sig?.throwIfAborted());
     const root = tempDirs.make("openclaw-xai-fallback-");
