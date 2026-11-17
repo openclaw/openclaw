@@ -43,6 +43,8 @@ export type StoredClaw = {
   token_bindings?: DeviceTokenBinding[];
   /** Gateway approval times, bounded by current membership rather than invite lifetime. */
   member_approved_at?: Record<string, number | null>;
+  /** Display-only browser notices and bounded replay/rate receipts for current members. */
+  member_browser_requests?: Record<string, MemberBrowserRequestState>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
@@ -56,6 +58,21 @@ export type StoredClaw = {
   };
 };
 
+/** Display-only: three accepted-ID receipts, three unseen-ID tombstones and one overflow deadline. */
+export type MemberBrowserRequestState = {
+  notice: {
+    requestId: string;
+    label: string;
+    location: string | null;
+    requestedAt: number;
+    expiresAt: number;
+  } | null;
+  recent: Array<{ requestId: string; until: number }>;
+  terminal?: Array<{ requestId: string; until: number }>;
+  /** Refuse new notices through this deadline when unseen terminal IDs exceed the tombstone cap. */
+  blockedUntil?: number | null;
+};
+
 /** Sender details OpenClaw ID reported for a redemption, and the invite's outcome. */
 export type InviteReport = {
   /** The redeeming account (from the signed redemption). */
@@ -65,6 +82,8 @@ export type InviteReport = {
   location_hint: string | null;
   resolution?: "approved" | "denied" | "expired";
   resolved_at?: number;
+  /** Owner-selected local profile; never part of a signed cap or Discovery publication. */
+  existingProfile?: { id: string; displayName: string | null; fallbackReason?: string };
 };
 
 /** Refuses recovery if an awaited lookup belongs to a root or binding that has since changed. */
@@ -102,7 +121,12 @@ export function storedOwnerProfile(
 // The persisted core names its format; all sections are installed atomically beside it.
 type StoredClawCore = Omit<
   StoredClaw,
-  "v" | "authority" | "invite_reports" | "token_bindings" | "member_approved_at"
+  | "v"
+  | "authority"
+  | "invite_reports"
+  | "token_bindings"
+  | "member_approved_at"
+  | "member_browser_requests"
 > & {
   v: 2;
   authority: Omit<AuthorityState, "owner_devices" | "members" | "invites"> | null;
@@ -112,9 +136,11 @@ type ClawRows = {
   current: StoredClawCore;
   "owner-devices": AuthorityState["owner_devices"];
   members: AuthorityState["members"];
+  [key: `members:${number}`]: AuthorityState["members"];
   invites: AuthorityState["invites"];
   "invite-reports": NonNullable<StoredClaw["invite_reports"]>;
   "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
+  [key: `member-browser-requests:${number}`]: NonNullable<StoredClaw["member_browser_requests"]>;
   "token-bindings": StoredTokenBindings;
 };
 type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
@@ -133,16 +159,43 @@ function openStore() {
 
 /** Partitions current authority into bounded values without changing any signed statement. */
 export function clawStoreRows(record: StoredClaw): ClawRows {
-  const { authority, invite_reports, member_approved_at, token_bindings, ...core } = record;
+  const {
+    authority,
+    invite_reports,
+    member_approved_at,
+    member_browser_requests,
+    token_bindings,
+    ...core
+  } = record;
   let anchor: StoredClawCore["authority"] = null;
   if (authority) {
     const { owner_devices: _owners, members: _members, invites: _invites, ...rest } = authority;
     anchor = rest;
   }
+  // Thirty-two accounts with ten maximum-length device labels fit the 1 MiB row limit.
+  // All chunks keep the same member-record shape and are replaced in one transaction.
+  const memberEntries = Object.entries(authority?.members ?? {});
+  const memberRows: Record<string, AuthorityState["members"]> = {};
+  for (let offset = 32; offset < memberEntries.length; offset += 32) {
+    memberRows[`members:${offset / 32}`] = Object.fromEntries(
+      memberEntries.slice(offset, offset + 32),
+    );
+  }
+  const browserRows: Record<string, NonNullable<StoredClaw["member_browser_requests"]>> = {};
+  if (member_browser_requests) {
+    const entries = Object.entries(member_browser_requests);
+    for (let offset = 0; offset < Math.max(entries.length, 1); offset += 32) {
+      browserRows[`member-browser-requests:${offset / 32}`] = Object.fromEntries(
+        entries.slice(offset, offset + 32),
+      );
+    }
+  }
   return {
     current: { ...core, v: 2, authority: anchor },
     "owner-devices": authority?.owner_devices ?? {},
-    members: authority?.members ?? {},
+    members: Object.fromEntries(memberEntries.slice(0, 32)),
+    ...memberRows,
+    ...browserRows,
     invites: authority?.invites ?? {},
     "invite-reports": invite_reports ?? {},
     "member-approvals": member_approved_at ?? {},
@@ -178,12 +231,30 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
       ? {
           ...record.authority,
           owner_devices: section("owner-devices"),
-          members: section("members"),
+          members: Object.assign(
+            {},
+            section("members"),
+            ...[...entries]
+              .filter(([key]) => key.startsWith("members:"))
+              // SAFETY: the claw writer stores member records in every members chunk.
+              .map(([, value]) => value as AuthorityState["members"]),
+          ),
           invites: section("invites"),
         }
       : null,
     invite_reports: section("invite-reports"),
     member_approved_at: section("member-approvals"),
+    ...(entries.has("member-browser-requests:0")
+      ? {
+          member_browser_requests: Object.assign(
+            {},
+            ...[...entries]
+              .filter(([key]) => key.startsWith("member-browser-requests:"))
+              // SAFETY: clawStoreRows writes member request records into every browser-request chunk.
+              .map(([, value]) => value as NonNullable<StoredClaw["member_browser_requests"]>),
+          ),
+        }
+      : {}),
     token_bindings: section("token-bindings").bindings,
   };
 }

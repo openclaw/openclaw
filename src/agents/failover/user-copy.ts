@@ -24,6 +24,9 @@ import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
   CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  MODEL_CHAT_REJECTED_CODE,
+  MODEL_CHAT_REJECTED_TEXT,
+  MODEL_CHAT_UNSUPPORTED_TEXT,
   type CliTimeoutContext,
   type FallbackAttemptRecord,
 } from "./error.js";
@@ -41,23 +44,27 @@ import type { FailoverClassification, FailoverReason } from "./signal.js";
 const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
-  "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+  "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.";
 export const TLS_CERTIFICATE_ERROR_USER_TEXT =
-  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
   "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
+  "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
-  code === "selected_auth_profile_unavailable"
-    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
-      ? RATE_LIMIT_ERROR_USER_MESSAGE
-      : code === "refresh_contention"
-        ? OAUTH_REFRESH_CONTENTION_USER_TEXT
-        : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
-          ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
-          : undefined;
+  code === "model_chat_unsupported"
+    ? MODEL_CHAT_UNSUPPORTED_TEXT
+    : code === MODEL_CHAT_REJECTED_CODE
+      ? MODEL_CHAT_REJECTED_TEXT
+      : code === "selected_auth_profile_unavailable"
+        ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+        : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+          ? RATE_LIMIT_ERROR_USER_MESSAGE
+          : code === "refresh_contention"
+            ? OAUTH_REFRESH_CONTENTION_USER_TEXT
+            : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
+              ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
+              : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
@@ -155,12 +162,62 @@ export function renderRateLimitRecoveryStopped(retries: number): string {
   );
 }
 
+type RateLimitResetContext = {
+  rateLimitResetAt?: number;
+  provider?: string;
+  model?: string;
+  locale?: string;
+  timeZone?: string;
+  nowMs?: number;
+};
+
+/** Provider deadlines outrank generic retry advice; diagnostic bodies never become this copy. */
+export function renderRateLimitResetCopy(params: RateLimitResetContext): string | undefined {
+  const resetAt = params.rateLimitResetAt ?? 0;
+  const remainingMs = resetAt - (params.nowMs ?? Date.now());
+  if (remainingMs <= 60_000 || !Number.isFinite(remainingMs)) {
+    return undefined;
+  }
+  const unit = remainingMs >= 86_400_000 ? "day" : remainingMs >= 3_600_000 ? "hour" : "minute";
+  const divisor = unit === "day" ? 86_400_000 : unit === "hour" ? 3_600_000 : 60_000;
+  const options: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone: params.timeZone,
+  };
+  let absolute: string;
+  let relative: string;
+  try {
+    absolute = new Intl.DateTimeFormat(params.locale, options).format(resetAt);
+    relative = new Intl.RelativeTimeFormat(params.locale).format(
+      Math.ceil(remainingMs / divisor),
+      unit,
+    );
+  } catch {
+    // Invalid saved display preferences must not hide the provider's reset.
+    absolute = new Date(resetAt).toISOString();
+    relative = new Intl.RelativeTimeFormat("en").format(Math.ceil(remainingMs / divisor), unit);
+  }
+  const route = [params.provider, params.model].filter(Boolean).join("/") || "This model";
+  return `⚠️ ${route} is rate-limited. The provider says to retry ${relative} (${absolute}). Choose another model in the model picker, or configure Model fallbacks in Settings (\`agents.defaults.model.fallbacks\`).`;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
-export function renderRateLimitOrOverloadedCopy(params: {
-  reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
-  raw?: string;
-  rateLimitRetriesExhausted?: number;
-}): string {
+export function renderRateLimitOrOverloadedCopy(
+  params: RateLimitResetContext & {
+    reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
+    raw?: string;
+    rateLimitRetriesExhausted?: number;
+  },
+): string {
+  const resetCopy = params.reason === "rate_limit" ? renderRateLimitResetCopy(params) : undefined;
+  if (resetCopy) {
+    return resetCopy;
+  }
   const exhaustion =
     params.reason === "rate_limit"
       ? renderRateLimitRetryExhaustion(params.rateLimitRetriesExhausted)
@@ -334,7 +391,7 @@ export function renderSanitizedUserFacingText(
 }
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
@@ -344,7 +401,7 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.";
+  "⚠️ This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
@@ -403,18 +460,27 @@ export function resolveProviderRequestFailureCopy(params: {
 export type ReplyFallbackAttempt = FallbackAttemptRecord & { authMode?: string };
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
-export function renderRateLimitReplyCopy(params: {
-  message: string;
-  reason?: FailoverReason;
-  provider?: string;
-  code?: string;
-  attempts?: readonly ReplyFallbackAttempt[];
-  rateLimitRetriesExhausted?: number;
-  cooldownExpiry?: number | null;
-  nowMs?: number;
-  sanitizeText?: (text: string) => string;
-}): string {
+export function renderRateLimitReplyCopy(
+  params: RateLimitResetContext & {
+    message: string;
+    reason?: FailoverReason;
+    code?: string;
+    attempts?: readonly ReplyFallbackAttempt[];
+    rateLimitRetriesExhausted?: number;
+    cooldownExpiry?: number | null;
+    sanitizeText?: (text: string) => string;
+  },
+): string {
   const attempts = params.attempts ?? [];
+  const limited = attempts.find(
+    (attempt) =>
+      attempt.reason === "rate_limit" &&
+      (attempt.rateLimitResetAt ?? 0) > (params.nowMs ?? Date.now()) + 60_000,
+  );
+  const resetCopy = renderRateLimitResetCopy(limited ? { ...params, ...limited } : params);
+  if (resetCopy && !attempts.some((attempt) => attempt.reason === "billing")) {
+    return resetCopy;
+  }
   // Host-authored failures keep their own copy; cooldown copy below adds expiry detail.
   const code = params.code ?? attempts.at(-1)?.code;
   const codeCopy =
@@ -546,11 +612,11 @@ export function renderMissingApiKeyReplyCopy(params?: {
     return null;
   }
   if (provider === "openai" && params?.providerGuidance) {
-    return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the Control UI or run `openclaw configure` to choose how to connect.";
+    return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the OpenClaw app or run `openclaw configure` to choose how to connect.";
   }
   return provider === "openai"
-    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
-    : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
+    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the OpenClaw app or run `openclaw configure`."
+    : "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.";
 }
 
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
@@ -571,10 +637,10 @@ export function renderCodexAppServerFailureCopy(message: string): string | null 
     return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
   }
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the OpenClaw app before trying again.";
   }
   if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the OpenClaw app before trying again.";
   }
   return null;
 }
@@ -610,7 +676,7 @@ export function renderCliTimeoutReplyCopy(params: {
   const remedy =
     mode === "no-output"
       ? "Check for a sign-in or confirmation prompt in the terminal."
-      : "Try a smaller task, or increase the task time limit in the Control UI settings.";
+      : "Try a smaller task, or increase the task time limit in the OpenClaw app settings.";
   return `⚠️ ${summary}${workStatus} ${remedy}`;
 }
 

@@ -121,6 +121,10 @@ import {
 import { migrateAgentStorageInTransaction } from "./openclaw-agent-storage-migration.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  AGENT_TOOL_USAGE_SQL,
+} from "./openclaw-agent-tool-usage-schema.js";
+import {
   migrateAgentTrajectoryStorageInTransaction,
   withoutTrajectoryPayloadColumns,
 } from "./openclaw-agent-trajectory-storage-migration.js";
@@ -386,6 +390,9 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION)) {
           db.exec(AGENT_ACTIVE_EVENT_FACTS_SQL);
         }
+        if (crossesVersion(AGENT_TOOL_USAGE_SCHEMA_VERSION)) {
+          db.exec(AGENT_TOOL_USAGE_SQL);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -409,12 +416,16 @@ function ensureAgentSchema(
                   foundVersion: previousVersion,
                   supportedVersion: targetVersion,
                 }),
-                // The empty-table step adds one FK and cannot change existing relations.
-                // Earlier crossings and explicit FULL verification retain the global check.
-                ...(previousVersion === 40 &&
-                targetVersion === AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+                // These empty-table steps do not change existing relations. Only v41 adds a FK.
+                ...(previousVersion >= 40 &&
+                targetVersion <= AGENT_TOOL_USAGE_SCHEMA_VERSION &&
                 integrity.check === "quick"
-                  ? { foreignKeyTables: ["session_transcript_active_event_facts"] }
+                  ? {
+                      foreignKeyTables:
+                        previousVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
+                          ? ["session_transcript_active_event_facts"]
+                          : [],
+                    }
                   : {}),
               }
             : undefined,

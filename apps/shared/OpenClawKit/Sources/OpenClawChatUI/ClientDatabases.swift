@@ -40,6 +40,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     let cacheQueue: DatabaseQueue
     let stateQueue: DatabaseQueue
     let outboxChangeHub = OutboxChangeHub()
+    let composerDraftWrites = ComposerDraftWriteChain()
     public let watchMessages: OpenClawWatchMessageJournal
     private let legacyDirectoryURLs: [URL]
 
@@ -184,6 +185,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                     ])
             }
             try db.execute(sql: "DELETE FROM outbox_commands WHERE gateway_id = ?", arguments: [gatewayID])
+            try db.execute(sql: "DELETE FROM composer_drafts WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM outbox_branch_scopes WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(
                 sql: "DELETE FROM gateway_routing_identity WHERE gateway_id = ?",
@@ -441,6 +443,7 @@ extension OpenClawClientDatabases {
         self.registerClientStateMigrationsV6ThroughV8(&migrator)
         self.registerWatchMessageJournalMigration(&migrator)
         self.registerOutboxQueueModeMigration(&migrator)
+        self.registerComposerDraftsMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }

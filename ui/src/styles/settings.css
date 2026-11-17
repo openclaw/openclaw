@@ -453,6 +453,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   margin: var(--space-2) 0;
   /* Chat transcript line-height, so the sample reads like real messages. */
   font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+  /* Match chat prose: macOS stem darkening keeps reading text from rendering
+     thin. App chrome keeps the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 @media (max-width: 768px) {
@@ -844,10 +848,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-tab-icon__preview[data-avatar-shape] {
   border-radius: 0;
-}
-
-.settings-tab-icon__preview[data-avatar-shape="rounded"] {
-  clip-path: inset(0 round 25%);
 }
 
 .settings-tab-icon__preview[data-avatar-shape="circle"] {
@@ -1540,7 +1540,8 @@ textarea.settings-input {
 
   /* A lone icon fits beside the heading; stacking is for full-size controls. */
   .settings-section__header:has(.settings-section__copy):has(
-      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
+      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button,
+      > .settings-section__actions > .refresh-button:only-child
     ) {
     align-items: flex-start;
     flex-direction: row;

@@ -1,8 +1,11 @@
+import { assertSandboxStateOwnerPathCurrent } from "../agents/sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
@@ -27,6 +30,37 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                     readManagedGitHubProfileToken(command.input.profileDir),
                   ),
               );
+            case "github.profile-stage":
+            case "github.profile-refresh":
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(command.input.nativeMode, async () => {
+                  const { writeManagedGitHubProfileFiles, refreshManagedGitHubProfileFiles } =
+                    await import("../agents/github-tool-profile-files.js");
+                  const assertCurrent = command.mutationAuthority
+                    ? workerMutationAssertion(
+                        command.mutationAuthority,
+                        () => channel.notify("authority"),
+                        control.throwIfCancelled,
+                      )
+                    : control.throwIfCancelled;
+                  await (
+                    command.type === "github.profile-stage"
+                      ? writeManagedGitHubProfileFiles
+                      : refreshManagedGitHubProfileFiles
+                  )(command.input.profileDir, command.input.identity, {
+                    assertCurrent,
+                  });
+                }),
+              );
+            case "checkout.bootstrap-workspace":
+              return import("./git-root.js").then(({ findGitRoot, readGitMetadataDirectories }) => {
+                const repository = findGitRoot(command.input.workspace);
+                const commonDir = repository && readGitMetadataDirectories(repository)?.commonDir;
+                return Boolean(
+                  commonDir &&
+                  readGitMetadataDirectories(command.input.root)?.commonDir === commonDir,
+                );
+              });
             case "workspace.inventory.select":
             case "workspace.inventory.existing":
             case "workspace.inventory.paths":
@@ -41,6 +75,7 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
             case "workspace.manifest.equal":
             case "workspace.manifest.snapshot":
             case "workspace.manifest.document":
+            case "workspace.manifest.initial":
             case "workspace.manifest.template":
             case "workspace.manifest.reference":
             case "workspace.manifest.parse":
@@ -57,7 +92,44 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                 ({ executeWorkspaceManifestComputation }) =>
                   executeWorkspaceManifestComputation(command),
               );
+            case "workspace.reconcile.ownership":
+            case "workspace.reconcile.apply":
+            case "workspace.reconcile.recover":
             case "workspace.manifest.stage-input":
+            case "workspace.reconcile.temporary": {
+              const mutation = command.mutation;
+              if (!mutation) {
+                throw new Error("Workspace filesystem work requires its original authority");
+              }
+              const grant = workerMutationAssertion(
+                mutation.decision,
+                () => channel.notify("authority"),
+                control.throwIfCancelled,
+              );
+              const assertCurrent = () => {
+                for (const evidence of mutation.filesystem) {
+                  assertWorkspaceFilesystemEvidence(evidence);
+                }
+                if (mutation.stateOwnerPath) {
+                  assertSandboxStateOwnerPathCurrent(mutation.stateOwnerPath);
+                }
+                grant();
+              };
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(mutation.nativeMode, async () => {
+                  const { executeWorkspaceManifestComputation } =
+                    await import("../gateway/worker-environments/workspace-manifest-computation.runtime.js");
+                  assertCurrent();
+                  return await executeWorkspaceManifestComputation(
+                    command,
+                    command.type === "workspace.manifest.stage-input" ||
+                      command.type === "workspace.reconcile.temporary"
+                      ? control.throwIfCancelled
+                      : assertCurrent,
+                  );
+                }),
+              );
+            }
             case "workspace.manifest.tree-input":
             case "workspace.reconcile.patch":
             case "workspace.reconcile.diff":

@@ -1,2 +1,0 @@
-24
-# Reject spoofed/missing parent workflow paths and accept both observed dynamic release run titles.

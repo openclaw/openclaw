@@ -314,7 +314,7 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes. An existing session first
+this checkout when capture or application requires a stable live tree. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
@@ -323,9 +323,11 @@ check for the guest workspace: commands that leave accepted files unchanged do
 not pause the sandbox. Small, fast workspaces capture directly into an immutable
 Git result. A probe taking at least half a second or an accepted inventory of at
 least 20,000 entries selects filesystem capture for private checkouts provisioned
-as btrfs subvolumes. These checkpoints settle pending recovery while paused, take
-a snapshot, then resume while the captured files are scanned and reconciled into
-the managed worktree. The first capture after substantial workspace growth can
+as btrfs subvolumes. Clean command checkpoints take an atomic snapshot without
+pausing, then scan and reconcile the captured files into the managed worktree.
+Pending recovery retains its consistency pause. A container pause does not flush
+application buffers; neither capture path promises application-level transactions
+across background writes. The first capture after substantial workspace growth can
 still use the direct path; later probes see the larger accepted inventory.
 Other checkouts pause until their files are stored in an immutable Git
 result. A snapshot that omits nested subvolumes is discarded and captured again
@@ -340,8 +342,9 @@ After acceptance and runtime resume, the workspace lease transfers the snapshot
 to a unique retired path for asynchronous cleanup. The next command can run while
 cleanup continues. Before another snapshot, capture admission waits for cleanup
 and retries any interrupted removal, keeping the cleanup backlog bounded.
-Snapshot creation may wait for dirty data to flush, so the short paused operation
-does not guarantee a fixed maximum pause duration.
+Snapshot creation may wait for dirty data to flush. Clean command exports keep
+the guest running during that wait; captures requiring recovery still have no
+fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
@@ -355,7 +358,9 @@ waits remain in the existing `workspaceWait` field. These timings include work
 performed while guests run;
 they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
-through settlement. New shell calls and command preparation wait for an active
+through settlement. A conflict-free retry whose file edits are already applied
+accepts the remaining receipt without writing another recovery journal. Conflicted
+results retain their durable acceptance marker. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
@@ -371,8 +376,12 @@ Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
 immutable result owns the source bytes, staged-file materialization, Git patch
 preparation, and temporary-file cleanup run with the guest resumed. Imports pause
 again before confirming the target and applying changes; edits made during
-preparation cause a visible conflict and remain saved. Pending base refreshes
-retain their pause until both workspaces accept the transfer.
+preparation cause a visible conflict and remain saved. Base refreshes also prepare
+canonical merge trees, temporary checkouts, and patches with the guest running.
+The target is checked again under pause before application; concurrent guest
+writes are preserved as conflicts. Successful two-sided transfers resume before
+temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations
+still keeps the guest paused until both workspaces accept the transfer.
 
 GitHub PR preparation and base refresh download commit history and missing objects
 with the guest running. After those downloads finish, OpenClaw checks the guest's
@@ -398,6 +407,22 @@ each runtime's live authority is still checked immediately before pausing.
 runtime and cannot measure the earlier owner's interval; `durationScope=owner`
 covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
 removed runtime. Failed resumes retain custody and do not log a successful release.
+Workspace mutations above 1 MiB use the existing compressed worker transport when
+it reduces their size; persisted checkpoint and rollback-journal bytes do not change.
+The `agents/worktrees` warning `Local workspace oversized mutation` samples at most
+once per minute per process. It reports serialized and wire bytes, top-level field
+bytes, fingerprint blob count and bytes, and journal entry/directory counts and tree
+reference bytes. Field string sizes are UTF-8 bytes; fingerprint bytes count the
+base64 strings. Journal samples include 16-hex SHA-256 prefixes of the exact pack
+and JSON bytes. Correlation fields contain hashed workspace and durable plan IDs,
+an attempt UUID, 12-hex base/target Git commit IDs, target side, and lifecycle reason.
+Each reconciliation apply attempt logs one start and finish with that correlation;
+outcomes are `applied`, `replayed` (no file mutations), `conflict`, or `aborted`
+(the attempt threw; this does not prove rollback or absence of committed effects).
+The plan stays the same across retries and both sides of a base refresh; the attempt
+changes. A missing finish indicates an interrupted process. These logs contain no
+paths, raw workspace identifiers, or document contents. Prepared
+mutations report their already-compressed wire size and available publication fields.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner

@@ -279,6 +279,84 @@ suite.define(() => {
     },
   );
 
+  it.each(["session", "new-session"] as const)(
+    "uncovers the selected %s before the next drawer frame",
+    async (destination) => {
+      const page = await openPage({
+        nativeNav: false,
+        width: 400,
+        scenario: { methodResponses: { "sessions.list": chatSessionListResponse() } },
+      });
+      await navigationDrawerToggle(page).click();
+      const drawer = page.locator(".shell-nav");
+      await page.waitForFunction(() =>
+        document
+          .querySelector(".shell-nav")!
+          .getAnimations()
+          .every((animation) => animation.playState !== "running"),
+      );
+      await page.evaluate(() => {
+        Reflect.set(
+          window,
+          "selectedNavigationFrame",
+          new Promise((resolve) => {
+            document.addEventListener(
+              "click",
+              () => {
+                const shell = document.querySelector(".shell")!;
+                const observer = new MutationObserver(() => {
+                  if (shell.classList.contains("shell--nav-drawer-open")) {
+                    return;
+                  }
+                  observer.disconnect();
+                  requestAnimationFrame(() => {
+                    const navDrawer = document.querySelector<HTMLElement>(".shell-nav")!;
+                    const backdrop = document.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+                    resolve({
+                      open: navDrawer
+                        .closest(".shell")!
+                        .classList.contains("shell--nav-drawer-open"),
+                      inert: navDrawer.inert,
+                      drawerOpacity: getComputedStyle(navDrawer).opacity,
+                      backdropOpacity: getComputedStyle(backdrop).opacity,
+                      moving: [navDrawer, backdrop]
+                        .flatMap((element) => element.getAnimations())
+                        .some((animation) => animation.playState === "running"),
+                    });
+                  });
+                });
+                observer.observe(shell, { attributes: true, attributeFilter: ["class"] });
+              },
+              { once: true, capture: true },
+            );
+          }),
+        );
+      });
+      const target =
+        destination === "session"
+          ? drawer.locator(
+              '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+            )
+          : drawer.getByRole("link", { name: "New session", exact: true }).first();
+      await target.click();
+      expect(await page.evaluate(() => Reflect.get(window, "selectedNavigationFrame"))).toEqual({
+        open: false,
+        inert: true,
+        drawerOpacity: "0",
+        backdropOpacity: "0",
+        moving: false,
+      });
+      const composer = page.locator(
+        destination === "session"
+          ? ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea"
+          : ".new-session-page__message",
+      );
+      await composer.click();
+      await page.keyboard.type("Chosen destination is ready");
+      expect(await composer.inputValue()).toBe("Chosen destination is ready");
+    },
+  );
+
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
     const toggle = page.locator('[data-navigation-view="sessions"]');

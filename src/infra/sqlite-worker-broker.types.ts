@@ -46,6 +46,7 @@ export type Job = {
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
+  finishing?: true;
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;

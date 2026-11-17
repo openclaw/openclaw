@@ -6,7 +6,7 @@ import type { ClawHubCoordinate } from "./clawhub-source.js";
 type Initialization = NonNullable<SessionEntry["templateInitialization"]>;
 export type PreparedAgentChat = (() => Promise<void>) & {
   assertCurrent?: () => Promise<void>;
-  complete?: () => Promise<void>;
+  complete?: (templateSetup?: SessionEntry["templateSetup"]) => Promise<void>;
   checkpoint?: (initialization: Initialization) => Promise<void>;
 };
 export type AdmittedTemplateAgent = {
@@ -17,6 +17,8 @@ export type AdmittedTemplateAgent = {
   workspaceIdentity: string;
   configured?: Initialization["configured"];
   preparing?: Initialization["preparing"];
+  /** This request created the agent and chat, so it alone may remove them. */
+  createdByRequest?: true;
 };
 
 /** Adapt installer checkpoints to the existing pending-session owner, not a second ledger. */

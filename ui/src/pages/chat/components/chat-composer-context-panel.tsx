@@ -19,6 +19,9 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
 });
+const ChatSessionCost = lazy(() => import("./chat-context-breakdown.tsx"), {
+  export: "ChatSessionCost",
+});
 const ModelProviderIcon = lazy(() => import("../../../lib/reactive/provider-presentation.tsx"), {
   export: "ModelProviderIcon",
 });
@@ -231,6 +234,33 @@ export function ChatComposerContextPanel(
                 </Show>
               </dl>
             </div>
+            <Show when={showCosts() && props.gateway && props.session}>
+              <Loading>
+                <ChatSessionCost
+                  gateway={props.gateway!}
+                  session={props.session!}
+                  agentId={props.agentId}
+                  used={context().used}
+                  presented={props.open}
+                >
+                  {(cost) => (
+                    <div class="context-usage__latest" data-chat-session-cost="true">
+                      <span>{t("chat.composer.contextUsage.sessionTotal")}</span>
+                      <dl class="context-usage__stats">
+                        <div>
+                          <dt>{t("chat.composer.contextUsage.costShort")}</dt>
+                          <dd>
+                            {cost().unpriced
+                              ? t("chat.composer.contextUsage.unpriced")
+                              : (cost().partial ? "≥ " : "") + formatContextCost(cost().usd)}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
+                </ChatSessionCost>
+              </Loading>
+            </Show>
           </>
         )}
       </Show>

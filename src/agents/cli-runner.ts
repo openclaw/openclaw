@@ -1,6 +1,5 @@
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
-import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
-import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
+import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -11,6 +10,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasAcceptedSessionSpawn,
@@ -46,6 +46,7 @@ import {
   resolveCliAssistantStopReason,
   runCliAgentEndHook,
 } from "./cli-runner/cli-run-transcript.js";
+import { startCliContextEngineTurn } from "./cli-runner/context-engine-turn.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -54,10 +55,7 @@ import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
-import {
-  loadCliSessionContextEngineMessages,
-  loadCliSessionHistoryMessages,
-} from "./cli-runner/session-history.js";
+import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
 import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import { runWithCliTurn } from "./cli-runner/turn-admission.js";
@@ -67,7 +65,6 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
 import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
 import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
-import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
@@ -127,7 +124,7 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
-  let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -139,10 +136,9 @@ async function runCliAgentInternal(
     const target = params.sessionTarget;
     generation =
       target && !params.sessionManager && !params.isolatedCompletion
-        ? await prepareCronRootSessionGeneration(
+        ? await acquireCronRootTranscriptLease(
+            chatRef({ ...target, sessionKey: params.sessionKey ?? target.sessionKey }),
             {
-              ...target,
-              sessionKey: params.sessionKey ?? target.sessionKey,
               sessionId: params.sessionId,
               lifecycleRevision:
                 params.expectedLifecycleRevision ?? params.sessionEntry?.lifecycleRevision,
@@ -531,30 +527,7 @@ async function runPreparedCliAgentOwned(
         userTurnHandled,
       });
     }
-    await bootstrapHarnessContextEngine({
-      admittedRunContext: params.admittedRunContext,
-      preparedRunAdmission: params.preparedRunAdmission,
-      hadSessionFile: context.hadSessionFile,
-      contextEngine: context.contextEngine,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      sessionFile: params.sessionFile,
-      sessionManager: params.sessionManager,
-      transcriptReadFence: params.sessionManager
-        ? undefined
-        : params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-      config: context.contextEngineConfig,
-      contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
-        backendId: context.backendResolved.id,
-      }),
-      providerId: params.provider,
-      modelId: context.modelId,
-      warn: (message) => log.warn(message),
-    });
-    const contextEngineHistoryMessages = context.contextEngine
-      ? await loadCliSessionContextEngineMessages(params)
-      : [];
+    const contextEngineHistoryMessages = await startCliContextEngineTurn(context);
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
@@ -596,7 +569,7 @@ async function runPreparedCliAgentOwned(
                 },
               }
             : undefined;
-        const pricedUsage = buildCliAssistantTranscriptUsage({
+        const pricedUsage = await buildCliAssistantTranscriptUsage({
           runParams: params,
           modelId: context.modelId,
           agentDir: context.agentDir,

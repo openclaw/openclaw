@@ -74,6 +74,8 @@ it("verifies primary inference before creation without using its output as the g
   activeConfig();
   vi.mocked(verifySetupInferenceConfig).mockResolvedValue(verified);
   const options = invocation();
+  let authorityCurrent = true;
+  options.hasCurrentClientAuthority = () => authorityCurrent;
   const prepared = await prepareAgentOnboarding(options, "bot-stable", {
     name: "New agent",
     onboarding: true,
@@ -87,6 +89,9 @@ it("verifies primary inference before creation without using its output as the g
   expect(cfg.agents?.entries).not.toHaveProperty("bot-stable");
   options.context.getRuntimeConfig = () => ({ ...cfg });
   expect(prepared.assertCurrent).toThrow("Gateway settings changed");
+  expect(prepared.assertAuthorityCurrent).not.toThrow();
+  authorityCurrent = false;
+  expect(prepared.assertAuthorityCurrent).toThrow("Gateway requester authority changed");
 });
 it("rejects failed inference and settings drift before persistence", async () => {
   activeConfig();
@@ -235,6 +240,48 @@ it("starts one normal Template personality greeting without the four-role questi
     timeoutMs: 120_000,
   });
   expect(release).toHaveBeenCalledOnce();
+});
+
+it("runs a chat-based Template opening hidden, under the agent's own tool policy", async () => {
+  sendInternalChat.mockReset().mockImplementation(async (request: GatewayRequestHandlerOptions) => {
+    request.respond(true, { status: "started" });
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  const [request] = sendInternalChat.mock.calls[0]!;
+  expect(request.params.message).toBe("Fixture setup prompt");
+  expect(request.params.systemInputProvenance).toEqual({
+    kind: "internal_system",
+    sourceTool: "template_add_setup",
+  });
+  expect(request.params.idempotencyKey).toMatch(/^agents.create:scout:template-setup:/);
+  expect(waitForAgentJob).toHaveBeenLastCalledWith({
+    runId: request.params.idempotencyKey,
+    source: "chat",
+    timeoutMs: 172_860_000,
+  });
+  const internal = sendInternalChat.mock.calls[0]![2];
+  // No runtime allowlist: an empty one would remove automations, plugins and message.
+  expect(internal).toEqual({
+    transcript: { display: false },
+    deferWorkspaceBootstrap: true,
+    templateSetup: true,
+  });
+  await startAgentOnboardingConversation(
+    invocation(),
+    "scout",
+    "agent:scout:home",
+    "template",
+    "Fixture setup prompt",
+  );
+  expect(sendInternalChat.mock.calls[1]![0].params.idempotencyKey).not.toBe(
+    request.params.idempotencyKey,
+  );
 });
 
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {

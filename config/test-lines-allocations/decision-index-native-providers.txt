@@ -1,3 +1,0 @@
-# Registered native HTTP contracts, scalar JSON, picker projection and credential isolation.
-# Exact 308 source test lines; inherited main debt is covered by its owning allocations.
-308

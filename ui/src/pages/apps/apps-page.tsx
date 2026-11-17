@@ -2,7 +2,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -114,7 +113,6 @@ export function AppsPage(props: { appSearch?: string }) {
           <>
             <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
             <SettingsWorkspace>
-              <McpAppCatalog surface="global" />
               <Apps
                 onNavigate={(route) => context.navigate(route)}
                 macGatewayLaunchUrl={macGatewayLaunchUrl()}

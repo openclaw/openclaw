@@ -27,7 +27,7 @@ const packageContract = "src/plugins/contracts/plugin-sdk-package-contract-guard
 const contractsConfig = "test/vitest/vitest.contracts-plugin.config.ts";
 const channelsConfig = "test/vitest/vitest.channels.config.ts";
 const gatewayMethodsConfig = "test/vitest/vitest.gateway-methods.config.ts";
-const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
+const gatewaySubscriptions = "src/gateway/server-runtime-config.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
@@ -72,7 +72,7 @@ it.for([
     agentsCoreConfig,
     [codeModeWorker],
     false,
-    ["src/agents/code-mode.test.ts"],
+    ["src/agents/code-mode.integrated.test.ts"],
   ],
   ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
   ["Git Bash basename filter", unitFastConfig, [path.basename(windowsGitBash, ".test.ts")], true],
@@ -285,7 +285,13 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
           ...fixturePreloadEnv(preload, "node"),
           ...(route === "built-source"
-            ? { CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192", RUNNER_TEMP: directory }
+            ? {
+                // This CI runner must not reuse a local cache slot before cleanup is observed.
+                CI: "1",
+                OPENCLAW_VITEST_WORKER_CACHE: undefined,
+                CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192",
+                RUNNER_TEMP: directory,
+              }
             : {}),
           ...(route === "batch"
             ? {

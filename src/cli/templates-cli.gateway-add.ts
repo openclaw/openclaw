@@ -8,8 +8,12 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
-import { isCanonicalClawHubPackageName, isExactSemVer } from "../templates/schema-portability.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
+import {
+  clawHubTemplateRef,
+  isCanonicalClawHubPackageName,
+  isExactSemVer,
+} from "../templates/schema-portability.js";
 import type { OwnerRequest } from "./local-state-owner.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { promptYesNo } from "./prompt.js";
@@ -36,15 +40,23 @@ export async function runTemplatesAddThroughOwner(
     query: sourcePath,
     limit: 100,
   });
-  const matches = catalog.entries.filter((entry) => entry.packageName === sourcePath);
-  const version = matches.length === 1 ? matches[0]?.latestVersion : undefined;
-  if (!version || !isExactSemVer(version)) {
+  // An exact package name wins; `@publisher/slug` also names that publisher's unscoped package.
+  const exact = catalog.entries.filter((entry) => entry.packageName === sourcePath);
+  const matches =
+    exact.length > 0
+      ? exact
+      : catalog.entries.filter(
+          (entry) => clawHubTemplateRef(entry.packageName, entry.ownerHandle) === sourcePath,
+        );
+  const match = matches.length === 1 ? matches[0] : undefined;
+  const version = match?.latestVersion;
+  if (!match || !version || !isExactSemVer(version)) {
     throw new Error(
       "ClawHub did not identify one exact published Template version. Search the catalog and retry.",
     );
   }
   const input = {
-    source: { packageName: sourcePath, version },
+    source: { packageName: match.packageName, version },
     ...(opts.agentId !== undefined ? { agentId: opts.agentId } : {}),
   };
   const plan = await requestOwner<TemplateLifecyclePlanResult>("templates.add.plan", input);
@@ -166,10 +178,13 @@ export async function runTemplatesAddThroughOwner(
   if (opts.json) {
     writeRuntimeJson(runtime, result);
   } else {
+    const agentId = sanitizeTerminalText(result.agentId);
     runtime.log(
       result.status === "complete"
-        ? `Added agent: ${sanitizeTerminalText(result.agentId)}`
-        : `Template Add partial for agent ${sanitizeTerminalText(result.agentId)}. Inspect reported Gateway state before retrying.`,
+        ? `Added agent: ${agentId}`
+        : result.initializationPending
+          ? `Template Add partial for agent ${agentId}. Rerun with --agent-id ${agentId} to continue its setup.`
+          : `Template Add partial for agent ${agentId}. Inspect reported Gateway state before retrying.`,
     );
     if (result.error) {
       runtime.error(redactSensitiveText(sanitizeTerminalText(result.error.message)));

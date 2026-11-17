@@ -1,2 +1,0 @@
-# Packaging regressions: locked Sparkle artifact and independent executable dependency closure.
-141

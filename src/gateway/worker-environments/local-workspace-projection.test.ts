@@ -212,7 +212,7 @@ it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
 
-it("attributes sandbox projection custody and joined preparation waits", () =>
+it("attributes cold sandbox preparation, projection custody, and joined waits", () =>
   proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
@@ -412,7 +412,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const capture = vi.spyOn(manifests, "captureInitialLocalWorkspaceManifest");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -609,7 +609,7 @@ it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
 it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();

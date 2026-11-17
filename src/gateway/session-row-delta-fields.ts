@@ -6,7 +6,14 @@ export type SessionRowDeltaFields = {
   readonly fieldCount: number;
 };
 
-type SessionRowDelta = { set: Record<string, unknown>; remove: string[] };
+type SessionRowDelta = {
+  patch: { set: Record<string, unknown>; remove: string[] };
+  encoding?: {
+    suffix: string;
+    utf8Bytes: number;
+    headers: Map<string, string>;
+  };
+};
 
 const preparedRows = new WeakMap<object, SessionRowDeltaFields>();
 const publicationSamples = new WeakMap<object, WeakRef<Record<string, unknown>>>();
@@ -103,7 +110,7 @@ export function prepareSessionRowDeltaFields(
   return prepared;
 }
 
-/** A publication owns patches; identical recipient baselines share comparison work. */
+/** A publication owns patch fields and encoding; identical baselines share both. */
 export function createSessionRowDeltaDiffer() {
   const pairs = new WeakMap<
     SessionRowDeltaFields,
@@ -136,7 +143,7 @@ export function createSessionRowDeltaDiffer() {
         remove.push(field);
       }
     }
-    const delta = { set, remove };
+    const delta: SessionRowDelta = { patch: { set, remove } };
     if (!next) {
       next = new WeakMap();
       pairs.set(previous, next);

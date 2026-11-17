@@ -139,6 +139,8 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Describe prospective GitHub actions before policy filtering; never executable. */
   githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
@@ -153,6 +155,12 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /**
+   * Host-resolved lifetime of this turn's tool policy, supplied only by host tool construction.
+   * "conversation" means the turn adds no narrowing the session would not re-derive on its next
+   * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
+   */
+  toolPolicyScope?: "conversation" | "turn";
 };
 
 export type PluginCodingToolsOptions = Omit<

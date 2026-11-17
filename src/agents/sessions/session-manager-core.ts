@@ -9,7 +9,7 @@ import {
   SessionEntryNavigation,
 } from "../../config/sessions/session-entry-navigation.js";
 import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -127,6 +127,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
+  /** The source snapshot's version, including writes beyond a selected admission prefix. */
+  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
+    return this.transcriptVersion;
+  }
+
   /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
@@ -178,7 +183,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       manager: this,
       retarget:
         !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
-      lane: preserveCwd ? targetDiscoveryLane : undefined,
+      lane: preserveCwd ? sessionStoreLane : undefined,
     });
     if (cohort && !hydration.readCohort) {
       return false;

@@ -365,8 +365,19 @@ it.each(["native", "portable-copy", "fallback-first", "fallback-second"] as cons
       : f.link());
     expect(counts).toEqual(
       portable
-        ? { linked: 0, copied: 3 + nestedFiles.length }
-        : { linked: fallback ? 1 : mode === "native" ? 3 : 2, copied: fallback ? 2 : 1 },
+        ? {
+            linked: 0,
+            copied: 3 + nestedFiles.length,
+            linkFallback: { count: 2 + nestedFiles.length, code: "EMLINK" },
+          }
+        : {
+            linked: fallback ? 1 : mode === "native" ? 3 : 2,
+            copied: fallback ? 2 : 1,
+            // The refusal that forced the copy must reach the update diagnostics.
+            linkFallback: fallback
+              ? { count: 1, code: mode === "fallback-first" ? "EXDEV" : "EMLINK" }
+              : undefined,
+          },
     );
     const retainedWorker = f.projected(fallback ?? f.worker);
     const retainedStat = stat(retainedWorker, { bigint: true });

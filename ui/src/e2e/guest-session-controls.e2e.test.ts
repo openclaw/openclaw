@@ -252,7 +252,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
         await page.keyboard.press("Escape");
         await model.click();
-        const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        const contextWindow = pane.locator(".chat-controls__context-trigger");
         await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
         await page.keyboard.press("Escape");

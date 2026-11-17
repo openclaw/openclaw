@@ -40,6 +40,26 @@ export async function writeManagedGitHubProfileFiles(
   notifyManagedGitHubProfileChanged({ profileDir, kind: "updated" });
 }
 
+/** Refresh the stable external profile through fs-safe's pinned atomic publication. */
+export async function refreshManagedGitHubProfileFiles(
+  profileDir: string,
+  identity: { login: string; token: string },
+  options: { assertCurrent: () => void },
+): Promise<void> {
+  const targetStat = await fs.lstat(path.join(profileDir, "hosts.yml"));
+  if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
+    throw new Error("The configured GitHub identity profile is unavailable.");
+  }
+  const profile = await fsRoot(profileDir);
+  await profile.write("hosts.yml", managedGitHubHosts(identity), {
+    mode: 0o600,
+    mkdir: false,
+    durable: false,
+    mutationSymlinks: "reject",
+    assertBeforeMutation: options.assertCurrent,
+  });
+}
+
 export async function isPrivateManagedGitHubProfile(profileDir: string): Promise<boolean> {
   try {
     const [profile, hosts] = await Promise.all([

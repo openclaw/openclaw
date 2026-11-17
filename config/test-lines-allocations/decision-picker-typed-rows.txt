@@ -1,2 +1,0 @@
-15
-# Regressions for typed-only (Decision) rows staying out of chat pickers: selection-policy placeholder and visible-catalog owner.

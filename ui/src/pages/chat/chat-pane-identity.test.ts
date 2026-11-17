@@ -192,56 +192,63 @@ describe("chat pane assistant identity snapshots", () => {
     expect(retireModelOverride).toHaveBeenCalledWith("agent:work:main");
   });
 
-  it("rebinds approval delivery when the selected global agent changes", async () => {
-    const request = vi.fn(
-      async (
-        method: string,
-        params?: { key?: string; agentId?: string; initialHistory?: unknown },
-      ) => {
-        if (method === "sessions.messages.subscribe") {
-          return {
-            key: params?.key,
-            agentId: params?.agentId,
-            ...(params?.initialHistory
-              ? { initialHistory: { ok: true, payload: { messages: [] } } }
-              : {}),
-          };
-        }
-        return method === "chat.history" || method === "chat.startup" ? { messages: [] } : {};
-      },
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = createLiveSessionContext(client);
-    Object.assign(context.agents, { ensureList: vi.fn(async () => null) });
-    const { pane } = createTestChatPane({ client, sessions: context.sessions });
-    pane.context = context;
-    pane.connectedClient = null;
-    pane.sessionKey = "global";
-    pane.render = () => ({
-      layout: null,
-      capabilityDialogs: undefined,
-      providerReviewSource: { state: pane.state, canWrite: false },
-    });
-
-    try {
-      pane.connectedCallback();
-      await vi.waitFor(() =>
-        expect(pane.state.chatSessionMessageSubscription?.agentId).toBe("main"),
+  it.each([undefined, "research"])(
+    "rebinds global approval delivery from pane agent %s when selection changes",
+    async (paneAgentId) => {
+      const request = vi.fn(
+        async (
+          method: string,
+          params?: { key?: string; agentId?: string; initialHistory?: unknown },
+        ) => {
+          if (method === "sessions.messages.subscribe") {
+            return {
+              key: params?.key,
+              agentId: params?.agentId,
+              ...(params?.initialHistory
+                ? { initialHistory: { ok: true, payload: { messages: [] } } }
+                : {}),
+            };
+          }
+          if (method === "agent.identity.get") {
+            return { agentId: params?.agentId, name: "Assistant" };
+          }
+          return method === "chat.history" || method === "chat.startup" ? { messages: [] } : {};
+        },
       );
-      pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
-      context.agentSelection.set("research");
-      await vi.waitFor(() => {
-        expect(pane.state.chatSessionMessageSubscription?.agentId).toBe("research");
-        expect(request).toHaveBeenCalledWith(
-          "sessions.messages.subscribe",
-          expect.objectContaining({ key: "global", agentId: "research", includeApprovals: true }),
-          expect.anything(),
-        );
+      const client = { request } as unknown as GatewayBrowserClient;
+      const context = createLiveSessionContext(client);
+      Object.assign(context.agents, { ensureList: vi.fn(async () => null) });
+      const { pane } = createTestChatPane({ client, sessions: context.sessions });
+      pane.context = context;
+      pane.connectedClient = null;
+      pane.sessionKey = "global";
+      pane.agentId = paneAgentId;
+      pane.render = () => ({
+        layout: null,
+        capabilityDialogs: undefined,
+        providerReviewSource: { state: pane.state, canWrite: false },
       });
-    } finally {
-      pane.disconnectedCallback();
-    }
-  });
+
+      try {
+        pane.connectedCallback();
+        await vi.waitFor(() =>
+          expect(pane.state.chatSessionMessageSubscription?.agentId).toBe(paneAgentId ?? "main"),
+        );
+        pane.state.loadAssistantIdentity = vi.fn(async () => undefined);
+        context.agentSelection.set("research");
+        await vi.waitFor(() => {
+          expect(pane.state.chatSessionMessageSubscription?.agentId).toBe("research");
+          expect(request).toHaveBeenCalledWith(
+            "sessions.messages.subscribe",
+            expect.objectContaining({ key: "global", agentId: "research", includeApprovals: true }),
+            expect.anything(),
+          );
+        });
+      } finally {
+        pane.disconnectedCallback();
+      }
+    },
+  );
 
   it.each([
     { replace: false, bootstrapAgentId: "main", expected: "Session Agent" },

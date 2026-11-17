@@ -157,3 +157,25 @@ it("counts symbols toward the field cap before reading a late credential discrim
   expect(project(value)).toEqual({ value: "<redacted>" });
   expect(descriptorKeys).toEqual(["value"]);
 });
+
+it("does not read credential discriminators when only media projection is enabled", () => {
+  const input = { name: "password", value: "kept", type: "image", data: "QUJDRA==" };
+  const hasOwn = vi.spyOn(Object, "hasOwn");
+  let projected: unknown;
+  let credentialReads: number;
+  try {
+    projected = projectPrepared(input, { redactCredentials: false });
+    credentialReads = hasOwn.mock.calls.filter(
+      ([value, key]) => value === input && (key === "name" || key === "key"),
+    ).length;
+  } finally {
+    hasOwn.mockRestore();
+  }
+  expect(projected).toEqual({
+    name: "password",
+    value: "kept",
+    type: "image",
+    data: { redacted: "<redacted>", bytes: 4 },
+  });
+  expect(credentialReads).toBe(0);
+});

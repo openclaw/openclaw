@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
+import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
   initializeReplacementTranscript,
   loadAgentTranscriptOperations,
@@ -202,7 +203,10 @@ async function loadAgentMaintenanceFinalizationOperations() {
 
 async function loadAgentMessageCutOperations() {
   const kernel = await import("../config/sessions/session-message-cut.worker.js");
-  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+  return {
+    "session.messageCut.commit": kernel.commitSessionMessageCut,
+    "session.messageCut.preflight": kernel.preflightSessionMessageCut,
+  } satisfies Handlers;
 }
 
 async function loadAgentNativeBindingOperations() {
@@ -515,6 +519,7 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
+    "session.messageCut.preflight": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "trajectory.retention.begin": loadAgentTrajectoryOperations,
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
@@ -545,6 +550,10 @@ export function createAgentWorkerOperationLoaders(
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
+    "toolUsage.prune": loadAgentToolUsageOperations,
+    "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.reset": loadAgentToolUsageOperations,
+    "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

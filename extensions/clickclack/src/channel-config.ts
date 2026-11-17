@@ -5,6 +5,7 @@ import {
   inspectClickClackAccount,
   listClickClackAccountIds,
   resolveClickClackAccount,
+  resolveClickClackAccountAsync,
   resolveClickClackAccountConfig,
   resolveDefaultClickClackAccountId,
 } from "./accounts.js";
@@ -17,7 +18,10 @@ export const clickClackConfigAdapter = {
   listAccountIds: (cfg) => listClickClackAccountIds(cfg as CoreConfig),
   resolveAccount: (cfg, accountId) =>
     resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
-  // SAFETY: ClickClack configuration has passed the registered channel schema.
+  resolveAccountAsync: (cfg, accountId) =>
+    // SAFETY: The registered channel schema validates ClickClack account configuration.
+    resolveClickClackAccountAsync({ cfg: cfg as CoreConfig, accountId }),
+  // SAFETY: The registered channel schema validates ClickClack account configuration.
   inspectAccount: (cfg, accountId) => inspectClickClackAccount(cfg as CoreConfig, accountId),
   defaultAccountId: (cfg) => resolveDefaultClickClackAccountId(cfg as CoreConfig),
   isConfigured: (account) => account.configured,

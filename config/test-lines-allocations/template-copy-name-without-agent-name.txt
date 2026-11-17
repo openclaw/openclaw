@@ -1,2 +1,0 @@
-# Regression proof that copies of a Template without agent.name never get the name "undefined N".
-15

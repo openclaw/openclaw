@@ -4,7 +4,7 @@ import { en } from "./en.ts";
 const enDashboards = {
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
-    emptyDescription: "Dashboards created in your sessions appear here.",
+    emptyDescription: "Ask your agent to make a dashboard in any conversation.",
     loadError: "Couldn’t load dashboards. Try again. {error}",
     openFocusMode: "Open dashboard in focus mode",
     running: "Updating now",

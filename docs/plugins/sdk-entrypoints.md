@@ -354,6 +354,15 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from
@@ -517,24 +526,31 @@ updated Gateway also upgraded an independently installed plugin.
 
 ## Prepared Decision HTTP runtime
 
-`openclaw/plugin-sdk/decisions-http-runtime` supplies `executeDecisionHttp(execution)`
-for provider-owned JSON Decision protocols. Import it lazily. Supply prepared
-provider auth, headers, request overrides, base URL, relative endpoint path,
-serialized body, signal, monotonic deadline, live admission assertion, and a
-provider-owned response decoder returning a Decision V2 provider outcome.
-It owns guarded HTTP dispatch, bounded JSON reads, credential-reflection rejection,
-cancellation, release, and standard HTTP failure classification. It makes one
-request, never discovers credentials, and never retries paid inference. The
-provider owns request eligibility, native semantics, retention controls, and
-validation of decoded results. `evaluateDecisionHttp(context, route)` projects the
-host-prepared V2 context into those execution inputs without importing a broad
-host-runtime facade in the provider. OpenAI-compatible and System One adapters share
-this executor without sharing their wire codecs.
+`openclaw/plugin-sdk/decisions-http-runtime` is the one HTTP executor for
+provider-owned JSON Decision protocols. Import it lazily.
+`evaluateDecisionHttp(context, route)` projects the host-prepared V2 context;
+`executeDecisionHttp(execution)` takes the same facts explicitly for other
+contracts. The provider supplies only its route: base URL, relative endpoint
+path, serialized body (omit it for a GET), and a decoder for the bounded JSON
+payload. Optional route fields cover real provider differences: `authHeaders`
+replaces the default `Authorization: Bearer` header, `statusReason` maps a
+documented provider status, and `maxResponseBytes` changes the 1 MiB read bound.
+
+The executor owns the deadline and timeout signal, one admission check when the
+request starts, guarded fetch with the trusted env-proxy mode, no redirects,
+status classification (401/403 authentication, 429 rate-limited with
+Retry-After, 400/413/422 unsupported input, otherwise transport), the bounded
+read, credential-reflection rejection, and release. Cancellation and thrown
+admission errors pass through. A decoder that throws returns an invalid
+response. It makes one request, never discovers credentials, and never retries.
+A provider with a queue wait or retry calls it again, which checks admission
+again. The provider owns request eligibility, native semantics, retention
+controls, and validation of decoded results.
 
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
-Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+Decisions codec used by OpenAI, Celeris, Nace, and ClawRouter. Import it
 only from a lazy decision runtime, not a plugin's eager entrypoint.
 
 `evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
@@ -545,13 +561,6 @@ The helper uses the prepared credential, headers, proxy/TLS policy, abort signal
 deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
-
-`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
-explicit fields: provider, model ID, base URL, headers, auth, request overrides,
-signal, deadline, admission assertion, and optional reasoning. Use it when a
-provider has already projected its execution inputs. Pass the full prepared
-request overrides, including auth metadata used to reject credential reflection.
-The context-based helper remains supported and delegates to this executor.
 
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed

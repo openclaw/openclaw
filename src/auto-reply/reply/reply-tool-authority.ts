@@ -455,10 +455,19 @@ export function prepareReplyToolAuthority(
       assertEntry?.release();
       throw error;
     });
+    try {
+      await capturedReadPlan?.revalidate();
+    } catch (error) {
+      prepared.release();
+      assertEntry?.release();
+      throw error;
+    }
     releases.add(prepared.release);
     return {
       read: prepared.read,
       evaluate(nextInput: ReplyToolAuthorityInput, nextRoute: ReplyToolAuthorityRoute | undefined) {
+        assertOpen();
+        capturedReadPlan?.assertLegacyCurrent();
         selectedInput = nextInput;
         selectedRoute = nextRoute;
         return prepared.read();
@@ -689,9 +698,15 @@ export function prepareReplyToolAuthority(
           installCurrent(currentReads);
           policy.read();
         };
+        const assertLegacyCurrent = () => {
+          assertCallerCurrent();
+          plan?.assertLegacyCurrent();
+          policy.read();
+        };
         const prepared: PreparedQuestionCallerRead = {
           reads,
           assertPrepared,
+          assertLegacyCurrent,
           prepareCurrent: () => withSessionEntriesFromStoresInWorker(reads, assertPrepared),
           retainCurrent() {
             policy.read();
@@ -700,7 +715,7 @@ export function prepareReplyToolAuthority(
         };
         recordPreparedToolAuthorityRead({
           ...prepared,
-          assertLegacyCurrent: policy.read,
+          assertLegacyCurrent,
         });
         return prepared;
       },

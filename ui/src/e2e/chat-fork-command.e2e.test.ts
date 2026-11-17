@@ -32,7 +32,7 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
     const input = composer(page);
     await input.fill("/fo");
-    const suggestion = page.locator(".slash-menu-item", { hasText: "/fork" });
+    const suggestion = page.getByRole("option", { name: /^Fork session\b/ });
     await suggestion.waitFor();
     const frame = await takeControlUiScreenshotFrame(page, input, [input, suggestion], {
       animations: "disabled",

@@ -244,7 +244,7 @@ export function auditMacRuntimePortability(runtime, executable) {
   return auditMacPortability(runtime, executable);
 }
 
-export function auditMacAppPortability(app) {
+function auditMacAppPortability(app) {
   const root = fs.realpathSync(app);
   return auditMacPortability(root, path.join(root, "Contents/MacOS/OpenClaw"), true);
 }

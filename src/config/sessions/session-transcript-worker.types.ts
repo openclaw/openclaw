@@ -66,6 +66,11 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
+  SessionPreparedCompactionInput,
+  SessionPreparedCompactionValue,
+  SessionPreparedCompactionWireValue,
+} from "./session-compaction-prepared.types.js";
+import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
@@ -116,13 +121,14 @@ import type {
   SessionStoreProjectionWorkerInput,
   SessionStoreProjectionWorkerResult,
 } from "./session-store-projection.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
-  SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type {
   SessionTranscriptHydrationWorkerInput,
@@ -174,6 +180,12 @@ import type {
   SessionGoalOperationReceiptWorkerInput,
   SessionPendingInputReceiptsWorkerInput,
 } from "./session-transcript-worker-receipts.types.js";
+import type {
+  AgentToolUsageReadInput,
+  AgentToolUsageImportReadInput,
+  AgentToolUsageStatus,
+  AgentToolUsageImportScan,
+} from "./tool-usage.types.js";
 
 export type {
   PreparedSessionTranscriptHydration,
@@ -274,6 +286,8 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | AgentToolUsageReadInput
+  | AgentToolUsageImportReadInput
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput
@@ -297,6 +311,7 @@ export type SessionHistoryWorkerInput =
   | SessionColdMetadataWorkerInput
   | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
+  | SessionPreparedCompactionInput
   | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
@@ -354,17 +369,22 @@ export type SessionTranscriptWorkerInput =
 /** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
 export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
   validation?: OpenClawAgentDatabaseReadValidation;
+  readCustody?: readonly SessionStoreReadCustody[];
   projectionReceipt?: SessionTranscriptProjectionReceipt;
 };
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+/** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
+export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
+
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "compaction-preparation": SessionPreparedCompactionWireValue;
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -495,6 +515,8 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-identity-evidence";
       evidence: SessionIdentityEvidenceResult[];
     };
+    "agent-tool-usage": { kind: "agent-tool-usage"; status: AgentToolUsageStatus };
+    "agent-tool-usage-import": { kind: "agent-tool-usage-import"; scan: AgentToolUsageImportScan };
     "voice-sessions": { kind: "voice-sessions"; matches: VoiceSessionMatch[] };
     "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
     "context-messages": import("./session-history-read.types.js").SessionTranscriptContextSnapshot;
@@ -542,6 +564,12 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    readPreparedCompaction: (
+      input: Omit<SessionPreparedCompactionInput, "kind" | "database">,
+      signal?: AbortSignal,
+    ) => Promise<SessionPreparedCompactionValue>;
+    readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
+    readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;
     readTrajectoryRetention: (

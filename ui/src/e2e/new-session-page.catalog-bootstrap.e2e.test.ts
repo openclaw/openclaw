@@ -144,9 +144,7 @@ suite.define(() => {
         await trigger.click();
         await reveal(page);
         expect((await gateway.getRequests("models.list")).length - requestsBeforeOpen).toBe(0);
-        expect(await page.locator("[data-chat-model-refresh]").textContent()).toContain(
-          "Refreshing models for Fixture…",
-        );
+        expect(await page.locator("[data-chat-model-refresh]").count()).toBe(0);
         expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
 
         await gateway.resolveDeferred("models.list", { models: [older] });

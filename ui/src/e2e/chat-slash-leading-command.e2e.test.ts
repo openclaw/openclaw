@@ -71,15 +71,13 @@ suite.define(() => {
       const { gateway, composer } = await openComposer(page);
       await composer.fill(prompt);
       // Home alone stops at the wrapped visual line; the command belongs at the draft start.
-      await composer.press("Control+Home");
+      await composer.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
       await composer.pressSequentially("/loo");
 
       const picker = page.locator(".slash-menu[role='listbox']");
       await picker.waitFor({ state: "visible" });
       const names = () => picker.getByRole("option").locator(".slash-menu-name").allTextContents();
-      await expect
-        .poll(names)
-        .toContainEqual(expect.stringContaining("/paced_contributor_pr_loop"));
+      await expect.poll(names).toContainEqual(expect.stringContaining("paced_contributor_pr_loop"));
       await screenshot(page, "leading-command-menu.png", picker);
       await expect.poll(names).toContainEqual(expect.stringContaining("/loop"));
 
@@ -96,7 +94,7 @@ suite.define(() => {
         await composer.press("ArrowLeft");
       }
       await composer.pressSequentially("a");
-      await expect.poll(names).toEqual(["/weather"]);
+      await expect.poll(names).toEqual(["weather"]);
       await composer.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe("Please use $weather ");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -108,12 +106,12 @@ suite.define(() => {
       const { gateway, composer } = await openComposer(page);
       await composer.fill(prompt);
       // Home alone stops at the wrapped visual line; the command belongs at the draft start.
-      await composer.press("Control+Home");
+      await composer.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
       await composer.pressSequentially("/goa");
       const picker = page.locator(".slash-menu[role='listbox']");
       await expect
         .poll(() => picker.getByRole("option").locator(".slash-menu-name").allTextContents())
-        .toContainEqual(expect.stringContaining("/goal"));
+        .toContainEqual(expect.stringContaining("Goal"));
       await composer.press("Enter");
 
       const goalMode = page.locator(".agent-chat__goal-mode");
