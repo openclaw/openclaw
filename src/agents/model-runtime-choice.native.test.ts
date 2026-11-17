@@ -13,7 +13,7 @@ import {
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";

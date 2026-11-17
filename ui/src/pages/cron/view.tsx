@@ -1,5 +1,6 @@
 import { lazy, Loading, Errored, onSettled } from "solid-js";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ListView } from "./view-list.tsx";
 import type { CronProps } from "./view-types.ts";
@@ -81,7 +82,7 @@ export function CronView(props: CronProps) {
         <Errored
           fallback={(error, reset) => (
             <div role="alert">
-              {String(error())}
+              {formatUiError(error())}
               <button class="btn" onClick={reset}>
                 {t("common.retry")}
               </button>

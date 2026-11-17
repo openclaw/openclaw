@@ -1,15 +1,14 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type * as runtimeModule from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { registerNodesCli } from "./register.js";
+import type { callNodesGatewayCli } from "./rpc.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCliNodeId: vi.fn(async () => "node-1"),
-  callNodesGatewayCli: vi.fn(async () => ({ payload: { lat: 48.2, lon: 16.3 } })),
-}));
-
-vi.mock("./cli-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./cli-utils.js")>()),
-  runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
+  callNodesGatewayCli: vi.fn<typeof callNodesGatewayCli>(async () => ({ payload: {} })),
 }));
 
 vi.mock("./rpc.js", async (importOriginal) => ({
@@ -18,61 +17,58 @@ vi.mock("./rpc.js", async (importOriginal) => ({
   callNodesGatewayCli: mocks.callNodesGatewayCli,
 }));
 
-vi.mock("../../gateway/call.js", () => ({
-  randomIdempotencyKey: () => "location-test-key",
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof runtimeModule>()),
+  defaultRuntime: { writeJson: vi.fn(), log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    writeJson: vi.fn(),
-    log: vi.fn(),
-  },
-}));
-
-async function getLocation(...options: string[]) {
+async function runNodes(command: string[], ...options: string[]) {
   const program = new Command();
   await registerNodesCli(program, ["node", "openclaw", "nodes", "location"]);
   program.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
-  return program.parseAsync(["nodes", "location", "get", "--node", "node-1", ...options], {
+  return program.parseAsync(["nodes", ...command, "--node", "node-1", ...options], {
     from: "user",
   });
 }
 
-describe("nodes location get validation", () => {
+describe("nodes camera and location reads", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("rejects unsupported accuracy values before resolving or invoking a node", async () => {
-    await expect(getLocation("--accuracy", "approximate")).rejects.toThrow(
-      "invalid --accuracy (use coarse|balanced|precise)",
-    );
-
+  it.each([
+    ["--accuracy", "approximate", "invalid --accuracy (use coarse|balanced|precise)"],
+    ["--location-timeout", "", "--location-timeout must be a positive integer"],
+    ["--location-timeout", " \t ", "--location-timeout must be a positive integer"],
+  ])("rejects invalid %s %j before node lookup", async (option, value, error) => {
+    await runNodes(["location", "get"], option, value);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(mocks.resolveCliNodeId).not.toHaveBeenCalled();
     expect(mocks.callNodesGatewayCli).not.toHaveBeenCalled();
   });
 
   it("normalizes and forwards supported accuracy values", async () => {
-    await getLocation("--accuracy", "PRECISE");
-
-    expect(mocks.callNodesGatewayCli).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({
-        params: expect.objectContaining({ desiredAccuracy: "precise" }),
-      }),
-    );
+    await runNodes(["location", "get"], "--accuracy", "PRECISE");
+    expect(mocks.callNodesGatewayCli.mock.calls[0]?.[2]).toMatchObject({
+      params: { desiredAccuracy: "precise" },
+    });
   });
 
-  it.each(["", " \t "])(
-    "rejects explicit blank --location-timeout %j before resolving or invoking a node",
-    async (locationTimeout) => {
-      await expect(getLocation("--location-timeout", locationTimeout)).rejects.toThrow(
-        "--location-timeout must be a positive integer",
-      );
-
-      expect(mocks.resolveCliNodeId).not.toHaveBeenCalled();
-      expect(mocks.callNodesGatewayCli).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ["camera", "list"],
+    ["location", "get"],
+  ])("cancels %s %s quietly", async (...command) => {
+    const work = new AsyncWorkScope();
+    mocks.callNodesGatewayCli.mockImplementationOnce(async (_method, _opts, _params, callOpts) => {
+      work.beginClose();
+      callOpts?.signal?.throwIfAborted();
+      return { payload: {} };
+    });
+    await work.run(() => runNodes(command));
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -23,13 +24,13 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -160,6 +161,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
         dispose() {},
       }));
+      using filesystem = observeMainThreadFs();
       let result: Awaited<typeof completed>;
       try {
         await patchSessionEntryCore(active, () => ({ label: "updated" }), {
@@ -198,7 +200,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         expect(scenario === "warm-cap" ? result.capped : result.pruned).toBe(1);
         expect(loadSessionEntry(stale)).toBeUndefined();
         expect(result.archivedTranscripts).toHaveLength(1);
-        const archived = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
+        const archived = readSessionArchiveText(result.archivedTranscripts[0]!.archivedPath);
         expect(archived.trim()).toBe(JSON.stringify(staleEvent));
         const archiveStarts = spawned.mock.calls.filter(([, options]) => {
           const data: unknown = options?.workerData;
@@ -212,6 +214,23 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (remove) {
         expect(loadSessionEntry(stale)).toBeUndefined();
       }
+      // Attribute the first source owner, not asynchronous ancestor frames or fixture reads.
+      const maintenanceFilesystemCalls = filesystem.stacks().filter(({ stack }) => {
+        const owner = stack
+          .replaceAll("\\", "/")
+          .split("\n")
+          .find(
+            (frame) =>
+              frame.includes("/src/") &&
+              !/\/(?:sqlite-worker-identity|main-thread-fs-spies\.test-support)\.[cm]?[jt]s:/u.test(
+                frame,
+              ),
+          );
+        return /\/session-accessor\.sqlite-(?:maintenance-kick|reclamation-run)\.[cm]?[jt]s:/u.test(
+          owner ?? "",
+        );
+      });
+      expect(maintenanceFilesystemCalls).toEqual([]);
     });
   },
 );

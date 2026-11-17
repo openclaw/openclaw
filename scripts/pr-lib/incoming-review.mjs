@@ -12,10 +12,10 @@ function readRegular(path) {
   return readFileSync(path, "utf8");
 }
 
-export function incomingReview(pr, incoming, jsonOid) {
-  const reviewPath = ".local/review.json";
+export function incomingReview(pr, incoming, jsonOid, directory = ".local") {
+  const reviewPath = directory + "/review.json";
   const review = JSON.parse(readRegular(reviewPath));
-  const prMeta = JSON.parse(readRegular(".local/pr-meta.json"));
+  const prMeta = JSON.parse(readRegular(directory + "/pr-meta.json"));
   const violations = validateReviewArtifacts({ review, prMeta });
   if (violations.length) {
     throw new Error(violations.join("\n"));

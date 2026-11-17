@@ -8,6 +8,7 @@ import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
   getPropertyNameText,
+  isTestLikeTypeScriptFile,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -15,8 +16,7 @@ import {
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
-const nodeSqliteBoundaryRoots = [
-  path.join(repoRoot, "src"),
+const additionalSqliteBoundaryRoots = [
   path.join(repoRoot, "extensions"),
   path.join(repoRoot, "packages"),
 ];
@@ -78,6 +78,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
     // Historical structural migrations extracted from the admitted schema owner.
+    "src/state/openclaw-agent-storage-migration.ts",
     "src/state/openclaw-agent-canonical-validation-migration.ts",
     "src/state/openclaw-agent-db-legacy-schema.ts",
     "src/state/openclaw-agent-db-maintenance.ts",
@@ -113,6 +114,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-schema-v13-widerow.ts",
+    // Versioned migration backfills legacy pending creation evidence during admission.
+    "src/state/openclaw-state-db-schema-v40-worker-provision-source.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",
@@ -131,6 +134,14 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
+  ],
+  "startup copy-and-swap upgrade copies, rebuilds and verifies private shadow databases": [
+    "src/state/openclaw-agent-db-swap.ts",
+    "src/state/openclaw-state-db-swap.ts",
+    "src/state/sqlite-copy-swap.ts",
+    "src/state/state-upgrade-tree.ts",
+    "src/state/state-upgrade-validate.ts",
+    "src/state/state-upgrade.ts",
   ],
   "read-only shared state database access": [
     "src/state/openclaw-agent-db-readonly.ts",
@@ -528,26 +539,40 @@ function collectKyselyGuardrailViolations(sourceFile: SourceFile, relativePath: 
 }
 
 async function collectKyselyGuardrails() {
-  const violations: Array<GuardViolation & { path: string }> = [];
-  for (const scan of [
-    { sourceRoots, includeTests: true, collect: collectKyselyGuardrailViolations },
-    {
-      sourceRoots: nodeSqliteBoundaryRoots,
-      includeTests: false,
-      collect: collectNodeSqliteBoundaryViolations,
+  const sourceBoundaryViolations: Array<GuardViolation & { path: string }> = [];
+  const kyselyViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots,
+    includeTests: true,
+    findViolations: (_content, filePath, sourceFile) => {
+      const relativePath = path.relative(repoRoot, filePath).split(path.sep).join("/");
+      const found = collectKyselyGuardrailViolations(sourceFile, relativePath);
+      if (!isTestLikeTypeScriptFile(filePath)) {
+        // Keep the original diagnostic groups without retaining ASTs across parser batches.
+        for (const violation of collectNodeSqliteBoundaryViolations(sourceFile, relativePath)) {
+          sourceBoundaryViolations.push({ path: relativePath, ...violation });
+        }
+      }
+      return found;
     },
-  ]) {
-    const found = await collectFileViolations({
-      repoRoot,
-      sourceRoots: scan.sourceRoots,
-      includeTests: scan.includeTests,
-      findViolations: (_content, filePath, sourceFile) =>
-        scan.collect(sourceFile, path.relative(repoRoot, filePath).split(path.sep).join("/")),
-    });
-    for (const violation of found) {
-      violation.path = violation.path.split(path.sep).join("/");
-      violations.push(violation);
-    }
+  });
+  const additionalBoundaryViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: additionalSqliteBoundaryRoots,
+    includeTests: false,
+    findViolations: (_content, filePath, sourceFile) =>
+      collectNodeSqliteBoundaryViolations(
+        sourceFile,
+        path.relative(repoRoot, filePath).split(path.sep).join("/"),
+      ),
+  });
+  const violations = [
+    ...kyselyViolations,
+    ...sourceBoundaryViolations,
+    ...additionalBoundaryViolations,
+  ];
+  for (const violation of violations) {
+    violation.path = violation.path.split(path.sep).join("/");
   }
   return violations;
 }

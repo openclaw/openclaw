@@ -32,6 +32,7 @@ import {
 import { tryWriteCompletionCache } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
+import { recordOwedUpdateStep } from "./update-command-owed.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
@@ -70,14 +71,20 @@ export {
 export { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
 export { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 
+/** Returns why the refresh is still owed, or nothing once completion is current. */
 export async function tryInstallShellCompletion(opts: {
   root: string;
   jsonMode: boolean;
   skipPrompt: boolean;
-}): Promise<void> {
+}): Promise<string | undefined> {
+  let failure: string | undefined;
+  const cacheFailed = (reason: string) => {
+    failure = reason;
+  };
   try {
-    await tryWriteCompletionCache(opts.root, opts.jsonMode);
+    await tryWriteCompletionCache(opts.root, opts.jsonMode, undefined, undefined, cacheFailed);
   } catch (err) {
+    cacheFailed(`Completion cache update failed: ${formatErrorMessage(err)}`);
     if (!opts.jsonMode) {
       const completionCacheRefreshCommand = formatCliCommand("openclaw completion --write-state");
       defaultRuntime.log(
@@ -88,7 +95,7 @@ export async function tryInstallShellCompletion(opts: {
     }
   }
   if (opts.jsonMode || !process.stdin.isTTY) {
-    return;
+    return failure;
   }
 
   try {
@@ -97,12 +104,12 @@ export async function tryInstallShellCompletion(opts: {
       defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
     } else if (status.profileInstalled) {
       if (status.cacheExists) {
-        return;
+        return failure;
       }
       defaultRuntime.log(theme.muted("Regenerating shell completion cache..."));
     } else {
       if (opts.skipPrompt) {
-        return;
+        return failure;
       }
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Shell completion"));
@@ -118,7 +125,7 @@ export async function tryInstallShellCompletion(opts: {
             `Skipped. Run \`${formatCliCommand("openclaw completion --install")}\` later to enable.`,
           ),
         );
-        return;
+        return failure;
       }
     }
     if (!(await ensureCompletionCacheExists(CLI_NAME, { generationMode: "core-only" }))) {
@@ -127,6 +134,8 @@ export async function tryInstallShellCompletion(opts: {
     if (status.usesSlowPattern || !status.profileInstalled) {
       await installCompletion(status.shell, status.usesSlowPattern, CLI_NAME);
     }
+    // A missing cache was just generated; an existing one is still the copy that failed to refresh.
+    return status.cacheExists ? failure : undefined;
   } catch (err) {
     const message = formatErrorMessage(err);
     defaultRuntime.log(
@@ -134,6 +143,7 @@ export async function tryInstallShellCompletion(opts: {
         `Shell completion refresh failed: ${message}. Update will continue. Resolve the reported error before retrying: ${formatCliCommand("openclaw completion --write-state --install")}`,
       ),
     );
+    return message;
   }
 }
 
@@ -196,7 +206,6 @@ export async function maybeRestartService(
       return await failed();
     }
   }
-  const original = params.originalManagedServiceRuntime;
   let activation = {
     ...params,
     signal: run?.deadline?.signal,
@@ -212,15 +221,6 @@ export async function maybeRestartService(
       recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
     onTimedStep: (step: UpdateStepResult) => recordServiceTimedStep(params.result, step, run),
   };
-  if (original && !original.definition.runtimePin) {
-    if (!original.version) {
-      throw new Error("Original service runtime or schema support was not verified.");
-    }
-    activation.refreshServiceEnv = activation.serviceRuntimeRefreshRequired = false;
-    activation.nodeRunner = original.nodeRunner;
-    activation.expectedGatewayIdentity = { version: original.version, buildId: original.buildId };
-    activation.serviceUpdateVerdict = original.service.serviceUpdateVerdict;
-  }
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
@@ -492,7 +492,6 @@ export async function maybeRestartService(
             onProgress,
             expectedVersion: expectedGatewayVersion,
             ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-            requirePluginHealth: false,
             serviceEnv: activation.serviceEnv,
             requireRunningService: true,
             assertCurrent,
@@ -515,7 +514,7 @@ export async function maybeRestartService(
           }
         }
         const warning =
-          `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${String(err)}. ` +
+          `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${run?.interrupted ? "the update was interrupted before the service restart finished" : String(err)}. ` +
           `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
         recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
         if (activation.serviceRuntimeRefreshRequired) {
@@ -526,6 +525,8 @@ export async function maybeRestartService(
           params.onVerificationFailure?.("service-definition-rollback-unverified");
           throw err;
         }
+        // The update continues on the previous definition, so its refresh is owed.
+        recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
         if (requiresInstallRootRefresh) {
           return await reconciliationPending();
         }
@@ -586,12 +587,12 @@ export async function maybeRestartService(
         }
       }
       if (requiresInstallRootRefresh && (await serviceUsesUpdatedRoot()) !== true) {
-        recordServiceReconciliationWarning(
-          activation.result,
-          activation.serviceEnv,
+        const warning =
           `Gateway service still points outside the updated install ${activation.result.root}. ` +
-            `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`,
-        );
+          `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
+        recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
+        assertCurrent();
+        recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
         return await reconciliationPending();
       }
     }

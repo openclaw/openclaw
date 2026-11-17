@@ -13,7 +13,7 @@ import {
   resolveInputFileLimits,
   type InputFileLimits,
   type InputImageLimits,
-} from "../media/input-files.js";
+} from "../media/input-file-limits.js";
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_OPENAI_MAX_IMAGE_PARTS = 8;

@@ -70,7 +70,14 @@ export function createComposerKeyDownHandler({
     }
 
     if (goalComposer.active) {
-      if (event.key === "Escape") {
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        target.value.length === 0 &&
+        goalComposer.restoreCommand()
+      ) {
+        event.preventDefault();
+        state.slashMenu.update(target.value, slashMenuHost);
+      } else if (event.key === "Escape") {
         event.preventDefault();
         goalComposer.cancel();
       } else if (
@@ -137,18 +144,8 @@ export function createComposerKeyDownHandler({
       }
     }
 
-    if (
-      event.key === "Escape" &&
-      !state.skillMenu.state.skillMenuOpen &&
-      !state.slashMenu.state.slashMenuOpen &&
-      !state.mentionMenu.open &&
-      !props.replyTarget &&
-      !state.dictation?.active &&
-      showAbortableUi &&
-      props.onAbort
-    ) {
+    if (event.key === "Escape" && stopRunFromEscape({ state, props, showAbortableUi })) {
       event.preventDefault();
-      props.onAbort();
       return;
     }
 
@@ -196,6 +193,27 @@ export function createComposerKeyDownHandler({
       submitDraft(target.value, event, followUpModeOverride);
     }
   };
+}
+
+/** Escape stops the visible run after composer menus, dictation, and replies decline it. */
+export function stopRunFromEscape({
+  state,
+  props,
+  showAbortableUi,
+}: Pick<ComposerKeyDownDeps, "state" | "props" | "showAbortableUi">): boolean {
+  if (
+    state.skillMenu.state.skillMenuOpen ||
+    state.slashMenu.state.slashMenuOpen ||
+    state.mentionMenu.open ||
+    props.replyTarget ||
+    state.dictation?.active ||
+    !showAbortableUi ||
+    !props.onAbort
+  ) {
+    return false;
+  }
+  props.onAbort();
+  return true;
 }
 
 export function handleQueueEditKeydown(

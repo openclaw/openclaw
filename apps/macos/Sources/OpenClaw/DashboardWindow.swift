@@ -5,6 +5,10 @@ import OSLog
 let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "DashboardWindow")
 
 enum DashboardWindowLayout {
+    // Compact AppKit chrome centers its traffic lights in a 40pt row.
+    static let toolbarStyle: NSWindow.ToolbarStyle = .unifiedCompact
+    static let titlebarHeight = 40
+    static let titlebarControlsGap: CGFloat = 8
     static let windowSize = NSSize(width: 1240, height: 860)
     static let windowMinSize = NSSize(width: 922, height: 620)
     static let windowFrameAutosaveName = "OpenClawDashboardWindow"
@@ -56,6 +60,16 @@ enum DashboardWindowAuth: Equatable {
     // UI uses native signing and never browser fallback. nil means not ready.
     case nativeDevice(gatewayUrl: String, token: String?, password: String?, legacyCredentials: [String: String]? = nil)
     case browserIdentity(gatewayUrl: String)
+
+    /// Accepted startup credentials are socket-owned projections, not a new page owner.
+    func hasSameDocumentIdentity(as other: Self) -> Bool {
+        switch (self, other) {
+        case let (.nativeDevice(url, token, password, _), .nativeDevice(otherURL, otherToken, otherPassword, _)):
+            url == otherURL && token == otherToken && password == otherPassword
+        default:
+            self == other
+        }
+    }
 
     var gatewayUrl: String? {
         switch self {

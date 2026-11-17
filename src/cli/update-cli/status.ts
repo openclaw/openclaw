@@ -40,7 +40,14 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
-import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import {
+  formatUpdateOwedStep,
+  listUpdateOwedSteps,
+  selectUpdateOwedSteps,
+  UPDATE_OWED_STEP_HISTORY,
+  type UpdateOwedStep,
+} from "../../infra/update-run-owed-step.js";
+import { listUpdateRunsAsync, type getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
@@ -48,6 +55,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
@@ -107,10 +115,26 @@ async function readChannelStatusIssues(
   }
 }
 
+/** An earlier run can still owe a step after a later one replaced it as the last run. */
+async function readUpdateRunStatusWithOwedSteps(): Promise<
+  Awaited<ReturnType<typeof readUpdateRunStatus>> & { owedSteps?: UpdateOwedStep[] }
+> {
+  const status = await readUpdateRunStatus();
+  if (!("lastRun" in status) || !status.lastRun) {
+    return status;
+  }
+  // The run report stays readable when this wider history read fails.
+  const owedSteps = await listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
+    selectUpdateOwedSteps,
+    () => [],
+  );
+  return owedSteps.length ? { ...status, owedSteps } : status;
+}
+
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
   // --timeout bounds update checks; a short network budget must not discard local history.
-  const timeoutMs = Math.max(30_000, checkTimeoutMs ?? 0);
+  const timeoutMs = resolveSafeTimeoutDelayMs(Math.max(30_000, checkTimeoutMs ?? 0));
   const scope = new AsyncWorkScope();
   const timer = setTimeout(
     () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
@@ -174,9 +198,9 @@ async function inspectUpdateStatus(
     () =>
       withUpdateDatabaseEngine(process.env, () =>
         Promise.all([
-          inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
+          inspect<Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>>(
             "update history",
-            readUpdateRunStatus,
+            readUpdateRunStatusWithOwedSteps,
             { runStatusError: "Update history inspection unavailable" },
           ),
           inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
@@ -416,6 +440,17 @@ async function inspectUpdateStatus(
     packageActivationError = safeMessage(formatErrorMessage(error));
   }
 
+  const packageReleases = root
+    ? await inspect(
+        "package releases",
+        async () => {
+          const { listPackageReleases } = await import("../../infra/package-release-retention.js");
+          return await listPackageReleases(root);
+        },
+        [],
+      )
+    : [];
+
   if (opts.json) {
     defaultRuntime.writeJson({
       update: preferredTarget ? { ...update, git: { ...update.git, preferredTarget } } : update,
@@ -438,6 +473,7 @@ async function inspectUpdateStatus(
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
       ...(packageActivation ? { packageActivation } : {}),
+      ...(packageReleases.length ? { packageReleases } : {}),
       ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
       ...(configWarnings.length > 0 ? { configWarnings } : {}),
@@ -522,6 +558,10 @@ async function inspectUpdateStatus(
     ...(packageActivationError
       ? [{ Item: "Package recovery", Value: packageActivationError }]
       : []),
+    ...packageReleases.map((release) => ({
+      Item: release.selected ? "Active release" : "Retained release",
+      Value: `${release.id} · version ${release.version ?? "unknown"} · build ${release.build ?? "unknown"}${release.leased ? " · in use" : ""}`,
+    })),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
@@ -607,7 +647,7 @@ async function inspectUpdateStatus(
     printWarning(`Update run status unavailable: ${runStatus.runStatusError}`);
     defaultRuntime.log("");
   } else {
-    const { lastRun, staleRun, abandonedRun, advisories } = runStatus;
+    const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
       if (advisory.runId !== run?.runId) {
@@ -641,6 +681,13 @@ async function inspectUpdateStatus(
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");
+    }
+    // The displayed run's report already lists what that run owes.
+    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
+    for (const step of owedSteps ?? []) {
+      if (!reported.has(step.id)) {
+        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
+      }
     }
   }
 

@@ -61,7 +61,8 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
                 return
             }
             try configureSocketTimeouts(fd, timeoutMs: execApprovalsSocketTimeoutMs)
-            guard let line = try readLineFromSocket(fd, maxBytes: 256_000),
+            // Keep aligned with EXEC_HOST_MAX_REQUEST_BYTES in src/infra/exec-host.ts.
+            guard let line = try readLineFromSocket(fd, maxBytes: 1024 * 1024),
                   let data = line.data(using: .utf8)
             else {
                 return

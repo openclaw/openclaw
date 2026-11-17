@@ -69,7 +69,7 @@ const resettableMocks = {
   cancelManagedServiceUpdateHandoff: vi.fn<
     (_identity: ManagedUpdateOwner) => Promise<false | "restored-in-process" | "restart-after-exit">
   >(async () => "restored-in-process"),
-  claimManagedServiceUpdateHandoff: vi.fn((_identity: ManagedUpdateOwner) => true),
+  claimManagedServiceUpdateHandoff: vi.fn(async (_identity: ManagedUpdateOwner) => true),
   isForegroundUpdateHandoff: vi.fn((_identity: ManagedUpdateOwner) => false),
   completeForegroundUpdateHandoffAfterClose:
     vi.fn<ManagedHandoff["completeForegroundUpdateHandoffAfterClose"]>(),
@@ -157,7 +157,8 @@ const m = {
       cancel: cancelShutdownHardExitWatchdog,
     }),
   ),
-  requestSettledExitWatchdog: vi.fn((_delayMs: number) => {}),
+  requestSettledExitWatchdog:
+    vi.fn<typeof import("../one-shot-exit.js").requestSettledExitWatchdog>(),
 };
 
 async function drainedCronWork(_timeoutMs?: number) {

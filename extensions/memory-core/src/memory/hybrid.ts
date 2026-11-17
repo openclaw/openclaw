@@ -2,6 +2,7 @@ import type {
   MemoryEntryProvenance,
   MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { ExactPathSpecificity } from "./manager-search-types.js";
 import { applyMMRToHybridResults, type MMRConfig } from "./mmr.js";
 import {
   applyRetrievalRanking,
@@ -12,7 +13,6 @@ import {
 import { applyTemporalDecayToHybridResults, type TemporalDecayConfig } from "./temporal-decay.js";
 
 type HybridSource = string;
-type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
 export type HybridSearchResult<TSource extends HybridSource = HybridSource> = {
   path: string;

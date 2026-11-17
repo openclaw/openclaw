@@ -298,3 +298,51 @@ it.each([
     }
   },
 );
+
+it("retains App attachment receipts without changing model text and binds them to retries", async () => {
+  const attachment = {
+    title: "Helmet shell",
+    uri: "shell://specimens/helmet",
+    icon: "https://example.test/shell.png",
+  };
+  const appContext = [attachment];
+  const value = await normalizeValue({ message: "Describe this shell.", appContext });
+  expect(value.appContext).toEqual(appContext);
+  const reordered = [{ icon: attachment.icon, uri: attachment.uri, title: attachment.title }];
+  expect(
+    (await normalizeValue({ message: "Describe this shell.", appContext: reordered }))
+      .requestIdentity,
+  ).toBe(value.requestIdentity);
+  expect(value.inboundMessage).toBe("Describe this shell.");
+  expect(value.rawMessage).toBe("Describe this shell.");
+  const changed = await normalizeValue({
+    message: "Describe this shell.",
+    appContext: [{ title: "Clam" }],
+  });
+  expect(changed.requestIdentity).not.toBe(value.requestIdentity);
+  await expectRejected({ message: "/stop", appContext });
+  await expectRejected({ appContext: [{ title: "x".repeat(201) }] });
+});
+
+it.each([
+  [undefined, "off", false],
+  ["other-tool", "off", false],
+  ["openclaw_agent_consult", undefined, false],
+  ["openclaw_agent_consult", "off", true],
+] as const)(
+  "normalizes only explicit trusted Talk preferences (%s, %s)",
+  async (sourceTool, thinking, expected) => {
+    const result = await normalizeChatSendRequest({
+      params: requestParams({
+        ...(thinking ? { thinking } : {}),
+        ...(sourceTool ? { systemInputProvenance: { kind: "internal_system", sourceTool } } : {}),
+      }),
+      client: null,
+      trustedSystemInput: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.normalizeThinkingLevelOverride).toBe(expected);
+    }
+  },
+);

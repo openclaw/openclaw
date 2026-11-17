@@ -28,6 +28,7 @@ type SessionModelEntry =
       | "model"
       | "modelProvider"
       | "modelOverride"
+      | "modelOverrideSource"
       | "providerOverride"
       | "modelOverrideRouteResolution"
       | "modelOverrideFallbackOriginProvider"
@@ -103,6 +104,10 @@ function resolveSessionModelRefCore(
   agentId?: string,
   options?: SessionModelResolutionOptions,
 ): { provider: string; model: string } {
+  // Default snapshots are historical context, not a pin on the next turn.
+  if (entry?.modelOverrideSource === "default") {
+    return resolveSessionConfiguredDefault(cfg, agentId, options);
+  }
   const overrideRouteResolution = resolveSessionModelOverrideRouteResolution(entry);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,

@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
-import { ProviderBrandIcon, ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
+import { ProviderFallbackIcon } from "../../components/solid/provider-icon.tsx";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import type { ModelSetupPageState } from "./state.ts";
@@ -24,7 +25,7 @@ export function renderProviderIcon(
   const localBrand = resolveSetupBrandIcon(entry);
   const iconClass = ["model-setup__icon", className];
   if (localBrand) {
-    return <ProviderBrandIcon provider={localBrand} class={iconClass} />;
+    return <ModelProviderIcon provider={localBrand} class={iconClass} />;
   }
   const blobUrl = entry.icon ? props.iconUrls[entry.icon] : undefined;
   if (!blobUrl) {

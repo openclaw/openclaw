@@ -5,7 +5,8 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LlmCompleteUsage } from "./runtime-llm.types.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 import type { NativeSubagentRuntime } from "./types-native-subagent.js";
 import type {
   RuntimeSessionFactsResult,
@@ -84,7 +85,7 @@ export type SubagentForkedTurnParams<T> = {
   model?: string;
   /** Caller-chosen id so tools' records can be found even when the run fails; unique per run. */
   runId?: string;
-  /** Capped at 120 seconds. */
+  /** Defaults to 120 seconds; a larger value runs longer (the agent timeout, for example). */
   timeoutMs?: number;
   signal?: AbortSignal;
   /**
@@ -339,6 +340,27 @@ export type PluginRuntime = PluginRuntimeCore & {
       ownerKind: "workboard";
       ownerId: string;
     }) => Promise<boolean>;
+  };
+  /** Core-owned per-skill usage, keyed by SKILL.md path; written for every demonstrated skill use. */
+  skills: {
+    /**
+     * Usage for the given SKILL.md paths, keyed by the paths as given. Files without recorded
+     * use are absent. When `tracked` is false this process does not persist skill use, so an
+     * absent entry is not evidence that the skill went unused.
+     */
+    readUsage: (params: { skillFiles: readonly string[] }) => Promise<{
+      tracked: boolean;
+      usage: ReadonlyMap<string, { useCount: number; lastUsedAtMs: number }>;
+    }>;
+    /**
+     * Records one read of an absolute SKILL.md path by the executing tool call. Run, session,
+     * and agent attribution come from that call. Returns false outside a live tool execution.
+     */
+    recordUsed: (params: {
+      skillFile: string;
+      skillName: string;
+      skillSource?: "bundled" | "workspace";
+    }) => boolean;
   };
   channel: PluginRuntimeChannel;
 };

@@ -33,7 +33,6 @@ import {
   githubPublicationApiArgs,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
-  hasGitHubPublicationWorkflowChanges,
   hasGitHubPublicationMessageFooter,
   readGitHubPublicationCoauthorTrailers,
   readGitHubPublicationBaseSha,
@@ -57,7 +56,7 @@ import {
   prepareBoundGitHubPublication,
   prepareGitHubPublicationExecutionTarget,
 } from "./github-publication-target.js";
-import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
+import * as publicationWorkflows from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
 
@@ -263,9 +262,8 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (preparation.status === "reconcile") {
       return await reconcileObservedPublication();
     }
-    const { target } = preparation;
-    const { pushRepository, repository, branch, baseBranch, pushOwner, githubHost } = target;
-    const { publishedPullRequest } = target;
+    const { pushRepository, repository, branch, baseBranch } = preparation.target;
+    const { pushOwner, githubHost, publishedPullRequest } = preparation.target;
     const remoteBaseSha = await readGitHubPublicationBaseSha(
       run,
       repository,
@@ -275,19 +273,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     );
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
     identity = await refreshIdentity();
-    const baseTransportEnv = {
-      ...identity.env,
-      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-    };
     await requireGitHubPublicationCommit(
       run,
       repository,
       remoteBaseSha,
       githubHost,
       worktree.path,
-      baseTransportEnv,
+      {
+        ...identity.env,
+        GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+        GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+      },
       "GitHub publication workspace base could not be materialized.",
+      { baseBranch },
     );
     // Reflogs can expire or restart when a branch is recreated; commits own its history.
     const lineage = await run(["git", "merge-base", sourceHeadCommit, remoteBaseSha], {
@@ -386,6 +384,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         worktree.path,
         transportEnv,
         "GitHub publication remote branch could not be verified.",
+        { baseBranch },
       );
       const ancestry = await run(["git", "merge-base", "--is-ancestor", remoteHead, headCommit], {
         cwd: worktree.path,
@@ -400,18 +399,19 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       }
     }
     const existingPullRequest = await step(findPullRequest);
-    const assertWorkflowAuthority = await prepareGitHubPublicationWorkflowGuard(
-      params.assertWorkflowChangesAllowed,
-      () =>
-        hasGitHubPublicationWorkflowChanges({
-          cwd: worktree.path,
-          comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
-          ancestryCommit: expectedRemoteHead || sourceHeadCommit,
-          targetCommit: remoteBaseSha,
-          workspaceTree,
-          run,
-        }),
-    );
+    const assertWorkflowAuthority =
+      await publicationWorkflows.prepareGitHubPublicationWorkflowGuard(
+        params.assertWorkflowChangesAllowed,
+        () =>
+          publicationWorkflows.hasGitHubPublicationWorkflowChanges({
+            cwd: worktree.path,
+            comparisonCommit: expectedRemoteHead || lineage.stdout.toString("utf8").trim(),
+            ancestryCommit: expectedRemoteHead || sourceHeadCommit,
+            targetCommit: remoteBaseSha,
+            accepted: { sourceCommit: sourceHeadCommit, tree: workspaceTree },
+            run,
+          }),
+      );
     const assertPublicationAction = () => {
       assertWorkflowAuthority();
       assertCurrent();

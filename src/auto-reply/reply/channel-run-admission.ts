@@ -104,6 +104,12 @@ export function prepareChannelRunAdmission(params: {
   return Object.freeze({
     operationalRunInstance,
     assertSourceCurrent,
+    assertCurrent: () => {
+      if (closed) {
+        throw new Error("prepared execution context is already closed");
+      }
+      prepared?.assertCurrent();
+    },
     readOperatorAuthority: () => {
       if (closed && params.operatorAuthority) {
         throw new Error("prepared operator authority is no longer active");

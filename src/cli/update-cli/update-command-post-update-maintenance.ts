@@ -13,10 +13,17 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import {
+  recordOwedUpdateStep,
+  retryOwedUpdateSteps,
+  shellProfileStillOwes,
+  warnOwedUpdateStep,
+} from "./update-command-owed.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
+  recordServiceReconciliationWarning,
   UpdateCommandPendingRecoveryFailure,
   UpdateCommandFailure,
 } from "./update-command-result.js";
@@ -151,6 +158,25 @@ export async function parkPostUpdateService(
   return stopped;
 }
 
+/** An already-current core explains a service it left alone instead of reporting repair. */
+export function reportCurrentCoreServiceSkip(
+  params: Pick<FinishUpdateParams, "preManagedServiceStop">,
+  result: UpdateRunResult,
+): void {
+  const service = params.preManagedServiceStop;
+  if (service?.serviceUpdateVerdict?.kind === "absent" && service.serviceMutationSkipMessage) {
+    // An absent service needs no repair. Keep the explanation without
+    // reporting a service-install command as completed maintenance.
+    defaultRuntime.error(service.serviceMutationSkipMessage);
+  } else if (service?.serviceMutationSkipMessage) {
+    recordServiceReconciliationWarning(
+      result,
+      service.serviceEnv ?? process.env,
+      service.serviceMutationSkipMessage,
+    );
+  }
+}
+
 /** Shell integration changes follow settled restart and health recovery. */
 export async function completePostUpdateMaintenance(
   params: FinishUpdateParams,
@@ -165,11 +191,54 @@ export async function completePostUpdateMaintenance(
     >;
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
-  await tryInstallShellCompletion({
-    root: context.root,
-    jsonMode: Boolean(params.opts.json),
-    skipPrompt: Boolean(params.opts.yes),
-  });
+  const run = params.opts.run;
+  const refreshShellCompletion = (skipPrompt: boolean) =>
+    tryInstallShellCompletion({
+      root: context.root,
+      jsonMode: Boolean(params.opts.json),
+      skipPrompt,
+    });
+  const retryOwedSteps = async (completion: () => Promise<string | undefined>) => {
+    if (!run) {
+      return;
+    }
+    assertCurrent();
+    const stillOwed = await retryOwedUpdateSteps(run, {
+      "shell-completion": async (step) =>
+        (await completion()) ?? (await shellProfileStillOwes(step.reason)),
+      // Only this update's own successful refresh settles it; repair inspects the service instead.
+      "service-definition": async (step) =>
+        result.steps.some((done) => done.name === "managed-service-install" && done.exitCode === 0)
+          ? undefined
+          : step.reason,
+    });
+    for (const step of stillOwed) {
+      warnOwedUpdateStep(result, step, true);
+    }
+  };
+  if (params.coreAlreadyCurrent) {
+    // A current core refreshes completion only when an earlier update still owes it, unprompted.
+    await retryOwedSteps(() => refreshShellCompletion(true));
+    return undefined;
+  }
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
+  const completionFailure = await refreshShellCompletion(Boolean(params.opts.yes));
+  if (completionFailure) {
+    const step = { id: "shell-completion" as const, reason: completionFailure };
+    warnOwedUpdateStep(result, step, recordOwedUpdateStep(run, step));
+  }
+  await retryOwedSteps(async () => completionFailure);
   if (!params.installKindChanged || result.mode === "git") {
     return undefined;
   }

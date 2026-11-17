@@ -29,7 +29,7 @@ const logLines = Array.from({ length: 40 }, (_value, index) =>
 );
 
 suite.define(() => {
-  it("keeps wrapped filters inside their rows in the macOS dashboard viewport", async () => {
+  it("keeps the toolbar and footer clear of the stream in the macOS dashboard viewport", async () => {
     const proofDir = artifactRoot
       ? path.join(createControlUiE2eArtifactDir("logs-layout", artifactRoot), proofLabel)
       : undefined;
@@ -90,25 +90,24 @@ suite.define(() => {
           );
         }
 
-        const metrics = await page.locator(".logs-card").evaluate((card) => {
-          const rows = [...card.querySelectorAll<HTMLElement>(":scope > .settings-row")];
-          const stream = card.querySelector<HTMLElement>(":scope > .log-stream");
+        const metrics = await page.evaluate(() => {
+          const box = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect();
+          const card = document.querySelector<HTMLElement>(".logs-card")!;
+          const stream = card.querySelector<HTMLElement>(":scope > .log-stream")!;
+          const toolbar = document.querySelector<HTMLElement>(".logs-toolbar")!;
           return {
             cardDisplay: getComputedStyle(card).display,
-            streamFlexGrow: stream ? getComputedStyle(stream).flexGrow : "",
-            overflow: rows.map((row) => row.scrollHeight - row.clientHeight),
-            overlap: rows.map(
-              (row, index) =>
-                row.getBoundingClientRect().bottom -
-                ((rows[index + 1] ?? stream)?.getBoundingClientRect().top ?? Number.NaN),
-            ),
+            streamFlexGrow: getComputedStyle(stream).flexGrow,
+            toolbarOverflow: toolbar.scrollWidth - toolbar.clientWidth,
+            toolbarOverlap: box(".logs-toolbar").bottom - box(".logs-card").top,
+            footerOverlap: box(".logs-card").bottom - box(".logs-footer").top,
           };
         });
         expect(metrics).toMatchObject({ cardDisplay: "flex", streamFlexGrow: "1" });
-        expect(metrics.overflow).toHaveLength(2);
-        for (const delta of [...metrics.overflow, ...metrics.overlap]) {
-          expect(delta).toBeLessThanOrEqual(1);
-        }
+        expect(metrics.toolbarOverflow).toBeLessThanOrEqual(1);
+        expect(metrics.toolbarOverlap).toBeLessThanOrEqual(1);
+        expect(metrics.footerOverlap).toBeLessThanOrEqual(1);
       },
     );
   });
@@ -150,7 +149,7 @@ suite.define(() => {
         });
         expect(layout.contentScrolls).toBe(false);
         expect(layout.streamScrolls).toBe(true);
-        expect(layout.contentBottom - layout.streamBottom).toBeLessThanOrEqual(32);
+        expect(layout.contentBottom - layout.streamBottom).toBeLessThanOrEqual(56);
         expect(layout.searchAlign).not.toBe("right");
         expect(layout.subsystem).toBeGreaterThan(0);
         expect(layout.pageWidth).toBeLessThanOrEqual(390);
@@ -159,22 +158,25 @@ suite.define(() => {
         // width where the shell header takes over the title.
         const heading = page.getByRole("heading", { name: "Logs", level: 1 });
         await expect.poll(() => heading.count()).toBe(1);
-        await page.setViewportSize({ height: 844, width: 620 });
+        await page.setViewportSize({ height: 844, width: 641 });
         await heading.waitFor({ state: "visible" });
         await expect
           .poll(async () => (await heading.boundingBox())?.height ?? 0)
           .toBeGreaterThan(1);
         await page.setViewportSize({ height: 844, width: 390 });
 
-        await page.getByRole("button", { name: "Filter", exact: true }).click();
         const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await autoFollow.waitFor({ state: "visible" });
-        await expect.poll(() => page.locator(".logs-filter .log-chip").count()).toBe(6);
-        await page.locator(".log-chip.info input").uncheck();
-        await expect
-          .poll(() => page.locator('[aria-controls="logs-filter-popover"]').getAttribute("class"))
-          .toContain("active");
-        await page.locator(".log-chip.info input").check();
+
+        await page.getByRole("button", { name: "Filter", exact: true }).click();
+        const info = page.getByRole("menuitemcheckbox", { name: "info", exact: true });
+        await info.waitFor({ state: "visible" });
+        await expect.poll(() => page.getByRole("menuitemcheckbox").count()).toBe(6);
+        await info.click();
+        const filter = page.locator('[aria-controls="logs-levels:content"]');
+        await expect.poll(() => filter.getAttribute("class")).toContain("active");
+        await info.click();
+        await expect.poll(() => filter.getAttribute("class")).not.toContain("active");
         await page.keyboard.press("Escape");
 
         await page.getByRole("button", { name: "More actions", exact: true }).click();

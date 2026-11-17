@@ -1,16 +1,17 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 const tempDirs: string[] = [];
 
-afterEach(async () => {
+afterEach(() => {
   flushDiagnosticsTimeline();
   vi.unstubAllEnvs();
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  cleanupTempDirs(tempDirs);
 });
 
 describe("measureAgentStartup", () => {

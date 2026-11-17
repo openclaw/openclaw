@@ -9,6 +9,7 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import {
   resolveBundledPluginSources,
   resolveSourceCheckoutBundledPluginIds,
@@ -51,30 +52,25 @@ import {
   buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
   formatNpmInstallFailure,
-  readClawHubTrustErrorCode,
+  resolveClawHubTrustSkipCode,
   runPluginUpdateAttempt,
-  shouldSkipClawHubTrustFailureForExistingInstall,
   type ClawHubPluginUpdateSuccess,
   type GitPluginUpdateSuccess,
   type MarketplacePluginUpdateSuccess,
   type NpmPluginUpdateSuccess,
 } from "./update-attempt.js";
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
-import {
-  hasRunnableInstalledNpmPayload,
-  migratePluginConfigId,
-  resolveRecordedExtensionsDir,
-} from "./update-config.js";
+import { migratePluginConfigId, resolveRecordedExtensionsDir } from "./update-config.js";
 import {
   reconcileDuplicateNpmPluginAliases,
   stageDuplicateNpmPluginAlias,
 } from "./update-duplicate-aliases.js";
 import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
+import { canRetainInstalledNpmPayload } from "./update-retention.js";
 import {
+  createStablePluginUpdateVersionPolicy,
   expectedIntegrityForNpmUpdate,
-  isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
-  isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubNpmUpdateFallback,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
@@ -141,6 +137,9 @@ async function runInstalledPluginUpdate(
   const completedCanonicalUpdates = new Set<string>();
 
   for (const pluginId of targets) {
+    if (params.signal?.aborted) {
+      break;
+    }
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
@@ -269,11 +268,17 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.recordSpec
           : record.spec;
-    const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
-      pluginId,
-      spec: effectiveSpec,
-      record,
-    });
+    const minimumStableVersion =
+      npmSpecs?.minimumStableVersion ?? clawhubSpecs?.minimumStableVersion;
+    if (minimumStableVersion && record.spec !== recordSpec) {
+      logger.warn?.(
+        `Plugin "${pluginId}" follows stable: replacing saved selector ${record.spec} with ${recordSpec} after a successful update.`,
+      );
+    }
+    const trustedSourceLinkedOfficialInstall = Boolean(
+      npmTarget?.officialPackageName &&
+      parseRegistryNpmSpec(effectiveSpec ?? "")?.name === npmTarget.officialPackageName,
+    );
     let expectedIntegrity =
       catalogExpectedIntegrity ??
       expectedIntegrityForNpmUpdate({
@@ -359,6 +364,11 @@ async function runInstalledPluginUpdate(
       code?: string,
       source: "npm" | "clawhub" = "npm",
     ): Promise<void> => {
+      if (minimumStableVersion) {
+        logger.warn?.(
+          `Keeping "${pluginId}" at ${currentVersion ?? record.version ?? "its installed version"}: no compatible stable update was installed. ${message}`,
+        );
+      }
       let installedPayloadRunnable = false;
       // Metadata failures precede target availability; core sync must retain a
       // runnable install during a registry outage when retention is requested.
@@ -369,17 +379,12 @@ async function runInstalledPluginUpdate(
         !params.dryRun &&
         currentVersion
       ) {
-        const compatible = isNpmMetadataCompatibleWithCurrentHost(
-          { packageOpenClaw: installedManifest?.openclaw },
-          { hostVersion: params.coreVersion, allowLegacyBareSemver: true },
-        );
-        try {
-          installedPayloadRunnable =
-            compatible &&
-            (await hasRunnableInstalledNpmPayload({ installPath, manifest: installedManifest }));
-        } catch {
-          // Damaged or unreadable payloads do not qualify for retention.
-        }
+        installedPayloadRunnable = await canRetainInstalledNpmPayload({
+          currentHostVersion: params.coreVersion ?? resolveCompatibilityHostVersion(),
+          pluginId,
+          installPath,
+          manifest: installedManifest,
+        });
       }
       if (retainOnUnavailable && installedPayloadRunnable) {
         const retainedMessage =
@@ -405,6 +410,12 @@ async function runInstalledPluginUpdate(
     const extensionsDir = resolveRecordedExtensionsDir({
       pluginId,
       installPath,
+    });
+    const stableVersion = createStablePluginUpdateVersionPolicy({
+      pluginId,
+      currentVersion: currentVersion ?? record.version,
+      minimumStableVersion,
+      logger,
     });
 
     if (
@@ -432,6 +443,7 @@ async function runInstalledPluginUpdate(
         if (
           currentVersion &&
           prepared.unchangedEligible &&
+          !stableVersion.error(metadataResult.metadata.version) &&
           !(await auditDeclaredOpenClawHostDependency({
             packageDir: installPath,
             packageName: pluginId,
@@ -500,7 +512,9 @@ async function runInstalledPluginUpdate(
           timeoutMs: params.timeoutMs,
           workTimeoutMs: params.workTimeoutMs,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+          onBeforePluginArtifactCommit: stableVersion.beforeCommit(
+            capabilityConsent.onBeforePluginArtifactCommit,
+          ),
           expectedIntegrity,
           clawhubSpecs,
           officialNpmFallback,
@@ -542,20 +556,15 @@ async function runInstalledPluginUpdate(
 
     const { result, activeClawHubInstallSpec, channelFallbackSuffix, npmFallbackSpec } = attempt;
     if (!result.ok) {
-      if (
-        record.source === "clawhub" &&
-        shouldSkipClawHubTrustFailureForExistingInstall({ result, currentVersion })
-      ) {
-        const code = readClawHubTrustErrorCode(result);
-        if (!code) {
-          continue;
-        }
+      const trustSkipCode =
+        record.source === "clawhub" && resolveClawHubTrustSkipCode({ result, currentVersion });
+      if (trustSkipCode) {
         outcomes.push(
           buildClawHubTrustSkippedOutcome({
             pluginId,
             phase: params.dryRun ? "check" : "update",
             error: result.error,
-            code,
+            code: trustSkipCode,
             ...("warning" in result && result.warning ? { warning: result.warning } : {}),
             ...(currentVersion ? { currentVersion } : {}),
           }),
@@ -590,6 +599,12 @@ async function runInstalledPluginUpdate(
       continue;
     }
     if (params.dryRun) {
+      const stableError = stableVersion.error(result.version);
+      if (stableError) {
+        logger.warn?.(stableError);
+        recordSkippedOutcome(pluginId, stableError);
+        continue;
+      }
       outcomes.push(
         await buildDryRunPluginUpdateOutcome({
           pluginId,

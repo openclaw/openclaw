@@ -282,7 +282,7 @@ module.exports = {
     await client.request("chat.send", { sessionKey, message, idempotencyKey: runId });
     await expect.poll(() => findTerminal(runId), { timeout: 30_000 }).toBeDefined();
     const terminal = findTerminal(runId);
-    expect(terminal?.payload).toMatchObject({ state: "final" });
+    expect(terminal?.payload, terminal?.payload?.errorMessage).toMatchObject({ state: "final" });
     return message.startsWith("/btw ")
       ? events.find((event) => event.event === "chat.side_result" && event.payload?.runId === runId)
           ?.payload

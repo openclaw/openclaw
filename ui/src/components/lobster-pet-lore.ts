@@ -26,6 +26,7 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   leonardodepinchy: "Leonardo DaPinchy",
   shellvis: "Shellvis",
   alexandergrahamshell: "Alexander Graham Shell",
+  santaclaws: "Santa Claws",
   clawnadian: "Clawnadian",
   clawtron: "Clawtron",
   selene: "Selene",
@@ -107,7 +108,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   },
   blue: { flavor: "1 in 2 million, and knows it.", hint: "One in two million." },
   gold: { flavor: "1 in 30 million karats.", hint: "Worth its weight." },
-  lumen: { flavor: "Brings its own night lights.", hint: "Glows where it's darkest." },
+  lumen: { flavor: "Brings its own night lights.", hint: "Glows where it’s darkest." },
   magma: { flavor: "Fresh from the vent, still cooling.", hint: "Runs hot." },
   oilslick: { flavor: "Black shell, rainbow finish.", hint: "Spilled, not stirred." },
   aurora: {
@@ -119,7 +120,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     hint: "Came from very far away.",
   },
   banana: { flavor: "Banana. For scale.", hint: "For scale." },
-  mood: { flavor: "Wears whatever color you're feeling.", hint: "Matches your vibe." },
+  mood: { flavor: "Wears whatever color you’re feeling.", hint: "Matches your vibe." },
   bee: { flavor: "Technically not a bee.", hint: "Do not tell the bees." },
   rubberduck: {
     flavor: "Listens to your bugs. Judges silently.",
@@ -154,6 +155,10 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     flavor: "Good ideas ring a bell.",
     hint: "A familiar ringing from the shore.",
   },
+  santaclaws: {
+    flavor: "Makes a list. Pinches it twice.",
+    hint: "A jolly knock on the chimney.",
+  },
   clawnadian: {
     flavor: "Says sorry when you poke it.",
     hint: "A polite knock from up north.",
@@ -161,17 +166,17 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   clawtron: { flavor: "60% rivets, 40% love.", hint: "Beep boop snip." },
   selene: { flavor: "Carries the current moon on its belly.", hint: "Waxes and wanes." },
   geode: { flavor: "Rock outside, amethyst inside.", hint: "Crack the surface." },
-  ghost: { flavor: "1 in 100 million, barely there.", hint: "You'd walk right past it." },
+  ghost: { flavor: "1 in 100 million, barely there.", hint: "You’d walk right past it." },
   glass: {
     flavor: "Fully transparent. Nothing to hide.",
     hint: "Easy to miss, hard to forget.",
   },
-  split: { flavor: "Two lobsters, one shell.", hint: "Can't pick a side." },
+  split: { flavor: "Two lobsters, one shell.", hint: "Can’t pick a side." },
   sourdough: {
     flavor: "Started from a starter. 24-hour proof.",
     hint: "Still proofing.",
   },
-  zombie: { flavor: "Slightly used. Still friendly.", hint: "It's been better." },
+  zombie: { flavor: "Slightly used. Still friendly.", hint: "It’s been better." },
   plush: { flavor: "Machine washable. Air dry only.", hint: "Soft to the touch." },
   balloon: { flavor: "Do not pop.", hint: "Handle with care." },
   cottoncandy: {
@@ -186,7 +191,7 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
     hint: "Anatomically correct.",
   },
   disco: { flavor: "Born under a mirror ball.", hint: "The night is still young." },
-  chimera: { flavor: "Borrowed parts. No refunds.", hint: "Something's off." },
+  chimera: { flavor: "Borrowed parts. No refunds.", hint: "Something’s off." },
   blueprint: {
     flavor: "Final hardware pending approval.",
     hint: "Still on the drawing board.",
@@ -198,10 +203,10 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   loading: { flavor: "Still loading. Any second now.", hint: "…" },
   eclipse: { flavor: "Do not look directly at it.", hint: "Once in a blue moon." },
   heisenbug: {
-    flavor: "Only renders right when nobody's watching.",
-    hint: "Cannot be reproduced.",
+    flavor: "Only renders right when nobody’s watching.",
+    hint: "Can’t be reproduced.",
   },
-  invisible: { flavor: "It's right there. Look closer.", hint: "Trust me, it exists." },
+  invisible: { flavor: "It’s right there. Look closer.", hint: "Trust me, it exists." },
   pixel: { flavor: "Rendered in 1987. Still runs.", hint: "Insert coin." },
   retro: {
     flavor: "The original: big claw, no apologies.",

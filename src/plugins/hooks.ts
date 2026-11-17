@@ -20,6 +20,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { mergeBeforeAgentFinalize } from "./hook-before-agent-finalize.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import { isHookContextEligible } from "./hook-context-eligibility.js";
@@ -39,7 +40,6 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
-  BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
   HookContext,
@@ -53,7 +53,6 @@ import { withHookTimeout } from "./hook-timeout.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -339,63 +338,6 @@ export function createHookRunner(
     };
   };
 
-  const mergeBeforeAgentFinalize = (
-    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
-    next: PluginHookBeforeAgentFinalizeResult,
-  ): BeforeAgentFinalizeResultWithRetryCandidates => {
-    const normalizeRetry = (
-      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): BeforeAgentFinalizeRetry | undefined => {
-      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
-      if (!instruction) {
-        return undefined;
-      }
-      return {
-        ...retry,
-        instruction,
-      };
-    };
-    if (acc?.action === "finalize") {
-      return acc;
-    }
-    if (next.action === "finalize") {
-      return { action: "finalize", reason: next.reason };
-    }
-    if (acc?.action === "revise" && next.action === "revise") {
-      const nextRetry = normalizeRetry(next.retry);
-      const retryCandidates = [
-        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
-        ...(nextRetry ? [nextRetry] : []),
-      ];
-      const retry = retryCandidates[0];
-      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
-        action: "revise",
-        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
-        ...(retry ? { retry } : {}),
-      };
-      if (retryCandidates.length > 1) {
-        Object.defineProperty(result, "retryCandidates", {
-          configurable: true,
-          enumerable: false,
-          value: retryCandidates,
-        });
-      }
-      return result;
-    }
-    if (acc?.action === "revise") {
-      return acc;
-    }
-    if (next.action === "revise") {
-      const retry = normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: next.reason,
-        ...(retry ? { retry } : {}),
-      };
-    }
-    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
-  };
-
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
@@ -574,8 +516,10 @@ export function createHookRunner(
       runModifyingHook(hookName, event, ctx, policy);
 
   // Keep the optional handler scope in host arguments, never in the plugin context.
-  const bindClaimingHook = <K extends ClaimingHookName>(hookName: K) =>
-    (runClaimingHook<K, HookResult<K>>).bind(undefined, hookName);
+  const bindClaimingHook = <K extends ClaimingHookName>(
+    hookName: K,
+    stopOnError?: (ctx: HookContext<K>) => boolean,
+  ) => (runClaimingHook<K, HookResult<K>>).bind(undefined, hookName, stopOnError);
 
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
@@ -702,18 +646,22 @@ export function createHookRunner(
    */
   async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
     hookName: K,
+    stopOnError: ((ctx: HookContext<K>) => boolean) | undefined,
     event: HookEvent<K>,
     ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
-    if (hooks.length === 0) {
-      return undefined;
-    }
-
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
 
-    const outcome = await runClaimingHooksList(hooks, hookName, event, ctx, runHandler);
+    const outcome = await runClaimingHooksList(
+      hooks,
+      hookName,
+      event,
+      ctx,
+      runHandler,
+      stopOnError?.(ctx),
+    );
     return outcome.status === "handled" ? outcome.result : undefined;
   }
 
@@ -726,6 +674,7 @@ export function createHookRunner(
     event: HookEvent<K>,
     ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
+    stopOnError = false,
   ): Promise<
     | { status: "handled"; result: TResult }
     | { status: "declined" }
@@ -765,6 +714,11 @@ export function createHookRunner(
         } catch (err) {
           firstError ??= sanitizeHookError(err);
           handleHookError({ hookName, pluginId: current.pluginId, error: err });
+          // An invoked ACP handler may already have started work, including after a timeout.
+          // Only a decline or a reload refusal before invocation permits another runtime.
+          if (stopOnError) {
+            throw err;
+          }
         }
         if (replaced) {
           registration = selection.current(hook);
@@ -905,6 +859,7 @@ export function createHookRunner(
       : undefined;
     return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
       "before_dispatch",
+      undefined,
       event,
       ctx,
       runHandler,
@@ -1094,7 +1049,7 @@ export function createHookRunner(
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
-    runReplyDispatch: bindClaimingHook("reply_dispatch"),
+    runReplyDispatch: bindClaimingHook("reply_dispatch", (ctx) => ctx.dispatchKind === "acp"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
       // Handlers see the latest payload without inheriting host-only media trust.
       eventForHandler: (event, result) => ({

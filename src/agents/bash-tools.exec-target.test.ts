@@ -249,3 +249,22 @@ describe("foreground node exec wait budgets", () => {
     },
   );
 });
+
+it("offers interruption only for locally owned foreground execution", () => {
+  for (const createTool of [createExecTool, createLazyExecTool]) {
+    const tool = createTool();
+    if (typeof tool.interruptible !== "function") {
+      throw new Error("Expected exec interruption policy");
+    }
+    expect(tool.interruptible({ command: ":" })).toBe(true);
+    for (const args of [
+      { host: "node" as const },
+      { node: "remote" },
+      { durable: true, background: true },
+      { background: true },
+    ]) {
+      expect(tool.interruptible({ command: ":", ...args })).toBe(false);
+    }
+    expect(pinExecToolTarget(tool, { host: "node" }).interruptible).toBeUndefined();
+  }
+});

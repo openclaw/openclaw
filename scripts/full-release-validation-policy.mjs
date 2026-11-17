@@ -14,6 +14,7 @@ import {
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
+import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import {
   FULL_RELEASE_CHILD_EVIDENCE_JOB,
   MAX_RELEASE_ARTIFACT_BYTES,
@@ -66,7 +67,13 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
     if (!normalCi || !Array.isArray(normalCi.jobs)) {
       throw new Error("Release advisory child evidence is invalid");
     }
-    if (normalCi.jobs.some(isFailedJob)) {
+    if (
+      evaluateReleaseChildPolicy({
+        child: { ...normalCi, key: "normalCi" },
+        targetVersion: manifest.validationInputs?.targetVersion,
+        targetSha: manifest.targetSha,
+      }).blockingJobs.length > 0
+    ) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }
@@ -86,6 +93,9 @@ const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+// GitHub can leave runnerless same-name copies after any rerun request; they never settle.
+export const GHOST_JOBS_ADVICE =
+  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
 
 export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
@@ -273,7 +283,7 @@ const CHILD_SPECS = Object.freeze([
     displayName: "OpenClaw Release Checks",
     key: "releaseChecksCandidate",
     parentJobName: "Run release checks candidate validation",
-    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package"],
+    rerunGroups: ["all", "cross-os", "windows-node", "live-e2e", "package", "qualified-package"],
     suffix: "-release-checks-candidate",
     workflow: "openclaw-release-checks.yml",
   },
@@ -418,6 +428,25 @@ export function classifyReleaseGhTransportError(error) {
   return TRANSIENT_GH_TRANSPORT_PATTERN.test(text) ? "transient" : "ambiguous";
 }
 
+export function evidenceReadRetryDelay(args, error, attempt) {
+  // Only these argument shapes are GETs; fields, input, methods, and GraphQL
+  // can mutate state and must never acquire retries through this read wrapper.
+  const isGet =
+    args[0] === "api" &&
+    /^(?:repos\/|rate_limit$)/u.test(args[1] ?? "") &&
+    (args.length === 2 || (args.length === 3 && args[2] === "--allow-escape-sequences"));
+  const diagnostic = `${error?.message ?? ""}\n${error?.stderr ?? ""}`;
+  if (
+    !isGet ||
+    attempt >= 3 ||
+    /HTTP [1-4][0-9]{2}\b/u.test(diagnostic) ||
+    classifyReleaseGhTransportError(error) !== "transient"
+  ) {
+    throw error;
+  }
+  return 2_000 * 2 ** attempt;
+}
+
 // GitHub can persistently 5xx one page size of an attempt-jobs listing (for example a
 // rerun attempt carrying forward hundreds of jobs) while smaller pages of the same
 // listing succeed. Each size reads the complete paginated listing, so results never
@@ -429,9 +458,29 @@ export function isReleaseGhServerError(error) {
   return GH_SERVER_ERROR_PATTERN.test(releaseGhTransportErrorText(error));
 }
 
-export async function readReleaseJobListing(readListing) {
-  for (const [index, perPage] of RELEASE_JOB_LISTING_PAGE_SIZES.entries()) {
-    const smallerPageFallback = index < RELEASE_JOB_LISTING_PAGE_SIZES.length - 1;
+export function releaseWatcherJobName(name) {
+  switch (name) {
+    case "Release Decision / Watch":
+      return "Release Decision";
+    case "Diagnostic Drain / Watch":
+      return "Diagnostic Drain";
+    default:
+      return name;
+  }
+}
+
+export async function readReleaseJobListing(
+  readListing,
+  pageSizes = RELEASE_JOB_LISTING_PAGE_SIZES,
+) {
+  if (
+    !pageSizes.length ||
+    pageSizes.some((size) => !RELEASE_JOB_LISTING_PAGE_SIZES.includes(size))
+  ) {
+    throw new Error("Invalid release job page size");
+  }
+  for (const [index, perPage] of pageSizes.entries()) {
+    const smallerPageFallback = index < pageSizes.length - 1;
     try {
       return await readListing(perPage, { smallerPageFallback });
     } catch (error) {
@@ -654,7 +703,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       if (identityNames.has(name)) {
         throw Object.assign(
           new Error(
-            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}`,
+            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
           ),
           { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
@@ -721,12 +770,19 @@ export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) 
 
 export function validateReleaseChildDispatchBinding({
   child,
+  childReuse,
   coveragePolicy,
   log,
   plannedRunAttempt,
   repository,
   targetSha,
 }) {
+  if (childReuse) {
+    const witnesses = [...String(log).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu)];
+    if (witnesses.length !== 1 || witnesses[0][1] !== releaseChildReuseSha256(childReuse)) {
+      throw new Error(`release child reuse adoption witness mismatch: ${child.key}`);
+    }
+  }
   const escapedRepo = String(repository).replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const exactPattern = new RegExp(
     `https://github\\.com/${escapedRepo}/actions/runs/([1-9][0-9]*) \\(attempt ([1-9][0-9]*)\\)`,
@@ -784,7 +840,14 @@ function candidatePreparationRequired(input) {
     return false;
   }
   if (
-    ["all", "plugin-prerelease", "cross-os", "windows-node", "package"].includes(input.rerunGroup)
+    [
+      "all",
+      "plugin-prerelease",
+      "cross-os",
+      "windows-node",
+      "package",
+      "qualified-package",
+    ].includes(input.rerunGroup)
   ) {
     return true;
   }
@@ -803,7 +866,9 @@ function releaseExecutionChildRequired(spec, input, npmTelegramForAll) {
       return input.rerunGroup === "npm-telegram" || npmTelegramForAll;
     case "releaseChecksCandidate":
       return (
-        ["all", "cross-os", "windows-node", "package"].includes(input.rerunGroup) ||
+        ["all", "cross-os", "windows-node", "package", "qualified-package"].includes(
+          input.rerunGroup,
+        ) ||
         (input.rerunGroup === "live-e2e" && !stringValue(input.liveSuiteFilter).trim())
       );
     default:
@@ -1544,8 +1609,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion });
+export function terminalPolicyPass(child, targetVersion, targetSha) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
@@ -1568,6 +1633,17 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   // can therefore need only this failed metadata job, never its passing workloads.
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
+  }
+  // The artifact seal depends on the entire npm stage. Retrying its one failed
+  // leaf also reruns the seal; neither failure is waived or posted separately.
+  const npmLeaf = failed.filter((name) => name.startsWith("Prepare npm artifacts / "));
+  if (
+    childKey === "artifact:npm" &&
+    failed.length === 2 &&
+    npmLeaf.length === 1 &&
+    failed.includes("Seal artifact producer receipt")
+  ) {
+    return { failed, jobName: npmLeaf[0], mode: "single-job" };
   }
   if (failed.length !== 1) {
     throw new Error(
@@ -1615,9 +1691,9 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-function releaseChildBlockers(selected, targetVersion) {
+function releaseChildBlockers(selected, targetVersion, targetSha) {
   const childJobBlockers = selected.flatMap((child) =>
-    evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+    evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1639,7 +1715,7 @@ function releaseChildBlockers(selected, targetVersion) {
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, targetVersion) &&
+        !terminalPolicyPass(child, targetVersion, targetSha) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1662,6 +1738,7 @@ export function classifyReleaseSnapshot({
   extraErrors = [],
   localFailures = [],
   targetVersion,
+  targetSha,
 }) {
   const selected = children.filter((child) => child.selected);
   const active = selected.filter(
@@ -1670,7 +1747,7 @@ export function classifyReleaseSnapshot({
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
-  const childBlockers = releaseChildBlockers(selected, targetVersion);
+  const childBlockers = releaseChildBlockers(selected, targetVersion, targetSha);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
@@ -1688,7 +1765,7 @@ export function classifyReleaseSnapshot({
     activeRunIds,
     advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
-      evaluateReleaseChildPolicy({ child, targetVersion }).waivers.map((waiver) =>
+      evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).waivers.map((waiver) =>
         Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
       ),
     ),
@@ -1876,7 +1953,6 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     if (
       payload.attemptEvidenceVersion !== 3 ||
-      payload.targetSha !== payload.workflowSha ||
       payload.releaseProfile !== coverage.profile ||
       payload.rerunGroup !== "all" ||
       !payload.sourceAdmission?.qualificationAdmission ||
@@ -1904,9 +1980,12 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
-      // Reuse retains the original producer; strict chain validation separately
-      // authenticates that root and proves the complete changelog-only delta.
-      const producer = child.source === "reused" && reusedProducer ? reusedProducer : payload;
+      // Reuse retains the original producer. Strict validation authenticates
+      // either its child workload closure or the whole-root changelog delta.
+      const producer =
+        child.source === "reused"
+          ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
+          : payload;
       if (
         !child.required ||
         !child.selected ||
@@ -2415,6 +2494,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
     extraErrors: executionPlan.errors,
     localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
+    targetSha: executionPlan.targetSha,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
     throw new Error(`${label} waivers differ from checked-in release tooling policy`);
@@ -2494,6 +2574,8 @@ function verifyStateTransition(decision, drain, executionPlan) {
         Object.entries(state.children).map(([key, child]) =>
           Object.assign({}, child, { key, jobs: child.timing.jobs }),
         ),
+        executionPlan.targetVersion,
+        executionPlan.targetSha,
       ).map((issue) => normalizeIssue(issue, "release_blocker")),
     ];
     const previous = new Map(

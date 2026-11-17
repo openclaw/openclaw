@@ -28,6 +28,9 @@ openclaw-board-view {
 .board-view {
   --board-line: color-mix(in srgb, var(--border) 84%, transparent);
   --board-surface: color-mix(in srgb, var(--panel) 94%, transparent);
+  /* Lets the narrow phone block below restyle .board-grid. Cards still query the
+     grid, their nearest container, whose content box has the same width. */
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -167,6 +170,26 @@ openclaw-board-widget-cell[hidden] {
     grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
     order: var(--board-widget-order);
   }
+
+  /* Phone layout only (PHONE_LAYOUT_QUERY): reports and progress cards show all
+     their content, so the board is the only thing a swipe scrolls. Desktop keeps
+     saved heights everywhere, narrow side panels included, so content may
+     scroll inside a card the user sized. Saved rows stay the minimum height. */
+  @media (max-width: 768px),
+    (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    .board-grid {
+      grid-auto-rows: minmax(56px, auto);
+    }
+
+    /* Other cards keep their saved height: their content never grows the rows. */
+    .board-widget__body {
+      contain: size;
+    }
+
+    .board-widget--fit-content > .board-widget__body {
+      contain: content;
+    }
+  }
 }
 
 .board-grid__append-zone {
@@ -283,14 +306,6 @@ openclaw-board-widget-cell {
   height: 27px;
   line-height: 1;
   width: 27px;
-}
-
-.board-widget__menu-heading {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  padding: 7px 9px 3px;
-  text-transform: uppercase;
 }
 
 .board-widget__menu-empty {

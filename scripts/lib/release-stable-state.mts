@@ -13,8 +13,9 @@ export const RELEASE_PHASES = [
   "publish",
   "flip-github",
   "sync-beta",
-  "macos",
+  // Closeout records pending apps; macOS retries must preserve its independent receipt.
   "closeout",
+  "macos",
 ] as const;
 export type ReleasePhase = (typeof RELEASE_PHASES)[number];
 const phaseSchema = z.enum(RELEASE_PHASES);
@@ -365,7 +366,9 @@ export function getReleasePhaseData(state: ReleaseState) {
 }
 export function resetReleasePhases(state: ReleaseState, from: ReleasePhase): void {
   const data = getReleasePhaseData(state);
-  for (const phase of RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from))) {
+  // Closeout and app publication have independent receipts and can restart separately.
+  const phases = from === "closeout" ? [from] : RELEASE_PHASES.slice(RELEASE_PHASES.indexOf(from));
+  for (const phase of phases) {
     state.history.push({
       at: new Date().toISOString(),
       phase,

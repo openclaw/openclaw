@@ -22,6 +22,7 @@ export const LOBSTER_PALETTE_WEIGHTS = [
   [{ id: "leonardodepinchy", shell: "#ddc595", claw: "#b99161" }, 1],
   [{ id: "shellvis", shell: "#f0c49f", claw: "#4b6694" }, 1],
   [{ id: "alexandergrahamshell", shell: "#d7c3a5", claw: "#aa8759" }, 1],
+  [{ id: "santaclaws", shell: "#c8202f", claw: "#de3a3f" }, 1],
   [{ id: "clawnadian", shell: "#d52b1e", claw: "#e5483b" }, 1],
   [{ id: "clawtron", shell: "#8d99a6", claw: "#a2aeba" }, 1],
   [{ id: "selene", shell: "#c9ced8", claw: "#d8dde5" }, 1],

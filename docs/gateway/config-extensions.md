@@ -138,6 +138,18 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
+- Retained stdio MCP children do not consume the spawn broker's 256 concurrent
+  startup slots once their startup handoff completes. Ordinary commands can
+  continue starting while session servers stay alive. The broker also limits
+  pending and retained children to 512 total, with at most 448 MCP children,
+  leaving 64 slots available to ordinary commands. Both host and worker enforce
+  these limits; capacity errors direct you to close unused sessions or running
+  processes before retrying. Reservations last until process cleanup settles.
+  Unconfirmed launch outcomes keep their reservations across broker restarts;
+  restart the Gateway if capacity remains unavailable after session cleanup.
+  Session and command owners retain control of process lifetime. The runtime
+  limit above still applies, and native broker resources have a separate
+  256-resource limit.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin
@@ -213,7 +225,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       "voice-call": {
         enabled: true,
         hooks: {
-          allowPromptInjection: false,
+          allowPromptModification: false,
         },
         config: { provider: "twilio" },
       },
@@ -229,7 +241,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
-- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.hooks.allowPromptModification`: when `false`, core blocks prompt-mutating hooks such as `before_prompt_build`. Applies to native plugin hooks and supported bundle-provided hook directories.
 - `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, and `agent_end`. It also grants the bounded, invocation-scoped `session_end` ended-transcript reader; metadata-only `session_end` handlers remain registerable without the grant.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of normalized `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.

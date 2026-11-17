@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   normalizeChatFastModeInput,
@@ -310,7 +311,7 @@ it.each([
     );
   },
 );
-it("keeps a saved off preference clearable on a no-op route", () => {
+it("hides speed controls while preserving a saved off preference on a no-op route", () => {
   const sessionsResult = session("claude-sonnet-5", "anthropic");
   expectFast(
     {
@@ -322,7 +323,7 @@ it("keeps a saved off preference clearable on a no-op route", () => {
         model("claude-opus-5", "Opus 5", "anthropic", { supportsFastMode: true }),
       ],
     },
-    { supported: true, disabled: false, nextValue: "" },
+    { supported: false, disabled: true, nextValue: "", persistedOverride: "off" },
   );
 });
 
@@ -450,12 +451,12 @@ it("uses Standard for a model's authoritative Standard-only capability without c
       currentOverride: "off",
       label: "Standard",
       disabled: true,
-      supported: true,
+      supported: false,
       ultrafastSupported: false,
     });
     expectFast(
       fastRoute({ supportsFastMode: false, serviceTiers: ["priority", "ultrafast"] }, { fastMode }),
-      { disabled: !fastMode },
+      { disabled: true, supported: false },
     );
   }
 });
@@ -467,7 +468,7 @@ it.each<[string[], Partial<FastState>]>([
   ],
   [
     ["default"],
-    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: true },
+    { active: false, currentOverride: "off", label: "Standard", disabled: true, supported: false },
   ],
 ])("recovers saved Ultrafast with tiers %j", (serviceTiers, expected) => {
   expectFast(fastRoute({ supportsServiceTierRecovery: true, serviceTiers }), {
@@ -485,4 +486,19 @@ it("preserves the wire preference without route recovery capability", () => {
     }),
     { currentOverride: "ultrafast", label: "Ultrafast", ultrafastSupported: false },
   );
+});
+
+it("routes the default model fallback through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const state = resolveChatModelSelectState(
+      modelState({
+        sessionsResult: createSessionsListResult({ defaultsModel: "", defaultsProvider: "" }),
+      }),
+    );
+    expect(translate).toHaveBeenCalledWith("chat.modelControls.defaultModel", undefined);
+    expect(state.defaultLabel).toBe(i18n.t("chat.modelControls.defaultModel"));
+  } finally {
+    translate.mockRestore();
+  }
 });

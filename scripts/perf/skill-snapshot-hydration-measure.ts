@@ -9,6 +9,11 @@
  * src/skills/runtime/session-snapshot.ts beneath that directory before editing.
  * Setup and first worker projection are outside the measured warm window. This
  * owner microbenchmark does not measure Gateway startup, admission, or remote I/O.
+ * --fresh --sessions 1000 retains fresh sessions with 135 skills after normal eligibility
+ * checks. Use --expose-gc for retained heap, and --snapshot <path> for owner attribution.
+ * --fixture-dir <unused-path> gives serial A/B processes identical source paths; the
+ * owned fixture is removed on completion. Digests normalize this root and the
+ * process-start-based snapshot version; all other catalog bytes remain exact.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -18,7 +23,9 @@ import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { writeHeapSnapshot } from "node:v8";
 import type { SkillSnapshot } from "../../src/skills/types.js";
 
 const { values } = parseArgs({
@@ -26,9 +33,16 @@ const { values } = parseArgs({
     output: { type: "string" },
     allocations: { type: "boolean" },
     "baseline-dir": { type: "string" },
+    fresh: { type: "boolean" },
+    sessions: { type: "string", default: "1000" },
+    snapshot: { type: "string" },
+    "fixture-dir": { type: "string" },
   },
 });
 assert(values.output, "--output is required");
+const freshSessions = Number(values.sessions);
+assert(Number.isSafeInteger(freshSessions) && freshSessions > 0 && freshSessions <= 100_000);
+assert(!values.snapshot || global.gc, "--snapshot requires --expose-gc");
 const output = path.resolve(values.output);
 const ownerSource = path.resolve(
   values["baseline-dir"] ?? ".",
@@ -38,7 +52,12 @@ const ownerSha256 = createHash("sha256")
   .update(await readFile(ownerSource))
   .digest("hex");
 await mkdir(path.dirname(output), { recursive: true });
-const fixture = await mkdtemp(path.join(path.dirname(output), "skill-hydration-fixture-"));
+const fixture = values["fixture-dir"]
+  ? path.resolve(values["fixture-dir"])
+  : await mkdtemp(path.join(path.dirname(output), "skill-hydration-fixture-"));
+if (values["fixture-dir"]) {
+  await mkdir(fixture);
+}
 Object.assign(process.env, {
   HOME: fixture,
   USERPROFILE: fixture,
@@ -59,7 +78,7 @@ const { stripRuntimeOnlySessionSkillsFields } =
 const inspector = values.allocations ? new Session() : undefined;
 try {
   const workspaceDir = path.join(fixture, "workspace");
-  const skillCount = 256;
+  const skillCount = values.fresh ? 135 : 256;
   for (let index = 0; index < skillCount; index++) {
     const name = `synthetic-${String(index).padStart(3, "0")}`;
     const roots =
@@ -71,7 +90,7 @@ try {
       await mkdir(dir, { recursive: true });
       await writeFile(
         path.join(dir, "SKILL.md"),
-        `---\nname: ${name}\ndescription: Synthetic skill ${index}\n---\nSynthetic instructions.\n`,
+        `---\nname: ${name}\ndescription: Synthetic skill ${index}\n---\n${"Synthetic instructions.\n".repeat(values.fresh ? 200 : 1)}`,
       );
     }
   }
@@ -99,15 +118,25 @@ try {
     skillsSnapshot: initial,
   }).skillsSnapshot;
   assert(saved);
-  const sessions = Array.from({ length: 32 }, () => structuredClone(saved));
+  const sessions = values.fresh ? [] : Array.from({ length: 32 }, () => structuredClone(saved));
   const hydrate = (index: number) =>
     resolveReusableWorkspaceSkillSnapshot({
       ...params,
-      existingSnapshot: sessions[index % sessions.length],
+      existingSnapshot: values.fresh ? undefined : sessions[index % sessions.length],
     });
   for (let index = 0; index < 64; index++) {
     await hydrate(index);
   }
+  const collect = async () => {
+    if (global.gc) {
+      for (let pass = 0; pass < 3; pass++) {
+        await nextTurn();
+        global.gc();
+      }
+    }
+  };
+  await collect();
+  const heapBefore = global.gc ? process.memoryUsage().heapUsed : undefined;
   if (inspector) {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
@@ -116,7 +145,9 @@ try {
       includeObjectsCollectedByMinorGC: true,
     });
   }
-  const iterations = 3_200;
+  const iterations = values.fresh ? freshSessions : 3_200;
+  const retained: SkillSnapshot[] = [];
+  const timings: number[] = [];
   let workerRoundTrips = 0;
   const tasks = channel("openclaw.worker.task");
   const countTask = () => {
@@ -128,7 +159,12 @@ try {
   const started = performance.now();
   let last: SkillSnapshot | undefined;
   for (let index = 0; index < iterations; index++) {
+    const operationStarted = performance.now();
     last = (await hydrate(index)).snapshot;
+    timings.push(performance.now() - operationStarted);
+    if (values.fresh) {
+      retained.push(last);
+    }
   }
   const elapsedMs = performance.now() - started;
   const cpu = process.cpuUsage(cpuBefore);
@@ -140,17 +176,42 @@ try {
     sampledBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
     await writeFile(`${output}.heapprofile`, JSON.stringify(profile));
   }
-  assert.equal(last?.prompt, initial.prompt);
-  assert.equal(last?.discoverySkills?.length, skillCount);
+  assert(last);
+  assert.equal(last.prompt, initial.prompt);
+  assert.equal(last.discoverySkills?.length, skillCount);
+  await collect();
+  const retainedBytes =
+    heapBefore === undefined ? undefined : process.memoryUsage().heapUsed - heapBefore;
+  if (values.snapshot) {
+    await mkdir(path.dirname(path.resolve(values.snapshot)), { recursive: true });
+    writeHeapSnapshot(path.resolve(values.snapshot));
+  }
+  const digest = createHash("sha256");
+  for (const snapshot of values.fresh ? retained : [last]) {
+    digest.update(
+      JSON.stringify({ ...snapshot, version: 0 }).replaceAll(fixture, "/synthetic/fixture"),
+    );
+  }
+  timings.sort((a, b) => a - b);
   const result = {
     ownerSha256,
+    snapshotVersion: last.version,
     iterations,
-    sessionCount: sessions.length,
+    sessionCount: values.fresh ? freshSessions : sessions.length,
     skillCount,
+    flow: values.fresh ? "fresh" : "hydration",
     mode: inspector ? "allocation" : "timing",
     elapsedMs,
     processCpuMs: (cpu.user + cpu.system) / 1_000,
     mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1_000,
+    p50Ms: timings[Math.floor(timings.length * 0.5)],
+    p95Ms: timings[Math.ceil(timings.length * 0.95) - 1],
+    retainedBytes,
+    uniqueSnapshots: new Set(retained).size,
+    uniqueSkillObjects: new Set(retained.flatMap((snapshot) => snapshot.discoverySkills ?? []))
+      .size,
+    uniqueMetadataObjects: new Set(retained.flatMap((snapshot) => snapshot.skills)).size,
+    digest: digest.digest("hex"),
     workerRoundTrips,
     sampledBytes,
     sampledBytesPerHydration: sampledBytes === undefined ? undefined : sampledBytes / iterations,

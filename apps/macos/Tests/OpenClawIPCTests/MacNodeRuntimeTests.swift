@@ -423,15 +423,15 @@ struct MacNodeRuntimeTests {
         (
             "Error: unknown Claude session catalog parameter: extra",
             "INVALID_REQUEST: unknown Claude session parameter: extra"),
-        ("Error: transcript cursor is invalid", "INVALID_REQUEST: transcript cursor is invalid"),
+        ("Error: chat history cursor is invalid", "INVALID_REQUEST: chat history cursor is invalid"),
         (
             "Error: EACCES: permission denied, open /private/example",
             "UNAVAILABLE: Claude session catalog is unavailable"),
         (
-            "Error: Claude transcript changed while it was being read",
+            "Error: Claude chat history changed while it was being read",
             "UNAVAILABLE: Claude session catalog is unavailable"),
         (
-            "Error: Claude transcript page exceeded the safe scan limit",
+            "Error: Claude chat history page exceeded the safe scan limit",
             "UNAVAILABLE: Claude session item exceeded the size limit"),
     ])
     func `Claude worker failures keep native errors`(message: String, expected: String) async {
@@ -582,6 +582,39 @@ struct MacNodeRuntimeTests {
                     #expect(response.error?.details == .init(capabilities: ["location"], state: .disabledInOpenClaw))
                 }
             }
+        }
+    }
+
+    @Test(arguments: [
+        (OpenClawCameraCommand.snap.rawValue, #"{"delayMs":"500"}"#),
+        (OpenClawCameraCommand.clip.rawValue, #"{"includeAudio":"no"}"#),
+        (OpenClawLocationCommand.get.rawValue, #"{"timeoutMs":"5000"}"#),
+        (OpenClawScreenCommand.record.rawValue, #"{"format":"mov","fps":"x"}"#),
+    ])
+    func `malformed device params are rejected before permissions or capture`(
+        command: String,
+        paramsJSON: String) async
+    {
+        await TestIsolation.withUserDefaultsValues([
+            cameraEnabledKey: true,
+            locationModeKey: OpenClawLocationMode.always.rawValue,
+        ]) {
+            let services = await MainActor.run {
+                let services = MainActorServicesProbe()
+                services.permissionStates = [.camera: .denied, .microphone: .denied]
+                return services
+            }
+            let runtime = await MacNodeRuntime(
+                desktopAvailability: services.desktopAvailability,
+                makeMainActorServices: { services })
+
+            let response = await self.invoke(runtime, "req-malformed-params", command, paramsJSON)
+
+            #expect(response.ok == false)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: invalid \(command) params")
+            let recordingPaths = await MainActor.run { services.recordingPaths }
+            #expect(recordingPaths.isEmpty)
         }
     }
 

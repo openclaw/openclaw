@@ -30,7 +30,11 @@ describe("sandbox config merges", () => {
     ).docker;
 
     expect(resolved.env).toEqual({ LANG: "C.UTF-8", FOO: "2", BAR: "3" });
-    expect(resolved.ulimits).toEqual({ nofile: { soft: 10, hard: 20 }, nproc: 256 });
+    expect(resolved.ulimits).toEqual({ core: "0", nofile: { soft: 10, hard: 20 }, nproc: 256 });
+    expect(
+      resolve({ docker: { ulimits: { core: 128 } } }, { docker: { ulimits: { core: 64 } } }).docker
+        .ulimits,
+    ).toEqual({ core: 64 });
   });
 
   it("resolves docker binds and shared-scope override behavior", () => {

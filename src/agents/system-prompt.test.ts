@@ -1,5 +1,5 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   clearMemoryPluginState,
@@ -10,6 +10,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { prepareAgentMemoryPrompt } from "./memory-prompt-prepare.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
@@ -206,6 +207,7 @@ describe("buildAgentSystemPrompt", () => {
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
     ],
+    ["notes recorded setup completion", { bootstrapCompleted: true }, ["## Bootstrap Complete"]],
     [
       "includes bootstrap truncation notice in system prompt without raw diagnostics",
       {
@@ -379,21 +381,11 @@ describe("buildAgentSystemPrompt", () => {
       "keeps update and delegated controls distinct when both tools are present",
       { toolNames: ["openclaw", "gateway"] },
       [
-        "Config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
+        "For the Gateway hosting this session, config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
         "perform the work with `gateway`: update.run",
         "update.cleanup retires eligible recovery copies",
       ],
       ["models/providers, updates: ask `openclaw`"],
-    ],
-    [
-      "preserves Workshop guidance for deferred Code Mode tools",
-      {
-        toolNames: ["exec", "wait"],
-        capabilityToolNames: ["skill_workshop"],
-        codeModeActive: true,
-        promptMode: "minimal",
-      },
-      ["## Skill Workshop"],
     ],
     [
       "does not advertise /elevated full when auto-approved full access is unavailable",
@@ -423,6 +415,14 @@ describe("buildAgentSystemPrompt", () => {
       ["## Directory Roles", "User can toggle with /elevated on|off|ask|full."],
     ],
   ])("%s", expectPromptCase);
+  it("preserves Workshop guidance for deferred Code Mode tools", async () => {
+    // The skill-workshop plugin registers the Workshop section as its tool's prompt guidance.
+    onTestFinished((await activateWorkshopPluginForTest()).reset);
+    const deferred = { toolNames: ["exec", "wait"], capabilityToolNames: ["skill_workshop"] };
+    expect(renderPrompt({ ...deferred, codeModeActive: true, promptMode: "minimal" })).toContain(
+      "## Skill Workshop",
+    );
+  });
   it("conditions routine promotion on the available automation actions", () => {
     const withAutomations = renderPrompt({ toolNames: ["automations"] });
     const withoutAutomations = renderPrompt({ toolNames: ["read"] });
@@ -453,6 +453,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("sourceTool=template_add_setup");
+    expect(prompt).toContain("BOOTSTRAP.md last in that same turn");
     expect(prompt.match(/## \/tmp\/openclaw\/BOOTSTRAP\.md/g)).toHaveLength(1);
     expect(prompt.match(/Ask who I am\./g)).toHaveLength(1);
   });
