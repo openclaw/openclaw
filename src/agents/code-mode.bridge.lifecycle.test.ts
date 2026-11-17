@@ -165,12 +165,21 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       awaitResults: true,
     });
     await started.promise;
+    const readWatchdog = () => {
+      const { tools, recovery } = operation.watchdog.snapshot();
+      return { tools, recovery };
+    };
+    const startedWatchdog = readWatchdog();
     await vi.advanceTimersByTimeAsync(900_001);
+    const advancedWatchdog = readWatchdog();
     await operation.watchdog.tick(Date.now());
     await vi.waitFor(() =>
       expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
     );
-    expect(operation.abortSignal.reason).toBeUndefined();
+    expect(
+      operation.abortSignal.reason,
+      JSON.stringify({ startedWatchdog, advancedWatchdog }),
+    ).toBeUndefined();
     expect(operation.watchdog.snapshot().tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ explicitDeadlineAtMs: expect.any(Number) }),
