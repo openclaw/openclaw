@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -123,11 +124,12 @@ async function isPluginConfigured(
 async function listConfiguredMessageChannelPlugins(
   cfg: OpenClawConfig,
   accountResolution: AccountResolutionMode = "strict",
+  action?: ChannelMessageActionName,
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
     if (
-      resolveOutboundChannelPlugin({ channel: plugin.id, cfg }) &&
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg, action }) &&
       (await isPluginConfigured(plugin, cfg, accountResolution))
     ) {
       plugins.push(plugin);
@@ -136,8 +138,13 @@ async function listConfiguredMessageChannelPlugins(
   return plugins;
 }
 
-export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
-  return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
+export async function listConfiguredMessageChannels(
+  cfg: OpenClawConfig,
+  action?: ChannelMessageActionName,
+): Promise<string[]> {
+  return (await listConfiguredMessageChannelPlugins(cfg, "strict", action)).map(
+    (plugin) => plugin.id,
+  );
 }
 
 export async function resolveMessageChannelSelection(params: {
@@ -145,6 +152,7 @@ export async function resolveMessageChannelSelection(params: {
   channel?: string | null;
   fallbackChannel?: string | null;
   agentId?: string;
+  action?: ChannelMessageActionName;
   // Strict callers select usable runtime accounts. Directory inspection opts in before it knows
   // which account-scoped SecretRefs to redeem.
   accountResolution?: AccountResolutionMode;
@@ -166,6 +174,7 @@ export async function resolveMessageChannelSelection(params: {
       cfg,
       agentId,
       allowBootstrap: true,
+      action: params.action,
     });
     if (selectedPlugin) {
       return { channel: selectedPlugin.id, plugin: selectedPlugin };
@@ -191,6 +200,7 @@ export async function resolveMessageChannelSelection(params: {
   const configuredPlugins = await listConfiguredMessageChannelPlugins(
     params.cfg,
     params.accountResolution,
+    params.action,
   );
   const configured = configuredPlugins.map((plugin) => plugin.id);
   const [plugin] = configuredPlugins;

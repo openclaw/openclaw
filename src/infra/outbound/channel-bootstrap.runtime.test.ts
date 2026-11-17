@@ -147,6 +147,34 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 
+  it("uses an active action-only handler without exposing ordinary outbound support", () => {
+    const active = discordRegistry({
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }: { action: string }) => action === "send",
+        handleAction: vi.fn(async () => ({ content: [] })),
+      },
+    });
+    setActivePluginRegistry(active);
+    expect(bootstrapOutboundChannelPlugin({ ...discordParams, action: "send" })).toBe(active);
+    expect(loaderMocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(active);
+    expect(bootstrapOutboundChannelPlugin({ ...discordParams, action: "react" })).toBeUndefined();
+    expect(bootstrapOutboundChannelPlugin(discordParams)).toBeUndefined();
+  });
+
+  it("keeps an activated plugin-owned legacy action without a supportsAction predicate", () => {
+    const active = discordRegistry({
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction: vi.fn(async () => ({ content: [] })),
+      },
+    });
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(active);
+    expect(bootstrapOutboundChannelPlugin({ ...discordParams, action: "send" })).toBe(active);
+    expect(getActivePluginRegistry()?.channels[0]?.plugin.actions).toBeUndefined();
+  });
+
   it("activates the scoped setup shell without borrowing a cached same-id root sender", () => {
     const base = createChannelTestPluginBase({ id: "discord" });
     const root = { ...base };
