@@ -873,7 +873,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
     const firstConfigured = candidates.length;
     for (const loadPath of loadPaths) {
       if (typeof loadPath === "string" && loadPath.trim()) {
-        discoverFromPath({ rawPath: loadPath.trim(), origin: "config", workspaceDir });
+        discoverFromPath({ rawPath: loadPath, origin: "config", workspaceDir });
       }
     }
     // Explicit operator selection is its own fact: host-owned aliases keep bundled

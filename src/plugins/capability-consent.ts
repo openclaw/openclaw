@@ -1,4 +1,3 @@
-import path from "node:path";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -6,7 +5,6 @@ import type {
   PluginInstallRecord,
 } from "../config/types.plugins.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { resolveUserPath } from "../utils.js";
 import {
   inspectPluginCapabilityArtifact,
   resolvePluginArtifactDeclaredSurface,
@@ -22,6 +20,7 @@ import {
 } from "./capability-summary.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import type {
   PluginInstallArtifactConsentHandler,
   PluginInstallArtifactConsentRequest,
@@ -292,8 +291,8 @@ export function createManagedPluginArtifactConsentHandler(params: {
           Boolean(
             artifact.currentArtifactDir &&
             record.installPath &&
-            path.resolve(resolveUserPath(artifact.currentArtifactDir, params.env)) ===
-              path.resolve(resolveUserPath(record.installPath, params.env)),
+            resolveRecordedPluginPath(artifact.currentArtifactDir, params.env) ===
+              resolveRecordedPluginPath(record.installPath, params.env),
           ),
       );
       if (matchingOwners.length > 1) {

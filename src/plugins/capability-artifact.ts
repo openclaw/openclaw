@@ -10,9 +10,9 @@ import {
 } from "../infra/boundary-path.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveUserPath } from "../utils.js";
 import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { resolvePackageExtensionEntries } from "./package-manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -27,7 +27,7 @@ function resolvePluginArtifactManifests(
   env: NodeJS.ProcessEnv = process.env,
   context: PluginArtifactInspectionContext = {},
 ) {
-  const artifactRoot = fs.realpathSync(resolveUserPath(rootDir, env));
+  const artifactRoot = fs.realpathSync(resolveRecordedPluginPath(rootDir, env));
   const packageManifest = readRootJsonObjectSync({
     rootDir: artifactRoot,
     rootRealPath: artifactRoot,
@@ -49,11 +49,11 @@ function resolvePluginArtifactManifests(
     }
   }
 
-  const currentRoot = path.resolve(resolveUserPath(context.currentArtifactDir ?? rootDir, env));
+  const currentRoot = resolveRecordedPluginPath(context.currentArtifactDir ?? rootDir, env);
   const currentCanonicalRoot = resolvePathViaExistingAncestorSync(currentRoot);
   const loadPaths: string[] = [];
   for (const configuredPath of context.config?.plugins?.load?.paths ?? []) {
-    const source = path.resolve(resolveUserPath(configuredPath, env));
+    const source = resolveRecordedPluginPath(configuredPath, env);
     const canonicalSource = resolvePathViaExistingAncestorSync(source);
     if (
       !isPathInside(currentRoot, source) &&

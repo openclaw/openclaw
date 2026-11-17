@@ -15,6 +15,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
@@ -156,20 +157,35 @@ describe("git install target ownership", () => {
       };
       const packageDir = path.join(sourceDir, directory);
       await commitPlugin("nested", "2.0.0", packageDir);
-      const installed = await install({ directory, expectedPluginId: "nested" });
+      const reviewedPluginIds: string[] = [];
+      const consent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "git",
+        requireCapabilityConsent: true,
+        onCapabilityConsent: async (review) => {
+          reviewedPluginIds.push(review.pluginId);
+          return { reviewToken: review.reviewToken };
+        },
+      });
+      const installed = await install({
+        directory,
+        expectedPluginId: "nested",
+        onBeforePluginArtifactCommit: consent.onBeforePluginArtifactCommit,
+      });
+      expect(reviewedPluginIds).toEqual(["nested"]);
       const records = expectDefined(
         parsePluginInstallRecordMap(
           JSON.parse(
             serializePluginInstallRecordMap({
               demo: legacyRoot,
-              nested: {
+              nested: consent.applyAcceptedSurface("nested", {
                 source: "git",
                 spec,
                 installPath: installed.targetDir,
                 gitUrl: installed.git.url,
                 gitCommit: installed.git.commit,
                 gitDirectory: installed.git.directory,
-              },
+              }),
             }),
           ),
         ),
@@ -196,10 +212,16 @@ describe("git install target ownership", () => {
         installed.targetDir,
       );
       const nextCommit = await commitPlugin("nested", "3.0.0", packageDir);
+      const updateConsent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "git",
+        previousRecords: records,
+      });
       const updated = await install({
         directory: records.nested?.gitDirectory,
         expectedPluginId: "nested",
         mode: "update",
+        onBeforePluginArtifactCommit: updateConsent.onBeforePluginArtifactCommit,
       });
       expect(updated).toMatchObject({
         targetDir: installed.targetDir,
