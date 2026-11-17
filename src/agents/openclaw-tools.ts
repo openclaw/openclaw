@@ -433,10 +433,11 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
+  // A recorded widget surface can keep authoring its durable board on internal
+  // wakes. Tool policy and board authority still apply; this grants no renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
-      (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
+      (scheduledCaller ? scheduledWidgetExplicitlyAllowed : inlineWidgetClientAvailable)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
     !isCronRunSessionKey(widgetBoardSessionKey);

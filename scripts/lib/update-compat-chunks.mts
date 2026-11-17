@@ -714,6 +714,16 @@ export function writeUpdateCompatibilityChunks(params: {
       );
     }
     for (const entry of chunk.exports) {
+      // 2026.9.37 predates leased handoffs: its immutable updater explicitly
+      // denied this authority. Preserve that shipped denial, not main's live lease predicate.
+      // Remove when 2026.9.37 leaves the supported first-hop upgrade window.
+      if (
+        entry.origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+        entry.origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess"
+      ) {
+        lines.push(`export async function ${entry.exported}() { return false; }`);
+        continue;
+      }
       const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
       const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
       const match = matches[0];
