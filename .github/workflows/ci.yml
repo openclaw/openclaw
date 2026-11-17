@@ -6401,6 +6401,8 @@ jobs:
     with:
       candidate_artifact_id: ${{ needs.build-artifacts.outputs.published_driver_artifact_id }}
       candidate_sha256: ${{ needs.build-artifacts.outputs.published_driver_sha256 }}
+      target_context_ref: ${{ inputs.target_context_ref || github.base_ref || github.ref_name }}
+      qualification_baselines_json: ${{ inputs.qualification_baselines_json }}
 
   docker-seed-e2e:
     permissions:
