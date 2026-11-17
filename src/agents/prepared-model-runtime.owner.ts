@@ -5,6 +5,7 @@ import {
   getRuntimeConfigSnapshotMetadata,
   hashRuntimeConfigValue,
 } from "../config/runtime-snapshot.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
@@ -186,6 +187,29 @@ export function preparedModelRuntimeConfigsMatch(
   } catch {
     return false;
   }
+}
+
+/** Passive inventory may cross execution isolation, but never its configured source or scope. */
+export function preparedModelRuntimeCatalogInputsMatch(
+  left: PreparedModelRuntimeInput,
+  right: PreparedModelRuntimeInput,
+): boolean {
+  const inventoryKey = (input: PreparedModelRuntimeInput) =>
+    ownerKey({
+      ...input,
+      readOnly: false,
+      loadRuntimePlugins: false,
+      runtimePluginPurpose: undefined,
+      runtimePluginSelections: undefined,
+      allowGatewaySubagentBinding: false,
+    });
+  return (
+    inventoryKey(left) === inventoryKey(right) &&
+    preparedModelRuntimeConfigsMatch(
+      projectConfigOntoRuntimeSourceSnapshot(left.config),
+      projectConfigOntoRuntimeSourceSnapshot(right.config),
+    )
+  );
 }
 
 function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
