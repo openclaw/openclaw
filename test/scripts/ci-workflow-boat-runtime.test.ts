@@ -45,11 +45,12 @@ it("spends a mixed Boat allowance on the longest rows without dropping overflow"
         runner: "blacksmith-8vcpu-ubuntu-2404",
         predictedSeconds: 100,
       },
-    ].map((row) => ({
-      ...row,
-      requiresDist: row.checkName === "dist",
-      configs: ["test/vitest/bundled.config.ts"],
-    })),
+    ].map((row) =>
+      Object.assign(row, {
+        requiresDist: row.checkName === "dist",
+        configs: ["test/vitest/bundled.config.ts"],
+      }),
+    ),
     targetFiles: ["test/vitest/bundled.config.ts"],
     scopeEnv: { OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: "1" },
   });
