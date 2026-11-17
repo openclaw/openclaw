@@ -8,6 +8,10 @@ import type { SandboxFsBridge, SandboxFsPreparation } from "./fs-bridge.types.js
 export type LocalWorkspacePausePhase =
   | "pause"
   | "operation"
+  | "operation.gitState"
+  | "operation.pristine"
+  | "operation.snapshot"
+  | "operation.commit"
   | "recovery"
   | "capture"
   | "scan"

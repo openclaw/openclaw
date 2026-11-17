@@ -367,11 +367,6 @@ export async function finishGoalContinuationSettlement(
     if (owner.closed) {
       return;
     }
-    try {
-      owner.params.base.operatorAuthority?.assertCurrent();
-    } catch {
-      return;
-    }
     throw error;
   } finally {
     owner.close();

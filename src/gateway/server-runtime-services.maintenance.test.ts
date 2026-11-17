@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -55,10 +56,9 @@ describe("post-ready maintenance scheduling", () => {
   });
 
   it.each(["recovery", "memory pressure"])("defers optional work during %s", async (cause) => {
-    const constrainedMemory = vi
-      .spyOn(process, "constrainedMemory")
-      .mockReturnValue(cause === "memory pressure" ? 1024 ** 3 : 0);
-    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+    const lowMemory = vi
+      .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+      .mockReturnValue(cause === "memory pressure");
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const ready = createDeferredCore();
@@ -95,7 +95,7 @@ describe("post-ready maintenance scheduling", () => {
       expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
       finishRecovery.resolve();
       await recovery;
-      availableMemory.mockReturnValue(1024 ** 3);
+      lowMemory.mockReturnValue(false);
       await clock.advanceBy(1_000);
       await clock.advanceBy(1_000);
       expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
@@ -106,8 +106,7 @@ describe("post-ready maintenance scheduling", () => {
       finishRecovery.resolve();
       await recovery;
       await scheduler.stop();
-      availableMemory.mockRestore();
-      constrainedMemory.mockRestore();
+      lowMemory.mockRestore();
     }
   });
 

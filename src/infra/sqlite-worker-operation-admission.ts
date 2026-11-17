@@ -4,11 +4,11 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
+} from "./path-existence.js";
 import {
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,

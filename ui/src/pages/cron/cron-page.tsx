@@ -11,7 +11,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
-import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
@@ -107,7 +106,6 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           )
         }
       />
-      <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
@@ -129,7 +127,7 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => context,
     () => props.host,
   );
-  // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
+  // Route changes retarget Gateway job queries.
   createEffect(
     () => props.routeSearch ?? "",
     (search) => page.setRouteSearch(search),

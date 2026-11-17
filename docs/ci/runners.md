@@ -551,6 +551,12 @@ in the rollout list below to allocate Boat runners. It does not change the repos
 same-repository first attempts whose source author and starter are each one of
 `davemorin`, `jalehman`, `joshavant`, `steipete`, or `vincentkoc` may allocate Boat
 runners. Other authors, starters, forks, and retries use GitHub-hosted runners.
+For ordinary admitted runs, hybrid remains the base route. Preflight reads the
+configured Boat organization's included start allowance and sends at most 20 of
+the longest eligible Node rows to Boat. Checks, builds and other rows retain
+hybrid routing. Missing credentials, unreadable limits or exhausted headroom
+select zero Boat rows. Explicit qualification dispatches retain their full
+Boat route. See [Boat start admission](/ci/capacity#boat-start-admission).
 Source author still means the PR creator or push commit author; an owner merging
 a contributor commit does not change that provenance. Scheduled and ordinary
 manual runs with no source author stay hosted. A maintainer qualification
@@ -586,7 +592,8 @@ Boat uses store-only dependency setup. Scheduled cache warmers stay on hosted
 Ubuntu and retain the existing hosted namespace; a cache miss is valid. The
 former build and named Node-row pilots are replaced by this general route.
 Failed-job-only retries retain their emitted plan but execute on hosted runners
-without the Boat CPU cap. Rerunning all jobs creates a new GitHub-hosted plan.
+without the Boat CPU cap. Mixed ordinary runs retain the existing hybrid retry
+route. Rerunning all jobs creates a new GitHub-hosted plan.
 
 ### Scheduled Android CodeQL routing
 

@@ -883,7 +883,7 @@ struct MacChatSurface: View {
         isGatewayConnected: Bool) -> OpenClawChatTalkControl?
     {
         guard usesPrimaryAppRuntime else { return nil }
-        let statusText: String = if !appState.talkEnabled {
+        let statusText = if !appState.talkEnabled {
             String(localized: "Talk mode off")
         } else if talkController.isPaused {
             String(localized: "Talk mode paused")

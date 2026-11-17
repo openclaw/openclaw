@@ -267,7 +267,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     /** Immutable presentation surface; independent of creation provenance. */
-    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
+    createdSurface: Type.Optional(
+      Type.Union([Type.Literal("plugin-dock"), Type.Literal("github-publication")]),
+    ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
