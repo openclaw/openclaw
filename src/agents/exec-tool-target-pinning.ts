@@ -163,7 +163,7 @@ export function pinExecToolTarget(tool: AnyAgentTool, target: PinnedExecToolTarg
     ...tool,
     parameters: restrictExecToolParameters(tool.parameters, target.host, Boolean(pinnedNode)),
     ...(getExecutionTimeoutMs
-      ? { getExecutionTimeoutMs: (args: unknown) => getExecutionTimeoutMs(pinArgs(args)) }
+      ? { getExecutionTimeoutMs: (args, context) => getExecutionTimeoutMs(pinArgs(args), context) }
       : {}),
     // The whole tool lifecycle sees only pinned arguments: preparation resolves
     // workdir/env against the pinned host, finalize's host-consistency checks

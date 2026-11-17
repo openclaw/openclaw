@@ -87,6 +87,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  let getRunAbortDeadlineAtMs: (() => number | undefined) | undefined;
   const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
   const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
@@ -308,6 +309,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       );
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
@@ -460,7 +462,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   try {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
+      bindRunAbortDeadline: (source: () => number | undefined) => {
+        getRunAbortDeadlineAtMs = source;
+      },
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         awaitSessionDiffBaseline,
         watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
         agentId: params.setup.sessionAgentId,
