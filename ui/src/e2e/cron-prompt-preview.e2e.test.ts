@@ -11,7 +11,7 @@ import {
   cronList,
   cronRuns,
   cronSidebarFeatureMethods,
-  openAutomation,
+  editAutomation,
 } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -56,10 +56,12 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
-        await openAutomation(page, job.id);
+        await editAutomation(page, job.id);
         const input = page.locator("#cron-payload-text");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe(prompt);
+        // The rendered preview sits with the other task settings under Advanced.
+        await page.locator("details.cron-advanced > summary").click();
         const preview = page.locator(".cron-editor .chat-text");
         await preview.waitFor({ state: "visible" });
         const frame = await takeControlUiScreenshotFrame(page, input, [input, preview], {

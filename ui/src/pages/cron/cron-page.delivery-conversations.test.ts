@@ -4,7 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { click, expectCalls, inputValue } from "./cron-assertions.test-support.ts";
+import { click, expectCalls, inputValue, waitForElement } from "./cron-assertions.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -99,6 +99,8 @@ it("keeps primary account directory targets out of failure-alert suggestions", a
       failureAlert: { channel: "telegram", accountId: "personal", to: "-100personal" },
     }),
   );
+  // Delivery settings live in the automation's settings, opened from Edit.
+  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
   const optionsFor = (selector: string) => {
     const input = page.querySelector<HTMLInputElement>(selector);
     expect(input).not.toBeNull();

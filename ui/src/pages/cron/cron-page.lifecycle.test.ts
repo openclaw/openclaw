@@ -671,6 +671,11 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       agents: [{ id: "main" }],
     };
     const edited = publication === "roster after same-scope intent" || changingCatalog;
+    // The link opens the automation's history; its settings open from Edit.
+    const openSettings = async () => {
+      (await waitForElement(page, testId("cron-edit"))).click();
+      await page.settle();
+    };
     try {
       await page.settle();
       expect(agentSelection.state.scopeId).toBeNull();
@@ -681,6 +686,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       await page.settle();
       if (edited) {
         lookup.resolve(job);
+        await openSettings();
         await waitForElement(page, "#cron-name");
         if (changingCatalog) {
           await expectModels(page, ["previous-model"]);
@@ -699,6 +705,9 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       await agents.ensureList();
       expect(agentSelection.state.scopeId).toBe("main");
       lookup.resolve(job);
+      if (!edited) {
+        await openSettings();
+      }
       if (changingCatalog) {
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
@@ -740,12 +749,13 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   const { page, gateway } = mountCronPage(request);
   page.routeSearch = `?job=${selected.id}`;
+  const previousHeader = (await waitForElement(page, ".cron-detail-meta")).textContent;
+  (await waitForElement(page, testId("cron-edit"))).click();
   await waitForElement(page, "#cron-name");
   fillInput(page, "#cron-name", "Unsaved automation");
   await page.settle();
   const definition = page.cron.cronEditingJob;
   const draft = page.cron.cronForm;
-  const previousHeader = text(page, ".cron-detail-meta");
   emitEvent(gateway, "cron", { jobId: selected.id, action: "finished" }, 2);
   pending.resolve({
     ...selected,
@@ -755,7 +765,6 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   });
   trailing.resolve({ ...selected, state: { triggerEvalCount: 9 } });
   await waitForCronPage(() => {
-    expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
     expect(page.cron.cronEditingJob?.state?.triggerEvalCount).toBe(9);
   });
   expect(reads).toBe(3);
@@ -765,10 +774,10 @@ it("refreshes off-page condition activity without replacing unsaved settings", a
   expect(text(page, ".cron-detail-title")).toContain("Saved automation");
   expect(page.cron.cronForm).toBe(draft);
   expect(inputValue(page, "#cron-name")).toBe("Unsaved automation");
-  page
-    .querySelector<HTMLElement>(testId("cron-detail-tab-history"))!
-    .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+  // Leaving the settings shows the refreshed runtime facts in the header and history.
+  page.querySelector<HTMLElement>(testId("cron-cancel"))!.click();
   await waitForCronPage(() => expect(text(page, ".cron-condition-activity__metric dd")).toBe("9"));
+  expect(text(page, ".cron-detail-meta")).not.toBe(previousHeader);
 });
 
 function controlVisibility(initial: DocumentVisibilityState = "visible") {

@@ -40,7 +40,7 @@ describe("cron view run history", () => {
     expect(entries).toHaveLength(cases.length);
     cases.forEach(([, title, facts, error], index) => {
       const entry = entries[index]!;
-      expect(entryText(entry, "title")?.replace(/\s+/g, " ").trim()).toBe(`job-1 · ${title}`);
+      expect(entryText(entry, "title")?.replace(/\s+/g, " ").trim()).toBe(title);
       expect(entryText(entry, "facts")).toBe(facts);
       if (error) {
         expect(entry.textContent).toContain(error);
@@ -69,11 +69,13 @@ describe("cron view run history", () => {
     const entry = container.querySelector(".cron-run-entry");
     expect(entryText(entry ?? undefined, "title")).toContain("Condition check failed");
     expect(entryText(entry ?? undefined, "facts")).toBe("");
-    expect(entryText(entry ?? undefined, "meta")).not.toContain("403");
+    expect(entryText(entry ?? undefined, "meta") ?? "").not.toContain("403");
     expect(entry?.textContent?.split(error)).toHaveLength(2);
     expect(entry?.querySelector(".cron-error--clamped")).not.toBeNull();
     expect(
-      [...(entry?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim()),
+      [...(entry?.querySelectorAll("button:not(.cron-run-entry__header)") ?? [])].map((button) =>
+        button.textContent?.trim(),
+      ),
     ).toEqual(["Show details"]);
   });
 
@@ -121,15 +123,16 @@ describe("cron view run history", () => {
     const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
     const [total, split, zero, invalid, unknown] = entries;
     expect(entryText(total, "facts")).toContain("1.2M Tokens");
-    expect(entryText(total, "meta")).toContain("1m 30s");
+    expect(entryText(total, "facts")).toContain("1m 30s");
     expect(total?.textContent).not.toContain("1234567");
     expect(total?.textContent).not.toContain("90000ms");
 
     expect(entryText(split, "facts")).toContain("50k in / 999 out");
-    expect(entryText(split, "meta")).toContain("500ms");
-    expect(entryText(zero, "meta")).toContain("0ms");
-    expect(entryText(invalid, "meta")).toContain("n/a");
-    expect(entryText(unknown, "meta")).toContain("n/a");
+    expect(entryText(split, "facts")).toContain("500ms");
+    expect(entryText(zero, "facts")).toContain("0ms");
+    expect(entryText(invalid, "facts")).toContain("n/a");
+    // A run without a recorded duration omits it rather than printing a placeholder.
+    expect(entryText(unknown, "facts")).not.toContain("n/a");
   });
 
   it("renders run summaries as sanitized markdown", async () => {
@@ -189,7 +192,7 @@ describe("cron view run history", () => {
         }),
       ],
     });
-    const facts = getElement(container, ".cron-run-entry__facts", HTMLDivElement);
+    const facts = getElement(container, ".cron-run-entry__facts", HTMLElement);
     expect(facts.textContent).toContain("Delivery suppression: silent <img");
     expect(facts.textContent).toContain("Bearer [redacted]");
     expect(facts.textContent).not.toContain("abcdefghijkl");
