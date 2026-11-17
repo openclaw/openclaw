@@ -1,10 +1,14 @@
 import { dirname } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { canAccess } from "../../infra/path-existence.js";
 import type { ModelRequestHeaders } from "../../llm/types.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import { buildEffectiveManifestProviderConfig } from "../../plugins/provider-catalog.js";
 import { mergeProviderModels, type ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
 import type { PersistedPluginModelCatalog } from "../plugin-model-catalog-read.types.js";
+import { filterGeneratedPluginModelCatalogProviders } from "../plugin-model-catalog.js";
 import type { ModelsConfig, ProviderAuthMode } from "./model-registry-schema.js";
 
 export type RegistryProviderSources = Record<
@@ -167,4 +171,66 @@ export function projectProviderRequestConfig(config: {
     headers: config.headers,
     authHeader: config.authHeader,
   };
+}
+
+/**
+ * Admits generated providers the catalog plugin still owns, then describes their listed models
+ * with the effective catalog rows (bundled plus hosted). Read-time only: callers that persist
+ * generated rows use the plain admission filter so stored rows stay as discovered.
+ *
+ * The account listing alone decides which models exist: an unlisted catalog row is never added,
+ * and a listed ID without a catalog row keeps its discovered values. For a listed ID with a catalog
+ * row, the catalog owns the metadata field by field. Generated rows carry no marker separating a
+ * provider-reported value from a discovery default (128k context, a $0 cost placeholder), so this
+ * applies the rule live discovery already applies to a plugin's own static rows: the catalog value
+ * wins and a discovered value fills only what the catalog omits. The row keeps its ID, route and a
+ * declared non-chat kind.
+ */
+export function readGeneratedPluginModelCatalogProviders<
+  T extends { models?: readonly { id: string; cost?: unknown; inference?: { chat?: boolean } }[] },
+>(params: Parameters<typeof filterGeneratedPluginModelCatalogProviders<T>>[0]): Record<string, T> {
+  const providers = filterGeneratedPluginModelCatalogProviders(params);
+  const plugin = params.pluginMetadataSnapshot?.manifestRegistry?.plugins.find(
+    (candidate) => candidate.id === params.catalogPluginId,
+  );
+  if (!plugin?.modelCatalog?.providers) {
+    return providers;
+  }
+  return Object.fromEntries(
+    Object.entries(providers).map(([providerKey, provider]) => {
+      const providerId = normalizeProviderId(providerKey);
+      const rows = provider.models?.length
+        ? planEffectiveModelCatalogRows({
+            registry: { plugins: [plugin] },
+            config: params.config ?? {},
+            providerFilter: providerId,
+          }).rows.filter((row) => row.provider === providerId)
+        : [];
+      const catalogRows = new Map(rows.map((row) => [row.id, row]));
+      const catalogModels = new Map(
+        buildEffectiveManifestProviderConfig(rows)?.models.map((model) => [model.id, model]),
+      );
+      if (catalogModels.size === 0 || !provider.models) {
+        return [providerKey, provider];
+      }
+      const models = provider.models.map((model) => {
+        const row = catalogRows.get(model.id);
+        const catalogModel = catalogModels.get(model.id);
+        if (!row || !catalogModel) {
+          return model;
+        }
+        const { api: _api, baseUrl: _baseUrl, headers: _headers, ...metadata } = catalogModel;
+        const { inference: discoveredInference, ...discovered } = model;
+        // A declared non-chat kind is listing evidence; weak "unlikely" evidence yields to the row.
+        const inference = discoveredInference?.chat === false ? discoveredInference : row.inference;
+        return {
+          ...discovered,
+          ...metadata,
+          ...(row.cost ? {} : { cost: model.cost }),
+          ...(inference ? { inference } : {}),
+        };
+      });
+      return [providerKey, { ...provider, models }];
+    }),
+  );
 }
