@@ -6,6 +6,7 @@ import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { loggingState } from "../logging/state.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
+import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
 import { AgentRunTerminalOutcomeError } from "./agent-run-terminal-error.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import { FailoverError } from "./failover-error.js";
@@ -133,6 +134,18 @@ const stopCases: Array<{
   },
   { reason: "terminal_abort_wrapper", make: async () => ({ error: await terminalAbortWrapper() }) },
   ...[
+    {
+      reason: "local_runtime_coordination",
+      make: () => ({ error: new SkillResourceDeliveryLimitError() }),
+    },
+    {
+      reason: "local_runtime_coordination",
+      make: () => ({
+        error: new Error("skill preparation failed", {
+          cause: new SkillResourceDeliveryLimitError(),
+        }),
+      }),
+    },
     {
       reason: "local_runtime_coordination",
       make: () => ({ error: new AgentHarnessSessionSupersededError("private supersede detail") }),

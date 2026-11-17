@@ -87,9 +87,10 @@ export function AppearanceBackground() {
                       return (
                         <Errored
                           fallback={(error) => (
-                            <p role="alert" class="settings-status settings-status--danger">
-                              {formatUiError(error())}
-                            </p>
+                            <div role="alert" class="settings-status settings-status--danger">
+                              <div>{t("configView.appearance.background.saveFailed")}</div>
+                              <div>{formatUiError(error())}</div>
+                            </div>
                           )}
                         >
                           <Loading

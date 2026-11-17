@@ -55,6 +55,7 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 ## Notes
 
 - `--local` cannot combine with `--url`, `--token`, `--password`, or `--tls-fingerprint`.
+- `--local` refuses while a Gateway owns the state directory. Omit `--local` to connect to that Gateway, or stop it first.
 - Pass only one Gateway target. A URL target cannot combine with `--url`, and
   any positional target cannot combine with `--session` or local mode.
 - A URL or host target never reuses configured credentials or

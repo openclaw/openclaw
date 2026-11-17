@@ -8,6 +8,8 @@ import { XBudgetExceededError, type XSpend } from "./spend.js";
 
 export type { XTokenState } from "./oauth.js";
 
+export const X_ACTIVITY_POST_EVENT_TYPES = ["post.mention.create", "post.reply.create"] as const;
+
 const POST_FIELDS =
   "author_id,conversation_id,created_at,in_reply_to_user_id,referenced_tweets,entities,withheld";
 
@@ -585,24 +587,26 @@ export function createXApiClient(options: XOAuthOptions & { spend: XSpend; beare
       const response = await request("/2/activity/subscriptions", { appOnly: true, signal });
       const data = record(await readJson(response))?.data;
       const subscriptions = Array.isArray(data) ? data : [];
-      if (
-        subscriptions.some((value) => {
-          const subscription = record(value);
-          return (
-            subscription?.event_type === "post.mention.create" &&
-            record(subscription.filter)?.user_id === userId
-          );
-        })
-      ) {
-        return;
+      for (const eventType of X_ACTIVITY_POST_EVENT_TYPES) {
+        if (
+          subscriptions.some((value) => {
+            const subscription = record(value);
+            return (
+              subscription?.event_type === eventType &&
+              record(subscription.filter)?.user_id === userId
+            );
+          })
+        ) {
+          continue;
+        }
+        const created = await request("/2/activity/subscriptions", {
+          method: "POST",
+          body: { event_type: eventType, filter: { user_id: userId } },
+          appOnly: false,
+          signal,
+        });
+        await created.body?.cancel();
       }
-      const created = await request("/2/activity/subscriptions", {
-        method: "POST",
-        body: { event_type: "post.mention.create", filter: { user_id: userId } },
-        appOnly: false,
-        signal,
-      });
-      await created.body?.cancel();
     },
     openActivityStream: (signal: AbortSignal) =>
       request("/2/activity/stream", { appOnly: true, stream: true, signal }),

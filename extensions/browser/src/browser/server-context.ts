@@ -1,11 +1,8 @@
 import fs from "node:fs";
-import {
-  resolveCdpControlPolicy,
-  resolveCdpReachabilityPolicy,
-} from "./cdp-reachability-policy.js";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
@@ -256,45 +253,18 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
           undefined,
           async (signal, runtime) => {
             const activeProfile = runtime.profile;
-            const capabilities = getBrowserProfileCapabilities(activeProfile);
-            let activeRunning = Boolean(runtime.running);
             let activeTabCount = 0;
-
-            if (capabilities.usesChromeMcp) {
-              try {
-                activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                  onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                });
-              } catch {
-                activeRunning = false;
-              }
-            } else {
-              if (!activeRunning) {
-                try {
-                  const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                    profileIsLoopback: activeProfile.cdpIsLoopback,
-                    attachOnly: activeProfile.attachOnly,
-                  })
-                    ? 200
-                    : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning =
-                    capabilities.mode === "local-extension"
-                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                      : await isChromeReachable(
-                          activeProfile.cdpUrl,
-                          probeTimeoutMs,
-                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                          signal,
-                        );
-                } catch {
-                  activeRunning = false;
-                }
-              }
-              if (activeRunning) {
-                const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-              }
-            }
+            const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+              profileIsLoopback: activeProfile.cdpIsLoopback,
+              attachOnly: activeProfile.attachOnly,
+            })
+              ? 200
+              : current.resolved.remoteCdpTimeoutMs;
+            const activeRunning = await profileCtx
+              .isTransportAvailable(probeTimeoutMs, signal, {
+                onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+              })
+              .catch(() => false);
             signal.throwIfAborted();
             return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
           },

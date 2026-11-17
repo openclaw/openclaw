@@ -29,7 +29,7 @@ export function renderMarkdownFileTooltip(container: HTMLElement, path: string) 
   const update = (copied?: boolean) => {
     // The HTTP clipboard fallback focuses a scratch control, dismissing the tooltip.
     if (copied === false && !container.closest("openclaw-tooltip[open]")) {
-      showToast({ message: t("common.copyFailed") });
+      showToast({ severity: "error", message: t("common.copyFailed") });
     }
     // Keep the hovered SVG shell, as the former renderer did across icon changes.
     icon.replaceChildren(...createIconElement(copied ? "check" : "copy", ownerDocument).childNodes);

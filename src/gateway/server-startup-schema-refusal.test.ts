@@ -6,12 +6,11 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../state/openclaw-database-preflight.messages.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -22,11 +21,11 @@ vi.mock("../daemon/launchd.js", async (importOriginal) => ({
   parkCurrentLaunchAgentForMaintenance: park,
 }));
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   park.mockClear();
   setConsoleSubsystemFilter(null);
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -41,7 +40,8 @@ it.each([
     withOpenClawTestState({ label: "startup-schema-refusal" }, async (state) => {
       await state.writeConfig({ plugins: { enabled: false } });
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-      closeOpenClawStateDatabaseForTest();
+      await writeConfigMachineStateAsync("startup.refusal.fixture", true, { env: state.env });
+      await closeStateDatabaseForTest();
       {
         using database = new DatabaseSync(databasePath);
         database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);

@@ -1,4 +1,3 @@
-/** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import {
@@ -7,6 +6,8 @@ import {
 } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+/** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -21,6 +22,7 @@ import {
 } from "./isolated-agent/run-delivery-trace.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
+import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -77,14 +79,27 @@ export async function runCronSessionTurn(
     assertCurrent();
     if (job.operatorSource) {
       const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
-      const operator = await restoreCronOperatorSource({
-        job,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        entry: expectedTarget,
-        signal: params.abortSignal,
-        deliveryAttemptFence: params.deliveryAttemptFence,
-      });
+      let operator: Awaited<ReturnType<typeof restoreCronOperatorSource>>;
+      try {
+        operator = await restoreCronOperatorSource({
+          job,
+          target: { agentId: params.agentId, sessionKey: params.sessionKey },
+          signal: params.abortSignal,
+          deliveryAttemptFence: params.deliveryAttemptFence,
+        });
+      } catch (error) {
+        if (!(error instanceof GatewayDispatchUnavailableError) || !error.retryable) {
+          throw error;
+        }
+        // No session event has been admitted. Preserve the typed transient
+        // outcome so the existing retry policy rearms this same one-shot.
+        return {
+          status: "error",
+          error: error.message,
+          errorClassification: { kind: "reason", reason: "server_error" },
+          executionStarted: false,
+        };
+      }
       if (operator) {
         operatorLease.defer(operator.release);
         operatorAuthority = operator.authority;
@@ -322,6 +337,9 @@ export async function runCronSessionTurn(
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
+      errorClassification: result.terminalOutcome
+        ? resolveCronAgentErrorClassification(result.terminalOutcome, result.errorReason)
+        : undefined,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

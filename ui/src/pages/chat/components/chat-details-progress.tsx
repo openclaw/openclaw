@@ -14,6 +14,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
@@ -245,12 +246,9 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
           class="oc-menu-item oc-menu-item--switch task-progress-details__show-in-chat"
         >
           <span class="oc-menu-item__label">{t("sessionProgressCard.showInChat")}</span>
-          <span
-            class="task-progress-details__switch"
-            data-checked={props.showTaskProgress ? "true" : "false"}
-            aria-hidden="true"
-            inert
-          />
+          <span class="task-progress-details__switch" inert>
+            <SwitchIndicator checked={props.showTaskProgress} size="sm" />
+          </span>
         </button>
       ),
     },

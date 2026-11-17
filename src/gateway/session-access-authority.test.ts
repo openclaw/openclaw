@@ -32,6 +32,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { runWithPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import type {
@@ -42,6 +43,7 @@ import type {
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as sessionAccess from "./session-access-authority.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
+import { isSessionAccessRefreshingError } from "./session-mutation-authorization-error.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
@@ -293,6 +295,72 @@ afterEach(() => {
 });
 
 describe("session resource admission", () => {
+  it("checks accepted service invocation while preserving retained actor lifetime", async () => {
+    const test = fixture();
+    test.client.internal = {
+      ...test.client.internal,
+      syntheticClient: true,
+      pluginRuntimeOwnerId: "research",
+    };
+    const controller = new AbortController();
+    const source = {
+      pluginId: "research",
+      context: test.context,
+      target: {
+        agentId: "main",
+        sessionKey: key,
+        sessionId: "session-1",
+        lifecycleRevision: "incarnation-1",
+      },
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertToolAllowed: vi.fn((name: string) => {
+        if (name !== "browser") {
+          throw new Error("not admitted");
+        }
+      }),
+    };
+    const authority = await runWithPluginSessionWorkAuthority(source, () => prepareAuthority(test));
+    const borrow = hold(authority.retain());
+    expectCurrent(authority, borrow);
+    expect(source.assertToolAllowed).toHaveBeenCalledWith("browser");
+    controller.abort(new Error("service revoked"));
+    expect(() => authority.assertCurrent()).toThrow("service revoked");
+    expectCurrent(borrow);
+  });
+
+  it.each(["plugin", "gateway", "incarnation", "tool"])(
+    "refuses accepted service work with a different %s boundary",
+    async (boundary) => {
+      const test = fixture();
+      test.client.internal = {
+        ...test.client.internal,
+        syntheticClient: true,
+        pluginRuntimeOwnerId: "research",
+      };
+      const source = {
+        pluginId: boundary === "plugin" ? "other" : "research",
+        context: boundary === "gateway" ? createContext() : test.context,
+        target: {
+          agentId: "main",
+          sessionKey: key,
+          sessionId: boundary === "incarnation" ? "other" : "session-1",
+          lifecycleRevision: "incarnation-1",
+        },
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+        assertToolAllowed: () => {
+          if (boundary === "tool") {
+            throw new Error("not admitted");
+          }
+        },
+      };
+      await expect(
+        runWithPluginSessionWorkAuthority(source, () => prepareAuthority(test)),
+      ).rejects.toThrow();
+    },
+  );
+
   it.each([
     ["canonical", "grant"],
     ["canonical", "profile"],
@@ -611,7 +679,15 @@ describe("session resource admission", () => {
     await setImmediate();
     expect(prepare).toHaveBeenCalledOnce();
     expect(resource.signal.aborted).toBe(false);
-    expect(() => resource.assertCurrent()).toThrow("refreshing");
+    let failure: unknown;
+    try {
+      resource.assertCurrent();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(sessionAccess.SessionAccessPreparationPendingError);
+    expect(isSessionAccessRefreshingError(failure)).toBe(true);
+    expect(isSessionAccessRefreshingError(new Error("Session revoked"))).toBe(false);
     state.mockReturnValue(readyState);
     expect(() => resource.assertCurrent()).not.toThrow();
     resource.release();

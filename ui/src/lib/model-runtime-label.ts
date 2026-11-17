@@ -9,6 +9,7 @@ registerModelControlsEnglish();
 // Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
 // which cannot be imported here (it drags terminal sanitizers into the bundle).
 const AGENT_RUNTIME_LABELS = new Map([
+  ["agentsapi", "Agents API"],
   ["claude-cli", "Claude CLI"],
   ["codex", "Codex"],
   ["codex-cli", "Codex"],

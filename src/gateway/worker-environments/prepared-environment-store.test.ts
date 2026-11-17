@@ -89,6 +89,96 @@ describe("prepared environment ownership", () => {
     expect(placements.get(sessionId)?.state).toBe("requested");
   }
 
+  it("publishes a refreshed commit only for the owning reserve claim", async () => {
+    const current = await ready();
+    const before = fixture.profile(PROJECT_KEY);
+    const profileSnapshot = {
+      ...before,
+      project: { ...before.project, baseCommit: "e".repeat(40) },
+    };
+    const request = await selection();
+    const claimed = (await placements.bindPreparedEnvironment(request))!;
+    const input = {
+      ...reservation,
+      ownerEpoch: current.ownerEpoch,
+      sessionId: request.sessionId,
+      expectedGeneration: claimed.generation,
+      profileSnapshot,
+    };
+    const sql = observeMainThreadSql();
+    try {
+      expect((await environments.refreshPreparedProject(input)).profileSnapshot).toEqual(
+        profileSnapshot,
+      );
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(environments.get(current.environmentId)?.profileSnapshot).toEqual(profileSnapshot);
+    await reopenStores();
+    expect(environments.get(current.environmentId)?.profileSnapshot).toEqual(profileSnapshot);
+    await placements.fail({
+      sessionId: request.sessionId,
+      expectedGeneration: claimed.generation,
+      recoveryError: "claim cancelled",
+    });
+    await expect(environments.refreshPreparedProject(input)).rejects.toThrow(
+      "changed during project refresh",
+    );
+  });
+
+  it("rejects changed project, recipe, runtime and authority without publishing a refresh", async () => {
+    const current = await ready();
+    const request = await selection();
+    const claimed = (await placements.bindPreparedEnvironment(request))!;
+    const claim = {
+      ...reservation,
+      sessionId: request.sessionId,
+      expectedGeneration: claimed.generation,
+    };
+    const before = fixture.profile(PROJECT_KEY);
+    const replacement = { ...before, project: { ...before.project, baseCommit: "e".repeat(40) } };
+    for (const profileSnapshot of [
+      { ...replacement, settings: { machineClass: "other" } },
+      { ...replacement, project: { ...replacement.project, key: "f".repeat(64) } },
+      {
+        ...replacement,
+        project: {
+          ...replacement.project,
+          preparation: { ...replacement.project.preparation, setupRecipe: "f".repeat(64) },
+        },
+      },
+      {
+        ...replacement,
+        project: {
+          ...replacement.project,
+          preparation: { ...replacement.project.preparation, cacheKey: "f".repeat(64) },
+        },
+      },
+    ]) {
+      await expect(
+        environments.refreshPreparedProject({ ...claim, profileSnapshot }),
+      ).rejects.toThrow("refresh identity changed");
+    }
+    await expect(
+      environments.refreshPreparedProject({
+        ...claim,
+        ownerEpoch: current.ownerEpoch + 1,
+        profileSnapshot: replacement,
+      }),
+    ).rejects.toThrow("changed during project refresh");
+    await expect(
+      environments.refreshPreparedProject({
+        ...claim,
+        profileSnapshot: replacement,
+        assertCurrent: () => {
+          throw new Error("caller revoked");
+        },
+      }),
+    ).rejects.toThrow("caller revoked");
+    expect(environments.get(current.environmentId)?.profileSnapshot).toEqual(before);
+  });
+
   it("admits a build at zero ready target and preserves its purpose on reopen", async () => {
     expect((await reserve("build-1", "build"))?.preparation?.purpose).toBe("build");
     const capacity = { environmentId: "build-1", target: 0, maxTotal: 1 };
@@ -104,6 +194,37 @@ describe("prepared environment ownership", () => {
     ).rejects.toThrow("intent identity changed");
     expect(await reserve("build-2", "build")).toEqual(environments.get("build-1"));
     expect(environments.list()).toHaveLength(1);
+  });
+
+  it("keeps explicit builds pinned to their requested commit", async () => {
+    await reserve("build-a", "build");
+    const before = fixture.profile(PROJECT_KEY);
+    const profileSnapshot = {
+      ...before,
+      project: { ...before.project, baseCommit: "e".repeat(40) },
+    };
+    const built = await environments.ensurePreparedIntent({
+      intent: {
+        environmentId: "build-b",
+        providerId: "test-provider",
+        profileId: "test-profile",
+        provisionOperationId: "provision:build-b",
+        profileSnapshot,
+        preparation: {
+          purpose: "build",
+          key: PREPARATION_KEY,
+          demandAtMs: 900,
+          expiresAtMs: 2_000,
+        },
+      },
+      projectKey: PROJECT_KEY,
+      target: 0,
+      maxTotal: 4,
+      assertCurrent,
+    });
+    expect(built?.environmentId).toBe("build-b");
+    expect(built?.profileSnapshot).toEqual(profileSnapshot);
+    expect(environments.list()).toHaveLength(2);
   });
 
   it("assigns once across store instances and retains consumption after placement deletion and reopen", async () => {

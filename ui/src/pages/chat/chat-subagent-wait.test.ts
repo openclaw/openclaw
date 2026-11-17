@@ -4,13 +4,14 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
+  countRunningSubagents,
   handoffSessionLinks,
   listResumedHandoffSessions,
   listSubagents,
   projectProgressCardRuntime,
   projectSubagentStatus,
 } from "./chat-subagent-wait.ts";
-import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
+import { ChatHandoffResume } from "./components/chat-handoff-sessions.tsx";
 import {
   SubagentActivity,
   type SubagentActivityProps,
@@ -249,9 +250,7 @@ describe("chat waiting on subagents", () => {
     expect([mixed?.runningCount, mixed?.pausedOnly]).toEqual([1, undefined]);
     // After the parent resumes, paused children alone read as a note.
     const resumed = { ...settled, startedAt: 3_000, endedAt: 4_000 };
-    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait?.pausedNote).toBe(
-      true,
-    );
+    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait).toBeNull();
     expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
@@ -274,7 +273,9 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([2_500, 1_500])("uses lifecycle end %i, not a later transcript timestamp", (endedAt) => {
-    expect(status({ selectedSession: { ...parent, endedAt } }).wait?.startedAt).toBe(endedAt);
+    expect(status({ selectedSession: { ...parent, endedAt } }).wait?.startedAt).toBe(
+      endedAt >= 2_000 ? endedAt : undefined,
+    );
   });
 
   it("keeps lifecycle wait timing after an announcement resumes and settles the parent", () => {
@@ -294,12 +295,7 @@ describe("chat waiting on subagents", () => {
     ];
     for (const loaded of [history, []]) {
       const projection = project(settled, loaded);
-      expect(projection.wait).toEqual({
-        startedAt: 4_000,
-        runningCount: 0,
-        sessionCount: 1,
-        sessions: [{ key: dashboardChild.key, label: "Backend implementation", status: "running" }],
-      });
+      expect(projection.wait).toBeNull();
       expect(projection.placedWait).toBeUndefined();
     }
     expect(project(settled, history, []).wait).toBeNull();
@@ -317,7 +313,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([{ history: [] }, { history: messages }])(
-    "renders the recorded clock despite absent or earlier handoff: %j",
+    "does not invent a parent wait from absent or earlier handoff: %j",
     ({ history }) => {
       const now = Date.UTC(2026, 9, 12, 20, 48);
       const wait = status({
@@ -325,24 +321,7 @@ describe("chat waiting on subagents", () => {
         messages: history,
         subagentSessionsHydrated: false,
       }).wait;
-      expect(wait?.startedAt).toBe(now - 65_000);
-      if (!wait) {
-        throw new Error("Expected a settled parent wait");
-      }
-      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      onTestFinished(() => clock.mockRestore());
-      const view = mountSolid(() =>
-        createComponent(UnplacedSubagentWait, {
-          sessionKey: parent.key,
-          wait,
-          options: { waitingSubagents: wait },
-        }),
-      );
-      onTestFinished(view.unmount);
-      flush();
-      expect(view.container.querySelector("openclaw-elapsed-time")?.textContent?.trim()).toBe(
-        "1m 5s",
-      );
+      expect(wait).toBeNull();
     },
   );
 
@@ -358,6 +337,24 @@ describe("chat waiting on subagents", () => {
         ...input,
       }).running;
     expect(count()).toBe(2);
+    // Queued children have not started, so the running count matches Details' Working count.
+    const withQueued = [
+      ...roster,
+      {
+        ...child,
+        key: "agent:main:subagent:queued",
+        hasActiveRun: false,
+        status: "queued" as const,
+      },
+    ];
+    expect(count({ subagentSessions: withQueued })).toBe(2);
+    expect(
+      countRunningSubagents({
+        selectedSession: working,
+        subagentSessions: withQueued,
+        subagentSessionsHydrated: true,
+      }),
+    ).toBe(2);
     expect(count({ subagentSessions: [{ ...child, hasActiveRun: false }] })).toBe(0);
     expect(
       count({ subagentSessions: [...roster, { ...child, key: "agent:main:dashboard:opened" }] }),
@@ -407,7 +404,7 @@ describe("chat waiting on subagents", () => {
   });
 
   it.each([false, true])(
-    "names the one session a wait is on in place of the working text (bubble mode: %s)",
+    "shows only the parent wait, with child details kept out of the transcript (bubble mode: %s)",
     (bubbleMode) => {
       const now = 66_500;
       vi.spyOn(Date, "now").mockReturnValue(now);
@@ -439,16 +436,9 @@ describe("chat waiting on subagents", () => {
       expect(
         container.querySelector("openclaw-working-phrase, details, .chat-subagent-activity"),
       ).toBeNull();
-      const line = container.querySelector(".chat-subagent-wait");
-      expect(line?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-        "Waiting on Backend implementation · 1m 5s",
-      );
-      expect(container.querySelector(".chat-working-indicator__subagents")).toBeNull();
-      expect(line?.querySelector("[aria-expanded]")).toBeNull();
-      const name = line?.querySelector<HTMLAnchorElement>("a");
-      expect(name?.getAttribute("href")).toBe("/chat/main/subagent/child");
-      name?.click();
-      expect(onOpenSessionLink).toHaveBeenCalledOnce();
+      expect(container.textContent?.trim()).toBe("Wait for subagents");
+      expect(container.querySelector("a, openclaw-elapsed-time")).toBeNull();
+      expect(onOpenSessionLink).not.toHaveBeenCalled();
     },
   );
 
@@ -561,11 +551,19 @@ describe("chat waiting on subagents", () => {
         { key: "agent:main:subagent:unloaded", label: "Unloaded", status: "done" as const },
       ],
     };
-    mountWorkingIndicator(
-      container,
-      { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
-      { waitingSubagents: wait, sessionLinks: links },
+    const view = mountSolid(
+      () =>
+        createComponent(ChatHandoffResume, {
+          handoff: { runId: "parent-run", yieldedAt: 1_000, resumedAt: 2_000 },
+          sessions: wait.sessions,
+          links,
+        }),
+      { container },
     );
+    onTestFinished(view.unmount);
+    flush();
+    container.querySelector<HTMLButtonElement>("button")!.click();
+    flush();
     const [linked, plain] = container.querySelectorAll("li");
     const anchor = linked?.querySelector<HTMLAnchorElement>("a");
     expect(anchor?.getAttribute("href")).toBe("/ui/chat/main/subagent/child");
@@ -587,7 +585,7 @@ describe("chat waiting on subagents", () => {
     );
   });
 
-  it("lists several sessions with statuses in words, attention first, open until closed", () => {
+  it("keeps child status facts available to Details independently of the generic wait", () => {
     const now = 66_500;
     vi.spyOn(Date, "now").mockReturnValue(now);
     onTestFinished(() => {
@@ -621,43 +619,6 @@ describe("chat waiting on subagents", () => {
       { key: child.key, label: "Backend implementation", status: "running" },
       { key: "agent:main:dashboard:docs", label: "Docs", status: "done" },
     ]);
-    const container = document.createElement("div");
-    const update = mountWorkingIndicator(
-      container,
-      { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
-      { waitingSubagents: { ...wait!, startedAt: 1_500 } },
-    );
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-subagent-wait__toggle");
-    expect(toggle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "Waiting on 4 sessions · 1 needs your input · 1 paused · 1m 5s",
-    );
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
-    const list = container.querySelector(`#${toggle?.getAttribute("aria-controls")}`);
-    expect(
-      [...(list?.querySelectorAll("li") ?? [])].map((row) =>
-        row.textContent?.replace(/\s+/gu, " ").trim(),
-      ),
-    ).toEqual([
-      "Review Needs your input",
-      "Audit Paused",
-      "Backend implementation Running",
-      "Docs Done",
-    ]);
-    toggle?.click();
-    flush();
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector("li")).toBeNull();
-    // The clock follows the projection's execution facts, not row labels.
-    const [review, audit] = wait!.sessions;
-    const text = () => container.textContent?.replace(/\s+/gu, " ").trim();
-    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [review!, audit!] } });
-    expect(text()).toBe("Waiting on 2 sessions · 1 needs your input · 1 paused · 1m 5s");
-    update({ waitingSubagents: { ...wait!, pausedOnly: true, sessions: [audit!] } });
-    expect(text()).toBe("Waiting on Audit · Paused");
-    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!] } });
-    expect(text()).toBe("Audit is paused");
-    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit!, audit!] } });
-    expect(text()).toBe("2 sessions are paused");
   });
 
   it("makes the running count the way to the list when navigation is available", () => {

@@ -151,6 +151,7 @@ export {
   SessionsGroupsListResultSchema,
   SessionsGroupsDefaultsParamsSchema,
   SessionsGroupsDefaultsResultSchema,
+  SessionsGroupsCreateParamsSchema,
   SessionsGroupsPutParamsSchema,
   SessionsGroupsRenameParamsSchema,
   SessionsGroupsUpdateParamsSchema,

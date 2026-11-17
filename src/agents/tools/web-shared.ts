@@ -143,9 +143,13 @@ export function sniffCharset(contentType: string | null, bytes: Uint8Array): str
 }
 
 function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
-  const head = latin1Decoder.decode(
-    bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
-  );
+  // Commented-out metadata must not override declarations in the live document.
+  // An unfinished comment consumes the rest of the bounded scan as well.
+  const head = latin1Decoder
+    .decode(bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)))
+    .replace(/<!--[\s\S]*?(?:--!?>|$)|<[A-Za-z!?/](?:"[^"]*"|'[^']*'|[^'">])*>/g, (tag) =>
+      tag.startsWith("<!--") ? " " : tag,
+    );
   const xmlEncoding = /<\?xml\s+[^>]*\bencoding\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(head);
   if (xmlEncoding) {
     return normalizeCharset(xmlEncoding[1] ?? xmlEncoding[2]);

@@ -1,6 +1,11 @@
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
+import {
+  prepareSessionEntryReplacementDatabase,
+  withSessionEntryWorker,
+} from "./session-accessor.sqlite-replacement-worker.js";
 import type {
   SessionActor,
   SessionActorLifetime,
@@ -11,20 +16,34 @@ import { createSessionActorReplica } from "./session-actor-replica.js";
 import { createSessionActor } from "./session-actor.js";
 
 /** Capture once; every command borrows the existing physical writer admission. */
-export function captureDurableSessionActor(params: {
+export async function captureDurableSessionActor(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   target: SessionActorTarget & {
     database: Extract<SessionActorTarget["database"], { kind: "file" }>;
   };
   lifetime: SessionActorLifetime;
-}): SessionActor {
+}): Promise<SessionActor> {
   const database = {
     ...params.database,
     env: Object.freeze({ ...(params.database.env ?? process.env) }),
   };
-  const execution = captureOpenClawAgentDatabaseExecution(database, {
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(database, {
     expectedIdentity: params.target.database,
   });
+  try {
+    params.lifetime.assertCurrent();
+    return bindDurableSessionActor({ ...params, database }, execution);
+  } catch (error) {
+    await execution.release();
+    throw error;
+  }
+}
+
+function bindDurableSessionActor(
+  params: Parameters<typeof captureDurableSessionActor>[0],
+  execution: OpenClawAgentDatabaseExecution,
+): SessionActor {
+  const database = params.database;
   const lifetime = {
     assertAdmission: () => params.lifetime.assertAdmission?.(),
     assertCurrent: () => {
@@ -48,7 +67,7 @@ export function captureDurableSessionActor(params: {
     }),
     transport: {
       agentId: database.agentId,
-      run: (operation, authorize, concurrentBoardReads) => {
+      run: (operation, authorize, concurrentBoardReads, source) => {
         const prepared = concurrentBoardReads
           ? execution.capturePreparedGenerationClaim()
           : undefined;
@@ -60,16 +79,16 @@ export function captureDurableSessionActor(params: {
           database,
           execution.fileIdentity?.physicalIdentity,
           assertCurrent,
-          async (_execution, source) => {
+          async (_execution, preparedSource) => {
             // Cold preparation retains exclusive admission; a qualified append cannot reopen.
             if (prepared) {
               prepared.assertCurrent();
             } else {
-              await execution.prepare(source);
+              await execution.prepare(preparedSource);
             }
             return operation({
               async execute(command) {
-                const result = await execution.runExisting(source, (worker) =>
+                const result = await execution.runExisting(preparedSource, (worker) =>
                   worker.execute(command),
                 );
                 if (result === undefined) {
@@ -92,6 +111,8 @@ export function captureDurableSessionActor(params: {
           "write",
           undefined,
           prepared ? concurrentBoardReads : undefined,
+          source?.workspaceEvidence,
+          source?.readCustody,
         );
       },
       release: () => execution.release(),
@@ -99,7 +120,10 @@ export function captureDurableSessionActor(params: {
   });
 }
 
-type AcquisitionTarget = SessionActorTarget | { database: { kind: "memory" }; sessionKey: string };
+type AcquisitionTarget = {
+  database: SessionActorTarget["database"] | { kind: "memory" | "file" };
+  sessionKey: string;
+};
 
 /** One actor contract selects either its durable worker or memory owner at acquisition. */
 export function createSessionActorFactory(
@@ -110,7 +134,11 @@ export function createSessionActorFactory(
     env: Object.freeze({ ...(database.env ?? process.env) }),
   };
   return {
-    async acquire(requestedTarget: AcquisitionTarget, lifetime: SessionActorLifetime) {
+    async acquire(
+      requestedTarget: AcquisitionTarget,
+      lifetime: SessionActorLifetime,
+      followRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
+    ) {
       lifetime.assertAdmission?.();
       lifetime.assertCurrent();
       if (requestedTarget.database.kind === "memory") {
@@ -124,15 +152,37 @@ export function createSessionActorFactory(
           lifetime,
         );
       }
-      const target = {
-        sessionKey: requestedTarget.sessionKey,
-        database: structuredClone(requestedTarget.database),
-      };
-      return captureDurableSessionActor({
-        database: captured,
-        target: { sessionKey: target.sessionKey, database: target.database },
-        lifetime,
+      const sessionKey = requestedTarget.sessionKey;
+      const execution = await captureOpenClawAgentDatabaseExecutionAsync(captured, {
+        expectedIdentity:
+          "physicalIdentity" in requestedTarget.database ? requestedTarget.database : undefined,
       });
+      try {
+        if (!execution.fileIdentity) {
+          await prepareSessionEntryReplacementDatabase(
+            captured,
+            () => lifetime.assertCurrent(),
+            execution,
+            followRegistration,
+          );
+        }
+        lifetime.assertCurrent();
+        const identity = execution.fileIdentity;
+        if (!identity) {
+          throw new Error("Durable session actor has no admitted physical database");
+        }
+        return bindDurableSessionActor(
+          {
+            database: captured,
+            target: { sessionKey, database: { ...identity } },
+            lifetime,
+          },
+          execution,
+        );
+      } catch (error) {
+        await execution.release();
+        throw error;
+      }
     },
   };
 }

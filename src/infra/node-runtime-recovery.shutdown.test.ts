@@ -17,8 +17,8 @@ let completion: ReturnType<typeof runRespawnedChild> | undefined;
 let originalExitCode: typeof process.exitCode;
 beforeEach(() => {
   vi.useFakeTimers();
-  originalExitCode = process.exitCode;
-  process.exitCode = undefined;
+  originalExitCode = process.exitCode ?? 0;
+  process.exitCode = 0;
   child = new ChildProcess();
   kill = vi.spyOn(child, "kill").mockReturnValue(true);
   spawn.mockReset();
@@ -89,9 +89,9 @@ it.each([
   vi.advanceTimersByTime(1_000);
   await Promise.resolve();
   expect(completed).not.toHaveBeenCalled();
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   child.emit("exit", null, childSignal);
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   await closeChild(null, childSignal, platform === "win32" ? 1 : 137);
   expect(process.listeners("SIGTERM")).toEqual(previous);
 });
@@ -110,7 +110,7 @@ it.each([
   forward("SIGTERM");
   vi.advanceTimersByTime(330_000);
   expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   expect(process.listeners("SIGTERM")).toContain(forward);
   await closeChild(null, childSignal, expected);
   expect(process.listeners("SIGTERM")).toEqual(previous);
@@ -120,7 +120,7 @@ it("records spawn failure only after its close notification", async () => {
   vi.spyOn(process.stderr, "write").mockReturnValue(true);
   completion = runRespawnedChild({ command: "missing-node", args: [], env: {} });
   child.emit("error", new Error("spawn ENOENT"));
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   await closeChild(-2, null, 1);
 });
 

@@ -9,12 +9,18 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { createCronPage } from "./cron-page-state.ts";
-import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
+const PHONE_LAYOUT_QUERY = "(max-width: 560px)";
+
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
+  const phoneLayout = createMediaQuery(
+    PHONE_LAYOUT_QUERY,
+    globalThis.matchMedia?.(PHONE_LAYOUT_QUERY).matches ?? false,
+  );
   const revision = () => i18nRevision() + props.page.revision();
   // Search publications must not invalidate the retained rows' permission branches.
   // Sample values because Gateway auth and identity snapshots can be mutated in place.
@@ -66,6 +72,15 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       selectedAgentId: page.context().agentSelection.state.scopeId,
     };
   };
+  const scopeControl = () => (
+    <AgentScopeControl
+      agents={pageHeader().agents}
+      selection={props.page.context().agentSelection}
+      selectedId={pageHeader().selectedAgentId}
+    />
+  );
+  // The phone list seats the scope beside its create action; detail views keep it here.
+  const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
   return (
     <>
       <HubPageHeader
@@ -86,21 +101,18 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
             >
               {t("cron.list.showAll")}
             </a>
-          ) : (
-            <AgentScopeControl
-              agents={pageHeader().agents}
-              selection={props.page.context().agentSelection}
-              selectedId={pageHeader().selectedAgentId}
-            />
+          ) : phoneList() ? undefined : (
+            scopeControl()
           )
         }
       />
-      <CronRunTranscriptView transcript={props.page.runTranscript} revision={revision} />
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
+          phoneLayout={phoneList()}
+          toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}
           busy={props.page.saving() || viewProps().busy}
           toggleSavingJobId={props.page.toggleSavingJobId()}
         />
@@ -115,7 +127,7 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => context,
     () => props.host,
   );
-  // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
+  // Route changes retarget Gateway job queries.
   createEffect(
     () => props.routeSearch ?? "",
     (search) => page.setRouteSearch(search),

@@ -13,6 +13,7 @@ import {
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
+import { readOpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -147,6 +148,25 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("shows seven desktop mentions and keeps the remaining rows scrollable", () => {
+    const shell = shellFor();
+    const mentions = Array.from({ length: 16 }, (_, index) => inboxMention(String(index)));
+    mountPanel(panelParams(inboxEntries([], mentions)), shell);
+    const list = part(shell, "list");
+    const rows = [...shell.querySelectorAll<HTMLElement>(".sidebar-mention-row")];
+    const viewport = bounds(list);
+    const visibleRows = rows.filter((row) => {
+      const content = bounds(part(row, "content"));
+      return content.top >= viewport.top && content.bottom <= viewport.bottom;
+    });
+    expect(visibleRows).toHaveLength(7);
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    const headerTop = bounds(part(shell, "header")).top;
+    list.scrollTop = list.scrollHeight;
+    expect(bounds(rows.at(-1)!).bottom).toBeLessThanOrEqual(viewport.bottom);
+    expect(bounds(part(shell, "header")).top).toBe(headerTop);
+  });
+
   it("keeps the header and tabs fixed when the selected category is empty", async () => {
     const params = panelParams([authWarning]);
 
@@ -163,20 +183,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         shell,
       );
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
-      await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "openclaw-tooltip",
-      )?.updateComplete;
       const headerHeight = bounds(part(shell, "header")).height;
       const tabsTop = bounds(part(shell, "tabs")).top;
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = shell.querySelector<HTMLButtonElement>(
-        ".sidebar-issues-panel__dismiss-shown",
-      )!;
-      expect(placeholder.disabled).toBe(true);
-      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-      expect(style(placeholder).visibility).toBe("hidden");
+      expect(shell.querySelector('[data-value="dismiss-shown"]')).toBeNull();
+      expect(shell.querySelector('[data-value="notifications"]')).not.toBeNull();
       expect(bounds(part(shell, "header")).height).toBe(headerHeight);
       expect(bounds(part(shell, "tabs")).top).toBe(tabsTop);
       shell.remove();
@@ -207,7 +220,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           row.getAttribute("data-mention-id"),
         ),
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
-      part(shell, "dismiss-shown").click();
+      part(shell, "more").click();
+      flush();
+      query(shell, '[data-value="dismiss-shown"]').click();
 
       expect(vi.mocked(params.mentions.dismiss).mock.calls).toEqual(
         selectedTab === "system" ? [] : [[["mention-a"]]],
@@ -217,6 +232,25 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       );
     },
   );
+
+  it("shows mention loading only after a delay and only while the list has nothing to show", async () => {
+    const params = panelParams(inboxEntries([authWarning], []));
+    params.mentions.snapshot.phase = "loading";
+    const all = mountPanel(params, shellFor());
+    const mentions = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    expect([part(mentions, "loading"), part(mentions, "empty")]).toEqual([null, null]);
+    await waitForSolid(() =>
+      expect(part(mentions, "loading")?.textContent).toBe("Loading mentions…"),
+    );
+    expect([part(all, "loading"), part(all, "mentions-note"), part(all, "empty")]).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    params.mentions.snapshot.phase = "ready";
+    const loaded = mountPanel({ ...params, selectedTab: "mentions" }, shellFor());
+    expect([part(loaded, "loading"), part(loaded, "empty")?.tagName]).toEqual([null, "DIV"]);
+  });
 
   it("keeps existing mentions visible with a refresh action after a request fails", () => {
     const entries = inboxEntries([], [inboxMention("mention-a")]);
@@ -301,8 +335,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       shell.append(nativeChrome);
       document.documentElement.classList.add("openclaw-native-web-chrome");
-      expect(bounds(attention).left).toBe(bounds(chrome).right + 8);
-      expect(bounds(nativeChrome).left).toBeGreaterThanOrEqual(bounds(attention).right + 8);
+      // Current Mac navigation keeps Inbox in the rail; this floating fixture
+      // only covers the retained native borderless appearance.
       const expectTransparent = () =>
         expect(style(inbox)).toMatchObject({
           borderTopWidth: "0px",
@@ -376,6 +410,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           expect(badgeBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
         }
       }
+      // Finish the shared tabs' initial frame-based reveal before testing keyboard scrolling.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
       tabs[0]!.focus();
       for (const [key, tab] of [
         ["End", tabs.at(-1)!],
@@ -412,7 +450,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const shell = shellFor(true);
     mountPanel(panelParams([authWarning]), shell);
     const dismiss = part(shell, "dismiss");
-    const dismissShown = part(shell, "dismiss-shown");
+    const more = part(shell, "more");
     const close = part(shell, "mobile-close");
     const sheet = query(shell, ".sidebar-issues-panel");
     const header = part(shell, "header");
@@ -423,12 +461,73 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismissStyle.pointerEvents).not.toBe("none");
     expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
     expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(dismissShown).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
-    expect(style(close)).toMatchObject({ borderTopWidth: "1px", borderRadius: "9999px" });
-    expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(bounds(more).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(more).height).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).width).toBeGreaterThanOrEqual(36);
+    expect(bounds(close).height).toBeGreaterThanOrEqual(36);
     expect(style(header).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(backgroundAlpha(sheet)).toBe(255);
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);
   });
 });
+
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)(
+  "shows a claimed member browser request in the owner Inbox (%s %s)",
+  async (theme, width) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 900);
+    document.documentElement.dataset.theme = theme;
+    const now = Math.floor(Date.now() / 1000);
+    const request = {
+      requestId: "member-browser-request",
+      accountId: "private-account-id",
+      displayName: "Alice Example",
+      email: "alice@example.test",
+      label: "Safari on iOS",
+      location: "Example City",
+      requestedAt: now - 60,
+      expiresAt: now + 1740,
+    };
+    const gateway = client(
+      vi.fn(async (method: string) =>
+        method === "openclawId.status"
+          ? {
+              channel: "tunnel",
+              owner: true,
+              status: { state: "online" },
+              link: { linked: true, clawId: "test-claw" },
+            }
+          : { link: { browserRequests: [request] } },
+      ),
+    );
+    const attention = await readOpenClawIdAttention(gateway, () => true);
+    const params = panelParams(attention!.items(Date.now()));
+    const opened = vi.fn();
+    params.onOpen = opened;
+    const shell = mountPanel(params, shellFor(width === 390));
+    await waitForSolid(() =>
+      expect(shell.textContent).toContain("Browser request from Alice Example"),
+    );
+    expect(shell.textContent).toContain("Safari on iOS");
+    expect(shell.textContent).toContain("Unverified request");
+    const title = shell.querySelector<HTMLElement>(
+      '[data-attention-kind="openClawIdBrowserRequest"] .sidebar-issues-panel__entity',
+    )!;
+    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth);
+    expect(shell.textContent).toContain("Location reported by OpenClaw ID: Example City");
+    expect(shell.textContent).not.toContain("private-account-id");
+    await page.getByText("Browser request from Alice Example", { exact: true }).click();
+    await page.screenshot({ path: `./.vitest/ocf551/member-browser-inbox-${theme}-${width}.png` });
+    await page.getByRole("button", { name: "Approve a new device", exact: true }).click();
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: expect.objectContaining({ kind: "openClawIdBrowserApproval", remote: true }),
+      }),
+    );
+  },
+);

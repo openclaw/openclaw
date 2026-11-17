@@ -7,6 +7,7 @@ import {
   CLAUDE_CLI_SETUP_GUIDANCE,
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -229,6 +230,7 @@ export async function prepareModelChoice(params: {
             entry,
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
+            resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
           })?.id;
           // Same ownership rule as the turn path: a harness-listed model has no host transport.
           const nativeModel = resolveNativeOwnedRuntimeModel({
@@ -383,6 +385,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
+  // A sign-in after Gateway start must reach selection without a model-list read first.
+  await published.recheckNativeLogin?.();
   let nativeCatalog: ModelCatalogSnapshot | undefined;
   if (params.prepareNativeCatalog) {
     const configuredEntry = findModelInCatalog(
@@ -442,7 +446,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  // A known account failure needs sign-in guidance; a catalog refresh cannot repair it.
+  // Recovery belongs to the failed account, which may differ from the runtime's native login.
   const describeUnavailable = async (
     row: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
@@ -451,6 +455,17 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const reason = evaluation.availability === true ? undefined : evaluation.unavailableReason;
     if (!reason) {
       return unavailable;
+    }
+    if (
+      (reason === "missing-auth" || reason === "auth-failed") &&
+      evaluation.selectedProfileId &&
+      !evaluation.runtimeAuth
+    ) {
+      // Shared replies must not expose the owner/account locator of a personal credential.
+      const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
+        ? "personal account"
+        : `account "${evaluation.selectedProfileId}"`;
+      return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
     }
     const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
     const routeRuntimeId =
@@ -461,6 +476,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         entry: row,
         evaluation,
         pluginRegistry: owner.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       })?.id;
     const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
     switch (reason) {

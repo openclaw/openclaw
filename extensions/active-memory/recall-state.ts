@@ -52,7 +52,7 @@ export function isCircuitBreakerOpen(
     return false;
   }
   // Cooldown allows another attempt; only a completed recall clears the streak.
-  return Date.now() - entry.lastTimeoutAt < cooldownMs;
+  return performance.now() - entry.lastTimeoutAt < cooldownMs;
 }
 
 export function recordCircuitBreakerTimeout(key: string): void {
@@ -61,7 +61,7 @@ export function recordCircuitBreakerTimeout(key: string): void {
   timeoutCircuitBreaker.delete(key);
   timeoutCircuitBreaker.set(key, {
     consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
-    lastTimeoutAt: Date.now(),
+    lastTimeoutAt: performance.now(),
   });
   pruneMapToMaxSize(timeoutCircuitBreaker, DEFAULT_MAX_CACHE_ENTRIES);
 }
@@ -184,7 +184,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  if (cached.expiresAt <= performance.now()) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -192,7 +192,7 @@ export function getCachedResult(cacheKey: string): ActiveRecallResult | undefine
 }
 
 export function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const now = performance.now();
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
     now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS

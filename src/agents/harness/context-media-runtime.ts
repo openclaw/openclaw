@@ -17,6 +17,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
+import type { AgentHarnessContextMedia } from "./host-capability-types.js";
 
 /** Restores model input without changing the canonical source row or invoking channel delivery. */
 export async function prepareHarnessContextMedia(params: {
@@ -34,12 +35,12 @@ export async function prepareHarnessContextMedia(params: {
   sandbox?: { root: string; bridge: SandboxFsBridge };
   assertCurrent: () => void;
   signal?: AbortSignal;
-}): Promise<{ text?: string; images: ImageContent[] }> {
+}): Promise<AgentHarnessContextMedia> {
   params.assertCurrent();
   if (
     (params.message.role !== "user" && params.message.role !== "assistant") ||
     isTranscriptOnlyOpenClawAssistantMessage(params.message) ||
-    params.maxChars <= 0
+    params.maxChars < 0
   ) {
     return { images: [] };
   }
@@ -47,7 +48,7 @@ export async function prepareHarnessContextMedia(params: {
     throw new Error("Context media requires a finite character budget");
   }
   if (params.message.role === "assistant") {
-    return prepareAssistantContextImages(params);
+    return params.maxChars === 0 ? { images: [] } : prepareAssistantContextImages(params);
   }
   const message = params.message;
   const media = readPersistedMediaFacts(message) ?? [];
@@ -56,6 +57,12 @@ export async function prepareHarnessContextMedia(params: {
     : [];
   if (!media.length && !inlineImages.length) {
     return { images: [] };
+  }
+  const imageFacts = media.filter(isImageMediaFact);
+  const hasImageAttachments = imageFacts.length > 0 || inlineImages.length > 0;
+  const imageOnly = hasImageAttachments && imageFacts.length === media.length;
+  if (params.maxChars === 0) {
+    return { images: [], hasImageAttachments, imageOnly };
   }
   const files = await prepareFileContextFromMedia({
     media,
@@ -68,8 +75,6 @@ export async function prepareHarnessContextMedia(params: {
     signal: params.signal,
   });
   params.assertCurrent();
-  const imageFacts = media.filter(isImageMediaFact);
-  const hasImageAttachments = imageFacts.length > 0 || inlineImages.length > 0;
   const text = [files.text];
   if (hasImageAttachments) {
     text.push(buildInboundMediaNoteProjection({ media: imageFacts }).text ?? "[Image attachment]");
@@ -78,7 +83,7 @@ export async function prepareHarnessContextMedia(params: {
     if (hasImageAttachments || files.images.length) {
       text.push("[Attachment images omitted: this model does not support image input]");
     }
-    return { text: text.filter(Boolean).join("\n\n"), images: [] };
+    return { text: text.filter(Boolean).join("\n\n"), images: [], hasImageAttachments, imageOnly };
   }
   const limits = { ...resolveImageSanitizationLimits(params.config), maxBytes: MAX_IMAGE_BYTES };
   const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
@@ -86,6 +91,7 @@ export async function prepareHarnessContextMedia(params: {
     agentId: params.agentId,
   });
   const inlineFactIndexes = readPersistedImageBlockFactIndexes(message);
+  let localRoots: readonly string[] | undefined;
   const rawImages = await detectAndLoadPromptImages({
     prompt: "",
     workspaceDir: params.workspaceDir,
@@ -98,7 +104,12 @@ export async function prepareHarnessContextMedia(params: {
     workspaceOnly,
     localRoots: workspaceOnly
       ? undefined
-      : getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId, params.workspaceDir),
+      : () =>
+          (localRoots ??= getAgentScopedMediaLocalRoots(
+            params.config ?? {},
+            params.agentId,
+            params.workspaceDir,
+          )),
     sandbox: params.sandbox,
     ...limits,
   });
@@ -134,6 +145,8 @@ export async function prepareHarnessContextMedia(params: {
     text.push("[Referenced image contents are not included in this context]");
   }
   return {
+    hasImageAttachments,
+    imageOnly,
     text: text.filter(Boolean).join("\n\n"),
     images: entries
       // Stable sorting retains page order within each attachment.

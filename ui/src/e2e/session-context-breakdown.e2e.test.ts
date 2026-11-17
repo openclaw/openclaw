@@ -1,5 +1,7 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -14,13 +16,13 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
 const sessionKey = "agent:main:context-breakdown";
 const workspaceFile = (
-  path: string,
+  filePath: string,
   rootPath: string,
   kind: "agent-workspace" | "execution-project",
   chars: number,
 ) => ({
-  name: path.split("/").at(-1)!,
-  path,
+  name: filePath.split("/").at(-1)!,
+  path: filePath,
   origin: { kind, rootPath },
   missing: false,
   rawChars: chars,
@@ -139,6 +141,98 @@ suite.define(() => {
       await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
       expect(await summary.isVisible()).toBe(true);
       expect(await draft.inputValue()).toBe("Keep this unsent draft");
+    });
+  });
+
+  it("separates the latest run's cost from the session's lifetime total", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      // A long cached session: each run is cheap, but the session has spent far more.
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 1000000,
+        totalTokens: 534677,
+        totalTokensFresh: true,
+        inputTokens: 4,
+        outputTokens: 9,
+        estimatedCostUsd: 0.116,
+      };
+      const usageRow = (totalCost: number, extra: object = {}) => ({
+        key: sessionKey,
+        sessionId: "context-instance",
+        contextWeight: report,
+        usage: {
+          totalCost,
+          missingCostEntries: 0,
+          input: 40_000,
+          cacheRead: 8_800_000,
+          cacheWrite: 160_000,
+        },
+        ...extra,
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 1000000 },
+        ],
+        historyMessages: [
+          { role: "user", content: "Summarize the plan." },
+          // Two calls in the latest run: 3 + 1 uncached, 2,000 written, 530,000 read.
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            usage: { input: 3, output: 4, cacheRead: 260_000, cacheWrite: 2_000 },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "ok" }],
+          },
+          {
+            role: "assistant",
+            content: "Ready when you are.",
+            usage: { input: 1, output: 5, cacheRead: 270_000, cacheWrite: 0 },
+          },
+        ],
+        methodResponses: { "sessions.usage": { sessions: [usageRow(99.14)] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      await summary.screenshot({
+        path: path.join(createControlUiE2eArtifactDir("session-total-cost"), "popover.png"),
+      });
+      const latest = summary.locator(".context-usage__latest").first();
+      // Run: 530,000 of 532,004 prompt tokens were reads. Session: 8.8M of 9M.
+      expect(await latest.textContent()).toMatch(/Latest run\s*Cache\s*99\.62%\s*Cost\s*\$0\.116/);
+      expect(await latest.getAttribute("title")).toBe("In 4 · Out 9");
+      await expect
+        .poll(() => total.textContent())
+        .toMatch(/Session total\s*Cache\s*97\.77%\s*Cost\s*\$99\.14/);
+      const request = await gateway.waitForRequest("sessions.usage");
+      expect(request.params).toMatchObject({ key: sessionKey, range: "all", groupBy: "instance" });
+      expect(request.params).not.toHaveProperty("startDate");
+
+      // The next run refreshes the lifetime total; a still-summarizing total is a lower bound.
+      await gateway.setMethodResponse("sessions.usage", {
+        sessions: [usageRow(99.31, { computing: true })],
+      });
+      const next = { ...session, totalTokens: 536000, estimatedCostUsd: 0.17, updatedAt: 2 };
+      await gateway.setSessionsListResponse({ sessions: [next] });
+      await gateway.emitGatewayEvent("sessions.changed", { ...next, sessionKey });
+      await expect.poll(() => total.textContent()).toMatch(/≥\s*\$99\.31/);
+      expect(await latest.textContent()).toContain("$0.17");
     });
   });
 
@@ -304,6 +398,7 @@ suite.define(() => {
       ).toBe(true);
       const finalSkill = context.getByText("project-skill-98", { exact: true });
       const header = context.locator(".chat-context-page__header");
+      await waitForControlUiFrameLayout([context]);
       const headerTop = (await header.boundingBox())!.y;
       await finalSkill.scrollIntoViewIfNeeded();
       expect((await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);

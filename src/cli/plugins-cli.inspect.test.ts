@@ -8,7 +8,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginInspectReport } from "../plugins/status.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   withPluginDiagnosticsReportForInspectionMock as withDiagnostics,
@@ -20,7 +19,7 @@ import {
   expectNoPluginCliCalls as expectNoCalls,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
-  retirePluginDiagnosticsMock,
+  resolvePluginLifecycleGatewayMock,
   runPluginsCommand,
   runPluginCli as plugins,
   runtimeErrors,
@@ -90,46 +89,36 @@ describe("plugins cli inspect", () => {
     process.exitCode = originalExitCode;
   });
 
-  it.each([false, true])(
-    "serializes while owned and waits for release before JSON output (all: %s)",
-    async (all) => {
-      const started = createDeferredCore();
-      const finish = createDeferredCore();
-      const plugin = createPluginRecord({ id: "owned-inspect" });
-      let released = false;
-      let serialized = false;
-      Object.defineProperty(plugin, "description", {
-        enumerable: true,
-        get() {
-          expect(released).toBe(false);
-          serialized = true;
-          return "resource-backed description";
-        },
-      });
-      const report = mockInspection(plugin);
-      withDiagnostics.mockImplementation(async (_params, formatReport) => {
-        const output = formatReport(report);
-        expect(serialized).toBe(true);
-        started.resolve();
-        await finish.promise;
-        released = true;
-        return output;
-      });
-      const command = plugins("inspect", all ? "--all" : plugin.id, "--runtime", "--json");
-      try {
-        await started.promise;
-        expect(logs).toEqual([]);
-      } finally {
-        finish.resolve();
-        await command;
-      }
-      expect(withDiagnostics).toHaveBeenCalledTimes(1);
-      expect(released).toBe(true);
-      expect(logs).toHaveLength(1);
-      const result = JSON.parse(logs[0] ?? "");
-      expect((all ? result[0] : result).plugin.description).toBe("resource-backed description");
-    },
-  );
+  it.each([false, true])("distinguishes CLI loading from Gateway state (all: %s)", async (all) => {
+    const plugin = createPluginRecord({
+      id: "cli-only",
+      status: "loaded",
+      description: "Plugin description",
+    });
+    mockInspection(plugin);
+    const query = vi.fn().mockResolvedValue({
+      plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }],
+    });
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(query);
+    const selector = all ? "--all" : plugin.id;
+    await plugins("inspect", selector, "--runtime", "--json");
+    const result = JSON.parse(logs.at(-1) ?? "null");
+    expect(all ? result[0] : result).toMatchObject({
+      inspectionScope: "cli",
+      plugin: { status: "loaded", description: "Plugin description" },
+      gatewayRuntime: { state: "unloaded" },
+    });
+    await plugins("inspect", selector, "--runtime");
+    const output = stripVTControlCharacters(logs.at(-1) ?? "");
+    expect(output).toContain("CLI status");
+    expect(output).toContain("Gateway");
+    expect(output).toContain("unloaded");
+
+    query.mockRejectedValue(new Error("Gateway unavailable"));
+    await plugins("inspect", selector, "--runtime", "--json");
+    const unavailable = JSON.parse(logs.at(-1) ?? "null");
+    expect((all ? unavailable[0] : unavailable).gatewayRuntime).toBeNull();
+  });
 
   it("reports a missing runtime inspection as JSON failure", async () => {
     const plugin = createPluginRecord({ id: "owned-inspect" });
@@ -155,17 +144,6 @@ describe("plugins cli inspect", () => {
       expect(withDiagnostics).not.toHaveBeenCalled();
     },
   );
-
-  it("does not publish runtime inspection output when retirement fails", async () => {
-    inspectAll.mockReturnValue([]);
-    retirePluginDiagnosticsMock.mockRejectedValue(new Error("diagnostics cleanup failed"));
-
-    await expect(plugins("inspect", "--all", "--runtime", "--json")).rejects.toThrow(
-      "diagnostics cleanup failed",
-    );
-
-    expect(logs).toEqual([]);
-  });
 
   it.each([
     { runtime: false, selection: "all" },

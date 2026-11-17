@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
@@ -25,6 +26,7 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { writeOutputAsset } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
@@ -43,6 +45,7 @@ export async function runTtsConvert(params: {
   output?: string;
   transport: CapabilityTransport;
 }) {
+  const signal = getAsyncWorkSignal();
   let result: Pick<TtsResult, "audioPath" | "provider" | "outputFormat" | "voiceCompatible">;
   let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
@@ -64,6 +67,7 @@ export async function runTtsConvert(params: {
         voiceId: params.voiceId,
       },
       timeoutMs: 120_000,
+      signal,
     });
   } else {
     const cfg = await resolveLocalCapabilityRuntimeConfig({
@@ -108,9 +112,11 @@ export async function runTtsConvert(params: {
   }
   let outputPath = result.audioPath;
   if (params.output && result.audioPath) {
+    const buffer = await fs.readFile(result.audioPath);
+    signal?.throwIfAborted();
     // Match image/video outputs: the extension follows the audio actually returned.
     const written = await writeOutputAsset({
-      buffer: await fs.readFile(result.audioPath),
+      buffer,
       outputPath: params.output,
       outputIndex: 0,
       outputCount: 1,
@@ -241,6 +247,7 @@ export async function runTtsProviders(transport: CapabilityTransport, rawAgentId
     } = await callGateway({
       method: "tts.providers",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
     return {
       ...payload,
@@ -285,6 +292,7 @@ export async function runTtsPersonas(transport: CapabilityTransport) {
     return await callGateway({
       method: "tts.personas",
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
@@ -331,6 +339,7 @@ export async function runTtsStateMutation(params: {
             ? { persona: params.persona ?? "off" }
             : undefined,
       timeoutMs: 30_000,
+      signal: getAsyncWorkSignal(),
     });
   }
 
@@ -357,7 +366,7 @@ export async function runTtsStateMutation(params: {
     return { persona: persona.id };
   }
   if (!params.provider) {
-    throw new Error("--provider is required");
+    throwExpectedCliError("--provider is required");
   }
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {

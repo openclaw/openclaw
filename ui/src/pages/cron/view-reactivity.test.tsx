@@ -157,8 +157,7 @@ it("retains live suggestions only while the editor is presented", async () => {
   expect(view.container.querySelector("datalist")).toBeNull();
 });
 
-it("retains history controls and forwards the current transcript target after refresh", () => {
-  const onViewRunTranscript = vi.fn();
+it("retains activity history and filters without transcript controls after refresh", () => {
   const first = {
     ts: 1,
     runId: "run-stable",
@@ -169,10 +168,12 @@ it("retains history controls and forwards the current transcript target after re
     summary: "First summary",
   };
   const [props, setProps] = createSignal(
-    createCronViewProps({ listTab: "activity", runs: [first], onViewRunTranscript }),
+    createCronViewProps({ listTab: "activity", runs: [first] }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
-  const button = getElement(view.container, ".cron-run-entry button", HTMLButtonElement);
+  const row = getElement(view.container, ".cron-run-entry", HTMLDivElement);
+  expect(row.textContent).toContain("First summary");
+  expect(row.textContent).not.toContain("View transcript");
   const option = getElement(
     view.container,
     '[data-filter="status"] [data-value="option:ok"]',
@@ -181,7 +182,8 @@ it("retains history controls and forwards the current transcript target after re
   const refreshed = { ...first, summary: "Updated summary" };
   setProps((previous) => ({ ...previous, runs: [refreshed], runsStatuses: ["ok"] }));
   flush();
-  expect(view.container.querySelector(".cron-run-entry button")).toBe(button);
+  expect(view.container.querySelector(".cron-run-entry")).toBe(row);
+  expect(row.textContent).not.toContain("View transcript");
   expect(view.container.querySelector('[data-filter="status"] [data-value="option:ok"]')).toBe(
     option,
   );
@@ -189,8 +191,6 @@ it("retains history controls and forwards the current transcript target after re
   expect(view.container.querySelector(".cron-run-entry__body")?.textContent).toContain(
     "Updated summary",
   );
-  button.click();
-  expect(onViewRunTranscript).toHaveBeenCalledExactlyOnceWith(refreshed, button);
 });
 
 it("keeps retained row controls current across pending queries and access changes", () => {
@@ -240,7 +240,7 @@ it("keeps retained row controls current across pending queries and access change
   expect(run.disabled).toBe(false);
   expect(toggle.getAttribute("aria-disabled")).toBeNull();
   run.click();
-  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job);
   expect(initialRun).not.toHaveBeenCalled();
 
   canManage = false;
@@ -248,4 +248,23 @@ it("keeps retained row controls current across pending queries and access change
   flush();
   expect(view.container.querySelector(".cron-table__row")).toBe(row);
   expect(row.querySelector(".cron-table__actions")).toBeNull();
+});
+
+it("shows a run's recorded next run as a fixed time, not a live relative label", () => {
+  const run = {
+    ts: 1,
+    runId: "run-next",
+    runAtMs: 1,
+    jobId: "job-next",
+    action: "finished" as const,
+    status: "ok" as const,
+    summary: "Done",
+    nextRunAtMs: Date.UTC(2020, 5, 15, 12, 0),
+  };
+  const view = mountSolid(() => (
+    <CronView {...createCronViewProps({ listTab: "activity", runs: [run] })} />
+  ));
+  const label = getElement(view.container, ".cron-run-entry__meta", HTMLElement).textContent;
+  expect(label).toMatch(/Next .*2020/);
+  expect(label).not.toMatch(/Due|ago/);
 });

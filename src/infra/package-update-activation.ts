@@ -14,6 +14,7 @@ import { resolveExecutablePath } from "./executable-path.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageVersion } from "./package-json.js";
+import { resolvePackageReleaseSlotForRootSync } from "./package-release-slot-path.js";
 import {
   archivePackageActivationCustody,
   settlePackageActivationCustody,
@@ -199,6 +200,14 @@ export async function preparePackageActivation(
   ) {
     return undefined;
   }
+  if (resolvePackageReleaseSlotForRootSync(params.liveRoot)) {
+    // The journal publishes at the installation key, which is the package link; a
+    // release that the link selects is replaced in place by the ordinary swap.
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable for a release replaced in place behind its package link; the package backup and rollback path is used.",
+    );
+    return undefined;
+  }
   const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });
   assertOriginal();
   if (!nodeRunner) {
@@ -269,6 +278,23 @@ type PackageActivationSettlement = {
   warning?: string;
 };
 
+async function readPackageActivationSettlement(anchor: string, dryRun?: boolean) {
+  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
+  const journal = openPackageActivationSettlementJournal(anchor);
+  const admission = dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
+  return { linkedCompleted, journal, admission, initial: admission?.record ?? journal.read() };
+}
+
+/** Discover repair custody through the same verified journal and lease inspection as settlement. */
+export async function readPackageActivationRepairLease(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    return undefined;
+  }
+  const { initial } = await readPackageActivationSettlement(anchor);
+  return inspectPackageActivationLease(initial.descriptor.authority).current;
+}
+
 /** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
 export async function settlePendingPackageActivation(
   installKey: string,
@@ -287,11 +313,10 @@ export async function settlePendingPackageActivation(
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
-  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
-  const journal = openPackageActivationSettlementJournal(anchor);
-  const admission =
-    options?.dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
-  const initial = admission?.record ?? journal.read();
+  const { linkedCompleted, journal, admission, initial } = await readPackageActivationSettlement(
+    anchor,
+    options?.dryRun,
+  );
   if (options?.operationId) {
     assertPackageActivationOperation(initial, options.operationId);
   }

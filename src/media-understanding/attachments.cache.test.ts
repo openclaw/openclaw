@@ -241,6 +241,82 @@ it("carries no local path when a blocked path recovers through the URL fallback"
   expect(result.buffer.toString()).toBe("remote-bytes");
   expect(result.localPath).toBeUndefined();
 });
+it.for([
+  ["getPath falls back to URL fetch when local path is blocked", "getPath", false],
+  ["getBuffer falls back to URL (missing local path=false)", "getBuffer", false],
+  ["getBuffer falls back to URL (missing local path=true)", "getBuffer", true],
+] as const)("%s", async ([, method, missing], { base }) => {
+  const attachmentRoot = path.join(base, "attachment");
+  const allowedRoot = path.join(base, "allowed");
+  const attachmentPath = path.join(attachmentRoot, "voice-note.m4a");
+  const fallbackUrl = "https://example.com/fallback.jpg";
+  await fs.mkdir(attachmentRoot, { recursive: true });
+  await fs.mkdir(allowedRoot, { recursive: true });
+  if (!missing) {
+    await mediaFile(attachmentRoot, "voice-note.m4a", "ok");
+  }
+  const cache = createCache(
+    [{ index: 0, path: attachmentPath, url: fallbackUrl, mime: "image/jpeg" }],
+    missing ? undefined : { localPathRoots: [allowedRoot] },
+  );
+  readRemoteMediaBufferMock.mockResolvedValue({
+    buffer: Buffer.from("fallback-buffer"),
+    contentType: "image/jpeg",
+    fileName: "fallback.jpg",
+  });
+  if (method === "getPath") {
+    const result = await cache.getPath(request);
+    expect(path.dirname(result)).toBe(resolvePreferredOpenClawTmpDir());
+    expect(path.extname(result)).toBe(".jpg");
+    await expect(fs.readFile(result, "utf8")).resolves.toBe("fallback-buffer");
+  } else {
+    const result = await cache.getBuffer(request);
+    expect(result.buffer.toString()).toBe("fallback-buffer");
+  }
+  expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
+  expect(readRemoteMediaBufferMock.mock.calls[0]?.[0]).toStrictEqual({
+    url: fallbackUrl,
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    ssrfPolicy: undefined,
+    retry: expect.objectContaining({ attempts: 3 }),
+  });
+});
+it.for(["getBuffer", "getPath"] as const)(
+  "cancels a pending remote %s without poisoning later reads",
+  async (method, { base, realFetch: _realFetch }) => {
+    vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(base);
+    const admitted = createDeferred();
+    const finish = createDeferred<Response>();
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      admitted.resolve();
+      return await new Promise<Response>((resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("aborted", "AbortError")),
+          { once: true },
+        );
+        void finish.promise.then(resolve);
+      });
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(withFetchPreconnect(fetch));
+    const cache = createCache([{ index: 0, url: "http://198.18.0.153/file.jpg" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+    const controller = new AbortController();
+    const reason = new Error("attachment read canceled");
+    const reading = { ...request, signal: controller.signal };
+    const rejected = expect(cache[method](reading)).rejects.toBe(reason);
+    await admitted.promise;
+    controller.abort(reason);
+    finish.resolve(new Response("image", { headers: { "content-type": "image/jpeg" } }));
+    await rejected;
+    expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    fetch.mockResolvedValue(new Response("retry", { headers: { "content-type": "image/jpeg" } }));
+    expect((await cache.getBuffer(request)).buffer.toString()).toBe("retry");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  },
+);
 it("resolves each relative attachment against its own workspace", async ({ base }) => {
   const workspaces = ["first", "second"].map((name) => path.join(base, name));
   await Promise.all(
@@ -276,19 +352,20 @@ it.for([true, false])(
   "resolves cwd/state collisions with cwd allowed: %s",
   async (allowedCwd, { base }) => {
     const stateDir = path.join(base, "state");
-    const cwd = path.join(base, "cwd");
-    const relativePath = "media/inbound/photo.jpg";
-    await mediaFile(cwd, relativePath, "cwd-media");
-    await mediaFile(stateDir, relativePath, "state-media");
-    vi.spyOn(process, "cwd").mockReturnValue(cwd);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const roots = (allowedCwd ? [cwd, stateDir] : [stateDir]).map((root) =>
-        path.join(root, "media"),
-      );
-      const cache = createCache([{ index: 0, path: relativePath }], { localPathRoots: roots });
-      expect((await cache.getBuffer(request)).buffer.toString()).toBe(
-        allowedCwd ? "cwd-media" : "state-media",
-      );
+    // Thread workers cannot chdir; place the fixture beneath the real cwd.
+    await withTestDir({ prefix: "openclaw-media-cwd-", parentDir: process.cwd() }, async (cwd) => {
+      const cwdFile = await mediaFile(cwd, "media/inbound/photo.jpg", "cwd-media");
+      const relativePath = path.relative(process.cwd(), cwdFile);
+      const stateFile = await mediaFile(stateDir, relativePath, "state-media");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const roots = (allowedCwd ? [cwdFile, stateFile] : [stateFile]).map((file) =>
+          path.dirname(file),
+        );
+        const cache = createCache([{ index: 0, path: relativePath }], { localPathRoots: roots });
+        expect((await cache.getBuffer(request)).buffer.toString()).toBe(
+          allowedCwd ? "cwd-media" : "state-media",
+        );
+      });
     });
   },
 );

@@ -55,8 +55,9 @@ runs required Doctor migrations, and verifies the activated Gateway. A raw
 workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
 
 The updater retains the previous package during activation and keeps it when
-failed recovery cannot prove a working installation. Migration recovery originals
-and original-state update captures remain until explicit
+failed recovery cannot prove a working installation. A verified healthy update
+retires its own migration recovery originals and original-state update capture;
+other copies remain until a later update or explicit
 [update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
@@ -432,6 +433,7 @@ repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
+- If `openclaw` cannot start after an update was interrupted on an `install-cli.sh` prefix or the durable service copy, and `lib/node_modules/openclaw` is missing, rename the leftover `lib/node_modules/.openclaw.release-link-*` link onto `lib/node_modules/openclaw`. It names the unchanged previous release. See [release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).

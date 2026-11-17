@@ -39,6 +39,7 @@ export function resolveReplySessionRolloverState(
     label: entry.label,
     autoLabel: entry.autoLabel,
     displayName: entry.displayName,
+    topicName: entry.topicName,
     icon: entry.icon,
     color: entry.color,
     category: entry.category,

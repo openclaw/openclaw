@@ -1,4 +1,3 @@
-import { getRuntimeConfig } from "../../config/config.js";
 import { readActiveTranscriptEntryAnchor } from "../../config/sessions/session-accessor.sqlite-transcript-admitted-read.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
@@ -6,17 +5,11 @@ import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/tran
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import {
-  scheduleSkillExperienceReview,
-  scheduleDailyWorkshopMaintenance,
-} from "../../skills/workshop/experience-review-default.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
-import { projectSessionForkRequester } from "../session-fork-requester.js";
 import {
   completedTurnMessageAnchor,
   type CompletedTurnMessageAnchor,
 } from "../sessions/session-manager-message-anchor.js";
-import { SKILL_WORKSHOP_TOOL_NAME } from "../skill-workshop-prompt.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -25,14 +18,21 @@ import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle
 
 const log = createSubsystemLogger("agents/harness");
 
+type CompletedTurnSource = Pick<
+  TranscriptEntryAnchor,
+  "agentId" | "sessionId" | "sessionKey" | "storePath" | "entryId"
+>;
+
 type BaseAgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
   [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
-  /** Exact completed-turn boundary; context loading stays off the foreground path. */
-  skillExperienceReviewSource?: Pick<
-    TranscriptEntryAnchor,
-    "agentId" | "sessionId" | "sessionKey" | "storePath" | "entryId"
-  >;
+  /**
+   * The transcript entry that ended the turn. Hooks receive it as `ctx.completedTurn`; omit it
+   * when the turn left no reviewable final entry.
+   */
+  completedTurnSource?: CompletedTurnSource;
+  /** @deprecated Set `completedTurnSource`. Supported through 2026-12-31. */
+  skillExperienceReviewSource?: CompletedTurnSource;
   ctx: BaseAgentEndSideEffectsParams["ctx"] & {
     authProfileId?: string;
     /** @deprecated Set `event.modelIterations`. Supported through 2026-12-31. */
@@ -50,17 +50,19 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
  * receipt is consumed here, and the retired context fields map onto their public replacements.
  */
 function prepareAgentEnd(params: AgentEndSideEffectsParams): AgentEndSideEffectsParams {
+  const { skillExperienceReviewSource, ...rest } = params;
   const { modelIterations, skillWorkshopAvailable, ...ctx } = params.ctx;
-  for (const [field, replacement, used] of [
-    ["modelIterations", "event.modelIterations", modelIterations !== undefined],
-    ["skillWorkshopAvailable", "ctx.toolNames", skillWorkshopAvailable !== undefined],
+  for (const [method, replacement, used] of [
+    ["ctx.modelIterations", "event.modelIterations", modelIterations !== undefined],
+    ["ctx.skillWorkshopAvailable", "ctx.toolNames", skillWorkshopAvailable !== undefined],
+    [
+      "skillExperienceReviewSource",
+      "completedTurnSource",
+      skillExperienceReviewSource !== undefined,
+    ],
   ] as const) {
     if (used) {
-      warnPluginSdkDeprecation({
-        family: "agent-end-side-effects",
-        method: `ctx.${field}`,
-        replacement,
-      });
+      warnPluginSdkDeprecation({ family: "agent-end-side-effects", method, replacement });
     }
   }
   const { modelIterations: reportedIterations, ...reported } = params.event;
@@ -76,75 +78,85 @@ function prepareAgentEnd(params: AgentEndSideEffectsParams): AgentEndSideEffects
     ...(iterations !== undefined ? { modelIterations: iterations } : {}),
     ...(skillsUsed.length > 0 ? { skillsUsed } : {}),
   };
+  const completedTurnSource = params.completedTurnSource ?? skillExperienceReviewSource;
   return {
-    ...params,
+    ...rest,
+    ...(completedTurnSource ? { completedTurnSource } : {}),
     event: loadMessages ? bindAgentHarnessHookMessages(event, loadMessages) : event,
     ctx:
       ctx.toolNames === undefined && skillWorkshopAvailable === true
-        ? { ...ctx, toolNames: [SKILL_WORKSHOP_TOOL_NAME] }
+        ? { ...ctx, toolNames: ["skill_workshop"] }
         : ctx,
   };
 }
 
-function runCoreAgentEndSideEffects(
+function warnSideEffectFailure(error: unknown): void {
+  // Side effects are observational; failures must not change the completed run result.
+  log.warn(`agent end side effect failed: ${String(error)}`);
+}
+
+/** Deprecated synchronous path: reads the final entry's anchor on this thread. */
+function readCompletedTurnNative(
   params: AgentEndSideEffectsParams,
-  read: "native" | "worker",
-): void | Promise<void> {
-  const foregroundPromptContext = params.ctx.foregroundPromptContext;
-  if (!foregroundPromptContext) {
-    return;
+): TranscriptEntryAnchor | undefined {
+  if (!params.completedTurnSource) {
+    return undefined;
   }
-  // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
-  const config = params.ctx.config ?? getRuntimeConfig();
-  const schedule = (anchor: TranscriptEntryAnchor | undefined) => {
-    if (!anchor) {
-      return;
-    }
-    // The review reads only the turn's requester identity, never its live capabilities.
-    const { foregroundPromptContext: _turn, ...hookCtx } = params.ctx;
-    scheduleSkillExperienceReview({
-      event: params.event,
-      ctx: {
-        ...hookCtx,
-        agentId: foregroundPromptContext.agentId,
-        trigger: params.ctx.trigger ?? foregroundPromptContext.trigger,
-        requester: projectSessionForkRequester(foregroundPromptContext),
-      },
-      config,
-      source: anchor,
-    });
-  };
-  const failed = (error: unknown) => {
-    // Side effects are observational; failures must not change the completed run result.
-    log.warn(`skill experience review scheduling failed: ${String(error)}`);
-  };
   try {
-    scheduleDailyWorkshopMaintenance(config, foregroundPromptContext.agentId);
-    // CLI hook contexts omit toolNames, so isEligibleContext rejects them.
-    const source = params.skillExperienceReviewSource;
-    if (!source) {
-      return;
-    }
-    if (read === "worker") {
-      const committed = params[completedTurnMessageAnchor];
-      const assertCurrent =
-        committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
-      assertCurrent();
-      if (committed) {
-        schedule(committed.anchor);
-        return;
-      }
-      return readActiveTranscriptEntryAnchorAsync(source)
-        .then((anchor) => {
-          assertCurrent();
-          schedule(anchor);
-        })
-        .catch(failed);
-    }
-    schedule(readActiveTranscriptEntryAnchor(source));
+    return readActiveTranscriptEntryAnchor(params.completedTurnSource);
   } catch (error) {
-    failed(error);
+    warnSideEffectFailure(error);
+    return undefined;
   }
+}
+
+/**
+ * Resolves the committed anchor of the turn's final entry once, for core and plugin consumers.
+ * The read keeps the turn lease's write assertion, so a superseded turn yields none.
+ */
+async function readCompletedTurn(
+  params: AgentEndSideEffectsParams,
+): Promise<TranscriptEntryAnchor | undefined> {
+  const source = params.completedTurnSource;
+  if (!source) {
+    return undefined;
+  }
+  try {
+    const committed = params[completedTurnMessageAnchor];
+    const assertCurrent = committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
+    assertCurrent();
+    if (committed) {
+      return committed.anchor;
+    }
+    const anchor = await readActiveTranscriptEntryAnchorAsync(source);
+    assertCurrent();
+    return anchor;
+  } catch (error) {
+    warnSideEffectFailure(error);
+    return undefined;
+  }
+}
+
+function withCompletedTurn(
+  params: AgentEndSideEffectsParams,
+  anchor: TranscriptEntryAnchor | undefined,
+): AgentEndSideEffectsParams {
+  return anchor
+    ? {
+        ...params,
+        ctx: {
+          ...params.ctx,
+          completedTurn: { sessionId: anchor.sessionId, entryId: anchor.entryId },
+        },
+      }
+    : params;
+}
+
+async function prepareWithCompletedTurn(
+  params: AgentEndSideEffectsParams,
+): Promise<AgentEndSideEffectsParams> {
+  const prepared = prepareAgentEnd(params);
+  return withCompletedTurn(prepared, await readCompletedTurn(prepared));
 }
 
 /** @deprecated Await runAgentEndSideEffectsAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -155,22 +167,17 @@ export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void 
     replacement: "await runAgentEndSideEffectsAsync",
   });
   const prepared = prepareAgentEnd(params);
-  void runCoreAgentEndSideEffects(prepared, "native");
-  runAgentHarnessAgentEndHook(prepared);
+  runAgentHarnessAgentEndHook(withCompletedTurn(prepared, readCompletedTurnNative(prepared)));
 }
 
 /** Keep the turn lease through anchor preparation, then start plugin hooks without waiting. */
 export async function runAgentEndSideEffectsAsync(
   params: AgentEndSideEffectsParams,
 ): Promise<void> {
-  const prepared = prepareAgentEnd(params);
-  await runCoreAgentEndSideEffects(prepared, "worker");
-  runAgentHarnessAgentEndHook(prepared);
+  runAgentHarnessAgentEndHook(await prepareWithCompletedTurn(params));
 }
 
 /** Runs agent-end side effects and waits for plugin/core completion. */
 export async function awaitAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
-  const prepared = prepareAgentEnd(params);
-  await runCoreAgentEndSideEffects(prepared, "worker");
-  await awaitAgentHarnessAgentEndHook(prepared);
+  await awaitAgentHarnessAgentEndHook(await prepareWithCompletedTurn(params));
 }

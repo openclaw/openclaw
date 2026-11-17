@@ -76,6 +76,55 @@ it("prepares registered English namespaces before publishing a locale without lo
   expect(manager.translateActive("common.connected")).toBeUndefined();
 });
 
+it.each(["loaded", "failed"] as const)(
+  "prepares the saved locale before route readiness (%s)",
+  async (outcome) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    localStorage.setItem("openclaw.i18n.locale", "de");
+    const entry = deferred<TranslationMap | null>();
+    loadTranslation.mockReturnValueOnce(entry.promise);
+    manager = createI18nManagerForTesting(loadTranslation);
+    let ready = false;
+    const preparation = manager.prepareLocale().then(() => {
+      ready = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(ready).toBe(false);
+    if (outcome === "loaded") {
+      entry.resolve(german);
+    } else {
+      entry.reject(offline);
+    }
+    await preparation;
+    expect(manager.getLocale()).toBe(outcome === "loaded" ? "de" : "en");
+    expect(manager.getRequestedLocale()).toBe("de");
+  },
+);
+
+it("prepares a namespace registered after the active locale was published", async () => {
+  const page = deferred<{ default: TranslationMap }>();
+  const loadPage = vi.fn(() => page.promise);
+  manager.registerTranslation(
+    "de",
+    createLazyLocaleCatalog({ ...german }, { lateRoute: loadPage }),
+  );
+  await manager.setLocale("de");
+  expect(loadPage).not.toHaveBeenCalled();
+  const { en } = await import("../locales/en.ts");
+  en.lateRoute = { title: "Late route" };
+  try {
+    const prepared = manager.prepareLocale();
+    expect(loadPage).toHaveBeenCalledOnce();
+    page.resolve({ default: { lateRoute: { title: "Späte Seite" } } });
+    await prepared;
+    expect(manager.translateActive("lateRoute.title")).toBe("Späte Seite");
+  } finally {
+    delete en.lateRoute;
+  }
+});
+
 it("keeps late namespace results scoped to their locale and retries a failed namespace", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const page = deferred<{ default: TranslationMap }>();
@@ -165,11 +214,13 @@ it.each(["failure", "success"] as const)("ignores a stale locale load's %s", asy
     loadTranslation.mockResolvedValueOnce(spanish);
   }
   const setGerman = manager.setLocale("de");
+  const prepared = manager.prepareLocale();
   const setSpanish = manager.setLocale("es");
   spanishLoad.resolve(outcome === "failure" ? spanish : Promise.reject(offline));
   await setSpanish;
   germanLoad.resolve(outcome === "failure" ? Promise.reject(offline) : german);
   await setGerman;
+  await prepared;
   expect(manager.getLocale()).toBe(outcome === "failure" ? "es" : "en");
   await retryPendingLocale();
   expect(state()).toMatchObject({ locale: "es", loads: outcome === "failure" ? 2 : 3 });

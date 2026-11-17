@@ -21,11 +21,14 @@ enum GatewayLaunchAgentManager {
         /// Flags remain exact invocation custody; bundle identity uses its concrete packaged files.
         func matchesBundledRuntime(_ runtime: BundledRuntime) -> Bool {
             let concrete = GatewayLaunchAgentManager.concreteServicePrefix(self.prefix)
-            guard concrete.first == runtime.bun.resolvingSymlinksInPath().path,
-                  let entry = GatewayLaunchAgentManager.serviceCLIEntrypoint(concrete),
-                  let sqliteLibrary,
-                  URL(fileURLWithPath: sqliteLibrary).resolvingSymlinksInPath() ==
-                  runtime.sqliteLibrary.resolvingSymlinksInPath()
+            // Services installed before the stable service path still name the per-build Bun.
+            guard concrete.first == runtime.bun.resolvingSymlinksInPath().path ||
+                (concrete.first == runtime.serviceBun.resolvingSymlinksInPath().path &&
+                    FileManager.default.contentsEqual(atPath: runtime.serviceBun.path, andPath: runtime.bun.path)),
+                let entry = GatewayLaunchAgentManager.serviceCLIEntrypoint(concrete),
+                let sqliteLibrary,
+                URL(fileURLWithPath: sqliteLibrary).resolvingSymlinksInPath() ==
+                runtime.sqliteLibrary.resolvingSymlinksInPath()
             else { return false }
             return GatewayLaunchAgentManager.serviceCLIEntrypoints.contains {
                 runtime.packageRoot.appendingPathComponent($0).resolvingSymlinksInPath() == entry
@@ -266,6 +269,7 @@ enum GatewayLaunchAgentManager {
                 allowUnconfigured: allowUnconfigured,
                 runtime: runtime,
                 launchAgentExists: existed)
+            var resumedRuntime: BundledRuntime?
             if !existed, let preserved = whenMissingCLI {
                 guard let executable = preserved.prefix.first, executable.hasPrefix("/"),
                       ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
@@ -275,12 +279,17 @@ enum GatewayLaunchAgentManager {
                 if preserved.hadRuntimePin ||
                     !self.isManagedNode(executable, stateDirectory: AppProfile.current.stateDirectoryURL())
                 {
-                    arguments += ["--runtime-path", preserved.sourcePrefix?.first ?? executable]
+                    let runtimePath = preserved.sourcePrefix?.first ?? executable
+                    arguments += ["--runtime-path", runtimePath]
+                    // A resume onto the stable service Bun needs its build staged there first.
+                    resumedRuntime = preserved.prefix.last.flatMap(BundledRuntime.init(serviceEntrypoint:))
+                        .flatMap { $0.serviceBun.path == runtimePath ? $0 : nil }
                 }
             }
             return await self.runDaemonCommand(
                 arguments,
                 runtime: runtime,
+                serviceRuntime: runtime ?? resumedRuntime,
                 installedCLI: installedCLI,
                 expectedServiceAuthority: custody,
                 checkCurrent: checkCurrent)
@@ -334,7 +343,7 @@ enum GatewayLaunchAgentManager {
         if allowUnconfigured { arguments.append("--allow-unconfigured") }
         // Existing services retain core's saved runtime intent unless the app update or migration owns replacement.
         if let runtime, !launchAgentExists || replaceRuntime {
-            arguments += ["--runtime", "bun", "--runtime-path", runtime.bun.path]
+            arguments += ["--runtime", "bun", "--runtime-path", runtime.serviceBun.path]
         }
         return arguments
     }
@@ -444,6 +453,7 @@ enum GatewayLaunchAgentManager {
                 launchAgentExists: exists,
                 replaceRuntime: true),
             runtime: runtime,
+            serviceRuntime: runtime,
             installedCLI: environment.map {
                 InstalledServiceCLI(
                     prefix: runtime.cliCommand,
@@ -707,6 +717,7 @@ extension GatewayLaunchAgentManager {
         timeout: Double = Self.startupMigrationTolerance,
         quiet: Bool = false,
         runtime: BundledRuntime? = nil,
+        serviceRuntime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
         restoring: InstalledServiceCLI? = nil,
         legacyAuthority: InstalledServiceCLI? = nil,
@@ -718,6 +729,7 @@ extension GatewayLaunchAgentManager {
             timeout: timeout,
             quiet: quiet,
             runtime: runtime,
+            serviceRuntime: serviceRuntime,
             installedCLI: installedCLI,
             restoring: restoring,
             legacyAuthority: legacyAuthority,
@@ -732,6 +744,7 @@ extension GatewayLaunchAgentManager {
         timeout: Double,
         quiet: Bool,
         runtime: BundledRuntime? = nil,
+        serviceRuntime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
         restoring: InstalledServiceCLI? = nil,
         legacyAuthority: InstalledServiceCLI? = nil,
@@ -777,6 +790,18 @@ extension GatewayLaunchAgentManager {
         } else {
             beforeSpawn = nil
         }
+        let prepared: BundledRuntime.PreparedServiceBun?
+        do {
+            prepared = if let serviceRuntime, args.first == "install" {
+                try await serviceRuntime.prepareServiceBun()
+            } else {
+                nil
+            }
+        } catch {
+            return .failure("The Gateway service runtime could not be prepared (\(error.localizedDescription)). " +
+                "Retry, or reinstall OpenClaw.app if it keeps failing.")
+        }
+        defer { prepared?.discard() }
         let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: selectedCLI)
         if args.first == "install", invocation.supportsExpectedRuntimePin {
             let intent: RuntimeIntent
@@ -794,13 +819,37 @@ extension GatewayLaunchAgentManager {
                 arguments += ["--expected-runtime-pin", expectation]
             }
         }
-        return await self.executeDaemonCommand(
+        let finishStaging: (@Sendable (Bool) -> Void)?
+        do {
+            // Preparation and runtime-intent inspection can suspend. No live executable changes
+            // until cancellation, update selection, and the originally captured custody agree.
+            if let prepared {
+                try await checkCurrent?()
+                try Task.checkCancellation()
+                if let error = beforeSpawn?() { return .failure(error) }
+                finishStaging = try prepared.publish()
+            } else {
+                finishStaging = nil
+            }
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+        let result = await self.executeDaemonCommand(
             arguments,
             invocation: invocation,
             timeout: timeout,
             quiet: quiet,
             beforeSpawn: beforeSpawn,
             checkCurrent: checkCurrent)
+        if case .failure = result {
+            // The installer can publish the service and then fail, so settle on what is installed.
+            let installedRoot = self.installedServiceCLI()?.prefix.last
+                .flatMap(BundledRuntime.init(serviceEntrypoint:))?.root.resolvingSymlinksInPath()
+            finishStaging?(installedRoot != nil && installedRoot == serviceRuntime?.root.resolvingSymlinksInPath())
+        } else {
+            finishStaging?(true)
+        }
+        return result
     }
 
     private static func executeDaemonCommand(

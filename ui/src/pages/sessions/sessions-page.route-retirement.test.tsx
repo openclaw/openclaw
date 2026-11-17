@@ -80,25 +80,25 @@ it("retires a held delete before rendering the destination route and ignores its
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForSolid(() => {
       expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
-      expect(container.textContent).toContain("Working…");
+      expect(container.textContent).toContain("Working");
     });
 
     await context.navigateAndWait("about");
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(container.textContent).not.toContain(row.label);
-      expect(container.textContent).not.toContain("Working…");
+      expect(container.textContent).not.toContain("Working");
     });
 
     pending.reject(new Error("Late deleted-session failure"));
     await Promise.allSettled([deletion.mock.results[0]!.value]);
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(document.body.textContent).not.toContain("Late deleted-session failure");
     });

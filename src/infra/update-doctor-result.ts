@@ -201,6 +201,7 @@ export type UpdateDoctorWriteAuthority = {
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -318,6 +319,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           physical = true;
           expectedGenerations = observation.committed;
         }
+        const first = !admitted;
         admitted = true;
         const generations = observation.committed;
         historicalScans.admit(generations);
@@ -327,6 +329,16 @@ export function createUpdateDoctorDatabaseWriteCapture(
         fromGenerations ??= matches ? incoming : generations;
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches;
+        if (!matches && first) {
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Changes after admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+          );
+        }
       }
     },
     async settle() {

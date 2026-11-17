@@ -2,7 +2,6 @@ import { fork } from "node:child_process";
 import { on, once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { withinTest } from "../helpers/promise.js";
 
 it("observes a new worker's first Usage task and preserves native message transfers", async ({
@@ -11,7 +10,7 @@ it("observes a new worker's first Usage task and preserves native message transf
   const child = fork(
     fileURLToPath(new URL("./usage-bench-observer.fixture.mjs", import.meta.url)),
     {
-      execPath: resolveTestNodeExecPath(),
+      execPath: process.execPath,
       execArgv: [
         "--import",
         fileURLToPath(new URL("../../scripts/lib/usage-bench-observer.mjs", import.meta.url)),

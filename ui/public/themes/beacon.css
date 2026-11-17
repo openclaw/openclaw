@@ -79,7 +79,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #5ee88a;
-  --ok-muted: rgba(94, 232, 138, 0.85);
   --ok-subtle: rgba(255, 255, 255, 0.1);
   --destructive: #ffabab;
   --destructive-hover: #ffc4c4;
@@ -90,6 +89,7 @@
   --danger-muted: rgba(255, 171, 171, 0.85);
   --danger-subtle: rgba(255, 255, 255, 0.1);
   --info: #8ecdff;
+  --status-running: var(--info);
   --info-subtle: rgba(255, 255, 255, 0.1);
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */
@@ -128,7 +128,6 @@
   --card-foreground: #000000;
   --card-highlight: rgba(0, 0, 0, 0.04);
   --popover-foreground: #000000;
-  --session-hovercard-surface: var(--card);
 
   --text: #000000;
   --text-strong: #000000;
@@ -148,7 +147,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #0c5024;
-  --ok-muted: rgba(12, 80, 36, 0.85);
   --ok-subtle: rgba(0, 0, 0, 0.07);
   --destructive: #8c0f0f;
   --destructive-foreground: #ffffff;
@@ -158,6 +156,7 @@
   --danger-muted: rgba(140, 15, 15, 0.85);
   --danger-subtle: rgba(0, 0, 0, 0.07);
   --info: #09428d;
+  --status-running: var(--info);
   --info-subtle: rgba(0, 0, 0, 0.07);
 
   /* Diff ink is a status pair too: it sits on the same neutral tints. */

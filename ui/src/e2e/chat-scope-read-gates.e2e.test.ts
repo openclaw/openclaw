@@ -20,6 +20,67 @@ const options = {
 const scopes = ["operator.sessions.read", "operator.sessions.write"];
 
 suite.define(() => {
+  it.each(["owner", "member", "viewer"] as const)(
+    "respects shared-session command access for a %s",
+    async (sharingRole) => {
+      await suite.withPage(options, async ({ page }) => {
+        const blocked = sharingRole === "viewer";
+        const reason = "session is shared for this connection";
+        const row = {
+          ...createControlUiSessionRow("agent:main:main", "Shared workspace", Date.now()),
+          visibility: "shared",
+          sharingRole,
+          sendDisabledReason: blocked ? reason : null,
+          spawnedCwd: "/workspace/synthetic-project",
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey: row.key,
+          sessions: [row],
+          methodResponses: {
+            "chat.startup": {
+              sessionId: row.sessionId,
+              sessionInfo: row,
+              messages: [],
+              metadata: { commands: [], models: [] },
+            },
+            "commands.list": blocked
+              ? { __mockError: { code: "INVALID_REQUEST", message: reason } }
+              : {
+                  commands: [
+                    {
+                      name: "project-check",
+                      textAliases: ["/project-check"],
+                      description: "Check this project",
+                      source: "plugin",
+                      scope: "text",
+                      acceptsArgs: false,
+                    },
+                  ],
+                },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
+        const composer = page
+          .locator(".agent-chat__composer-combobox textarea")
+          .filter({ visible: true });
+        await composer.waitFor();
+        await gateway.waitForRequest("sessions.messages.subscribe");
+        if (blocked) {
+          await page.getByText(reason, { exact: false }).first().waitFor();
+          expect(await composer.isEditable()).toBe(false);
+          expect(await page.locator(".slash-menu[role='listbox']").count()).toBe(0);
+          expect(await gateway.getRequests("commands.list")).toHaveLength(0);
+        } else {
+          await composer.fill("/project-check");
+          await expect
+            .poll(() => page.locator(".slash-menu-name").allTextContents())
+            .toContain("/project-check");
+          expect(await gateway.getRequests("commands.list")).toHaveLength(1);
+        }
+      });
+    },
+  );
+
   it("keeps operator session-only command menus free of forbidden catalog reads", async () => {
     await suite.withPage(options, async ({ page }) => {
       const row = {

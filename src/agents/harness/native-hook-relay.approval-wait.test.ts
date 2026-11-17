@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
@@ -32,6 +37,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
+  resetGlobalHookRunner();
   await clearNativeHookRelaysForTests();
 });
 
@@ -54,6 +60,55 @@ async function invokePermissionRequest(
 }
 
 describe("native hook relay approval wait handling", () => {
+  it.each([
+    {
+      decision: "allow-once",
+      output: { permissionDecision: "allow", updatedInput: { command: "echo rewritten" } },
+    },
+    { decision: "deny", output: { permissionDecision: "deny" } },
+  ])("withholds a rewrite until the $decision approval decision", async ({ decision, output }) => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({
+            params: { command: "echo rewritten" },
+            requireApproval: { title: "Rewrite", description: "Run the replacement?" },
+          })),
+        },
+      ]),
+    );
+    const gatewayDecision = createDeferredCore<{ id: string; decision: string }>();
+    mockCallGatewayTool.mockImplementation(async (method) => {
+      if (method !== "plugin.approval.request") {
+        throw new Error(`unexpected gateway method: ${method}`);
+      }
+      return await gatewayDecision.promise;
+    });
+    const relay = registerRelay();
+    let settled = false;
+    const response = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-approved-rewrite",
+        tool_input: { command: "cat /tmp/private_key" },
+      },
+    }).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    gatewayDecision.resolve({ id: "plugin:rewrite", decision });
+    const hookOutput = JSON.parse((await response).stdout).hookSpecificOutput;
+    expect(hookOutput).toMatchObject(output);
+    expect("updatedInput" in hookOutput).toBe(decision === "allow-once");
+  });
+
   it("defers when a waitDecision reply carries a different approval id", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "approval-1", status: "accepted" })

@@ -1,0 +1,3 @@
+# memory-provider-entry assertions proving the Knowledge memory prompt asks agents to keep
+# page State current only when page-editing tools are available. Exact net growth for PR #197018.
+7

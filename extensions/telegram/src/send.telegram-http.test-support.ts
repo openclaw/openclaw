@@ -254,6 +254,7 @@ export function useTelegramHttpFixture() {
       linkPreview?: boolean;
       firstReply?: boolean;
       textLimit?: number;
+      messageEffectId?: string;
     } = {},
   ) {
     const textMode = options.textMode ?? (rich ? undefined : "html");
@@ -268,6 +269,7 @@ export function useTelegramHttpFixture() {
         quoteText: "quote",
         ...(options.firstReply ? { replyToIdSource: "implicit", replyToMode: "first" } : {}),
         messageThreadId: options.threadId,
+        messageEffectId: options.messageEffectId,
         ...authorization,
         ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [state.mediaDir] } : {}),
         ...replyButtons,

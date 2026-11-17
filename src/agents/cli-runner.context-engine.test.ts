@@ -322,6 +322,32 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(dispose).not.toHaveBeenCalled();
   });
 
+  it("assembles after bootstrap and sends the engine addition with the turn, not the system prompt", async () => {
+    const { bootstrap } = createLifecycle();
+    const history = [textMessage("user", "bootstrapped ask", 1)];
+    bootstrap.mockImplementation(async () => {
+      historyMock.mockResolvedValueOnce(history);
+      return { bootstrapped: true };
+    });
+    const assemble = vi.fn<ContextEngine["assemble"]>(async ({ messages }) => ({
+      messages,
+      estimatedTokens: 0,
+      systemPromptAddition: " live context ",
+    }));
+    const context = buildPreparedContext(createContextEngine({ bootstrap, assemble }));
+    const { systemPrompt } = context;
+
+    await runPreparedCliAgent(context);
+
+    expect(assemble).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ messages: history, prompt: "transcript visible ask" }),
+    );
+    expect(executeMock.mock.calls[0]?.[0]).toMatchObject({
+      systemPrompt,
+      contextEngineSystemPromptAddition: "live context",
+    });
+  });
+
   it("keeps the admitted source in its exact transcript fence until bootstrap settles", async () => {
     const { admission, recorder } = createAdmittedCliRecorder("cli-scoped-user");
     const enteredBootstrap = createDeferred();
@@ -395,7 +421,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
       expect(lifecycle).toEqual(["open"]);
       finishBootstrap.resolve();
       await run;
-      expect(lifecycle).toEqual(["open", "bootstrap-settled", "release"]);
+      // Assembly then reopens the same fenced source.
+      expect(lifecycle).toEqual(["open", "bootstrap-settled", "release", "open", "release"]);
     } finally {
       finishBootstrap.resolve();
       await run.catch(() => {});

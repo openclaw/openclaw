@@ -55,7 +55,7 @@ type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
 
 type AgentConfigEntry = Pick<
   AgentConfig,
-  "name" | "workspace" | "agentDir" | "decisionModel" | "skills"
+  "name" | "workspace" | "agentDir" | "decisionModel" | "utilityModel" | "skills"
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
@@ -66,7 +66,7 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "models" | "skills"
+      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
@@ -417,7 +417,7 @@ export function buildModelOptions(
     const separator = current.indexOf("/");
     options.unshift({
       value: current,
-      label: `Current (${current})`,
+      label: current,
       provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }

@@ -161,10 +161,16 @@ export function captureConfigHealthStateStore(
         assertCurrent();
         const context = captured.context;
         const options = { path: databasePath, env: context.environment };
+        const sharedOwner = !context.maintenanceScope && !context.existingSchemaPath;
+        const readSource = sharedOwner
+          ? await getActiveOpenClawStateDatabaseReadSnapshotAsync(options)
+          : undefined;
         const receipt =
-          !context.maintenanceScope &&
-          !context.existingSchemaPath &&
-          !(await getActiveOpenClawStateDatabaseReadSnapshotAsync(options))
+          sharedOwner &&
+          (!readSource ||
+            (context.liveStateReads &&
+              context.databaseEngineSelection?.effectiveEngines.state === "sqlite" &&
+              readSource.location === databasePath))
             ? readConfigHealthReceipt(databasePath)
             : undefined;
         const snapshots = healthSnapshots.get(context.admission) ?? new Map();

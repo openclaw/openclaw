@@ -322,9 +322,35 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
     }
     throw error;
   }
-  const needsTransform = (node: AnyNode, exportedDeclaration = false): boolean => {
+  const needsTransform = (
+    node: AnyNode,
+    exportedDeclaration = false,
+    parent?: AnyNode,
+    grandparent?: AnyNode,
+  ): boolean => {
     if (node.type === "MetaProperty") {
-      return true;
+      if (
+        node.meta.name !== "import" ||
+        node.property.name !== "meta" ||
+        parent?.type !== "MemberExpression" ||
+        parent.object !== node ||
+        parent.computed ||
+        parent.property.type !== "Identifier" ||
+        parent.property.name !== "url"
+      ) {
+        return true;
+      }
+      // These value reads do not become new literal references when Jiti inlines
+      // the URL. Assignment targets and other metadata still need its prepass.
+      return !(
+        grandparent?.type === "ArrayExpression" ||
+        (grandparent?.type === "ReturnStatement" && grandparent.argument === parent) ||
+        (grandparent?.type === "NewExpression" &&
+          grandparent.callee.type === "Identifier" &&
+          grandparent.callee.name === "URL" &&
+          grandparent.arguments.length === 2 &&
+          grandparent.arguments[1] === parent)
+      );
     }
     // Jiti moves declarations around resource disposal blocks, changing reference order.
     if (
@@ -388,6 +414,8 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
           child,
           exportedDeclaration ||
             (node.type === "ExportNamedDeclaration" && child === node.declaration),
+          node,
+          parent,
         )
       ) {
         return true;
@@ -424,7 +452,7 @@ function parseTransformedPluginSource(source: string, code: string): Program {
 export function visitPluginSourceReferences(
   source: string,
   sourceText: string,
-  resolver: ReturnType<typeof createJiti>,
+  getResolver: () => ReturnType<typeof createJiti>,
   visitReference: (reference: string, kind: "asset" | "import" | "require") => void,
 ): ReadonlySet<string> {
   const authoredStaticImports = new Set<string>();
@@ -443,7 +471,7 @@ export function visitPluginSourceReferences(
     parseNativePluginJavaScript(source, sourceText) ??
     parseTransformedPluginSource(
       source,
-      resolver.transform({
+      getResolver().transform({
         source: sourceText,
         filename: source,
         ts: /\.[cm]?tsx?$/.test(source),

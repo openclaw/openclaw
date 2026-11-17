@@ -24,6 +24,7 @@ import * as restartResume from "./session-restart-resume.js";
 import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
 import * as sessionLists from "./session-utils-list.js";
+import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 function observeProjectionDisposal(afterCreate?: () => Promise<void>) {
@@ -277,6 +278,41 @@ it("warms the recent page without gating startup and joins it before projection 
     await entryRequest?.catch(() => undefined);
   }
 });
+
+it.each([false, true])(
+  "keeps headless rows lazy and serves sessions.list (configured UI: %s)",
+  async (ui) => {
+    const port = await createStartupState({ ui });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:headless" },
+      { sessionId: "headless-session", updatedAt: 10, visibility: "shared" },
+    );
+    const list = vi.spyOn(sessionLists, "listProjectedSessions");
+    const { startGatewayServerCore } = await import("./server-start.js");
+    const server = await startGatewayServerCore(port, {
+      ...authenticatedOptions,
+      controlUiEnabled: ui ? false : undefined,
+    });
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      await server.startupSettled;
+      expect(list).not.toHaveBeenCalled();
+      client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        scopes: ["operator.admin"],
+      });
+      expect(await client.request("sessions.list", { limit: 100 })).toMatchObject({
+        sessions: [expect.objectContaining({ key: "agent:main:headless" })],
+        totalCount: 1,
+      });
+      expect(list).toHaveBeenCalledOnce();
+    } finally {
+      await client?.stopAndWait();
+      await server.close();
+    }
+  },
+);
 
 it("joins and disposes a warming projection when transport creation fails", async ({ signal }) => {
   const port = await createStartupState({ anonymous: true });

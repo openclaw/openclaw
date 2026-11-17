@@ -61,6 +61,7 @@ export async function runCrabboxCommand(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   assertCurrent?: () => void;
+  killGraceMs?: number;
 }): Promise<SpawnResult> {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
@@ -70,6 +71,7 @@ export async function runCrabboxCommand(params: {
       timeoutMs: params.timeoutMs,
       maxOutputBytes: MAX_OUTPUT_BYTES,
       killProcessTree: true,
+      ...(params.killGraceMs === undefined ? {} : { killGraceMs: params.killGraceMs }),
       ...(params.env === undefined ? {} : { env: params.env }),
       ...(params.input === undefined ? {} : { input: params.input }),
       ...(params.signal ? { signal: params.signal } : {}),
@@ -189,14 +191,13 @@ export async function runCrabboxCommandWithCoordinatorRetry(
   let coordinatorDetail: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     const result = await runCrabboxCommand({ ...params, timeoutMs });
-    // Fixed-claim resolution precedes script execution; profile setup is safe to repeat.
+    // This exact native conflict precedes execution of the fixed-lease command.
     const transient =
       isCoordinatorTransportFailure(result) ||
-      (params.action === "profile setup" &&
-        result.termination === "exit" &&
+      (result.termination === "exit" &&
         result.code === 4 &&
         result.stdout.trim() === "" &&
-        /^lease_id_conflict:[^\r\n]*$/u.test(result.stderr.trim()));
+        result.stderr.trim() === "lease_id_conflict: fixed claim changed during resolution; retry");
     if (transient) {
       coordinatorDetail = crabboxCommandDetail(result);
     }

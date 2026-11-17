@@ -13,7 +13,7 @@ import {
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
   requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
 } from "./install-transaction.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
 
@@ -143,7 +143,7 @@ describe("git install target ownership", () => {
       requestDeferredPluginInstall({ spec, mode: "update" as const, expectedPluginId: "demo" }),
     );
     expect(await head(updated.targetDir)).toBe(nextCommit);
-    const transaction = expectDefined(resolvePluginInstallTransaction(updated), "deferred update");
+    const transaction = expectDefined(takePluginInstallTransaction(updated), "deferred update");
     await transaction.rollback();
 
     expect(await head(installed.targetDir)).toBe(installed.git.commit);
@@ -161,7 +161,7 @@ describe("git install target ownership", () => {
       requestDeferredPluginInstall({ spec, mode: "install" as const }),
     );
     // Settle any pre-fix transaction so the failing reproduction leaves no backup behind.
-    await resolvePluginInstallTransaction(result)?.commit();
+    await takePluginInstallTransaction(result)?.commit();
     expect.soft(result).toEqual({
       ok: false,
       error: `plugin already exists: ${installed.targetDir} (delete it first)`,

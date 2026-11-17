@@ -1,5 +1,4 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -17,14 +16,6 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import {
-  resetGatewaySuspendCoordinatorForLifecycleRestart,
-  resumeGatewaySuspend,
-} from "../../infra/gateway-suspend-coordinator.js";
-import {
-  getActiveGatewayRootWorkCount,
-  resetGatewayWorkAdmission,
-} from "../../process/gateway-work-admission.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { registerAgentOwnerPolicyCases } from "./agent.owner-policy.test-support.js";
 import {
@@ -47,10 +38,6 @@ import {
   resetTimeConfig,
   primeMainAgentRun,
   backendGatewayClient,
-  cronContinuationGatewayClient,
-  cronMediaCompletionEvent,
-  setupCronContinuationReleaseFixture,
-  invokeGatewaySuspendPrepare,
   operatorWriteCliClient,
   waitForAgentCommandCall,
   invokeAgent,
@@ -62,139 +49,6 @@ const mocks = getAgentTestMocks();
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
-
-  it("stops continuation release recovery after gateway generation rotation", async () => {
-    vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForLifecycleRestart();
-    resetGatewayWorkAdmission();
-    try {
-      const { sessionKey, store } = setupCronContinuationReleaseFixture();
-      const context = makeContext();
-      let releaseAttempts = 0;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        if (
-          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation
-            ?.phase === "continuing"
-        ) {
-          releaseAttempts += 1;
-          throw new Error("disk unavailable");
-        }
-        return await updater(store);
-      });
-      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
-
-      await invokeAgent(
-        {
-          message: "media completion",
-          sessionKey,
-          internalEvents: [cronMediaCompletionEvent()],
-          idempotencyKey: "cron-media-release-rotates",
-        },
-        {
-          reqId: "cron-media-release-rotates",
-          client: cronContinuationGatewayClient(),
-          context,
-          flushDispatch: false,
-        },
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      expect(releaseAttempts).toBe(3);
-      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-rotating");
-      expect(busyPrepare).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          status: "busy",
-          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
-        }),
-      );
-
-      mocks.lifecycleGeneration = "post-restart-generation";
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(releaseAttempts).toBe(3);
-      expect(
-        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toMatchObject({
-        phase: "continuing",
-        ownerRunId: "cron-media-release-rotates",
-      });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      const readyPrepare = await invokeGatewaySuspendPrepare(
-        context,
-        "cron-media-release-rotation-complete",
-      );
-      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
-        | { status?: string; suspensionId?: string }
-        | undefined;
-      expect(readyPayload).toMatchObject({ status: "ready" });
-      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
-        ok: true,
-        status: "running",
-      });
-    } finally {
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
-      resetGatewayWorkAdmission();
-      vi.useRealTimers();
-    }
-  });
-
-  it("releases a claimed cron continuation when the request exits before dispatch", async () => {
-    mocks.agentCommand.mockClear();
-    const sessionKey = "agent:main:cron:job-1:run:run-1";
-    const entry = {
-      sessionId: "run-1",
-      updatedAt: Date.now(),
-      lifecycleRevision: "revision-1",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-      channel: "slack",
-      to: "channel:C123",
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "ready" as const,
-        basePersisted: true,
-      },
-    };
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      canonicalKey: sessionKey,
-      entry,
-    });
-    const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = structuredClone(entry);
-    const store = {
-      "agent:main:cron:job-1": baseEntry,
-      [sessionKey]: structuredClone(entry),
-    };
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
-    mocks.resolveSendPolicy.mockReturnValue("deny");
-
-    const respond = await invokeAgent(
-      {
-        message: "media completion",
-        sessionKey,
-        deliver: true,
-        internalEvents: [cronMediaCompletionEvent()],
-        idempotencyKey: "cron-media-denied",
-      },
-      {
-        reqId: "cron-media-denied",
-        client: cronContinuationGatewayClient(),
-        flushDispatch: false,
-      },
-    );
-
-    expectRespondError(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "send blocked by session policy",
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(store[sessionKey].cronRunContinuation).toEqual({
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    });
-  });
 
   it("does not let public provenance suppress visible session accounting", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });

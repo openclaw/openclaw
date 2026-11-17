@@ -6,8 +6,10 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -23,6 +25,12 @@ import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.work
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
@@ -36,6 +44,10 @@ import {
   captureChannelOperatorRunAuthority,
   captureGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
+import {
+  registerIngressPrincipalRecovery,
+  restoreIngressPrincipalRecovery,
+} from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -126,7 +138,9 @@ function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"], withDenie
   };
   return {
     agents: { defaults: { model: "fixture/a" } },
-    gateway: { roles: { definitions: { reader, ...(withDenied ? { denied } : {}) } } },
+    gateway: {
+      roles: { default: "reader", definitions: { reader, ...(withDenied ? { denied } : {}) } },
+    },
   } satisfies OpenClawConfig;
 }
 function registerProof(
@@ -185,6 +199,57 @@ it.each(["unprofiled backend", "synthetic owner"] as const)(
     ).resolves.toBeUndefined();
   },
 );
+
+it("aborts captured authority when its live ingress recovery owner is replaced", () =>
+  withOperator(async ({ profile, client, context }) => {
+    const source = new AbortController();
+    const owner = {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+      resume: async (audienceId: string) => ({
+        audienceId,
+        recoveryId: "accepted-consent",
+        principal: { kind: "person" as const, profileId: profile.id },
+        operatorScopeCeiling: ["operator.read"],
+        signal: source.signal,
+        assertCurrent: () => source.signal.throwIfAborted(),
+      }),
+    };
+    registerIngressPrincipalRecovery(context, "queued-app", owner);
+    const restored = await restoreIngressPrincipalRecovery(
+      context,
+      { pluginId: "queued-app", audienceId: "queued-person", recoveryId: "accepted-consent" },
+      profile.id,
+      ["operator.read"],
+    );
+    const captured = await capture({ client, context, sourceAuthority: restored });
+    try {
+      expect(captured.authority.assertCurrent).not.toThrow();
+      registerIngressPrincipalRecovery(context, "queued-app", { ...owner });
+      let failure: unknown;
+      try {
+        captured.authority.assertCurrent();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(GatewayDispatchUnavailableError);
+      expect(failure).toMatchObject({
+        retryable: true,
+        message: expect.stringContaining("owner changed"),
+      });
+      expect(restored.signal.aborted).toBe(false);
+      expect(captured.authority.signal?.aborted).toBe(true);
+      expect(captured.authority.signal?.reason).toBe(failure);
+      registerIngressPrincipalRecovery(context, "queued-app", owner);
+      expect(restored.assertCurrent).not.toThrow();
+      expect(captured.authority.assertCurrent).toThrow(failure);
+      expect(captured.authority.signal?.reason).toBe(failure);
+    } finally {
+      captured.release();
+      restored.release();
+      source.abort();
+    }
+  }));
 
 it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
   withOperator(
@@ -570,7 +635,65 @@ it("rechecks current role and latched revocation after a source callback mutates
     using _ = { [Symbol.dispose]: captured.release };
 
     change = true;
-    expect(captured.authority.assertCurrent).toThrow("no longer active");
+    expect(captured.authority.assertCurrent).toThrow(
+      /operator (?:role changed|execution authority is no longer active)/,
+    );
     expect(captured.authority.signal?.aborted).toBe(true);
-    expect(captured.authority.assertCurrent).toThrow("no longer active");
+    expect(captured.authority.assertCurrent).toThrow(captured.authority.signal?.reason);
   }));
+
+it("uses membership authority for operator runs despite a read-only named-role default, and refuses a later downgrade", async () => {
+  await withOperator(
+    async ({ client, context }) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "view" } },
+            },
+          },
+        },
+      };
+      cfg.gateway!.roles!.definitions = {
+        ...cfg.gateway!.roles!.definitions,
+        ...MEMBER_ROLE_PRESETS,
+      };
+      setRuntimeConfigSnapshot(cfg);
+      context.getRuntimeConfig = () => cfg;
+      const admitted: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: "iroh:run-member",
+        accountId: "acct_op",
+        role: "operator",
+      };
+      let current = admitted;
+      // This is the exact server-attested metadata present on the original connection.
+      client.internal = {
+        ...client.internal,
+        authenticatedOperator: true,
+        openclawIdPrincipal: admitted,
+      };
+      client.authPolicy = captureGatewayAuthPolicy(cfg, {
+        role: "operator",
+        authMethod: "trusted-proxy",
+      });
+      setOpenClawIdTunnelPrincipalLookup(() => current);
+      try {
+        const accepted = await capture({ client, context });
+        try {
+          accepted.authority.assertCurrent();
+          const retained = { ...client, internal: { operatorRunAuthority: accepted.authority } };
+          expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
+          current = { ...admitted, role: "viewer" };
+          expect(() => accepted.authority.assertCurrent()).toThrow(/authority|membership|role/i);
+        } finally {
+          accepted.release();
+        }
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
+    },
+    ["operator.read", "operator.write"],
+  );
+});

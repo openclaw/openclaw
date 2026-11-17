@@ -12,7 +12,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import { captureSwap } from "../../infra/package-update-swap.assertions.test-support.js";
+import {
+  captureSwap,
+  publishWithoutPathExchange,
+} from "../../infra/package-update-swap.assertions.test-support.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -155,6 +158,8 @@ async function scenario(
   if (kind === "unverified-completion") {
     const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
+    // The denied move is the backup move of a publication without an exchange.
+    const exchange = publishWithoutPathExchange();
     const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (String(args[0]) === fixture.packageRoot) {
         setupInjected = true;
@@ -166,6 +171,7 @@ async function scenario(
       swap = await publishSwap(fixture, "failed");
     } finally {
       effect.mockRestore();
+      exchange.mockRestore();
     }
   } else if (["link-retained", "link-changed", "transient-read"].includes(kind)) {
     const fixture = await createPackageSwapFixture(base);
@@ -522,8 +528,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.launcher).toBe("candidate launcher\n");
     expect(value.retainedExists).toBe(true);
     expect(value.exitCode).toBe(1);
-    expect(value.history?.status).not.toBe("succeeded");
-    expect(value.history?.status).not.toBe("rolled-back");
+    expect(["succeeded", "rolled-back"]).not.toContain(value.history?.status);
   });
   it("publishes the Gateway's completed row after real executor release", async () => {
     const value = await scenario("healthy");
@@ -532,13 +537,11 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.retainedExists).toBe(false);
     expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
     // Verified retirement is recorded with its wall time, not only on warnings.
-    expect(value.observedResults[0]?.steps).toContainEqual(
-      expect.objectContaining({
-        name: "package-backup-retention",
-        exitCode: 0,
-        durationMs: expect.any(Number),
-      }),
-    );
+    for (const name of ["package-backup-retention", "post-update-maintenance-timing"]) {
+      expect(value.observedResults[0]?.steps).toContainEqual(
+        expect.objectContaining({ name, exitCode: 0, durationMs: expect.any(Number) }),
+      );
+    }
     expect(value.observationLeases).toEqual(["absent"]);
     expect(value.humanOutput.join("\n").toLowerCase()).toContain("updated");
     expect(value.errorOutput).not.toContain(
@@ -550,8 +553,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.injected).toBe(true);
     expect(value).toMatchObject({ exitCode: 1, history: { status: "succeeded" } });
     expect(value.lease).toBe("current");
-    expect(value.observedResults).toEqual([]);
-    expect(value.jsonOutput).toEqual([]);
+    expect([value.observedResults, value.jsonOutput]).toEqual([[], []]);
   });
   it("reports revoked authority from captured facts without changing retained state", async () => {
     const value = await scenario("revoked");

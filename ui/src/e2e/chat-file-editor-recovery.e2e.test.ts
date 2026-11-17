@@ -102,7 +102,7 @@ suite.define(() => {
         await editor.press("End");
         await page.keyboard.type(" Continued after cancellation.");
         const continued = `${draft} Continued after cancellation.`;
-        await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
+        await page.getByRole("link", { name: "New session", exact: true }).first().click();
         await page.waitForURL(/\/new(?:\?|$)/);
         await editor.waitFor({ state: "hidden" });
         expect(await reload()).toBe("beforeunload");
@@ -166,7 +166,7 @@ suite.define(() => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.route(new URL("index.html", suite.server.baseUrl).href, async (route) => {
-        if (route.request().method() === "HEAD") {
+        if (route.request().headers()["x-openclaw-reachability-probe"] === "1") {
           documentProbes += 1;
           await route.fulfill({ status: reachable ? 200 : 503, body: "" });
         } else {

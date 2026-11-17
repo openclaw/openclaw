@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { t } from "../lib/local-error-catalog.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
@@ -360,7 +361,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
       if (message.type === "set") {
         const result = nativeDeviceSettingsSnapshotSchema.safeParse(reply);
         if (!result.success) {
-          throw new Error("Native settings returned an invalid edit result");
+          throw new Error(t("nativeDeviceEditError"));
         }
         acceptSnapshot(result.data);
       }

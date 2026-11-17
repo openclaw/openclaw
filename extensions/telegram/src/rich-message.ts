@@ -35,7 +35,11 @@ type TelegramSendRichMessageOptions = NonNullable<Parameters<Bot["api"]["sendRic
 
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageOptions,
-  "disable_notification" | "direct_messages_topic_id" | "message_thread_id" | "reply_parameters"
+  | "disable_notification"
+  | "direct_messages_topic_id"
+  | "message_effect_id"
+  | "message_thread_id"
+  | "reply_parameters"
 >;
 
 const TELEGRAM_RICH_EMAIL_TOKEN_RE =
@@ -72,6 +76,9 @@ export function toTelegramRichMessageContextParams(
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;
+  }
+  if (typeof params?.message_effect_id === "string") {
+    richParams.message_effect_id = params.message_effect_id;
   }
   if (isReplyParameters(params?.reply_parameters)) {
     richParams.reply_parameters = params.reply_parameters;
