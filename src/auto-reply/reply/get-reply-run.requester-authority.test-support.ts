@@ -26,8 +26,13 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
-import { bindRequesterProfile } from "../requester-profile.js";
+import {
+  bindRequesterProfile,
+  bindUnlinkedChannelRequester,
+  readAdmittedUnlinkedChannelRequester,
+} from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import {
   baseParams,
@@ -48,6 +53,44 @@ export function registerPendingRequesterAuthorityCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: typeof createPreparedReplyTurn;
 }): void {
+  it.each([false, true])(
+    "carries only direct originally-unlinked requester facts into admission (internal=%s)",
+    async (internal) => {
+      const params = turn("Create a session", {
+        ...createProviderSurface("discord"),
+        SenderId: "unlinked-sender",
+        AccountId: "default",
+        ...(internal ? { InputProvenance: { kind: "internal_system" as const } } : {}),
+      });
+      bindUnlinkedChannelRequester(params.ctx, () => true);
+      await runPrepared(params);
+      // prepareReplyAgentTurn clones this projection before run admission.
+      const sourceContext = { ...requireRunReplyAgentCall().followupRun.run };
+      const prepare = (runId: string) =>
+        prepareChannelRunAdmission({
+          cfg: {},
+          agentId: "default",
+          runId,
+          ingressKind: "channel",
+          boundary: "prepared-reply-test",
+          sourceContext,
+        });
+      const admission = prepare("originally-unlinked");
+      const later = prepare("later-system-turn");
+      try {
+        const admitted = await admission.admit("embedded");
+        const requester = readAdmittedUnlinkedChannelRequester(admitted.operationalRunInstance);
+        expect(Boolean(requester)).toBe(!internal);
+        requester?.();
+        const next = await later.admit("embedded");
+        expect(readAdmittedUnlinkedChannelRequester(next.operationalRunInstance)).toBeUndefined();
+      } finally {
+        admission.close();
+        later.close();
+      }
+    },
+  );
+
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
       ...createProviderSurface("x"),

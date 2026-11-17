@@ -22,6 +22,7 @@ import {
   readGatewayLocalUserIngressFacts,
   type GatewayLocalUserIngress,
 } from "../../gateway/local-user-ingress.js";
+import { admitUnlinkedChannelRequester } from "../requester-profile.js";
 
 /** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
 function consumeChannelRunAdmission(
@@ -160,6 +161,21 @@ export function prepareChannelRunAdmission(params: {
               } catch (error) {
                 throw new ChannelRunAuthorizationError(error);
               }
+            }
+            if (
+              params.sourceContext &&
+              params.ingressKind === "channel" &&
+              !params.operatorAuthority
+            ) {
+              admitUnlinkedChannelRequester(
+                params.sourceContext,
+                context.operationalRunInstance,
+                () => {
+                  if (!getAdmittedRunDelegatedAuthority(context)) {
+                    throw new Error("Original channel run is no longer active.");
+                  }
+                },
+              );
             }
             params.onAdmitted?.(context);
           },
