@@ -54,6 +54,11 @@ describe("local setup fleet owner persistence", () => {
       await withTempHome(async (rawHome) => {
         const home = await fs.realpath(rawHome);
         const stateDir = path.join(home, ".openclaw");
+        // Doctor uses these fixture roots for private migration scratch files.
+        for (const directory of [stateDir, path.join(home, ".cache")]) {
+          await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+          await fs.chmod(directory, 0o700);
+        }
         const configPath = path.join(stateDir, "openclaw.json");
         const includePath = path.join(stateDir, "roster.json");
         const read = (file = configPath) => fs.readFile(file, "utf8");
