@@ -9,6 +9,10 @@ import {
   operatorMcpOAuthIdentity,
 } from "../../agents/mcp-oauth-identity.js";
 import {
+  completeOperatorMcpOAuthLink,
+  startOperatorMcpOAuthLink,
+} from "../../agents/mcp-oauth-link.js";
+import {
   McpOAuthCredentialsRetainedError,
   type McpOAuthLoginLifecycle,
 } from "../../agents/mcp-oauth-provider.js";
@@ -57,8 +61,37 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       getPluginRuntimeGatewayRequestScope()?.pluginRegistry === methodRegistry?.pluginRegistry;
     if (!connection || !isOperatorOwned()) {
       reject(
-        "This MCP server cannot use operator browser sign-in. Check its existing account settings.",
+        "sessionId" in params
+          ? "This MCP server cannot use operator browser sign-in. Check its existing account settings."
+          : "This MCP server has no shared OAuth sign-in. Check its name and OAuth settings; per-requester servers connect through the channel.",
       );
+      return;
+    }
+    if (!("sessionId" in params)) {
+      const input = {
+        cfg: context.getRuntimeConfig(),
+        metadata,
+        serverName: params.serverName,
+      };
+      try {
+        const result =
+          params.callbackUrl === undefined
+            ? await startOperatorMcpOAuthLink(input, connection)
+            : {
+                status: await completeOperatorMcpOAuthLink(
+                  { ...input, callbackUrl: params.callbackUrl },
+                  connection,
+                ),
+                serverName: params.serverName,
+              };
+        respond(true, result);
+      } catch (error) {
+        reject(
+          error instanceof Error
+            ? error.message
+            : "MCP sign-in could not be completed. Try connecting again.",
+        );
+      }
       return;
     }
     const { config } = connection;
@@ -67,9 +100,8 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       config.url,
       context.getRuntimeConfig(),
     );
-    // Plugin-declared servers have no CLI sign-in path, so recovery points at the plugin.
     const terminalLogin = mcpOAuthCliLoginSteps(identity);
-    const settingsOwner = terminalLogin ? "MCP server" : "plugin";
+    const settingsOwner = identity.configured === false ? "plugin" : "MCP server";
     if (!client.browserOrigin) {
       reject(
         terminalLogin
@@ -134,7 +166,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             new Error(
               saved
                 ? `Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the ${settingsOwner} before trying again.`
-                : terminalLogin
+                : settingsOwner === "MCP server" && terminalLogin
                   ? `Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: ${terminalLogin}.`
                   : "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
             );

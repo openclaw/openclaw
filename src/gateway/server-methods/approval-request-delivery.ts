@@ -1,15 +1,8 @@
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { runWithRetainedGatewayRootWork } from "../../process/gateway-work-admission.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import type { ApprovalPushTarget as ApprovalRequestDeliveryTarget } from "../exec-approval-ios-push.js";
-import {
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-  isApprovalRecordVisibleToClient,
-} from "./approval-shared.js";
-import type { GatewayClient } from "./types.js";
+import { buildRequestedApprovalEvent, handlePendingApprovalRequest } from "./approval-shared.js";
 
 type ApprovalPayloadByKind = {
   exec: ExecApprovalRequestPayload;
@@ -43,10 +36,7 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
     forwardRequest?: (event: RequestedApproval<TKind>) => Promise<boolean>;
     getIosPushDelivery: () =>
       | {
-          handleRequested?: (
-            event: RequestedApproval<TKind>,
-            options?: { isTargetVisible?: (target: ApprovalRequestDeliveryTarget) => boolean },
-          ) => Promise<boolean>;
+          handleRequested?: (record: PendingApproval<TKind>["record"]) => Promise<boolean>;
           handleExpired?: (event: RequestedApproval<TKind>) => Promise<void>;
         }
       | undefined;
@@ -72,17 +62,6 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
     requestEventName: `${approvalKind}.approval.requested`,
     requestEvent,
     deliverRequest: () => {
-      const isTargetVisible = (target: ApprovalRequestDeliveryTarget) =>
-        isApprovalRecordVisibleToClient({
-          record: pending.record,
-          client: {
-            connect: {
-              client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
-              device: { id: target.deviceId },
-              scopes: [...target.scopes],
-            },
-          } as GatewayClient,
-        });
       const deliveryTasks: Promise<boolean>[] = [];
       const startDelivery = (run: () => Promise<boolean>, errorLabel: string) => {
         deliveryTasks.push(
@@ -100,7 +79,7 @@ export function handlePendingApprovalRequestWithDelivery<TKind extends keyof App
       }
       if (iosPushRequest) {
         startDelivery(
-          () => iosPushRequest(requestEvent, { isTargetVisible }),
+          () => iosPushRequest(pending.record),
           `${logPrefix} iOS push ${logContext}request failed`,
         );
       }

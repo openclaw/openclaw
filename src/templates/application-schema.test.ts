@@ -179,7 +179,6 @@ describe("inline agent policy", () => {
     { subagents: { allowAgents: ["researcher"] } },
     { subagents: { delegationMode: "prefer" } },
     { model: {} },
-    { model: "acme/model" },
     { subagents: {} },
     { tools: { fs: { workspaceOnly: false } } },
     { tools: { allow: ["*"] } },

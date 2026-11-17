@@ -61,7 +61,9 @@ assert.equal(accountHome, "/home/appuser", "Expected the disposable E2E account"
 assert(candidateArg && artifactsArg, "Expected candidate tarball and artifact directory");
 const requestedDriver = parseReleaseVersion(driverTag);
 assert(
-  driverTag === "latest" || (requestedDriver && classifyReleaseTrain(requestedDriver) === "stable"),
+  driverTag === "latest" ||
+    (requestedDriver &&
+      ["stable", "extended-stable"].includes(classifyReleaseTrain(requestedDriver))),
   "Driver must be a published stable version",
 );
 const candidate = fs.realpathSync(candidateArg);
@@ -292,8 +294,8 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     const driverRelease = parseReleaseVersion(driverVersion);
     assert(
-      driverRelease && classifyReleaseTrain(driverRelease) === "stable",
-      "npm latest must resolve to stable",
+      driverRelease && ["stable", "extended-stable"].includes(classifyReleaseTrain(driverRelease)),
+      "Driver must resolve to a final release",
     );
     const driverSeed = "/tmp/published-driver-cache/driver.tar";
     if (fs.existsSync(driverSeed)) {
@@ -776,6 +778,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           fixture.targetVersion,
           "The selected release was not updated",
         );
+        // A release behind its link is replaced without a journal. The image has a
+        // system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The in-place replacement did not use the atomic exchange",
+        );
         assert.match(
           fs.readFileSync(path.join(artifacts, "follow-up-update.stdout"), "utf8") +
             fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
@@ -800,6 +810,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           JSON.stringify(output("follow-up-update").steps ?? []),
           /release layout was not used/u,
           "The fallback was not recorded",
+        );
+        // That swap publishes a plain directory through the publication journal. The image
+        // has a system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
+          /Package publication recovery: /u,
+          "The fallback swap prepared no publication journal",
+        );
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The journaled publication did not use the atomic exchange",
         );
         assert.equal(
           fs.readlinkSync(path.join(bin, "openclaw")),

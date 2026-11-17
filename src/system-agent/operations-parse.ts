@@ -1,6 +1,8 @@
 import { listAgentRoles } from "../agents/agent-roles.js";
 import { parseConfigSetPath } from "../cli/config-cli-path.js";
 import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
+import { formatNonClawHubInstallWarning } from "../plugins/install-provenance.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -10,10 +12,13 @@ import {
   isSystemAgentSensitiveConfigValue,
   redactSystemAgentConfigPath,
 } from "./config-redaction.js";
-import type { SystemAgentOperation } from "./operation-types.js";
+import type { SystemAgentOperation, SystemAgentPluginCapabilityReview } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
 import type { loadSystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install-spec.js";
+import {
+  redactSystemAgentPluginInstallSpec,
+  validateSystemAgentPluginInstallSpec,
+} from "./plugin-install-spec.js";
 
 export type { SystemAgentOperation };
 export type { SystemAgentOperatorProposal } from "./operation-types.js";
@@ -26,6 +31,7 @@ export type SystemAgentOperationResult = {
   agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
+  pluginCapabilityReview?: SystemAgentPluginCapabilityReview;
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;
@@ -458,8 +464,19 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return "configure a model provider and default model";
     case "doctor-fix":
       return "run openclaw doctor --fix on the machine running OpenClaw, with OpenClaw stopped";
-    case "plugin-install":
-      return `install plugin ${operation.spec}`;
+    case "plugin-install": {
+      const plan = resolvePluginInstallSourcePlan({ raw: operation.spec, mode: "install" });
+      const spec = redactSystemAgentPluginInstallSpec(operation.spec);
+      return [
+        `install plugin ${spec}`,
+        plan.ok && plan.acknowledgement
+          ? formatNonClawHubInstallWarning({ ...plan.acknowledgement, spec })
+          : undefined,
+        operation.capabilityReview?.description,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    }
     case "template-install":
       return `add ClawHub Template ${operation.source.packageName}@${operation.source.version} as agent ${operation.agentId} using reviewed plan ${operation.planIntegrity}`;
     case "plugin-activate-artifact":
@@ -518,6 +535,9 @@ export function formatSystemAgentPersistentPlan(
 
 export function redactSensitiveCommandText(text: string): string {
   const operation = parseSystemAgentOperation(text);
+  if (operation.kind === "plugin-install") {
+    return text.replace(operation.spec, redactSystemAgentPluginInstallSpec(operation.spec));
+  }
   if (isInvalidConfigSetOperation(operation)) {
     return "config set <invalid path> <redacted secret>";
   }

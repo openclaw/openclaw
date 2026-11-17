@@ -27,7 +27,7 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   runId: string;
   updaterStopped?: "native" | "legacy";
   operatorRestart?: "before-recovery" | "service-inspection";
-  cut: "before" | "prepared" | "publishing" | "after" | "risk";
+  cut: "before" | "prepared" | "exchanging" | "publishing" | "after" | "risk";
   pluginCohort?: "own" | "foreign" | "risk";
   finalizeFailure?: true;
 }) {
@@ -178,7 +178,13 @@ export async function prepareInterruptedManagedServiceFixture(params: {
           ? ""
           : params.cut === "after"
             ? "await createPublicationOwner(prepared.anchor, prepared.journal, fence.assertCurrent).publish();"
-            : `
+            : params.cut === "exchanging"
+              ? `
+      // An exchange publication records its intent, then the candidate takes the previous name.
+      prepared.journal.transition(prepared.journal.read(),"publishing",{kind:"publish"},fence.assertCurrent);
+      fs.renameSync(prepared.anchor + "/candidate", prepared.anchor + "/previous");
+      `
+              : `
       const record = prepared.journal.read();
       prepared.journal.transition(record,"publishing",{kind:"displace"},fence.assertCurrent);
       fs.renameSync(${JSON.stringify(installRoot)}, prepared.anchor + "/previous");
