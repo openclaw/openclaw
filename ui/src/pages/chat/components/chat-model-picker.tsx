@@ -7,7 +7,6 @@ import {
   Show,
   type Element as SolidElement,
 } from "solid-js";
-import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
@@ -104,25 +103,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
 
 function ModelPickerPopover(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
-  let summary: HTMLElement;
-  let searchInput: HTMLInputElement | undefined;
-  let details: HTMLDetailsElement | undefined;
-  let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = () => {
-    if (pendingSearchFocus === undefined || !details) {
-      return;
-    }
-    if (
-      !details.isConnected ||
-      !details.open ||
-      details.ownerDocument.activeElement !== pendingSearchFocus
-    ) {
-      pendingSearchFocus = undefined;
-    } else if (searchInput?.isConnected) {
-      pendingSearchFocus = undefined;
-      searchInput.focus({ preventScroll: true });
-    }
-  };
   // Retain the panel after first use so expanded model lists survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
@@ -132,14 +112,12 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
     }
     params.onOpenChange?.(target.open);
     if (!target.open) {
-      pendingSearchFocus = undefined;
       params.accountSection?.onClose();
       resetModelSearch(target);
       return;
     }
     void params.onOpen?.();
-    pendingSearchFocus = target.ownerDocument.activeElement;
-    requestAnimationFrame(focusSearch);
+    search.focusOnOpen();
   }, "top");
   const triggerModel = createMemo(() => {
     const triggerModelValue = params.triggerModelValue;
@@ -174,20 +152,10 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       (model.presentation || hasProviderBrandIcon(model.provider)),
     );
   };
-  const closeModelPickerAfterSelection = (event: MouseEvent) => {
-    // Option buttons live inside the picker overlay; its summary lives outside it.
-    if (event.currentTarget instanceof Element) {
-      findOverlayParent(event.currentTarget)?.request(false);
-    }
-    if (event.detail === 0) {
-      summary.focus({ preventScroll: true });
-    }
-  };
   return (
     <ChatModelSearchContext value={search}>
       <details
         ref={(element) => {
-          details = element;
           search.detailsRef(element);
           pickerOverlay.details(element);
         }}
@@ -199,7 +167,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
         onKeyDown={handleModelPickerKeydown}
       >
         <summary
-          ref={[(element) => (summary = element), search.summaryRef, pickerOverlay.trigger]}
+          ref={[search.summaryRef, pickerOverlay.trigger]}
           class="chat-controls__inline-select-trigger chat-controls__model-trigger"
           data-chat-model-select="true"
           data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
@@ -257,14 +225,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               )}
             >
               <Loading>
-                <ChatModelPickerPanel
-                  params={params}
-                  onSelectionClose={closeModelPickerAfterSelection}
-                  searchRef={(element) => {
-                    searchInput = element;
-                    queueMicrotask(focusSearch);
-                  }}
-                />
+                <ChatModelPickerPanel params={params} />
               </Loading>
             </Errored>
           </Show>

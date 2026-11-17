@@ -323,6 +323,44 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
+it("keeps picker shortcuts scoped to unmodified keys outside search and nested menus", async () => {
+  const select = vi.fn();
+  const { container } = mountPicker({
+    open: true,
+    modelOptions: [option("fixture", "current"), option("fixture", "other")],
+    onModelSelect: select,
+  });
+  await waitForMenu(container);
+  const trigger = control(container, "select")!;
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  const press = (target: HTMLElement, key: string, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    flush();
+    return event.defaultPrevented;
+  };
+  for (const init of [
+    { ctrlKey: true },
+    { altKey: true },
+    { metaKey: true },
+    { isComposing: true },
+  ]) {
+    expect(press(trigger, "2", init)).toBe(false);
+  }
+  expect(press(search, "2")).toBe(false);
+  const nestedMenu = document.createElement("div");
+  nestedMenu.setAttribute("role", "menu");
+  nestedMenu.setAttribute("popover", "auto");
+  trigger.closest("details")!.append(nestedMenu);
+  expect(press(nestedMenu, "2")).toBe(false);
+  nestedMenu.remove();
+  expect(select).not.toHaveBeenCalled();
+  expect(press(trigger, "/")).toBe(true);
+  expect(document.activeElement).toBe(search);
+  expect(press(trigger, "2")).toBe(true);
+  expect(select).toHaveBeenCalledWith("fixture/other", "main", undefined);
+});
+
 it("uses the displayed model for trigger metadata and distinguishes an unset override from an empty one", () => {
   const params = pickerProps({
     modelOptions: [

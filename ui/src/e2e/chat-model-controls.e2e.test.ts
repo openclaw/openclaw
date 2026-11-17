@@ -187,12 +187,16 @@ suite.define(() => {
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
       expect(await refresh.count()).toBe(0);
+      const search = picker.locator("[data-chat-model-search]");
+      // Shortcuts activate after the cold panel loads and stay live when it reopens.
+      await trigger.press("/");
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       const requestsBeforeReopen = (await gateway.getRequests("models.list")).length;
       await trigger.click();
       await trigger.click();
       expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeReopen);
-      const search = picker.locator("[data-chat-model-search]");
-      await search.click();
+      await trigger.press("/");
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       await search.pressSequentially("Model 0999");
       expect(await search.inputValue()).toBe("Model 0999");
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
@@ -219,7 +223,7 @@ suite.define(() => {
       expect(await result.getAttribute("data-chat-model-highlighted")).not.toBeNull();
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       expect(await picker.getAttribute("open")).not.toBeNull();
-      await result.click();
+      await trigger.press("1");
       await expect.poll(() => trigger.textContent()).toContain("Model 0999");
       expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
         expectedSessionId: "session:agent:main:main",
