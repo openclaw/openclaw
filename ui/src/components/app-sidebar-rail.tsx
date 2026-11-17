@@ -21,6 +21,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -88,6 +89,7 @@ const PEEK_DELAY_MS = 300;
 function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => void {
   // The rail is not attached yet when its ref runs; bind the sidebar on first hover.
   let sidebar: Element | null = null;
+  const removeListeners: Array<() => void> = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let previous: AppSidebarRenderHost["navigationView"] | undefined;
   const end = (restore: boolean) => {
@@ -117,8 +119,12 @@ function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => vo
   const over = (event: PointerEvent) => {
     if (!sidebar) {
       sidebar = rail.closest("openclaw-app-sidebar");
-      sidebar?.addEventListener("pointerleave", leave);
-      sidebar?.addEventListener("click", click);
+      if (sidebar) {
+        removeListeners.push(
+          listen(sidebar, "pointerleave", leave),
+          listen(sidebar, "click", click),
+        );
+      }
     }
     clearTimeout(timer);
     const section = sectionAt(event.target);
@@ -158,12 +164,12 @@ function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => vo
       end(true);
     }
   }
-  rail.addEventListener("pointerover", over);
+  removeListeners.push(listen(rail, "pointerover", over));
   return () => {
     clearTimeout(timer);
-    rail.removeEventListener("pointerover", over);
-    sidebar?.removeEventListener("pointerleave", leave);
-    sidebar?.removeEventListener("click", click);
+    for (const remove of removeListeners) {
+      remove();
+    }
   };
 }
 
