@@ -336,6 +336,12 @@ See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
 `openclaw skills` commands for install and update, or the `clawhub` CLI for
 publish and sync.
 
+ClawHub requests and archive downloads check each URL and redirect against the
+network safety policy. An explicitly configured registry or GitHub archive origin
+may use private addresses for self-hosting; that exception does not extend to
+other origins, including a different port on the same host. Resolver-provided
+archive URLs and redirects to other origins must use public addresses.
+
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |

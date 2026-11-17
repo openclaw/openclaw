@@ -80,16 +80,19 @@ beforeEach(() => {
   mocks.resolveIconSource.mockReset().mockResolvedValue([source]);
   mocks.fetchMetadata.mockReset().mockImplementation(async () => metadata());
   mocks.readRemoteMediaBuffer.mockReset().mockResolvedValue(imageResult);
-  vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : input);
-    if (url.href === metadataUrl) {
-      return mocks.fetchMetadata(input, init);
-    }
-    if (url.origin === `http://127.0.0.1:${port}`) {
-      return realFetch(input, init);
-    }
-    throw new Error(`Unexpected icon fixture request: ${url.origin}${url.pathname}`);
-  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.href === metadataUrl) {
+        return mocks.fetchMetadata(input, init);
+      }
+      if (url.origin === `http://127.0.0.1:${port}`) {
+        return realFetch(input, init);
+      }
+      throw new Error(`Unexpected icon fixture request: ${url.origin}${url.pathname}`);
+    }),
+  );
 });
 
 afterEach(() => vi.unstubAllGlobals());

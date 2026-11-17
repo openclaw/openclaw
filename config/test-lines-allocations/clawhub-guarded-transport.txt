@@ -1,0 +1,2 @@
+# ClawHub archive redirect/private-origin regression and guarded-fetch fixtures (#190939).
+44
