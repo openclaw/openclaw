@@ -13375,6 +13375,7 @@ struct ChatViewModelTests {
             },
             listSessionsHook: { _ in
                 let call = await listCallCount.increment()
+                print("[thinking-overlap] list call \(call)")
                 if call == 1 {
                     return initialSessions
                 }
@@ -13386,16 +13387,22 @@ struct ChatViewModelTests {
             })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        print("[thinking-overlap] bootstrap settled")
         await MainActor.run { vm.selectModel("openai/model-b") }
         await vm.waitForPendingSessionSettings(in: "main")
+        print("[thinking-overlap] model settled")
 
         let refresh = Task { await vm.fetchSessions(limit: nil) }
         await listCallCount.wait { $0 >= 2 }
         #expect(await listCallCount.current() == 2)
         await MainActor.run { vm.selectThinkingLevel("max") }
+        print("[thinking-overlap] thinking settlement enter")
         await vm.waitForPendingSessionSettings(in: "main")
+        print("[thinking-overlap] thinking settled")
         await staleListGate.open()
+        print("[thinking-overlap] stale list gate released")
         await refresh.value
+        print("[thinking-overlap] refresh settled")
 
         #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-c")
         #expect(await MainActor.run { vm.sessions.first?.model } == "model-c")
