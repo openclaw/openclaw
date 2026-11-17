@@ -315,6 +315,27 @@ it("preserves newer guest divergence in projection if edited while conflict is p
   expect((await readProjection())?.pending_ref).toBeTruthy();
 });
 
+it("treats a resolved path as a new conflict after the guest edits it again", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest source v1\n");
+  await writeText(projection, "other.txt", "guest other v1\n");
+  await writeText(canonical, "source.txt", "canonical source v1\n");
+  await writeText(canonical, "other.txt", "canonical other v1\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  // Accept source.txt while other.txt remains conflicted.
+  await acknowledge("source.txt");
+  await expect(settleProjection()).rejects.toThrow("conflict");
+  await expectText(projection, "source.txt", "canonical source v1\n");
+  expect((await readProjection())?.pending_ref).toBeTruthy();
+
+  // A newer guest edit must not inherit the old acknowledgement.
+  await writeText(projection, "source.txt", "guest source v3 after resolution\n");
+  await writeText(canonical, "source.txt", "canonical source v2\n");
+  await expect(settleProjection()).rejects.toThrow("conflict");
+  await expectText(projection, "source.txt", "guest source v3 after resolution\n");
+});
+
 it("allows explicitly accepted Markdown separator lines (Revision 3 Finding 1)", async () => {
   const projection = await prepare();
   // Concurrent edit with markdown separator in canonical

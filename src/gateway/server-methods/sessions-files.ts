@@ -1,4 +1,4 @@
-import path, { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
@@ -60,12 +60,12 @@ import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
+import { writeSessionFileWithConflictRecovery } from "./sessions-file-managed-write.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 import {
   getSessionWorkspaceFile,
   listSessionWorkspaceFiles,
-  resolveSessionWorkspaceCandidatePath,
   setSessionWorkspaceFile,
 } from "./workspace-files.js";
 
@@ -485,98 +485,33 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }
         const worktreeId = loaded.entry.worktree?.id;
         let acknowledgedInCustody = false;
-        const writeLocalFile = async () => {
-          const write = (
-            assertCurrent = authorize,
-            targetExpectedHash = params.expectedHash,
-            targetPath = params.path,
-          ) =>
-            setSessionWorkspaceFile({
-              ...params,
-              path: targetPath,
-              expectedHash: targetExpectedHash,
-              root: loaded.root,
-              fileRoot: loaded.fileRoot,
-              assertCurrent,
-            });
-          if (!worktreeId || !loaded.root) {
-            return await write();
-          }
-          const candidateBrowserPath = await resolveSessionWorkspaceCandidatePath({
-            root: loaded.root,
-            fileRoot: loaded.fileRoot,
-            filePath: params.path,
-          });
-          const effectivePath = candidateBrowserPath ?? params.path;
-          // The candidate is workspace-relative. Hand the writer an absolute path so
-          // it does not apply fileRoot a second time when that candidate is nested.
-          const writePath = candidateBrowserPath
-            ? path.join(loaded.root, candidateBrowserPath)
-            : params.path;
-          const { withSettledLocalWorkspacePath } =
-            await import("../worker-environments/local-workspace-projection.js");
-          const { resolveReconciledExpectedHash, acknowledgeLocalWorkspaceConflict } =
-            await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
-          const { LocalWorkspaceConflictError } =
-            await import("../worker-environments/local-workspace-conflict-error.js");
-          return await withSettledLocalWorkspacePath(
-            { cwd: loaded.root, assertCurrent: authorize, allowConflict: true },
-            async (custody) => {
-              const currentAuth = () => {
-                authorize();
-                custody?.assertCurrent();
-              };
-              const { effectiveExpectedHash, reviewedGuestVersion } =
-                await resolveReconciledExpectedHash({
-                  cwd: loaded.root,
-                  fileRoot: loaded.fileRoot,
-                  worktreeId,
-                  path: effectivePath,
-                  expectedHash: params.expectedHash,
-                  projectionPath: custody?.projectionPath,
-                  conflicts: custody?.conflicts,
-                  assertCurrent: currentAuth,
-                });
-              const update = await write(currentAuth, effectiveExpectedHash, writePath);
-              if (update.status === "updated") {
-                if (update.file.workspacePath) {
-                  if (custody?.acknowledgeConflict) {
-                    await custody.acknowledgeConflict(
-                      update.file.workspacePath,
-                      reviewedGuestVersion,
-                    );
-                  } else {
-                    await acknowledgeLocalWorkspaceConflict({
-                      cwd: loaded.root,
-                      worktreeId,
-                      path: update.file.workspacePath,
-                      reviewedGuestVersion,
-                      assertCurrent: currentAuth,
-                    });
-                  }
-                  acknowledgedInCustody = true;
-                }
-                try {
-                  await custody?.synchronizeProjection?.();
-                } catch (error) {
-                  // This save's accepted bytes are durable even when other paths
-                  // remain conflicted; report that outcome instead of failing.
-                  if (!(error instanceof LocalWorkspaceConflictError)) {
-                    throw error;
-                  }
-                }
-              }
-              return update;
-            },
-          );
-        };
         const update = repository
           ? await repository.inspect(
               "set",
               { path: params.path, content: params.content, expectedHash: params.expectedHash },
               authorize,
             )
-          : await writeLocalFile();
+          : await (async () => {
+              if (worktreeId && loaded.root) {
+                const result = await writeSessionFileWithConflictRecovery({
+                  root: loaded.root,
+                  fileRoot: loaded.fileRoot,
+                  worktreeId,
+                  requestedPath: params.path,
+                  content: params.content,
+                  expectedHash: params.expectedHash,
+                  assertCurrent: authorize,
+                });
+                acknowledgedInCustody = result.acknowledgedInCustody;
+                return result.update;
+              }
+              return await setSessionWorkspaceFile({
+                ...params,
+                root: loaded.root,
+                fileRoot: loaded.fileRoot,
+                assertCurrent: authorize,
+              });
+            })();
         assertSourceCurrent();
         if (update.status === "missing") {
           respondSessionFileNotFound(respond, params.path);

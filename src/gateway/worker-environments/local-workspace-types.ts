@@ -2,6 +2,8 @@ import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
 } from "../../agents/worktrees/types.js";
+import type { LocalWorkspaceConflictRecord } from "./local-workspace-conflict-resolution.js";
+import type { WorkspaceGuestVersion } from "./workspace-manifest-comparison.js";
 
 export type LocalWorkspaceOwner = {
   agentId: string;
@@ -24,9 +26,9 @@ export type LocalWorkspaceCustody = {
   synchronizeProjection?: () => Promise<void>;
   acknowledgeConflict?: (
     path: string,
-    reviewedGuestVersion?: { sha256?: string; mode?: number },
+    reviewedGuestVersion?: WorkspaceGuestVersion,
   ) => Promise<void>;
-  conflicts?: Record<string, unknown>;
+  conflicts?: LocalWorkspaceConflictRecord;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
 };

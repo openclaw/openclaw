@@ -1,0 +1,6 @@
+# Issue #187911: managed-workspace conflict recovery regressions.
+# Proves acknowledgement through the projection update boundary, nested fileRoot
+# candidate binding, partial-resolution acceptance, baseline overlay fidelity,
+# resolved-path rejection after newer guest edits, and ordinary saves staying
+# checkpoint-free.
+889

@@ -516,6 +516,31 @@ describe("sessions.files for managed-worktree sessions", () => {
     });
   });
 
+  it("does not synthesize a checkpoint for an ordinary managed save", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { entry, worktreeDir } = await seedPreparedWorktreeConflictSession(state.workspaceDir);
+      fs.writeFileSync(path.join(worktreeDir, "preview.html"), "<h1>base</h1>\n");
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const result = await invoke("sessions.files.set", {
+        sessionKey: key,
+        path: "preview.html",
+        content: "<h1>ordinary save</h1>\n",
+        expectedHash: createHash("sha256").update("<h1>base</h1>\n").digest("hex"),
+        expectedSource: {
+          workspaceId: entry.worktree.id,
+          root: worktreeDir,
+          fileRoot: worktreeDir,
+        },
+      });
+      expect(result).toMatchObject([{ ok: true }]);
+      const { readLocalWorkspaceProjection } =
+        await import("../worker-environments/local-workspace-store.test-support.js");
+      const row = await readLocalWorkspaceProjection(entry.worktree.id);
+      expect(row?.checkpoint_json).toBeNull();
+      expect(row?.pending_ref).toBeNull();
+    });
+  });
+
   it("acknowledges and saves a reconciled version via sessions.files.set during conflict", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { entry, projectionDir, owner, worktreeDir } =

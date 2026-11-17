@@ -35,6 +35,7 @@ import {
   acknowledgeConflictInStore,
 } from "./local-workspace-conflict-acknowledgement.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
+import type { LocalWorkspaceConflictRecord } from "./local-workspace-conflict-resolution.js";
 import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import { runLocalWorkspaceProjection } from "./local-workspace-projection-operation.js";
@@ -349,7 +350,7 @@ async function settleLocalWorkspace<T>(
           }
           const current = state.current();
           const checkpoint = current.checkpoint_json
-            ? (JSON.parse(current.checkpoint_json) as { conflicts?: Record<string, unknown> }) // SAFETY: Checkpoint JSON deserializes to a record.
+            ? (JSON.parse(current.checkpoint_json) as { conflicts?: LocalWorkspaceConflictRecord }) // SAFETY: Checkpoint JSON deserializes to a record.
             : undefined;
           return await operation({
             worktreeId: worktree.id,

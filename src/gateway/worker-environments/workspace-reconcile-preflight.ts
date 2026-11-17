@@ -196,19 +196,10 @@ export async function preflightWorkspaceApplyImpl(
         applyPaths.add(entryPath);
       }
     } else if (!sameEntry(local, currentNodes.get(entryPath))) {
-      const isPriorConflict =
-        params.priorConflicts !== undefined
-          ? params.priorConflicts[entryPath] !== undefined ||
-            params.resolvedPaths?.includes(entryPath)
-          : true;
-      const isExplicitlyAccepted =
-        Boolean(isPriorConflict) &&
-        Boolean(
-          params.acknowledgedPaths?.includes(entryPath) ||
-          params.resolvedPaths?.includes(entryPath),
-        );
-      const isResolved = isExplicitlyAccepted;
-      if (!isResolved) {
+      // A recorded acknowledgement is the only preflight acceptance. The copy
+      // layer still verifies the live guest bytes against the recorded version.
+      const isExplicitlyAccepted = Boolean(params.acknowledgedPaths?.includes(entryPath));
+      if (!isExplicitlyAccepted) {
         conflicts.add(entryPath);
         const current = currentNodes.get(entryPath);
         if (

@@ -9,6 +9,7 @@ import type { LocalWorkspaceSyncTarget as Direction } from "./local-workspace-ch
 import type { LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-store.types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
+import type { WorkspaceGuestVersion } from "./workspace-manifest-comparison.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
@@ -19,15 +20,20 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
-type LocalWorkspaceConflictRecord = Record<
-  string,
-  { sha256?: string; mode?: number; size?: number; type?: string; target?: string }
->;
+export type LocalWorkspaceConflictVersion = {
+  sha256?: string;
+  mode?: number;
+  size?: number;
+  type?: string;
+  target?: string;
+};
+
+export type LocalWorkspaceConflictRecord = Record<string, LocalWorkspaceConflictVersion>;
 
 export type LocalWorkspaceCheckpointRecord = LocalWorkspaceManifestCheckpoint & {
   conflicts?: LocalWorkspaceConflictRecord;
   acknowledgedPaths?: string[];
-  acknowledgedGuestVersions?: Record<string, { sha256?: string; mode?: number }>;
+  acknowledgedGuestVersions?: Record<string, WorkspaceGuestVersion>;
   resolvedPaths?: string[];
 };
 
@@ -208,7 +214,11 @@ export async function synchronizeResolvedCanonicalPaths(params: {
       const destStats = await fs.lstat(dest).catch(() => undefined);
       if (destStats) {
         params.assertCurrent?.();
-        await projectionFs.remove(resolvedPath);
+        await projectionFs.remove(resolvedPath, {
+          recursive: true,
+          force: true,
+          assertBeforeMutation: params.assertCurrent,
+        });
         params.assertCurrent?.();
       }
     } else if (stats.isSymbolicLink()) {
@@ -225,23 +235,35 @@ export async function synchronizeResolvedCanonicalPaths(params: {
         params.assertCurrent?.();
       }
       params.assertCurrent?.();
-      await fs.mkdir(destDir, { recursive: true });
+      const destDirRelative = path.relative(params.projectionRoot, destDir);
+      if (destDirRelative) {
+        await projectionFs.mkdir(destDirRelative, {
+          assertBeforeMutation: params.assertCurrent,
+        });
+      }
       params.assertCurrent?.();
       const realDestDir = await fs.realpath(destDir);
       if (!isPathInside(realProjectionRoot, realDestDir)) {
         throw new Error(`Resolved path directory escapes projection root: ${resolvedPath}`);
       }
-      await fs.rm(dest, { force: true, recursive: true });
       params.assertCurrent?.();
       await fs.symlink(targetLink, dest);
       params.assertCurrent?.();
+    } else if (stats.isDirectory()) {
+      // A directory entry has admitted children this copy cannot enumerate; refuse
+      // instead of recording a partial resolution that re-conflicts.
+      throw new Error(`Directory conflict cannot be resolved automatically: ${resolvedPath}`);
     } else if (stats.isFile()) {
       const readResult = await canonicalFs.read(resolvedPath);
       params.assertCurrent?.();
       const destStats = await fs.lstat(dest).catch(() => undefined);
       if (destStats && !destStats.isFile()) {
         params.assertCurrent?.();
-        await projectionFs.remove(resolvedPath);
+        await projectionFs.remove(resolvedPath, {
+          recursive: true,
+          force: true,
+          assertBeforeMutation: params.assertCurrent,
+        });
         params.assertCurrent?.();
       }
       await projectionFs.write(resolvedPath, readResult.buffer, {
@@ -295,12 +317,14 @@ export async function commitLocalWorkspaceReconciliation(params: {
         });
       }
       const previousResolved = params.checkpoint?.resolvedPaths ?? [];
+      // A path that conflicts again lost its acknowledgement; never keep it eligible
+      // for canonical overwrite until an operator acknowledges the new guest version.
       const resolvedPaths = [
         ...new Set([
           ...previousResolved,
           ...(params.resolvedCanonicalPaths?.filter((p) => !divergedPaths.has(p)) ?? []),
         ]),
-      ];
+      ].filter((resolvedPath) => !params.conflictPaths.includes(resolvedPath));
       const currentConflicts = buildLocalWorkspaceConflictRecord(
         params.conflictPaths,
         params.snapshot.current,
@@ -448,6 +472,7 @@ export async function commitLocalWorkspaceReconciliation(params: {
       pending_target: null,
       journal_json: null,
       journal_pack: null,
+      ...(params.resolvedCanonicalPaths?.length ? { checkpoint_json: null } : {}),
     };
     if (
       params.resolvedCanonicalPaths?.length &&

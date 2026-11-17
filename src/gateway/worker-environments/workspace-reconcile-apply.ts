@@ -19,7 +19,10 @@ import {
   MAX_WORKSPACE_RESULT_CHANGED_PATHS,
   WorkspaceResultLimitError,
 } from "./workspace-inventory-limits.js";
-import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
+import type {
+  WorkspaceGuestVersion,
+  WorkspaceReconciliationPreparation,
+} from "./workspace-manifest-comparison.js";
 import type { WorkspaceReconciliationOperations } from "./workspace-manifest-computation.js";
 import {
   captureWorkspaceManifest,
@@ -53,10 +56,7 @@ type WorkspaceApplyParameters = {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
-  priorConflicts?: Record<
-    string,
-    { sha256?: string; size?: number; type?: string; target?: string }
-  >;
+  priorConflicts?: Readonly<Record<string, WorkspaceGuestVersion>>;
   acknowledgedPaths?: ReadonlySet<string>;
   resolvedPaths?: ReadonlySet<string>;
   workerAuthority?: WorktreeWorkerAuthority;
@@ -190,6 +190,26 @@ export async function applyStagedWorkerWorkspace(
       });
     };
     const preflight = await inspectPaths();
+    const resolvedCanonicalPathsFor = (
+      accepted: WorkerWorkspaceManifest,
+      finalPreflight: Awaited<ReturnType<typeof inspectPaths>>,
+      conflictPaths: string[],
+    ): string[] => {
+      const admittedPaths = new Set(accepted.entries.map((entry) => entry.path));
+      const candidatePaths = new Set<string>([
+        ...(params.priorConflicts
+          ? Object.keys(params.priorConflicts)
+          : (params.acknowledgedPaths ?? [])),
+        ...(params.resolvedPaths ?? []),
+      ]);
+      return [...candidatePaths].filter(
+        (entryPath) =>
+          (admittedPaths.has(entryPath) || params.priorConflicts?.[entryPath] !== undefined) &&
+          (params.acknowledgedPaths?.has(entryPath) || params.resolvedPaths?.has(entryPath)) &&
+          !conflictPaths.includes(entryPath) &&
+          !finalPreflight.applyPaths.has(entryPath),
+      );
+    };
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" | "checkpoint" }>,
       preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
@@ -200,19 +220,10 @@ export async function applyStagedWorkerWorkspace(
         const finalPreflight = preparedPreflight ?? (await inspectPaths());
         params.assertCurrent?.();
         const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-        const admittedPaths = new Set(params.current.entries.map((entry) => entry.path));
-        const candidatePaths = new Set<string>([
-          ...(params.priorConflicts
-            ? Object.keys(params.priorConflicts)
-            : (params.acknowledgedPaths ?? [])),
-          ...(params.resolvedPaths ? params.resolvedPaths : []),
-        ]);
-        const resolvedCanonicalPaths = [...candidatePaths].filter(
-          (entryPath) =>
-            (admittedPaths.has(entryPath) || params.priorConflicts?.[entryPath] !== undefined) &&
-            (params.acknowledgedPaths?.has(entryPath) || params.resolvedPaths?.has(entryPath)) &&
-            !conflictPaths.includes(entryPath) &&
-            !preflight.applyPaths.has(entryPath),
+        const resolvedCanonicalPaths = resolvedCanonicalPathsFor(
+          params.current,
+          finalPreflight,
+          conflictPaths,
         );
         await reconcile.publish({
           manifest: params.current,
@@ -248,19 +259,10 @@ export async function applyStagedWorkerWorkspace(
         await verifyLocalStable();
       }
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-      const admittedPaths = new Set(actual.manifest.entries.map((entry) => entry.path));
-      const candidatePaths = new Set<string>([
-        ...(params.priorConflicts
-          ? Object.keys(params.priorConflicts)
-          : (params.acknowledgedPaths ?? [])),
-        ...(params.resolvedPaths ? params.resolvedPaths : []),
-      ]);
-      const resolvedCanonicalPaths = [...candidatePaths].filter(
-        (p) =>
-          (admittedPaths.has(p) || params.priorConflicts?.[p] !== undefined) &&
-          (params.acknowledgedPaths?.has(p) || params.resolvedPaths?.has(p)) &&
-          !conflictPaths.includes(p) &&
-          !preflight.applyPaths.has(p),
+      const resolvedCanonicalPaths = resolvedCanonicalPathsFor(
+        actual.manifest,
+        finalPreflight,
+        conflictPaths,
       );
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths, resolvedCanonicalPaths });
