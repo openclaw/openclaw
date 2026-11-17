@@ -23,9 +23,13 @@ const dirs = useSessionStoreTempDirs(afterAll, "cli-history-owner-");
 afterAll(clearRuntimeConfigSnapshot);
 
 // Completed held answers are not narration: canonical consumers need both results.
-it.each([false, true])(
-  "retains held answers in canonical history (transformed=%s)",
-  async (transformed) => {
+it.each([
+  { transformed: false, finalInterim: false },
+  { transformed: true, finalInterim: false },
+  { transformed: false, finalInterim: true },
+])(
+  "retains held answers and deduplicates the final interim result in canonical history (%j)",
+  async ({ transformed, finalInterim }) => {
     setRuntimeConfigSnapshot({});
     const root = dirs.make();
     const target = {
@@ -53,7 +57,7 @@ it.each([false, true])(
             subtype: "success",
             result: text,
             session_id: "native-held",
-            ...(index === 0 ? { openclaw_interim_result: true } : {}),
+            ...(index === 0 || finalInterim ? { openclaw_interim_result: true } : {}),
           },
           "",
         ),

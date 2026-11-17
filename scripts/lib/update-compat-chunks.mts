@@ -571,6 +571,17 @@ export function listUpdateCompatibilityChunkPaths(
   ].toSorted();
 }
 
+/** The 2026.9.37 immutable updater predates leased handoffs and always denied authority.
+ * This export is emitted inline, not imported from the current runtime. Remove it when
+ * 2026.9.37 leaves the supported first-hop upgrade window.
+ */
+export function isInlineUpdateCompatibilityExport(origin: UpdateCompatibilityOrigin): boolean {
+  return (
+    origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+    origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess"
+  );
+}
+
 /** Follow the old owner's current lexical binding when its implementation moves. */
 function currentOrigin(
   origin: UpdateCompatibilityOrigin,
@@ -714,13 +725,7 @@ export function writeUpdateCompatibilityChunks(params: {
       );
     }
     for (const entry of chunk.exports) {
-      // 2026.9.37 predates leased handoffs: its immutable updater explicitly
-      // denied this authority. Preserve that shipped denial, not main's live lease predicate.
-      // Remove when 2026.9.37 leaves the supported first-hop upgrade window.
-      if (
-        entry.origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
-        entry.origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess"
-      ) {
+      if (isInlineUpdateCompatibilityExport(entry.origin)) {
         lines.push(`export async function ${entry.exported}() { return false; }`);
         continue;
       }

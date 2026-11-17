@@ -123,10 +123,13 @@ function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
 
 function entryMatchesApp(entry: OfficialExternalPluginCatalogEntry, appLabel: string): boolean {
   const appTokens = inventoryTokens(appLabel);
-  const entryTokens = inventoryTokens(entrySearchText(entry));
-  // Candidate generation must not offer unrelated products such as LINE for
-  // Linear; the model can choose relevance among whole-word catalog matches.
-  return appTokens.some((appToken) => entryTokens.includes(appToken));
+  const searchText = entrySearchText(entry);
+  const entryTokens = inventoryTokens(searchText);
+  return appTokens.some(
+    (appToken) =>
+      searchText.includes(appToken) ||
+      entryTokens.some((entryToken) => appToken.includes(entryToken)),
+  );
 }
 
 function officialCandidate(

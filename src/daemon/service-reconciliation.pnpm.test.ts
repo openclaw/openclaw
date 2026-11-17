@@ -5,7 +5,8 @@ import { expect, it, vi } from "vitest";
 import { fixture, native } from "./service-definition-backup.test-support.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
-vi.mock("./service-audit.js", () => ({
+vi.mock("./service-audit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-audit.js")>()),
   auditGatewayServiceConfig: async () => ({ issues: [], definitionDrift: [] }),
 }));
 
@@ -37,7 +38,8 @@ it.each([false, true])(
     await fs.writeFile(f.sourcePath, buildSystemdUnit(f.command));
     const original = await fs.readFile(f.sourcePath);
     const install = vi.fn(f.install);
-    vi.doMock("./service.js", () => ({
+    vi.doMock("./service.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./service.js")>()),
       resolveGatewayService: () => ({ readCommand: native.command }),
       readGatewayServiceState: async () => ({
         command: await native.command(),

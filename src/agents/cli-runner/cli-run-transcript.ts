@@ -55,7 +55,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -213,12 +213,13 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
+  // Deduplicate the final answer by its transcript item key, not a session admission pin.
+  const finalNativeItem = params.nativeIdentity
+    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+    : undefined;
   // Completed held answers are separate native rows; narration remains native-only.
   for (const reply of params.interimReplies ?? []) {
-    if (
-      reply.cliSessionId === params.nativeIdentity?.cliSessionId &&
-      reply.externalId === params.nativeIdentity.externalId
-    ) {
+    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
       continue;
     }
     await persistCliAssistantTranscript({
@@ -232,7 +233,7 @@ export async function persistCliAssistantTranscript(params: {
   }
   const idempotencyKey =
     params.interim && params.nativeIdentity
-      ? `${cliAssistantItemId(runParams.runId)}:interim:${params.nativeIdentity.cliSessionId}:${params.nativeIdentity.externalId}`
+      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
       : cliAssistantItemId(runParams.runId);
   let committed = false;
   try {

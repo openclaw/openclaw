@@ -151,24 +151,25 @@ it("gathers, dedupes, and sorts candidates with their ClawHub publisher ids", as
   expect(result.matches[0]?.candidate.id).toBe("@demo-owner/notes-tools");
 });
 
-it("rejects coincidental official-name substrings while preserving exact app matches", async () => {
+it("keeps renamed apps as candidates and lets the matcher reject coincidental names", async () => {
   const result = await matched({
-    labels: ["Linear", "LINE Desktop"],
-    channels: [officialEntry("line", true)],
+    labels: ["Linear", "LINE Desktop", "Slack2"],
+    channels: [officialEntry("line", true), officialEntry("slack", true)],
     plugins: [officialEntry("linear")],
     searchSkills: async () => [],
     matches: [
-      match("line", "substring overlap", "Linear"),
+      match("slack", "renamed app", "Slack2"),
       match("linear", "project integration", "Linear"),
       match("line", "messaging integration", "LINE Desktop"),
     ],
   });
-  expect(result.groups.find((group) => group.app.label === "Linear")?.candidates).toEqual([
-    expect.objectContaining({ id: "linear" }),
-  ]);
+  expect(result.groups.find((group) => group.app.label === "Linear")?.candidates).toEqual(
+    expect.arrayContaining([expect.objectContaining({ id: "line" })]),
+  );
   expect(result.matches.map(({ appLabel, candidateId }) => [appLabel, candidateId])).toEqual([
     ["LINE Desktop", "line"],
     ["Linear", "linear"],
+    ["Slack2", "slack"],
   ]);
 });
 

@@ -146,27 +146,24 @@ function relaxConditionalRequiredKeywords(
   schema: JsonSchemaValue,
   insideConditionalBranch = false,
 ): JsonSchemaValue {
-  if (Array.isArray(schema)) {
-    return schema.map((entry) =>
-      relaxConditionalRequiredKeywords(entry as JsonSchemaValue, insideConditionalBranch),
-    ) as never;
-  }
-  if (!schema || typeof schema !== "object") {
+  if (typeof schema === "boolean") {
     return schema;
   }
   return Object.fromEntries(
     Object.entries(schema)
       .filter(([key]) => !(insideConditionalBranch && key === "required"))
-      .map(([key, value]) => [
-        key,
-        typeof value === "boolean" || (value && typeof value === "object")
-          ? relaxConditionalRequiredKeywords(
-              value as JsonSchemaValue,
-              insideConditionalBranch || key === "then" || key === "else",
-            )
-          : value,
-      ]),
-  ) as JsonSchemaValue;
+      .map(([key, value]) => {
+        const inBranch = insideConditionalBranch || key === "then" || key === "else";
+        const relaxValue = (entry: unknown): unknown => {
+          if (Array.isArray(entry)) {
+            return entry.map(relaxValue);
+          }
+          const object = asOptionalObjectRecord(entry);
+          return object ? relaxConditionalRequiredKeywords(object, inBranch) : entry;
+        };
+        return [key, relaxValue(value)];
+      }),
+  );
 }
 
 function checkSchema(validate: SchemaValidator, value: unknown): TypeBoxValidationError[] | null {
