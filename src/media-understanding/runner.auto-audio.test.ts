@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
+import { renderMediaAttachmentDisposition } from "./media-attachment-outcomes.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
@@ -76,7 +77,9 @@ describe("runCapability audio", () => {
     const failure =
       mode === "upload"
         ? await createProviderHttpError(
-            new Response('{"detail":"Synthetic provider response body"}', { status: 403 }),
+            new Response('{"detail":"Synthetic body","code":"insufficient_quota"}', {
+              status: 403,
+            }),
             "Audio transcription failed",
             { statusPrefix: "HTTP " },
           )
@@ -142,7 +145,11 @@ describe("runCapability audio", () => {
         expect(result.outputs).toEqual([]);
         expect(hasAuth).not.toHaveBeenCalled();
         expect(formatDecisionSummary(result.decision)).toBe(
-          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403)",
+          "audio: failed (0/1) reason=Audio transcription failed (HTTP 403) code=insufficient_quota",
+        );
+        const disposition = result.decision.attachmentDispositions?.[0] ?? { kind: "handled" };
+        expect(renderMediaAttachmentDisposition("audio", disposition)).toBe(
+          "[Audio attachment could not be analyzed (HTTP 403 code=insufficient_quota)]",
         );
       }
     }
