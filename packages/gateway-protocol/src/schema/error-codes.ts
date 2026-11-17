@@ -141,7 +141,6 @@ export const GatewayErrorDetailsSchema = Type.Union([
   TemplateReviewRequiredErrorDetailsSchema,
   PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
-  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TALK_SESSION_CAPACITY) }),
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY) }),
 ]);
 

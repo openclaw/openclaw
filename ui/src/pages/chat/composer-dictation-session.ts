@@ -6,6 +6,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { ComposerDictationFailure } from "./composer-dictation.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -47,17 +48,20 @@ function eventPayload(frame: GatewayEventFrame) {
   return asOptionalObjectRecord(frame.payload) ?? null;
 }
 
-export function formatDictationError(error: unknown): string {
+function formatDictationError(error: unknown): string {
   if (error instanceof DOMException) {
     return describeRealtimeTalkInputError(error);
   }
   return formatUiError(error);
 }
 
-/** No free Gateway transcription session: earlier recordings still hold them. */
-export function formatDictationBusyError(error: unknown): string | undefined {
+export function describeDictationStartError(error: unknown): [string, ComposerDictationFailure] {
+  // Stopped recordings hold their Gateway sessions until transcribed; a full
+  // connection refuses the next one before its microphone opens.
   const details = asOptionalObjectRecord(asOptionalObjectRecord(error)?.details);
-  return details?.code === "TALK_SESSION_CAPACITY" ? t("chat.dictation.busy") : undefined;
+  return details?.code === "TALK_SESSION_CAPACITY"
+    ? [t("chat.dictation.busy"), { kind: "busy", preservesText: false }]
+    : [formatDictationError(error), { kind: "start", preservesText: false }];
 }
 
 function isAbortError(error: unknown): boolean {
@@ -200,7 +204,7 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
-  async finish(options: { requireTranscript?: boolean } = {}): Promise<string> {
+  async finish(requireTranscript?: true): Promise<string> {
     const transcript =
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
@@ -208,7 +212,7 @@ export class ComposerDictationSession {
     const text = await transcript;
     // Composer dictation needs a visible outcome; split Talk can quietly listen again.
     // Cancellation and already-reported provider failures keep their existing outcomes.
-    if (options.requireTranscript && !text && !this.discarded && !this.failed) {
+    if (requireTranscript && !text && !this.discarded && !this.failed) {
       this.reportFailure(
         t(
           this.gatewayDisconnected

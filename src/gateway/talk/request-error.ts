@@ -1,8 +1,4 @@
-import {
-  ErrorCodes,
-  errorShape,
-  GatewayErrorDetailCodes,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
@@ -22,7 +18,7 @@ export function talkRequestError(
   if (classify && error instanceof TalkRelayCapacityError) {
     return errorShape(ErrorCodes.UNAVAILABLE, message, {
       retryable: true,
-      details: { code: GatewayErrorDetailCodes.TALK_SESSION_CAPACITY },
+      details: { code: "TALK_SESSION_CAPACITY" },
     });
   }
   const invalidRequest = classify && error instanceof AgentSelectionRequiredError;
