@@ -486,7 +486,10 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   Pick<
     RestoredGatewayOperatorAuthority,
     "authority" | "controlUiAdmin" | "automationAdmin" | "release"
-  >
+  > & {
+    /** Only Gateway recovery reauthenticates a Control UI profile. */
+    authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
+  }
 > {
   params.assertCurrent();
   const source = decodeQueuedOperatorRecoverySource(params.source);
