@@ -1,0 +1,2 @@
+# Cover custom Responses retention and the explicit transient override in existing suites.
+6
