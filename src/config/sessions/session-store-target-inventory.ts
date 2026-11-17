@@ -345,15 +345,22 @@ export function createSessionStoreRegistryMutationFilter(params: {
     entries: readonly OpenClawRegisteredAgentDatabase[] | undefined,
   ) =>
     mutation.sources.every((source) => {
+      let generationChecked = false;
+      let samePhysicalGeneration = false;
+      const checkGeneration = (
+        ...args: Parameters<typeof isSessionStoreSourceGenerationCurrent>
+      ) => {
+        generationChecked = true;
+        const current = isSessionStoreSourceGenerationCurrent(...args);
+        samePhysicalGeneration ||= current;
+        return current;
+      };
       const sameCapturedRegistration = params.captured.some(
         ({ candidate, identity, birthtime }) =>
           identity?.startsWith("file:") &&
           identity === source.identity &&
           (source.path === candidate.path || source.path === candidate.physicalPath) &&
-          isSessionStoreSourceGenerationCurrent(
-            { path: candidate.path, identity, birthtime },
-            source,
-          ) &&
+          checkGeneration({ path: candidate.path, identity, birthtime }, source) &&
           entries?.some(
             (entry) =>
               entry.agentId === source.agentId &&
@@ -376,12 +383,12 @@ export function createSessionStoreRegistryMutationFilter(params: {
                     identity === source.identity &&
                     (candidate.path === prepared.path || candidate.physicalPath === prepared.path),
                 )) &&
-              isSessionStoreSourceGenerationCurrent(prepared, source),
+              checkGeneration(prepared, source),
           ))
       ) {
         return true;
       }
-      return (
+      const unchanged =
         !params.preparedSources.some(
           (prepared) =>
             prepared.path === source.path ||
@@ -397,8 +404,23 @@ export function createSessionStoreRegistryMutationFilter(params: {
               { ...candidate, path: candidate.physicalPath },
               source.physicalPath,
             ),
-        )
-      );
+        );
+      if (!unchanged) {
+        console.error("[session-registry-filter-diagnostic]", {
+          kind: mutation.kind,
+          sameCapturedRegistration,
+          preparedSourcePresent: params.preparedSources.length > 0,
+          preparedIdentityMatches: params.preparedSources.some(
+            (prepared) =>
+              prepared.agentId === source.agentId && prepared.identity === source.identity,
+          ),
+          samePhysicalGeneration,
+          generationChecked,
+          currentSchema: source.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+          entriesPresent: entries !== undefined,
+        });
+      }
+      return unchanged;
     });
 }
 

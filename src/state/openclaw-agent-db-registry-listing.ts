@@ -616,6 +616,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         assertAdmissionCurrent();
         const current = registry.memo;
         if (invalidated) {
+          console.error("[session-registry-diagnostic]", { rejection: "already-invalidated" });
           throw new AgentDatabaseRegistryChangedError();
         }
         const pending = unchangedBy
@@ -627,6 +628,10 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             )
           : [];
         if (pending.length > 0) {
+          console.error("[session-registry-diagnostic]", {
+            rejection: "pending",
+            mutations: pending.map(({ mutation }) => mutation?.kind ?? "unknown"),
+          });
           throw new AgentDatabaseRegistryChangedError(
             "Agent database registry ownership is changing during discovery",
           );
@@ -639,6 +644,12 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             (next.transition.phase === "commit" && !unchanged(next.transition.mutation))
           ) {
             invalidated = true;
+            console.error("[session-registry-diagnostic]", {
+              rejection: next?.transition ? "transition" : "unknown-transition",
+              phase: next?.transition?.phase,
+              mutation: next?.transition?.mutation?.kind ?? "unknown",
+              filterPresent: unchangedBy !== undefined,
+            });
             throw new AgentDatabaseRegistryChangedError();
           }
           cursor = next;
