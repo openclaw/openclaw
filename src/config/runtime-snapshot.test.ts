@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
@@ -84,6 +85,20 @@ afterEach(() => {
   resetRuntimeConfigState();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it("replaces an equal mutable publication with an immutable owner snapshot", () => {
+  const initial = portConfig(18789);
+  setSnapshot(initial, initial);
+  const frozen = freezeJsonSnapshot(structuredClone(initial));
+  setSnapshot(frozen, frozen);
+  expect(getSnapshot()).toBe(frozen);
+  initial.gateway.port = 19001;
+  expect(getSnapshot()?.gateway?.port).toBe(18789);
+  const revision = getMetadata()?.revision;
+  setSnapshot(freezeJsonSnapshot(structuredClone(frozen)), frozen);
+  expect(getSnapshot()).toBe(frozen);
+  expect(getMetadata()?.revision).toBe(revision);
 });
 
 it("pins the first successful load in memory until the snapshot is cleared", () => {
