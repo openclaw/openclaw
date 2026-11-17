@@ -39,7 +39,9 @@ const GENERIC_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 const CANONICAL_REASONING_EFFORTS = new Set(["none", ...ENABLED_REASONING_EFFORTS, "off"]);
 
 function normalizeModelId(id: string | null | undefined): string {
-  return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
+  return normalizeLowercaseStringOrEmpty(id ?? "")
+    .replace(/^openai\//u, "")
+    .replace(/-\d{4}-\d{2}-\d{2}$/u, "");
 }
 
 /** Return whether a model is the GPT-5.4 mini family. */
