@@ -47,7 +47,7 @@ function formatHeadlineCost(totals: UsageTotals): string {
     : formatUsageCost(totals.totalCost);
 }
 
-/** Turn latency is often sub-minute; keep seconds there and drop them for long tails. */
+/** Sub-minute turn latency is floored to seconds; longer tails use the shared compact form. */
 export function formatLatencyCompact(ms: number): string {
   return formatDurationCompact(ms, { includeSeconds: ms < 60_000 }) ?? t("usage.common.emptyValue");
 }

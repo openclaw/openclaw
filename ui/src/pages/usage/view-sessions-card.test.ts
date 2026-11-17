@@ -18,7 +18,7 @@ const withLatency = (label: string, p95Ms: number, durationMs?: number) => {
     ...entry,
     usage: {
       ...entry.usage,
-      durationMs,
+      ...(durationMs === undefined ? {} : { durationMs }),
       latency: { count: 75, avgMs: 183_649, p95Ms, minMs: 11_897, maxMs: 374_840 },
     },
   };
@@ -51,6 +51,14 @@ it("leaves the p95 chip out when the session has no latency samples", () => {
   const owner = renderSessions(session("no turns"));
   const meta = owner.querySelector(".session-bar-meta")?.textContent ?? "";
   expect(meta).not.toContain("p95");
+});
+
+it("leaves the p95 chip out for zero or non-finite samples instead of showing a placeholder", () => {
+  for (const p95Ms of [0, Number.NaN]) {
+    const owner = renderSessions(withLatency("empty turns", p95Ms));
+    const meta = owner.querySelector(".session-bar-meta")?.textContent ?? "";
+    expect(meta).not.toContain("p95");
+  }
 });
 
 it("retires changed copy payloads and announces success and failure until feedback expires", async () => {

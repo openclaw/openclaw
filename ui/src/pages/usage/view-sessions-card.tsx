@@ -38,8 +38,13 @@ const buildSessionMeta = (
     counts?.errors &&
       `${counts.errors.toLocaleString()} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}`,
     session.usage?.durationMs && formatDurationCompact(session.usage.durationMs),
-    // Appended last: the meta line is nowrap with an ellipsis, so a narrow row clips p95 first.
-    p95Ms !== undefined && `${t("usage.overview.p95")} ${formatLatencyCompact(p95Ms)}`,
+    // Overview rows merge per-quarter p95s by keeping the largest, so this is the worst quarter's
+    // p95, not a percentile over every turn. Zero or non-finite samples stay silent, and the
+    // nowrap meta line clips p95 first on a narrow row.
+    p95Ms != null &&
+      Number.isFinite(p95Ms) &&
+      p95Ms > 0 &&
+      `${t("usage.overview.p95")} ${formatLatencyCompact(p95Ms)}`,
   ].filter((part): part is string => typeof part === "string" && part.length > 0);
 };
 
