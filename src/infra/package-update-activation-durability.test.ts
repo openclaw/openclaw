@@ -892,8 +892,8 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     await expect(recovery(f.anchor, "repair", f.operationId)).resolves.toMatchObject({
       phase: "publication-complete",
     });
-    const version = (root: string) =>
-      JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+    const version = (packageDir: string) =>
+      JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")).version;
     expect([version(f.packageRoot), version(previous), fs.existsSync(candidate)]).toEqual([
       "2.0.0",
       "1.0.0",
