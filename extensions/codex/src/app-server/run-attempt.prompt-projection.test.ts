@@ -33,7 +33,13 @@ it("freezes only the hook-enriched current user projection before native dispatc
     ]),
   );
   const params = createParams(path.join(tempDir, "projection.jsonl"), tempDir);
-  await attachSqliteSessionTarget(params, path.join(tempDir, "projection.sqlite"), "projection");
+  const target = {
+    agentId: "main",
+    sessionId: "projection",
+    sessionKey: "agent:main:projection",
+    storePath: path.join(tempDir, "projection.sqlite"),
+  };
+  await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
   await appendSqliteHistoryMessage(params, userMessage("older history must stay separate", 1));
   const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
   const recorder = createRecorder({
@@ -42,7 +48,7 @@ it("freezes only the hook-enriched current user projection before native dispatc
       idempotencyKey: "projection:user",
       provenance: { kind: "internal_system", sourceTool: "test" },
     },
-    target: { ...params.sessionTarget!, sessionEntry: undefined },
+    target: { ...target, sessionEntry: undefined },
   });
   await recorder.persistApproved();
   params.userTurnTranscriptRecorder = recorder;
