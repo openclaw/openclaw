@@ -1,5 +1,5 @@
 import { AsyncContext } from "../../shared/async-context.js";
-import type { SpawnBrokerHost } from "./host.js";
+import type { SpawnBrokerHost } from "./host-contract.js";
 
 const context = new AsyncContext<SpawnBrokerHost | null>(Symbol("spawnBroker"));
 
