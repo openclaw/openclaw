@@ -69,6 +69,7 @@ export function retirePoolRecord(
   options: PoolOptions,
   record: Environment,
   reason: "expired" | "invalidated",
+  authorize?: () => void,
 ) {
   if (!record.preparation) {
     return undefined;
@@ -78,7 +79,12 @@ export function retirePoolRecord(
     ownerEpoch: record.ownerEpoch,
     preparationKey: record.preparation.key,
     reason,
-    assertCurrent: () => options.signal.throwIfAborted(),
+    assertCurrent: () => {
+      options.signal.throwIfAborted();
+      if (options.store.get(record.environmentId)?.destroyRequestedAtMs == null) {
+        authorize?.();
+      }
+    },
   });
 }
 export type Generations = Map<string, Generation>;
