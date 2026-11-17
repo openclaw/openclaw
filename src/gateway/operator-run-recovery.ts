@@ -451,7 +451,8 @@ export async function restoreGatewayOperatorSource(params: {
           onSessionIdentityMutation((mutation) => {
             if (
               mutation.agentId === target.agentId &&
-              (mutation.previous.sessionId === target.sessionId ||
+              ((target.sessionId !== undefined &&
+                mutation.previous.sessionId === target.sessionId) ||
                 mutation.previous.sessionKeys.includes(target.sessionKey))
             ) {
               revoke();
