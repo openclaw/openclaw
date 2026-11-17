@@ -227,7 +227,7 @@ if (isMainThread && process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR) {
       return { ...result, source: transformed.source };
     },
   });
-  process.once("exit", () => {
+  process.once("exit", (exitCode) => {
     record(
       {
         type: "capture-end",
@@ -235,6 +235,7 @@ if (isMainThread && process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR) {
         droppedEvents,
         unclassifiedIdentities,
         writeFailures,
+        exitCode,
       },
       true,
     );

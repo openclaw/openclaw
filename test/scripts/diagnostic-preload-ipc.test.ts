@@ -130,6 +130,7 @@ it("invalidates bounded native chat capture without interrupting the measured pr
     droppedEvents: 1,
     unclassifiedIdentities: 1,
     writeFailures: 0,
+    exitCode: 0,
   });
   expect(capture).toHaveLength(10002);
 });

@@ -33,6 +33,7 @@ export function summarizeNativeChatStart(client, captures) {
     const start = capture.find((event) => event.type === "capture-start");
     const end = capture.find((event) => event.type === "capture-end");
     assert(start && end, "Collect the completed task-owned Gateway capture after shutdown");
+    assert.equal(end.exitCode, 0, "Measured Gateway did not exit successfully");
     for (const name of ["droppedEvents", "unclassifiedIdentities", "writeFailures"]) {
       assert.equal(end[name], 0, `Invalid native capture: ${name}`);
     }

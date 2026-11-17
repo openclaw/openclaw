@@ -94,6 +94,7 @@ it("joins only complete same-process server anchors without subtracting client c
     droppedEvents: 0,
     unclassifiedIdentities: 0,
     writeFailures: 0,
+    exitCode: 0,
   };
   const capture = [start, ...marks, end];
   const result = summarizeNativeChatStart(client, [capture]);
@@ -116,6 +117,7 @@ it("joins only complete same-process server anchors without subtracting client c
     [start, ...marks, marks[1], end],
     [start, ...marks, marks[3], end],
     [start, ...marks, { ...end, droppedEvents: 1 }],
+    [start, ...marks, { ...end, exitCode: 1 }],
   ]) {
     expect(() => summarizeNativeChatStart(client, [invalid])).toThrow();
   }
