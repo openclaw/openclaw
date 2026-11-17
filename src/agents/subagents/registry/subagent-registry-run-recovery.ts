@@ -13,11 +13,16 @@ import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import {
+  captureSubagentOriginFacts,
+  runWithCompletionOrigin,
+} from "./subagent-completion-origin.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import {
   clearDeliveryState,
@@ -224,10 +229,13 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     let refreshCompletionAuthority: true | undefined;
     try {
-      // A surviving requester owns the whole cohort, including this successor.
-      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
-    } catch {
-      refreshCompletionAuthority = true;
+      // A surviving requester owns the whole cohort, including this successor. A refused
+      // origin is replaced by the adopting caller's; a temporary outage keeps it.
+      await runWithCompletionOrigin(paused, async () => undefined);
+    } catch (error) {
+      if (!(error instanceof SubagentAnnouncePreparationConflictError)) {
+        refreshCompletionAuthority = true;
+      }
     }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
@@ -367,7 +375,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const authority = refreshCompletionAuthority
       ? await captureOperatorToolGatewayContinuationContext()
       : undefined;
-    let custodyTransferred = false;
+    const originFacts = refreshCompletionAuthority
+      ? captureSubagentOriginFacts(authority)
+      : undefined;
     const runIds = new Set([
       previousRunId,
       nextRunId,
@@ -536,6 +546,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             spawnMode,
             archiveAtMs: undefined,
             runTimeoutSeconds,
+            // The newly admitted caller replaces the predecessor's origin.
+            ...(originFacts ? { originFacts } : {}),
           });
           clearDeliveryState(next);
           const postimages = this.planSupersededKillReconciliations(rows, next);
@@ -592,8 +604,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               subagentRuns.transferCompletionAuthority(value.source, next);
             }
             if (refreshCompletionAuthority && authority) {
-              // The newly admitted caller replaces predecessor custody, including
-              // a retired legacy source; persisted rows alone never grant it.
+              // A refreshed caller readmits the row; persisted rows alone never grant it.
               const sameRequesterTask =
                 !preserveCompletedRun &&
                 (next.taskRunId ?? next.runId) === (value.source.taskRunId ?? value.source.runId) &&
@@ -605,20 +616,15 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
               const requesterRunInstance = sameRequesterTask
                 ? subagentRuns.getRequesterRunInstance(next)
                 : undefined;
-              subagentRuns.bindCompletionAuthority(
+              subagentRuns.admitCompletion(
                 next,
-                authority,
                 requesterRunInstance?.runId === next.requesterTurnRunId
                   ? requesterRunInstance
                   : undefined,
                 sameRequesterTask ? subagentRuns.getRequesterCompletion(next) : undefined,
               );
-              custodyTransferred = true;
             }
             subagentRuns.commitOwnership(next);
-            if (replaceParams.successor) {
-              subagentRuns.releaseCompletionAuthority(replaceParams.successor);
-            }
             if (!preserveCompletedRun && previousRunId !== nextRunId) {
               // Remapped cohorts must not queue behind their replaced input.
               retireSubagentControllerInputs(value.source);
@@ -638,9 +644,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       }
       throw error;
     } finally {
-      if (!custodyTransferred) {
-        authority?.release();
-      }
+      authority?.release();
     }
     if (!replacement) {
       return false;

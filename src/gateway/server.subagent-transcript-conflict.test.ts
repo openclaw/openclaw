@@ -22,6 +22,7 @@ import {
   mutateRequesterCompletionBatch,
   SubagentCompletionSourceChangedError,
 } from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import { captureSubagentOriginFacts } from "../agents/subagents/registry/subagent-completion-origin.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
@@ -317,19 +318,20 @@ for (const scenario of [
             },
           ],
         });
+        if (!originalSource) {
+          throw new Error("Original requester authority was not captured");
+        }
         await mutateSubagentRuns([childId], () => ({
           value: undefined,
-          postimages: new Map([[childId, child]]),
+          postimages: new Map([
+            [childId, { ...child, originFacts: captureSubagentOriginFacts(originalSource) }],
+          ]),
         }));
         const saved = subagentRuns.get(childId);
         if (!saved) {
           throw new Error("Missing durable child");
         }
         bindGatewayContextResolver(saved, () => gatewayContext);
-        if (!originalSource) {
-          throw new Error("Original requester authority was not captured");
-        }
-        subagentRuns.bindCompletionAuthority(saved, originalSource);
         const currentBatch = (batch: readonly SubagentRunRecord[]) =>
           batch.map((member) => {
             const current = subagentRuns.get(member.runId);

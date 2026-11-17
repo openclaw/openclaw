@@ -195,6 +195,8 @@ export type SubagentRunRecordOverrides = Pick<SubagentRunRecord, "runId"> &
 export function createSubagentRunRecord(overrides: SubagentRunRecordOverrides): SubagentRunRecord {
   const { startedAt, endedAt, outcome, execution, ...record } = overrides;
   return {
+    // Rows from this build always save an origin; tests of older rows delete it.
+    originFacts: { kind: "none" },
     childSessionKey: "agent:main:subagent:child",
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",

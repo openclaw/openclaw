@@ -96,18 +96,23 @@ export async function prepareSessionPrincipalRunAuthority(
       throw new Error("Session principal has no current run authority.");
     }
     const original = source.recordedOperatorAuthority;
-    if (original) {
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
+    const current = admitted.authority;
+    admitted.authority = createAdmittedRunOperatorAuthority({
+      ...current,
+      ...(original && {
         scopes: intersectOperatorScopes(current.scopes, original.scopes),
         gatewayAccessGrant: original.gatewayAccessGrant,
         recoverySnapshot: original.recoverySnapshot,
-        get modelPolicy() {
-          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
-    }
+      }),
+      // A principal without its own recovery facts is saved and restored by profile.
+      ...(!original?.recoverySnapshot &&
+        !original?.channelRecoverySource && { sessionPrincipalProfileId: params.profileId }),
+      get modelPolicy() {
+        return original
+          ? intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy)
+          : current.modelPolicy;
+      },
+    });
     return admitted;
   } catch (error) {
     if (admitted) {

@@ -102,6 +102,7 @@ export function createAdmittedRunOperatorAuthority(
           modelPolicy: source.channelRecoverySource.modelPolicy,
         })
       : undefined,
+    sessionPrincipalProfileId: source.sessionPrincipalProfileId,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })

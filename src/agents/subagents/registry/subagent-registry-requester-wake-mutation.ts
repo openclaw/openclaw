@@ -4,9 +4,11 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import {
+  mutateRequesterCompletionBatch,
+  renderChildCompletionFailure,
+} from "../completion/subagent-completion-admission.store.js";
 import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
@@ -214,7 +216,7 @@ export function createRequesterWakeSettlement(params: {
         ) {
           const error =
             outcome?.error ?? "Child completion could not continue the yielded request.";
-          const notice = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
+          const notice = renderChildCompletionFailure(error, batch);
           const runId = admittedWake.requesterRunId;
           if (runId) {
             // A newer turn, reset, or Stop cannot inherit the failed batch's terminal.

@@ -5,15 +5,13 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { captureGatewayAuthPolicy } from "../../../gateway/auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -372,11 +370,21 @@ it.each([false, true])(
       profileName: "retirement-successor",
       scopes: ["operator.write"],
     });
+    // A handshake-attested operator, so its origin facts can be saved.
+    client.internal = {
+      authenticatedOperator: true,
+      operatorAccessAuthority: {
+        assertCurrent: () => {},
+        signal: new AbortController().signal,
+        gatewayAccessGrant: null,
+      },
+    };
+    client.authPolicy = captureGatewayAuthPolicy({}, { role: "operator", authMethod: "token" });
     const source = await captureGatewayOperatorRunAuthority({ client, context });
     if (!source) {
       throw new Error("Expected canonical successor authority");
     }
-    client.internal = { operatorRunAuthority: source.authority };
+    client.internal = { ...client.internal, operatorRunAuthority: source.authority };
     const cleanupEntered = createDeferredCore();
     const releaseCleanup = createDeferredCore();
     const removeAttachments = registryHelpers.safeRemoveAttachmentsDir;
@@ -458,12 +466,8 @@ it.each([false, true])(
         expect(storedAnnouncement(run.runId)?.task).toBe("live retirement successor");
         expect(getSubagentRegistryPublicationRevision()).toBeGreaterThan(publicationRevision);
         expect(ended).not.toHaveBeenCalled();
-        subagentRuns.runWithCompletionAuthority(successor, () => {
-          const retained =
-            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-          expect(retained?.source).toBe(source.authority.source);
-          retained?.assertCurrent();
-        });
+        // The successor registration saved its own origin; no in-memory custody carries over.
+        expect(successor.originFacts).toMatchObject({ kind: expect.any(String) });
       } else {
         expect(result).toEqual({ completed: true });
         expect(subagentRuns.has(run.runId)).toBe(false);

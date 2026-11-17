@@ -8,6 +8,10 @@ import {
 } from "../../test/helpers/promise.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
+import {
+  captureSubagentOriginFacts,
+  runWithCompletionBatchOrigin,
+} from "../agents/subagents/registry/subagent-completion-origin.js";
 import { consumeSubagentPauseNotice } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { subagentRuns as runs } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
@@ -24,8 +28,10 @@ import {
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import {
@@ -45,7 +51,6 @@ it.for([
   "foreign requester",
   "requester reset",
   "same-human follow-up",
-  "follow-up source revoked during dispatch",
   "outbox retired after acceptance",
 ] as const)(
   "enforces %s after consuming the pause notice and before starting the next turn",
@@ -67,19 +72,25 @@ it.for([
     const followupRunId = `followup-${id}`;
     const foreignRequester = outcome === "foreign requester";
     const resetRequester = outcome === "requester reset";
-    const revokedSource = outcome === "follow-up source revoked during dispatch";
-    const followsUp = outcome === "same-human follow-up" || revokedSource;
+    const followsUp = outcome === "same-human follow-up";
     const retiresAfterAcceptance = outcome === "outbox retired after acceptance";
-    const sourceRevocation = new AbortController();
     let originalSource: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     const marker = `PAUSE-MARKER-${id}`;
     const client = createOperatorClient({
       profileName: `pause-${id}`,
       scopes: ["operator.admin"],
     });
-    if (outcome !== "operator only") {
-      client.internal = { controlUiAdmin: true };
-    }
+    // A handshake-attested operator, so its origin facts can be saved.
+    client.internal = {
+      authenticatedOperator: true,
+      operatorAccessAuthority: {
+        assertCurrent: () => {},
+        signal: new AbortController().signal,
+        gatewayAccessGrant: null,
+      },
+      ...(outcome !== "operator only" ? { controlUiAdmin: true } : {}),
+    };
+    client.authPolicy = captureGatewayAuthPolicy({}, { role: "operator", authMethod: "token" });
     const other = createOperatorClient({
       profileName: `foreign-${id}`,
       scopes: ["operator.write"],
@@ -188,7 +199,6 @@ it.for([
           expect(caller.operatorAuthority).toMatchObject({
             scopes: originalSource?.authority.scopes,
           });
-          expect(caller.operatorAuthority?.source).toBe(originalSource?.authority.source);
         }
         expect(opts.cronCreatorAuthorityCapability?.managementEntitlement?.source).toBe(
           outcome === "operator only" || continued ? undefined : "control-ui-admin",
@@ -201,7 +211,12 @@ it.for([
               await captureOperatorToolGatewayContinuationContext(),
               "registered completion source",
             );
-            runs.bindCompletionAuthority(currentChild(), completion);
+            const originFacts = captureSubagentOriginFacts(completion);
+            completion.release();
+            await mutateChild((draft) => {
+              draft.originFacts = originFacts;
+            });
+            bindGatewayContextResolver(currentChild(), () => context);
             expect(await markRequesterTurnYielded(requester)).toBe(1);
             expect(
               await settleRequesterAfterSessionSpawns({
@@ -249,7 +264,7 @@ it.for([
       message: string,
       onAccepted?: (payload: unknown) => void,
     ) =>
-      runs.runWithCompletionBatchAuthority([currentChild()], () =>
+      runWithCompletionBatchOrigin([currentChild()], () =>
         captureRequesterContinuationCaller({
           requesterSessionKey: parent,
           requesterSessionId: parentId,
@@ -297,8 +312,8 @@ it.for([
             client,
             context,
             sourceAuthority: {
-              signal: sourceRevocation.signal,
-              assertCurrent: () => sourceRevocation.signal.throwIfAborted(),
+              assertCurrent: () => {},
+              gatewayAccessGrant: null,
             },
           }),
           "original requester source",
@@ -383,7 +398,6 @@ it.for([
         });
         freshClient.internal = { controlUiAdmin: true };
         await sendHuman(freshClient, followupRunId, "Same human follow-up");
-        expect(originalSource?.authority.assertCurrent).not.toThrow();
       }
       const target = foreignRequester ? foreign : parent;
       const sessionId = foreignRequester ? foreignId : parentId;
@@ -399,16 +413,15 @@ it.for([
       const entered = createDeferred();
       const resume = createDeferred();
       const stage = pendingInputs.stageSessionPendingInput;
-      const stageSpy =
-        resetRequester || revokedSource
-          ? vi
-              .spyOn(pendingInputs, "stageSessionPendingInput")
-              .mockImplementationOnce(async (...args) => {
-                entered.resolve();
-                await resume.promise;
-                return await stage(...args);
-              })
-          : undefined;
+      const stageSpy = resetRequester
+        ? vi
+            .spyOn(pendingInputs, "stageSessionPendingInput")
+            .mockImplementationOnce(async (...args) => {
+              entered.resolve();
+              await resume.promise;
+              return await stage(...args);
+            })
+        : undefined;
       const requestWork = vi.spyOn(context, "trackExecution");
       const trackedRequests = () =>
         requestWork.mock.results.flatMap((result) =>
@@ -426,18 +439,14 @@ it.for([
             continuation,
             "Continuation ended before reaching input staging",
           );
-          if (resetRequester) {
-            await sessionAccessor.replaceSessionEntry(scope, {
-              sessionId,
-              updatedAt: Date.now(),
-              lifecycleRevision: "reset",
-            });
-          } else {
-            sourceRevocation.abort(new Error("Original completion source revoked during dispatch"));
-          }
+          await sessionAccessor.replaceSessionEntry(scope, {
+            sessionId,
+            updatedAt: Date.now(),
+            lifecycleRevision: "reset",
+          });
           resume.resolve();
         }
-        if (!foreignRequester && !resetRequester && !revokedSource) {
+        if (!foreignRequester && !resetRequester) {
           await continuation;
           await Promise.all(trackedRequests());
           expect(received).toEqual([
@@ -461,9 +470,7 @@ it.for([
           );
           const expectedDenial = foreignRequester
             ? "does not own this continuation"
-            : revokedSource
-              ? "Original completion source revoked during dispatch"
-              : "no longer current";
+            : "no longer current";
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
@@ -489,10 +496,6 @@ it.for([
       }
     } finally {
       revokeRequesterCronAuthority(parent);
-      const remaining = runs.get(child.runId);
-      if (remaining) {
-        runs.releaseCompletionAuthority(remaining);
-      }
       originalSource?.release();
       await writeChild(() => null);
     }

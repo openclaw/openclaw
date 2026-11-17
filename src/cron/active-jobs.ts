@@ -115,8 +115,8 @@ export function captureCronJobMessageSourceAuthority(params: {
   return captureCronJobMessageAuthority(params, true);
 }
 
-/** Source restoration belongs to one occurrence; returns whether it has removed itself. */
-export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | undefined {
+/** Admission of one live occurrence; afterwards only its explicit cancel ends the run. */
+export function captureCronJobSourceAuthority(jobId: string): (() => void) | undefined {
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker?.standingGrantAuthority;
   if (!marker || !owner) {
@@ -131,7 +131,6 @@ export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | 
       throw new Error("Cron occurrence source authority is no longer active");
     }
     owner.assertCurrent();
-    return marker.jobRemoved === true;
   };
 }
 

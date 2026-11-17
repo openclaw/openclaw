@@ -24,6 +24,7 @@ import {
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import { captureSubagentOriginFacts } from "./subagent-completion-origin.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
@@ -107,7 +108,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     let preparedRows: (() => ReadonlyMap<string, SubagentRunRecord>) | undefined;
     let plannedEntry: SubagentRunRecord | undefined;
     let registered: SubagentRunRecord | undefined;
-    let custodyTransferred = false;
+    let typingOwnsAuthority = false;
     let queuedScope: SubagentRegistrationScope | undefined;
     let initialOutcome: "pending" | "refused" | "uncertain" = "pending";
     let initialFailure: unknown;
@@ -220,6 +221,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             }),
       );
       authority = await captureOperatorToolGatewayContinuationContext();
+      const originFacts = captureSubagentOriginFacts(authority);
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
@@ -276,7 +278,8 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 "Accepted run already has another completion owner; inspect it before retrying.",
               );
             }
-            subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.());
+            subagentRuns.assertCompletionCurrent(previous);
+            options.assertCurrent?.();
             return { value: undefined };
           }
           if (selected ? !isSameSubagentRunOwner(previous, selected) : previous !== undefined) {
@@ -306,6 +309,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   )
                 : undefined,
           });
+          entry.originFacts = originFacts;
           entry.requesterStorePath =
             previous?.requesterStorePath ??
             resolvePhysicalSessionStorePath(
@@ -354,12 +358,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(
-                  entry,
-                  authority,
-                  options.requesterRunInstance,
-                );
-                custodyTransferred = true;
+                subagentRuns.admitCompletion(entry, options.requesterRunInstance);
               }
             } finally {
               if (!registrationOwnership.superseded) {
@@ -430,6 +429,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           current,
           this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
         );
+        typingOwnsAuthority = true;
         await startSubagentTyping(current, authority, currentEntry);
       }
     } catch (error) {
@@ -450,17 +450,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           activate();
         }
       }
-      if (
-        registered &&
-        error instanceof SubagentRegistryWriteError &&
-        error.outcome === "not-committed"
-      ) {
-        subagentRuns.releaseCompletionAuthority(registered);
-      }
       throw error;
     } finally {
       registrationSettled = true;
-      if (!custodyTransferred) {
+      if (!typingOwnsAuthority) {
         authority?.release();
       }
       registrationOwnership.release();

@@ -8,8 +8,12 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
@@ -59,6 +63,7 @@ import {
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
+  type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
@@ -585,8 +590,9 @@ export async function captureGatewayOperatorContinuation(
   const inherited = input.client?.internal?.operatorRunAuthority;
   const context = input.context.resolveGatewayContext?.();
   const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
+  // A session principal is restored from its profile. An origin beyond the recovery
+  // serialization bounds keeps its live authority; its completion is withheld visibly.
   if (!inherited || !context || !facts || facts.kind === "unavailable") {
-    // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
   // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
@@ -615,4 +621,42 @@ export async function captureGatewayOperatorContinuation(
       releaseInherited?.();
     },
   };
+}
+
+/** Detached work whose origin cannot be restored; the caller shows it as `withheld: <reason>`. */
+export class TurnWithheldError extends Error {
+  constructor(reason: string, options?: ErrorOptions) {
+    super(`withheld: ${reason}`, options);
+    this.name = "TurnWithheldError";
+  }
+}
+
+/** A refusal withholds detached work; a policy or dispatch outage is not one and passes through. */
+export function toTurnWithheld(error: unknown) {
+  return error instanceof TurnWithheldError ||
+    isOperatorAuthorityUnavailable(error) ||
+    (error instanceof GatewayDispatchUnavailableError && error.retryable)
+    ? error
+    : new TurnWithheldError(formatErrorMessage(error), { cause: error });
+}
+
+/**
+ * Detached work runs on saved origin facts intersected with current policy, checked at turn
+ * admission. Only a policy change or the explicit cancel signal ends it; the end of the request,
+ * turn or occurrence that started it does not.
+ */
+export async function authorizeTurn(params: {
+  facts: QueuedOperatorRecoverySource | undefined;
+  context: GatewayRequestContext;
+  signal?: AbortSignal;
+}) {
+  const { facts, signal } = params;
+  if (!facts || facts.kind === "unavailable") {
+    throw new TurnWithheldError("the origin of this work was not saved");
+  }
+  return await restoreGatewayQueuedOperatorRecovery({
+    source: facts,
+    context: params.context,
+    assertCurrent: () => signal?.throwIfAborted(),
+  });
 }

@@ -14,6 +14,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
     modelPolicy?: PreparedOperatorModelPolicy;
   }>;
+  /** A session-principal system turn; detached work saves this profile as its origin. */
+  sessionPrincipalProfileId?: string;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;

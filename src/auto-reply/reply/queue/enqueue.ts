@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import {
@@ -39,6 +40,7 @@ import {
 import {
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
+  type InternalFollowupRun,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
@@ -84,6 +86,13 @@ export function enqueueFollowupRun(
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
+  }
+  // The live request ends; admission restores its authority from these saved facts.
+  const queued: InternalFollowupRun = run;
+  try {
+    queued.originFacts ??= captureQueuedOperatorRecoverySource(run.operatorAuthority);
+  } catch {
+    queued.originFacts = { kind: "unavailable" };
   }
   if (options.position === "front") {
     run.protectFromQueueOverflow = true;
