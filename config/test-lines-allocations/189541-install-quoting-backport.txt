@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #189541: real npm/git launchers preserve shell-character paths across working-directory changes.
+8

@@ -676,6 +676,8 @@ fi
   it.each([
     { input: "environment", method: "npm" },
     { input: "literal tilde", method: "git" },
+    { input: "shell characters", method: "npm" },
+    { input: "shell characters", method: "git" },
   ] as const)(
     "keeps a generated $method launcher working after $input supplied paths change cwd",
     ({ input, method }) => {
@@ -683,8 +685,13 @@ fi
       const home = join(f.root, "home"),
         installRoot = join(f.root, "install-root");
       const tilde = input === "literal tilde";
-      const prefix = join(tilde ? home : installRoot, "openclaw-local");
-      const repo = join(tilde ? home : installRoot, "openclaw-source");
+      const localName =
+        input === "shell characters"
+          ? "openclaw $literal 'single' \"double\" `backtick`"
+          : "openclaw-local";
+      const prefix = join(tilde ? home : installRoot, localName);
+      const repoName = input === "shell characters" ? `${localName}-source` : "openclaw-source";
+      const repo = join(tilde ? home : installRoot, repoName);
       const nodeDir = join(prefix, "tools", "node-v24.22.1");
       const legacy = join(home, "openclaw", "Peekaboo", "user.txt");
       for (const dir of [
@@ -698,7 +705,7 @@ fi
       }
       writeFileSync(legacy, "keep this checkout");
       f.runtime(
-        `${tilde ? "home" : "install-root"}/openclaw-local/tools/node-v24.22.1/bin`,
+        `${tilde ? "home" : "install-root"}/${localName}/tools/node-v24.22.1/bin`,
         'if [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi',
       );
       symlinkSync("node-v24.22.1", join(prefix, "tools", "node"));
@@ -727,14 +734,15 @@ fi
         }
         main --${method} ${tilde ? '--prefix "~/openclaw-local" --git-dir "~/openclaw-source"' : ""}
         cd "$ROOT/other-root"
-        "${prefix}/bin/openclaw" --version
+        "$EXPECTED_PREFIX/bin/openclaw" --version
       `,
         {
           ROOT: f.root,
           HOME: home,
           OPENCLAW_HOME: home,
-          OPENCLAW_GIT_DIR: undefined,
-          OPENCLAW_PREFIX: tilde ? undefined : "openclaw-local",
+          OPENCLAW_GIT_DIR: tilde ? undefined : repoName,
+          OPENCLAW_PREFIX: tilde ? undefined : localName,
+          EXPECTED_PREFIX: prefix,
         },
       );
       expect(result.status, result.stderr || result.stdout).toBe(0);
