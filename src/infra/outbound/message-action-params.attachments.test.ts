@@ -146,9 +146,9 @@ describe("runMessageAction media behavior", () => {
     vi.clearAllMocks();
   });
 
-  it("normalizes image/png data URLs and infers filenames for send", async () => {
+  it.each(["send", "thread-reply"] as const)("stages png data URLs for %s", async (action) => {
     const args: Record<string, unknown> = { buffer: parameterizedPngDataUrl };
-    await hydrate(args);
+    await hydrate(args, { action });
     expect(args).toMatchObject({
       contentType: "image/png",
       filename: "attachment.png",
@@ -206,6 +206,43 @@ describe("runMessageAction media behavior", () => {
       fromSpy.mockRestore();
     }
   });
+
+  it.each([onePixelPngBase64, parameterizedPngDataUrl])(
+    "delivers buffer bytes through the thread-reply runner (%#)",
+    async (buffer) => {
+      await withSandbox(async (stateDir) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        try {
+          setTestPlugin(
+            mediaPlugin("threadchat", ["thread-reply"], async ({ params }) => {
+              if (typeof params.media !== "string") {
+                throw new Error("thread-reply did not receive staged media");
+              }
+              return jsonResult({
+                bytes: (await fs.readFile(params.media)).toString("base64"),
+                filename: params.filename,
+              });
+            }),
+            "threadchat",
+          );
+          const result = await createMediaAction(
+            "threadchat",
+            "thread-reply",
+          )({
+            buffer,
+            filename: "proof.png",
+            message: "attachment proof",
+          });
+          expect(requireActionPayload(result)).toEqual({
+            bytes: onePixelPngBase64,
+            filename: "proof.png",
+          });
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
+    },
+  );
 
   describe("sendAttachment hydration", () => {
     const attachmentPlugin = mediaPlugin(
