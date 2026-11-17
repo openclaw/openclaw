@@ -355,7 +355,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       return Object.freeze(object);
     }
-    return safe(value.value);
+    // Producers normalize these guest-owned values; a second JSON copy can OOM into safe()'s text fallback.
+    return value.value;
   }
 
   function settle(id, ok, payload) {
