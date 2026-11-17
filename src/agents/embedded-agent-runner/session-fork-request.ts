@@ -5,7 +5,6 @@ import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
-import type { ToolDefinition } from "./session-tool-checkpoint.js";
 import { sameToolParameters } from "./session-tool-definition.js";
 
 const TOOL_CALL_ID_KEYS = new Set(["id", "call_id", "tool_use_id", "tool_call_id"]);
@@ -182,7 +181,10 @@ function requestToolNames(payload: Record<string, unknown>): Set<unknown> {
 }
 
 /** The source session's last checkpointed system prompt and tool definitions. */
-export type SessionForkPin = { prefix: string; tools: ToolDefinition[] };
+export type SessionForkPin = {
+  prefix: string;
+  tools: Array<Pick<AnyAgentTool, "name" | "description" | "parameters">>;
+};
 
 export type SessionForkRequest = {
   /** The source session's last prepared provider request, while its run is live on this route. */
