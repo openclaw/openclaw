@@ -5,7 +5,6 @@ import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-p
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import type {
   ReplyMessageInjectionOutcome,
@@ -481,20 +480,7 @@ export async function runActiveReplySteer(
         if (replayForbidden) {
           parked.consume("consumed");
         } else {
-          try {
-            assertReadCurrent();
-            parked.fallback();
-          } catch (error) {
-            if (isOperatorAuthorityUnavailable(error)) {
-              parked.fallback();
-            } else {
-              diagnosticLogger.warn("steering followup unavailable: source authority lost", {
-                sessionId: steerSessionId,
-                runId: params.opts?.runId,
-              });
-              parked.consume();
-            }
-          }
+          parked.fallback();
         }
       }
     } finally {

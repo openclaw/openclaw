@@ -65,22 +65,19 @@ export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
   const check = source.assertCurrent;
-  const signal = source.signal;
-  let revoked = false;
-  let revocationReason: unknown;
+  const revocation = new AbortController();
+  const signal = source.signal
+    ? AbortSignal.any([source.signal, revocation.signal])
+    : revocation.signal;
   const assertCurrent = composeSessionSourceAssertion(
     [check],
     scopeOperatorAccessDecisions((assertSource: () => void) => {
-      if (revoked) {
-        throw revocationReason;
-      }
+      signal.throwIfAborted();
       try {
-        signal?.throwIfAborted();
         assertSource();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
-          revocationReason = error;
+          revocation.abort(error);
         }
         throw error;
       }
