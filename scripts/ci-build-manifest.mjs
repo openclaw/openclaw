@@ -2243,7 +2243,7 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(
       manifest.run_postgres_conformance,
-      workflowEventName === "pull_request" ? 4 : 3,
+      workflowEventName === "pull_request" ? 5 : 4,
     ),
     "skills-python": count(manifest.run_skills_python_job),
     "checks-windows": count(

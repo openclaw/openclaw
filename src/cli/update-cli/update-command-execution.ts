@@ -414,7 +414,8 @@ export async function executeMutableUpdate(
       throw error;
     }
   };
-  let servicePrepared = false;
+  // A Git release never stops or verifies the serving Gateway before activation.
+  let servicePrepared = params.gitRelease === true;
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
@@ -477,7 +478,8 @@ export async function executeMutableUpdate(
     await recordPhase("activating");
     assertExecutionCurrent();
     const publication = {
-      roots,
+      // Every consumer keeps the release it started from; a release replaces no root.
+      roots: params.gitRelease ? [] : roots,
       env,
       timeoutMs: updateStepTimeoutMs,
       assertCurrent: assertExecutionCurrent,
@@ -587,13 +589,16 @@ export async function executeMutableUpdate(
           : runPackageInstallUpdate(packageUpdate),
       );
     } else {
-      const sourceRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
-      const sourceRuntimePrepared = await admitSourceUpdateArtifacts(sourceRoot, opts.run);
+      const gitRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+      // Releases build in their own worktrees; the checkout's artifacts are never written.
+      const prepared = !params.gitRelease && (await admitSourceUpdateArtifacts(gitRoot, opts.run));
       assertExecutionCurrent();
       const gitUpdate: Parameters<typeof updateGitInstall>[0] = {
         ...installOptions,
-        sourceRuntimePrepared,
+        sourceRuntimePrepared: prepared,
         switchToGit: params.switchToGit,
+        gitReleases: params.gitRelease,
+        deferReleaseActivation: !params.shouldRestart,
         timeoutMs: params.timeoutMs,
         channel: params.channel,
         devTarget: params.devTarget,

@@ -360,6 +360,33 @@ describe("successful update finalization ordering", () => {
 
   registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
+  it("converges plugins for a switched Git release only after it verified", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(
+      await fs.realpath(tempDirs.make("git-release-finalize-")),
+      "git-install",
+    );
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+
+    await finishSuccessfulPackageSwitch(
+      {
+        packageRoot: gitReleaseSlot(prefix),
+        updateMode: "git",
+        sealed: true,
+        restartEnvironment: process.env,
+      },
+      { gitRelease: true },
+    );
+
+    // A failed trial switches core back; plugins replaced before that would require the new core.
+    expect(mocks.restartService).toHaveBeenCalled();
+    expect(mocks.updatePlugins).toHaveBeenCalled();
+    expectBefore(mocks.restartService, mocks.updatePlugins);
+  });
+
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
     await fs.writeFile(

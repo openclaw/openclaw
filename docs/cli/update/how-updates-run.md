@@ -533,6 +533,9 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
+A plugin convergence failure, or an updater failure around a started Doctor, can
+instead be recorded as an [owed step](#owed-steps), under the conditions listed
+there.
 
 Offline Doctor cron inspection reuses its admitted maintenance reader after the
 backup boundary instead of creating another disposable SQLite snapshot. If optional
@@ -890,7 +893,7 @@ history.
 Some follow-up steps are not needed for the new version to run. When one of them
 fails and the update otherwise succeeds, the update records the step as owed,
 with its reason, prints it as a warning, and exits 0. In `--json` output the
-warning is an advisory step, and the `run` record lists the owed step. Two steps
+warning is an advisory step, and the `run` record lists the owed step. Four steps
 can be owed:
 
 - **Shell completion refresh** (`shell-completion`): the completion cache or the
@@ -898,10 +901,37 @@ can be owed:
 - **Gateway service definition refresh** (`service-definition`): the service
   installer failed and the update continued on the previous definition, or the
   definition still points outside the updated installation after the refresh.
+- **Plugin convergence** (`plugin-convergence`): during a core update, plugin
+  sync, update, or repair threw before it published any plugin record or config
+  change. The updater restores every plugin package it replaced in that pass, so
+  plugins stay on their previous versions and records. The update then validates
+  the final config, runs readiness checks, and starts the Gateway as usual.
+- **Post-plugin Doctor** (`post-plugin-doctor`): Doctor started after plugin
+  convergence, and the updater then failed around it for a reason Doctor did not
+  report, such as a state read that failed after Doctor finished. Config
+  validation and readiness checks still run before the Gateway starts.
 
 Required database migrations, refused or invalid configuration, Doctor refusals,
 and Gateway readiness are never owed. They still block completion. A failed or
 rolled-back update owes nothing, including a step recorded before it failed.
+
+A plugin or Doctor failure is owed only when the updater can show what it left
+behind. These failures still fail the command, and roll back a replaced core:
+
+- plugin convergence that throws where plugin installs are not restored
+  together: on an already-current core, in `openclaw update repair`, and in an
+  update whose updater did not retain the plugin set before activation
+- plugin convergence that throws while it must also restore channel config that
+  Doctor dropped during this update
+- a refused config write, or an unexpected failure while plugin records and
+  config are being published
+- a package that could not be restored after a failed plugin install
+- a post-core update process that exits nonzero, is terminated, or times out
+- a Doctor refusal: a migration or config-write refusal, a cancelled Doctor, and
+  any refusal that names data at risk
+- a missing updated entrypoint, a Gateway that could not be parked for Doctor,
+  or a state read that fails before Doctor starts
+- a command whose termination cannot be confirmed, and lost update authority
 
 Later commands settle what is owed:
 
@@ -912,21 +942,40 @@ Later commands settle what is owed:
 - An update settles an owed service definition refresh only when it refreshes the
   service definition itself, as a core update with a restart does. Otherwise the
   step stays owed and the update repeats the warning.
+- The next `openclaw update` runs plugin convergence again, including when the
+  core is already current, and settles the step when convergence completes.
+  Individual plugins that fail to update are reported as plugin warnings, as
+  before, and do not keep the step owed. Convergence that is deferred because
+  config changed during the update settles nothing: every plugin step stays
+  owed. Convergence that throws again during a core update is owed again for the
+  new reason. On an already-current core it fails the command as before, and the
+  step stays owed.
+- An update settles an owed post-plugin Doctor only when it changes plugins and
+  its own Doctor then completes. An update that leaves plugins unchanged does not
+  run full Doctor, so the step stays owed and the update repeats the warning.
 - `openclaw update repair` refreshes the completion cache when it runs
   finalization. It does not run the service installer. After its Doctor
   maintenance, it settles the service definition step when the managed definition
-  targets the active installation, or when no managed service remains. A repair
-  that finds a healthy Gateway and skips finalization leaves owed steps unchanged.
+  targets the active installation, or when no managed service remains. Repair
+  runs full Doctor and then plugin convergence, so it settles the post-plugin
+  Doctor step, and settles plugin convergence when its own convergence completes.
+  A repair that finds a healthy Gateway and skips finalization leaves owed steps
+  unchanged.
 
-A retry that fails keeps the step owed, warns again, and does not fail the
-command. The command that retried it then holds the step in its own run. Gateway
-startup does not retry owed steps. See
+A retry that fails keeps the step owed and warns again. It does not fail the
+command, except for the plugin convergence cases above. The command that retried
+it then holds the step in its own run. Gateway startup does not retry owed steps.
+See
 [Status and history](/cli/update/status-and-history#update-status) to inspect them.
 
 An updater records and retries owed steps only when its own version supports
 them. On the first update to a version that does, the previously installed
 updater runs these steps and still drops a failed shell completion refresh
-without a record.
+without a record. It records no plugin step either. Plugin convergence runs in
+the new version's own process, which keeps that first update only when the
+previously installed updater retained the plugin set before activation, and
+otherwise fails as before. The post-plugin Doctor pass behaves as it did in the
+previously installed updater whenever that updater runs the pass itself.
 
 <a id="durable-serving-recovery" />
 
@@ -1668,13 +1717,31 @@ the old one is under `previous`, which is where every recovery reader expects it
 after a publication.
 
 An updater killed between those two steps leaves the old package serving and the
-candidate waiting under `previous`. The journal still records the publish
-intent, so the next update, and `openclaw update repair`, refuse with `Package
-publication is incomplete` until it is settled. Only the managed update helper,
-when it is still alive, or the journal's printed recovery command settles it:
-`repair` returns the candidate to its own name and aborts the publication, and
-`retire` then removes the recovery directory. That
-state is read only with the recorded intent and the recorded identities of all
+candidate waiting under `previous`, with the publish intent still in the
+journal. The next `openclaw update`, and `openclaw update repair`, settle that
+leftover before anything else. They claim the installation in the recorded
+update lease store, which succeeds only once the killed updater's processes are
+gone, return the candidate to its own name, abort the publication, and remove
+its recovery directory. The old package and its launchers are not touched. The
+update prints what it settled and continues, and its result and run history
+carry a `package-publication-recovery` warning. The journal's printed recovery
+command does the same by hand: `repair` aborts the publication and `retire`
+removes the recovery directory.
+
+A killed update usually also leaves its update run unreconciled. That is a
+separate check: `openclaw update` then stops with `Update <id> has unfinished
+recovery`, and `openclaw update repair` reconciles the run. Repair settles the
+publication in the same pass, so one repair is enough before the next update.
+
+The updater does not settle the leftover when another updater still holds the
+installation, when the lease store is missing or was replaced, when the
+installed package or a launcher no longer matches the journal, or when a
+different OpenClaw build wrote the journal. It then refuses with the reason and
+a next step: wait for the other updater, reinstall, or run the recovery command.
+See
+[Unfinished publication and rollback](/install/updating#unfinished-publication-and-rollback).
+
+That state is read only with the recorded intent and the recorded identities of all
 three directories. A reader that finds the layout without that intent, and the
 recovery code of earlier releases, refuses it by its identity check instead of
 taking the candidate for the previous package. An updater killed after the
@@ -1708,10 +1775,14 @@ unavailable: <reason>)`. Between the two moves the package path is missing and
 `openclaw` cannot start.
 
 With a journal, the candidate returns to its own name, the old package moves to
-`previous`, and the candidate moves into place. If the updater dies between
-those moves, the managed update helper, when it is still alive, or the journal's
+`previous`, and the candidate moves into place. An updater killed before the old
+package moves is settled by the next update as above. If it dies between those
+moves, the package path is missing and `openclaw` cannot start from that
+installation, so neither `openclaw update` nor `openclaw update repair` can run
+there. The managed update helper, when it is still alive, or the journal's
 printed recovery command, run with the recorded external runtime, finishes the
-publication. `openclaw update repair` cannot run while the package is missing.
+publication. An update or repair of the same build that still reaches admission
+for that installation publishes the recorded candidate into the gap.
 
 Without a journal, the staged directory returns to its stage, the old one moves
 to the backup name, and the staged one moves into place. If the updater dies
