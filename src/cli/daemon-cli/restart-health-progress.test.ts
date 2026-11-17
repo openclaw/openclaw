@@ -313,7 +313,9 @@ describe("restart startup progress", () => {
         defaultTimeoutSeconds: 60,
       });
       if (expected === "still-starting") {
-        expect(message.failMessage).toContain(`still starting after ${elapsedMs / 1000}s`);
+        expect(message.failMessage).toContain(
+          `still starting after ${Math.round(elapsedMs / 1000)}s`,
+        );
         expect(message.failMessage).toContain(phase ?? "startup migration");
         expect(message.failMessage).toContain("openclaw gateway status --deep");
       }

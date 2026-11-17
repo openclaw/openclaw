@@ -132,6 +132,7 @@ vi.mock("../../gateway/probe-auth.js", () => ({
     resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
+// mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
