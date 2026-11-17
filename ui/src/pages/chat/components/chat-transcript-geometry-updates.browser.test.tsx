@@ -549,7 +549,6 @@ it("parks retained rows at zero size and restores their resized geometry and nes
   );
   expect(session.revealMessage("geometry-answer")).toBe(true);
   await expect.poll(() => host.querySelector('[data-entry-id="geometry-answer"]')).not.toBeNull();
-  session.cancelScroll();
   const row = expectDefined(
     requireElement(host, '[data-entry-id="geometry-answer"]').closest<HTMLElement>(
       ".chat-virtual-row",
@@ -564,6 +563,7 @@ it("parks retained rows at zero size and restores their resized geometry and nes
       virtualizer.resizeItem(index, 120);
     }
   }
+  session.cancelScroll();
   virtualizer.scrollToIndex(targetIndex, { align: "start", behavior: "auto" });
   await settleLayout();
   // Other fixture rows have fixed heights. This row uses its real Markdown

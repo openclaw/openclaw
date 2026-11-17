@@ -86,9 +86,14 @@ export class TranscriptPrependAnchor {
   update(
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
     rowsMeasured: () => boolean,
+    committed = false,
   ): boolean {
     const anchor = this.pending;
-    if (!anchor || (!anchor.prepended && !rowsMeasured())) {
+    if (!anchor) {
+      return false;
+    }
+    const ready = anchor.prepended || rowsMeasured();
+    if (!ready && !committed) {
       return false;
     }
     const changed = anchor.prepended && this.measurePrependedRows();
@@ -99,6 +104,10 @@ export class TranscriptPrependAnchor {
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
+    // Committed geometry can move before all row receipts arrive; retain its target meanwhile.
+    if (!ready) {
+      return moved;
+    }
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }

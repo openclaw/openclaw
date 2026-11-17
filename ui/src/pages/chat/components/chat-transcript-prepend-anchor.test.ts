@@ -70,6 +70,38 @@ it("retains the reader without admitting a pending history prepend", () => {
   expect(bubble.getBoundingClientRect().top).toBe(90);
 });
 
+it("restores a committed reader while measurements settle without requesting idle commits", () => {
+  const { scroller, bubble, instance, anchor } = fixture();
+  scroller.scrollTop = 200;
+  let contentTop = 290;
+  bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.retainReader(scroller);
+
+  contentTop += 40;
+  expect(anchor.update(instance, unmeasuredRows)).toBe(false);
+  expect(scroller.scrollTop).toBe(200);
+  expect(anchor.update(instance, unmeasuredRows, true)).toBe(true);
+  expect(scroller.scrollTop).toBe(240);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+  const idleCommits = Array.from({ length: 2 }, () =>
+    anchor.update(instance, unmeasuredRows, true),
+  );
+  expect(idleCommits).toEqual([false, false]);
+  expect(anchor.messageKey).toBe("visible");
+
+  contentTop += 10;
+  expect(anchor.update(instance, unmeasuredRows, true)).toBe(true);
+  expect(scroller.scrollTop).toBe(250);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+  const settledCommits = Array.from({ length: 3 }, () =>
+    anchor.update(instance, measuredRows, true),
+  );
+  expect(settledCommits).toEqual([true, true, false]);
+  expect(anchor.messageKey).toBeNull();
+});
+
 it("stops requesting commits when a reachable scroll correction makes no progress", () => {
   const { scroller, bubble, virtualizer, instance, anchor } = fixture();
   scroller.scrollTop = 200;
