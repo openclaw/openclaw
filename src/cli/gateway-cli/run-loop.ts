@@ -17,7 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { registerSignalExitOwner } from "../signal-exit-barrier.js";
+import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
@@ -1041,6 +1041,8 @@ export async function runGatewayLoop(params: {
     updateSuccessor,
     request,
   });
+  // These handlers own SIGINT/SIGTERM now; retire the startup owner in the same turn.
+  handOffGatewayStartupSignals();
   const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({
     decision: restartDecision,
     ownsProcessLifecycle: params.ownsProcessLifecycle === true,

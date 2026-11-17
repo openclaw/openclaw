@@ -3,9 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import {
+  cliMessageExitEntrypoints,
+  gatewayDirectStopEntrypoints,
+} from "../cli-entrypoint.test-support.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
 const fixtures = createProcessFixtures("restart liveness cleanup failed", 5_000);
@@ -216,4 +220,89 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     expect(await fixture.closed, fixture.output()).toEqual([1, null]);
     expect(fixture.output()).toContain("fixture startup refused");
   });
+});
+
+const startupStopScript = `
+  import { once } from "node:events";
+  import { acquireGatewayLock } from ${moduleUrl(gatewayDirectStopEntrypoints.gatewayLock)};
+  import { withCliCommandCleanup, withCliProcessScope } from ${moduleUrl(gatewayDirectStopEntrypoints.cleanupScope)};
+  import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
+  import { runCliWithExitFinalization } from ${moduleUrl(cliMessageExitEntrypoints.oneShotExit)};
+  await withCliProcessScope(() => runCliWithExitFinalization({
+    onError: (error) => console.error(error),
+    run: () => withCliCommandCleanup(true, async () => {
+      // An earlier startup step holds state custody, as startup maintenance does.
+      const custody = await acquireGatewayLock({ databaseAccess: "none" });
+      process.stdout.write("custody-held\\n");
+      await once(process.stdin, "data");
+      await custody.release();
+      await runGatewayLoop({
+        ownsProcessLifecycle: true,
+        start: async () => {
+          throw new Error("gateway startup continued after a stop");
+        },
+      });
+    }),
+  }));
+`;
+
+describe("gateway run stop before the run loop owns signals", { timeout: 60_000 }, () => {
+  const posixIt = process.platform === "win32" ? it.skip : it;
+
+  posixIt.each(["SIGTERM", "SIGINT"] as const)(
+    "releases startup custody and exits with the %s status",
+    async (signal) => {
+      const directory = fixtures.make("openclaw-startup-stop-");
+      const configPath = path.join(directory, "openclaw.json");
+      fs.writeFileSync(configPath, "{}");
+      const env = {
+        PATH: process.env.PATH,
+        HOME: fs.mkdtempSync(path.join(directory, "home-")),
+        TMPDIR: directory,
+        OPENCLAW_STATE_DIR: path.join(directory, "state"),
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_NO_RESPAWN: "1",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        TSX_DISABLE_CACHE: "1",
+        ESBUILD_WORKER_THREADS: "0",
+      };
+      const child = spawn(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", startupStopScript],
+        { env, stdio: ["pipe", "pipe", "pipe"] },
+      );
+      const tracked = fixtures.ownChild(child);
+      const output = () => tracked.output.stdout + tracked.output.stderr;
+      // Output listeners run after the tracker's, so each check sees the new chunk.
+      const reached = (text: string) =>
+        Promise.race([
+          new Promise<void>((resolve) => {
+            const check = () => {
+              if (output().includes(text)) {
+                resolve();
+              }
+            };
+            child.stdout.on("data", check);
+            child.stderr.on("data", check);
+            check();
+          }),
+          tracked.closed,
+        ]);
+      await reached("custody-held");
+      const { ownerLockPath, stateLockPath } = resolveGatewayLockPaths(env);
+      const heldLocks = () => [ownerLockPath, stateLockPath].filter((file) => fs.existsSync(file));
+      expect(heldLocks(), output()).toEqual([ownerLockPath, stateLockPath]);
+      expect(child.kill(signal)).toBe(true);
+      await reached(`Command interrupted by ${signal}.`);
+      // Without a startup owner the signal already ended the child; ignore its closed stdin.
+      child.stdin.on("error", () => {});
+      child.stdin.end("continue\n");
+      const exit = await tracked.closed;
+      expect({ exit, heldLocks: heldLocks() }, output()).toEqual({
+        exit: [signal === "SIGINT" ? 130 : 143, null],
+        heldLocks: [],
+      });
+      expect(output()).not.toContain("gateway startup continued after a stop");
+    },
+  );
 });
