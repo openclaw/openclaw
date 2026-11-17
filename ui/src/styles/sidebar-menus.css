@@ -47,6 +47,12 @@
   overscroll-behavior: contain;
 }
 
+/* A scroller's own scrollbar is not clipped by its border radius, so the thumb
+   travels only along the straight edge between the rounded corners. */
+.session-menu__list-submenu + .oc-menu::-webkit-scrollbar-track {
+  margin-block: var(--menu-radius);
+}
+
 .people-menu__submenu + .oc-menu {
   width: min(320px, calc(100vw - 24px));
 }
