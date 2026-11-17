@@ -148,7 +148,9 @@ it.skipIf(process.platform === "win32").each(["directory", "token"] as const)(
       });
     try {
       await expect(instance.releaseAsync()).rejects.toThrow(
-        /identity changed|changed before retirement/,
+        replaced === "directory"
+          ? "Plugin source capture directory ownership is unknown"
+          : /identity changed/,
       );
       expect(changed).toBe(true);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("replacement bytes");
