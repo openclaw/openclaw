@@ -660,7 +660,7 @@ export async function executePreparedReplyRun(
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   if (!inputProvenance || inputProvenance.kind === "external_user") {
-    transferRequesterProfile(ctx, followupRun);
+    transferRequesterProfile(ctx, followupRun, followupRun.run);
     bindReplyInputChannel(
       followupRun.run,
       ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),

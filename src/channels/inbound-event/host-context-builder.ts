@@ -3,7 +3,10 @@ import {
   bindCommandOwnerAuthority,
   CommandOwnerRevokedError,
 } from "../../auto-reply/command-owner-authority.js";
-import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
+import {
+  bindRequesterProfile,
+  bindUnlinkedChannelRequester,
+} from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
@@ -130,6 +133,23 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           const requester = batch.at(-1)?.requesterProfile;
+          // Retain an actual absent linkage result, not the later absence of a live grant.
+          // Mixed/batched ingress keeps ordinary explicit-user validation.
+          if (
+            batch.length === 1 &&
+            principal &&
+            !requester &&
+            !batch[0]?.operatorAuthority &&
+            binding.inboundEventKind === "user_request" &&
+            built.SenderId === principal.senderId &&
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
+            built.OriginatingChannel === principal.channelId
+          ) {
+            bindUnlinkedChannelRequester(
+              built,
+              () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
+            );
+          }
           let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
           if (
             principal &&
