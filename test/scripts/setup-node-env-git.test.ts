@@ -101,12 +101,19 @@ if [[ "\${FIXTURE_UNRELATED_SOURCE_ERROR:-}" == true && "$*" == *' update' && "$
   echo "Unrelated repository changed its Label" >&2
   exit 100
 fi
+if [[ "$*" == *' update' ]]; then
+  updates=0
+  [[ ! -f "$FIXTURE_CAPABLE.updates" ]] || read -r updates < "$FIXTURE_CAPABLE.updates"
+  printf '%s\\n' "$((updates + 1))" > "$FIXTURE_CAPABLE.updates"
+fi
 if [[ "$*" == *'--no-install-recommends git' ]]; then
   attempt=0
   [[ ! -f "$FIXTURE_CAPABLE.attempts" ]] || read -r attempt < "$FIXTURE_CAPABLE.attempts"
   attempt=$((attempt + 1))
   printf '%s\\n' "$attempt" > "$FIXTURE_CAPABLE.attempts"
   (( attempt > \${FIXTURE_INSTALL_FAILURES:-0} )) || exit 100
+  read -r updates < "$FIXTURE_CAPABLE.updates"
+  (( updates > \${FIXTURE_STALE_INDEX_UPDATES:-0} )) || exit 0
   [[ "\${FIXTURE_POST_FAIL:-}" == true ]] || : > "$FIXTURE_CAPABLE"
 fi`,
     );
@@ -218,6 +225,22 @@ fi`,
       expect(commands.match(/^apt .* install /gm)).toHaveLength(installs);
       expect(commands.match(/^sleep 2$/gm)).toHaveLength(installs - 1);
       expect(commands.match(/^timeout /gm)).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    { staleUpdates: "1", status: 0 },
+    { staleUpdates: "3", status: 1 },
+  ])(
+    "verifies Git after successful apt commands with $staleUpdates stale index updates",
+    ({ staleUpdates, status }) => {
+      const setup = fixture();
+      const result = setup.run({ FIXTURE_STALE_INDEX_UPDATES: staleUpdates });
+      expect(result.status, result.stderr).toBe(status);
+      expect(existsSync(setup.capable)).toBe(status === 0);
+      if (status !== 0) {
+        expect(result.stderr).toContain("Git upgrade did not provide --no-lazy-fetch support");
+      }
     },
   );
 
