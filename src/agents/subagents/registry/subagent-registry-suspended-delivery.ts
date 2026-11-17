@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { recordRequiredCompletionFailure } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
@@ -91,6 +92,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
+  // Retiring the obligation is the final failure: the requester sees it, not only the log.
+  await recordRequiredCompletionFailure(entry, "expired");
   params.warn("subagent suspended delivery discarded", {
     reason: "expired",
     runId: entry.runId,
