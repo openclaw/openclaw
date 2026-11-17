@@ -173,6 +173,7 @@ struct BundledRuntimeTests {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "seed-fixture"])
+        let environment = ["HOME": home.path, "PATH": "/usr/bin:/bin", "SHELL": "/bin/zsh"]
         let state = profile.stateDirectoryURL(homeDirectory: home)
         let runtimeRoot = state.appendingPathComponent("runtime")
         let shellProfile = home.appendingPathComponent(".zshrc")
@@ -187,8 +188,12 @@ struct BundledRuntimeTests {
                 bundle: bundle,
                 profile: profile,
                 homeDirectory: home,
-                environment: [:])
-            _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home, environment: [:])
+                environment: environment)
+            let installedShellText = try String(contentsOf: shellProfile, encoding: .utf8)
+            #expect(installedShellText.hasPrefix("# existing settings\n"))
+            _ = try await BundledRuntime.seed(
+                bundle: bundle, profile: profile, homeDirectory: home, environment: environment)
+            #expect(try String(contentsOf: shellProfile, encoding: .utf8) == installedShellText)
             #expect(seeded.root.path == runtimeRoot.appendingPathComponent("build-\(index)").path)
             #expect(try FileManager.default.destinationOfSymbolicLink(
                 atPath: runtimeRoot.appendingPathComponent("current").path) == "build-\(index)")
@@ -204,11 +209,18 @@ struct BundledRuntimeTests {
             #expect(result.success)
             #expect(result
                 .stdout == "seed-fixture\n\(runtimeRoot.path)/current/lib/libsqlite3.dylib\nargument with spaces\n")
+            let discovered = await ShellExecutor.runDetailed(
+                command: ["/bin/zsh", "-ic", "command -v openclaw; openclaw \"argument with spaces\""],
+                cwd: nil,
+                env: environment,
+                timeout: 5)
+            #expect(discovered.success)
+            #expect(discovered.stdout == home.appendingPathComponent(".openclaw/bin/openclaw").path + "\n" + result
+                .stdout)
         }
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: runtimeRoot.appendingPathComponent("previous").path) == "build-0")
         let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
-        #expect(shellText == "# existing settings\n")
 
         let brokenApp = home.appendingPathComponent("Broken.app")
         _ = try self.makeBundle(
@@ -222,8 +234,13 @@ struct BundledRuntimeTests {
             ofItemAtPath: brokenApp.appendingPathComponent("Contents/Resources/runtime/bin/bun").path)
         let broken = try #require(Bundle(url: brokenApp))
         await #expect(throws: BundledRuntime.SeedError.self) {
-            try await BundledRuntime.seed(bundle: broken, profile: profile, homeDirectory: home, environment: [:])
+            try await BundledRuntime.seed(
+                bundle: broken,
+                profile: profile,
+                homeDirectory: home,
+                environment: environment)
         }
+        #expect(try String(contentsOf: shellProfile, encoding: .utf8) == shellText)
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: runtimeRoot.appendingPathComponent("current").path) == "build-1")
         #expect(try FileManager.default.contentsOfDirectory(atPath: runtimeRoot.path)
