@@ -13,8 +13,8 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
  */
 
 export const GBRAIN_SERVER_NAME = "gbrain";
-export const GBRAIN_DEFAULT_PORT = 3131;
-export const GBRAIN_INSTALL_SPEC = "github:garrytan/gbrain#stable";
+const GBRAIN_DEFAULT_PORT = 3131;
+const GBRAIN_INSTALL_SPEC = "github:garrytan/gbrain#stable";
 const KEY_NAME = "openclaw";
 
 export type GbrainMcpServerEntry = {
@@ -30,7 +30,7 @@ export type Health =
   | { kind: "not-gbrain" }
   | { kind: "down" };
 
-export type CommandResult = { code: number | null; stdout: string; stderr: string };
+type CommandResult = { code: number | null; stdout: string; stderr: string };
 
 export type ConnectDeps = {
   home: string;
