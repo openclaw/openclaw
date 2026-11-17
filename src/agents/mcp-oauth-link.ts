@@ -1,11 +1,18 @@
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOperatorMcpOAuthConnection } from "../plugins/mcp-auth-status.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { hasRegisteredOAuthRedirect } from "./mcp-oauth-provider.js";
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "./mcp-oauth-store.js";
-import { completeOAuthCallback, startMcpOAuthAuthorization } from "./mcp-oauth.js";
+import {
+  completeOAuthCallback,
+  readMcpOAuthCredentialsStatus,
+  startMcpOAuthAuthorization,
+} from "./mcp-oauth.js";
 import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export const MCP_OAUTH_LINK_CALLBACK_PATH = "/oauth/mcp/callback";
@@ -62,6 +69,7 @@ export async function startOperatorMcpOAuthLink(
 ): Promise<McpOAuthLinkStart> {
   const { identity, config } = resolveConnection(params, connection);
   const redirectUrl = resolveMcpOAuthLinkRedirectUrl(params.cfg);
+  let started: McpOAuthLinkStart | "pinned";
   try {
     params.assertCurrent?.();
     const stored = await readMcpOAuthStore(identity.storeKey);
@@ -73,24 +81,47 @@ export async function startOperatorMcpOAuthLink(
       stored.codeVerifier &&
       (await readMcpOAuthPendingAuthorization(state)) === identity.storeKey;
     params.assertCurrent?.();
-    const result =
-      pending && stored.lastAuthorizationUrl
-        ? { status: "redirect" as const, authorizationUrl: stored.lastAuthorizationUrl }
-        : await startMcpOAuthAuthorization(identity, config, { redirectUrl });
-    params.assertCurrent?.();
-    if (result.status === "authorized") {
-      return { status: "authorized", serverName: params.serverName };
+    // Saved tokens keep their original client registration. A client registered for another
+    // callback cannot complete this redirect, so stop before publishing a doomed attempt.
+    const client = stored.clientInformation;
+    const pinnedToOtherCallback =
+      !pending &&
+      stored.tokens !== undefined &&
+      (await readMcpOAuthCredentialsStatus(identity, stored)).state !== "authorized" &&
+      client !== undefined &&
+      "redirect_uris" in client &&
+      Array.isArray(client.redirect_uris) &&
+      !hasRegisteredOAuthRedirect(client.redirect_uris, redirectUrl);
+    if (pinnedToOtherCallback) {
+      started = "pinned";
+    } else {
+      const result =
+        pending && stored.lastAuthorizationUrl
+          ? { status: "redirect" as const, authorizationUrl: stored.lastAuthorizationUrl }
+          : await startMcpOAuthAuthorization(identity, config, { redirectUrl });
+      params.assertCurrent?.();
+      started =
+        result.status === "authorized"
+          ? { status: "authorized", serverName: params.serverName }
+          : {
+              status: "redirect",
+              serverName: params.serverName,
+              authorizationUrl: result.authorizationUrl,
+              redirectUrl,
+              usesPublicOrigin: Boolean(resolveGatewayPublicOrigin(params.cfg)),
+            };
     }
-    return {
-      status: "redirect",
-      serverName: params.serverName,
-      authorizationUrl: result.authorizationUrl,
-      redirectUrl,
-      usesPublicOrigin: Boolean(resolveGatewayPublicOrigin(params.cfg)),
-    };
   } catch {
     throw new Error("MCP sign-in could not be started. Try connecting again.");
   }
+  if (started !== "pinned") {
+    return started;
+  }
+  throw new Error(
+    `MCP server "${params.serverName}" was signed in through a different callback, so a sign-in link cannot renew it. ` +
+      `Run ${formatCliCommand(`openclaw mcp logout ${quoteCliArg(params.serverName)}`)} and connect again, ` +
+      "or sign in from the terminal with the Gateway stopped to keep the current credentials until renewal.",
+  );
 }
 
 /** Complete only a link-flow callback for this shared identity, never a Settings attempt. */

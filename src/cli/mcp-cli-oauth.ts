@@ -99,15 +99,16 @@ export function registerMcpOAuthCommands(mcp: Command, { loadServer, fail }: Mcp
         runLocal: async () => {
           const server = await loadServer(name);
           if (asRecord(server.oauth)?.identity === "per-requester") {
-            return fail(
+            fail(
               `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,
             );
           }
           const resolved = resolveMcpTransportConfig(name, server);
-          if (!resolved || resolved.kind !== "http") {
-            return fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
-          }
-          await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
+          const url =
+            resolved?.kind === "http"
+              ? resolved.url
+              : fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
+          await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, url));
           defaultRuntime.log(terminalText`MCP OAuth credentials cleared for "${name}".`);
         },
       }),

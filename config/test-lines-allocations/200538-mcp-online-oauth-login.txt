@@ -1,0 +1,8 @@
+# Connect OAuth MCP servers while the Gateway runs (#200538): red-on-main regressions at each owning
+# boundary — mcp.authLogin link mode and pasted-redirect completion through the real Gateway callback,
+# Settings-state rejection at the shared callback, online CLI login/logout routing, the owner-only
+# <server>__connect tool (and its absence for non-owner/group/tainted turns), the openclaw tool returning
+# the link only after the Gateway applies the committed server, and the pinned-client refusal that keeps
+# saved credentials. The mcp.authLogin suite harness moved to a test-support file to stay under the
+# 1000-line test cap.
+361

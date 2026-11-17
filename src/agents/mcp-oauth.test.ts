@@ -16,6 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { startOperatorMcpOAuthLink } from "./mcp-oauth-link.js";
 import {
   readMcpOAuthPendingAuthorization as readPending,
   readMcpOAuthStore as readStoreFor,
@@ -189,6 +190,41 @@ describe("MCP OAuth provider", () => {
   beforeEach(() => {
     authMock.mockReset();
   });
+
+  itWithHome(
+    "keeps credentials when a sign-in link cannot renew a client pinned to another callback",
+    async () => {
+      const url = "https://mcp.example.com/mcp";
+      const { storeKey } = operatorMcpOAuthIdentity("docs", url);
+      // Signed in earlier by the offline CLI loopback; the provider now asks for more scope.
+      const saved = {
+        tokens: { access_token: "synthetic-access", token_type: "Bearer" },
+        clientInformation: {
+          client_id: "cli-client",
+          redirect_uris: ["http://localhost:8989/oauth/callback"],
+        },
+        pendingAuthorizationChallenge: {
+          requiresAuthorization: true as const,
+          scope: "docs.write",
+        },
+      };
+      seedMcpOAuthStoreForTest(storeKey, saved);
+      const cfg: OpenClawConfig = {
+        gateway: { port: 18790 },
+        mcp: { servers: { docs: { url, auth: "oauth" } } },
+      };
+      await expect(startOperatorMcpOAuthLink({ cfg, serverName: "docs" })).rejects.toThrow(
+        /signed in through a different callback.*openclaw mcp logout docs/,
+      );
+      const after = await readStoreFor(storeKey);
+      expect(after).toMatchObject({
+        tokens: saved.tokens,
+        clientInformation: saved.clientInformation,
+      });
+      expect(after.lastAuthorizationUrl).toBeUndefined();
+      expect(authMock).not.toHaveBeenCalled();
+    },
+  );
 
   itWithHome("reuses a valid session without persisting a redirect", async () => {
     await saveTokens(makeTokens("stored-access", "stored-refresh"));

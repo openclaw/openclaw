@@ -255,6 +255,7 @@ it("routes login and logout through a live Gateway owner and prints its sign-in 
       ownerId: "fixture-gateway-owner",
       createdAt: new Date(0).toISOString(),
       port: 18789,
+      configPath: process.env.OPENCLAW_CONFIG_PATH ?? "",
     };
     vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(owner);
     vi.spyOn(gatewayLock, "readLockPayloadSync").mockReturnValue(owner);

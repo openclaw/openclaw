@@ -2,13 +2,14 @@ import { setImmediate as yieldToScheduler } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
 import {
   clearRuntimeConfigSnapshot,
   hashRuntimeConfigValue,
   setRuntimeConfigAppliedHash,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -52,13 +53,24 @@ beforeEach(() => {
   startOperatorLink.mockReset();
   // Default: the delegated commit is already the applied runtime revision.
   readCommittedConfig.mockReset();
-  readCommittedConfig.mockResolvedValue({
-    exists: true,
-    valid: true,
-    sourceConfig: {},
-  } as ConfigFileSnapshot);
+  readCommittedConfig.mockResolvedValue(committedSnapshot({}));
   setRuntimeConfigAppliedHash(hashRuntimeConfigValue({}));
 });
+
+function committedSnapshot(config: OpenClawConfig) {
+  return createConfigFileSnapshot({
+    path: "/synthetic/openclaw.json",
+    exists: true,
+    raw: JSON.stringify(config),
+    parsed: config,
+    sourceConfig: config,
+    runtimeConfig: config,
+    valid: true,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
+}
 
 type Options = Omit<Parameters<typeof createTools>[0], "sessionAgentId">;
 const runSessionKey = "agent:main:main";
@@ -93,7 +105,7 @@ it("returns the sign-in link only after the Gateway applies the committed server
         setRuntimeConfigSnapshot(committed);
         setRuntimeConfigAppliedHash(hashRuntimeConfigValue(committed));
       }
-      return { exists: true, valid: true, sourceConfig: committed } as ConfigFileSnapshot;
+      return committedSnapshot(committed);
     });
     return { reply: "[openclaw] done: config.set", action: "none" };
   });
