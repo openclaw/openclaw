@@ -7,11 +7,14 @@ import { withoutRequiredSessionPlacement } from "../../agents/session-placement-
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import { authorizeTurn, TurnWithheldError } from "../../gateway/operator-run-recovery.js";
+import {
+  authorizeTurn,
+  toTurnWithheld,
+  TurnWithheldError,
+} from "../../gateway/operator-run-recovery.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -198,22 +201,18 @@ export function createFollowupRunner(
         await deliverProgress(turn, [payload], "block");
       };
       // Queued input runs on its saved origin and current policy, not the enqueuing request.
-      const internal: InternalFollowupRun = queued;
-      const originFacts = internal.originFacts;
+      // An origin beyond the recovery bounds keeps its live authority.
+      const { originFacts }: InternalFollowupRun = queued;
       const gateway = resolveGatewayContext?.();
-      // An unsaveable origin keeps its live authority until its producers save facts.
-      if (originFacts && originFacts.kind !== "unavailable" && gateway) {
-        restoredOrigin = await authorizeTurn({ facts: originFacts, context: gateway });
-        queued = { ...queued, operatorAuthority: restoredOrigin.authority };
-      } else {
-        try {
+      try {
+        if (originFacts && originFacts.kind !== "unavailable" && gateway) {
+          restoredOrigin = await authorizeTurn({ facts: originFacts, context: gateway });
+          queued = { ...queued, operatorAuthority: restoredOrigin.authority };
+        } else {
           queued.operatorAuthority?.assertCurrent();
-        } catch (error) {
-          // A retained live origin that no longer passes is withheld; a policy outage retries.
-          throw isOperatorAuthorityUnavailable(error)
-            ? error
-            : new TurnWithheldError(formatErrorMessage(error), { cause: error });
         }
+      } catch (error) {
+        throw toTurnWithheld(error);
       }
       const admission = await prepareReplyAgentTurn({
         queued,

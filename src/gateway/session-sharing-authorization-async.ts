@@ -18,7 +18,6 @@ import {
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
   intersectOperatorScopes,
@@ -62,9 +61,6 @@ import {
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 
-/** A definitive session-principal refusal; restore owners show it as withheld. */
-const refused = (message: string) => new GatewayOperatorRecoveryAuthorizationError(message);
-
 /** An explicit non-human assignment must not fall back to a former human creator. */
 export function resolveSessionSystemTurnProfileId(
   entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
@@ -97,31 +93,26 @@ export async function prepareSessionPrincipalRunAuthority(
       sourceAuthority: source,
     });
     if (!admitted) {
-      throw refused("Session principal has no current run authority.");
+      throw new Error("Session principal has no current run authority.");
     }
     const original = source.recordedOperatorAuthority;
-    if (!original?.recoverySnapshot && !original?.channelRecoverySource) {
-      const principal = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...principal,
-        sessionPrincipalProfileId: params.profileId,
-        get modelPolicy() {
-          return principal.modelPolicy;
-        },
-      });
-    }
-    if (original) {
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
+    const current = admitted.authority;
+    admitted.authority = createAdmittedRunOperatorAuthority({
+      ...current,
+      ...(original && {
         scopes: intersectOperatorScopes(current.scopes, original.scopes),
         gatewayAccessGrant: original.gatewayAccessGrant,
         recoverySnapshot: original.recoverySnapshot,
-        get modelPolicy() {
-          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
-    }
+      }),
+      // A principal without its own recovery facts is saved and restored by profile.
+      ...(!original?.recoverySnapshot &&
+        !original?.channelRecoverySource && { sessionPrincipalProfileId: params.profileId }),
+      get modelPolicy() {
+        return original
+          ? intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy)
+          : current.modelPolicy;
+      },
+    });
     return admitted;
   } catch (error) {
     if (admitted) {
@@ -169,7 +160,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
-        throw refused("Session principal is no longer the Gateway owner.");
+        throw new Error("Session principal is no longer the Gateway owner.");
       }
       return ["operator.admin"];
     }
@@ -188,7 +179,7 @@ async function prepareSessionPrincipalRunAccess(params: {
             profile.githubLogin ?? null,
           )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
-      throw refused("Session principal has no current run authority.");
+      throw new Error("Session principal has no current run authority.");
     }
     return scopes;
   };
@@ -239,7 +230,7 @@ async function prepareSessionPrincipalRunAccess(params: {
         }
         // readScopes validates the retained identity before consuming its current role.
         if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-          throw refused("Session principal has no current run authority.");
+          throw new Error("Session principal has no current run authority.");
         }
       },
       params.preserveRecordedSource ? undefined : { synchronousCheck: true },
@@ -261,16 +252,16 @@ async function prepareSessionPrincipalRunAccess(params: {
             target.storePath !== params.storePath &&
             !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
         ) {
-          throw refused("Session is unavailable for this principal.");
+          throw new Error("Session is unavailable for this principal.");
         }
       },
     });
     sharing = resolved.authorization;
     if (resolved.error) {
-      throw refused(resolved.error.message);
+      throw new Error(resolved.error.message);
     }
     if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
-      throw refused("Session is unavailable for this principal.");
+      throw new Error("Session is unavailable for this principal.");
     }
     const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;
     // This synthetic principal's sharing owner has no caller-supplied policy callbacks.

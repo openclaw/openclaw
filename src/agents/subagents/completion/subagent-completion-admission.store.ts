@@ -56,23 +56,14 @@ type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-/** A refused origin names its reason and keeps the results readable; others get the generic copy. */
-export function renderChildCompletionFailure(
-  reason: string,
-  batch: readonly SubagentRunRecord[],
-): string {
-  const withheldAt = reason.indexOf("withheld: ");
-  if (withheldAt < 0) {
-    return expectDefined(
-      renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-      "child completion failure notice",
-    );
-  }
-  const results = batch.flatMap((member) => {
-    const text = member.completion?.resultText ?? member.completion?.fallbackResultText;
-    return text ? [text] : [];
-  });
-  return [`⚠️ Child result ${reason.slice(withheldAt)}`, ...results].join("\n\n");
+/** A withheld origin reuses the `withheld: <reason>` notice and keeps the results readable. */
+export function renderChildCompletionFailure(reason: string, batch: readonly SubagentRunRecord[]) {
+  const notice = /withheld: .*/s.exec(reason)?.[0];
+  const results = batch.map(
+    ({ completion }) => completion?.resultText ?? completion?.fallbackResultText,
+  );
+  const copy = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
+  return notice ? [notice, ...results].filter(Boolean).join("\n\n") : expectDefined(copy, "copy");
 }
 
 async function recordRequiredCompletionFailure(

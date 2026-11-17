@@ -3,8 +3,8 @@ import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/sessi
 import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import {
   authorizeTurn,
+  toTurnWithheld,
   TurnWithheldError,
-  withheldOnRefusal,
 } from "../../../gateway/operator-run-recovery.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -16,7 +16,6 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
 import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -43,7 +42,7 @@ export function captureSubagentOriginFacts(
  * A completion runs under its saved origin facts and current policy, never a live closure.
  * A Gateway row without facts was written by an older build: it is withheld, never widened.
  */
-export async function runWithSubagentOrigin<T>(
+async function runWithSubagentOrigin<T>(
   entry: SubagentRunRecord,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -59,7 +58,6 @@ export async function runWithSubagentOrigin<T>(
   if (!facts) {
     throw new TurnWithheldError("the origin of this child run was not saved");
   }
-  // A temporary restore outage keeps the result pending for the preparation retry path.
   const restored = await (
     facts.kind === "system"
       ? Promise.resolve(undefined)
@@ -67,11 +65,7 @@ export async function runWithSubagentOrigin<T>(
         ? restoreSessionPrincipal(entry, facts.profileId, context)
         : authorizeTurn({ facts, context })
   ).catch((error: unknown) => {
-    throw error instanceof TurnWithheldError
-      ? error
-      : new SubagentAnnouncePreparationConflictError("Subagent completion origin is unavailable", {
-          cause: error,
-        });
+    throw toTurnWithheld(error);
   });
   try {
     // Delivery never inherits the ambient caller's request scope or client.
@@ -145,17 +139,15 @@ async function restoreSessionPrincipal(
     sessionKey: entry.requesterSessionKey,
     storePath: entry.requesterStorePath,
   };
-  return await withheldOnRefusal(async () => {
-    const requester = await readSessionEntryReadOnlyInWorker(scope);
-    if (!requester?.sessionId) {
-      throw new TurnWithheldError("the requester chat is gone");
-    }
-    return await prepareSessionPrincipalRunAuthority({
-      context,
-      ...scope,
-      profileId,
-      sessionId: requester.sessionId,
-      sessionPrincipal: true,
-    });
+  const requester = await readSessionEntryReadOnlyInWorker(scope);
+  if (!requester?.sessionId) {
+    throw new TurnWithheldError("the requester chat is gone");
+  }
+  return await prepareSessionPrincipalRunAuthority({
+    context,
+    ...scope,
+    profileId,
+    sessionId: requester.sessionId,
+    sessionPrincipal: true,
   });
 }

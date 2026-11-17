@@ -1,4 +1,3 @@
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   createAdmittedRunOperatorAuthority,
@@ -68,7 +67,6 @@ import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
@@ -622,12 +620,19 @@ export async function captureGatewayOperatorContinuation(
   };
 }
 
-/** A definitive refusal of detached work; the caller shows it as `withheld: <reason>`. */
+/** Detached work whose origin cannot be restored; the caller shows it as `withheld: <reason>`. */
 export class TurnWithheldError extends Error {
   constructor(reason: string, options?: ErrorOptions) {
     super(`withheld: ${reason}`, options);
     this.name = "TurnWithheldError";
   }
+}
+
+/** A detached result that cannot be authorized is withheld with the reason, never retried. */
+export function toTurnWithheld(error: unknown) {
+  return error instanceof TurnWithheldError
+    ? error
+    : new TurnWithheldError(formatErrorMessage(error), { cause: error });
 }
 
 /**
@@ -644,32 +649,9 @@ export async function authorizeTurn(params: {
   if (!facts || facts.kind === "unavailable") {
     throw new TurnWithheldError("the origin of this work was not saved");
   }
-  return await withheldOnRefusal(
-    () =>
-      restoreGatewayQueuedOperatorRecovery({
-        source: facts,
-        context: params.context,
-        assertCurrent: () => signal?.throwIfAborted(),
-      }),
-    signal,
-  );
-}
-
-/** Only a definitive refusal becomes `withheld`; any other failure stays retryable. */
-export async function withheldOnRefusal<T>(restore: () => Promise<T>, signal?: AbortSignal) {
-  try {
-    return await restore();
-  } catch (error) {
-    const refused = collectNestedErrorCandidates(error).find(
-      (candidate) =>
-        candidate instanceof TurnWithheldError ||
-        candidate instanceof GatewayOperatorRecoveryAuthorizationError ||
-        candidate instanceof GatewayOperatorAccessDeniedError ||
-        candidate instanceof SessionMutationAuthorizationChangedError,
-    );
-    if (signal?.aborted || !refused || refused instanceof TurnWithheldError) {
-      throw refused ?? error;
-    }
-    throw new TurnWithheldError(formatErrorMessage(refused), { cause: error });
-  }
+  return await restoreGatewayQueuedOperatorRecovery({
+    source: facts,
+    context: params.context,
+    assertCurrent: () => signal?.throwIfAborted(),
+  });
 }
