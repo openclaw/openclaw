@@ -1,1 +1,5 @@
-463
+# +600 net LF test lines against f1d7daedced8b1d34e6f368bd481e66884d1c297.
+# Preserve the existing generic retired-claim final-write regression alongside
+# native admission, stored-source continuation and provider-review final effects.
+# The ordinary allowance covers 400; allocate only the remaining verified 200.
+200
