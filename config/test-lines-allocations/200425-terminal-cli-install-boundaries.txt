@@ -12,10 +12,10 @@
 # The review correction adds 27 lines by parameterizing the registration fixture;
 # it proves differing OPENCLAW_HOME/state/config/profile survive setup and new-shell execution,
 # with original config bytes and state-directory contents unchanged.
-# Reviewed credit: 411 (98 original + 286 desktop + 27 custom-home regression).
+# Reviewed credit: 426 (98 original + 286 desktop + 27 custom-home + 15 missing-home).
 # Missing-home review adds 15 lines: registration reuse (6) verifies absent home stays
 # absent with inherited environment and launcher bytes preserved; daemon reuse (9)
 # verifies a real non-directory scan root still fails with ENOTDIR and preserves data.
-# Additional 15 awaits parent acceptance; proposed total 426 above the unchanged
-# 400-line allowance, with no extra headroom.
+# Parent accepted the exact total 426 above the unchanged 400-line allowance.
+# No spare or future credit.
 426
