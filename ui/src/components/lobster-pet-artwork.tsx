@@ -66,6 +66,12 @@ const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.El
 <path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#f6f1e8" stroke-width="4.5" stroke-linecap="round"></path>
 <path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#c41f2b" stroke-width="4.5" stroke-dasharray="3 3"></path>
 `),
+  clawnadian: staticSprite(`
+<path class="lob-hockey-stick" d="M97 66 L100.6 66.5 L111.6 15.5 L108 14.6 Z" fill="#d6a15d"></path>
+<path class="lob-hockey-stick" d="M99.6 64 L110 16" fill="none" stroke="#a8733a" stroke-width="1" stroke-linecap="round"></path>
+<path class="lob-hockey-stick" d="M108 14.6 L111.6 15.5 Q114.5 12.8 119.5 11.2 Q121.6 10.2 120.6 7.6 Q115 7.8 108.6 11 Z" fill="#d6a15d"></path>
+<path class="lob-hockey-stick" d="M111.4 11.4 L113 14.4 M113.9 10.2 L115.5 13.1 M116.4 9.2 L118 12 M118.9 8.3 L120.4 10.8" fill="none" stroke="#26252b" stroke-width="1.5" stroke-linecap="round"></path>
+`),
 };
 
 // Every registered pattern suppresses freckles. Null entries use geometry or CSS instead of an overlay.
@@ -250,6 +256,32 @@ const PALETTE_PATTERNS: Partial<Record<LobsterPetPaletteId, (() => JSX.Element) 
     <path d="M30 18.5 V25.5 M38 16 V23 M46 14.3 V21.4 M54 13.4 V20.4 M66 13.4 V20.4 M74 14.3 V21.4 M82 16 V23 M90 18.5 V25.5"></path>
   </g>
   <circle cx="16" cy="25.5" r="5" fill="#f6f1e8"></circle>
+</g>
+`),
+  // Toque and buffalo-check flannel belong to the shell; the antennae poke
+  // out under the toque. Plaid bands are pre-clipped to the shirt outline.
+  clawnadian: staticSprite(`
+<g class="lob-clawnadian">
+  <path d="M18 48 L44 47 L60 60 L76 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#c41f2b"></path>
+  <g fill="#1d1416" opacity="0.6">
+    <path d="M18 48 L24 47.8 L24 77.9 L22.6 75.7 L20.7 72.2 L19.1 68.4 L17.8 64.5 L16.8 60.4 L16.2 56.3 L16 52 Z M32 47.5 L40 47.2 L40 93.2 L38 92.1 L35.1 90.1 L32.3 87.8 L32 87.5 Z M48 50.2 L56 56.8 L56 96.4 L53.6 96.3 L50.4 96 L48 95.6 Z M64 56.8 L72 50.2 L72 95.6 L69.6 96 L66.4 96.3 L64 96.4 Z M80 47.2 L88 47.5 L88 87.5 L87.7 87.8 L84.9 90.1 L82 92.1 L80 93.2 Z M96 47.8 L102 48 L104 52 L103.8 56.3 L103.2 60.4 L102.2 64.5 L100.9 68.4 L99.3 72.2 L97.4 75.7 L96 77.9 Z"></path>
+    <path d="M52.6 54 L60 60 L67.4 54 L103.9 54 L103.8 56.3 L103.2 60.4 L102.8 62 L17.2 62 L16.8 60.4 L16.2 56.3 L16.1 54 Z M100.2 70 L99.3 72.2 L97.4 75.7 L96 78 L24 78 L22.6 75.7 L20.7 72.2 L19.8 70 Z M89.5 86 L87.7 87.8 L84.9 90.1 L82 92.1 L79 93.7 L78.4 94 L41.6 94 L41 93.7 L38 92.1 L35.1 90.1 L32.3 87.8 L30.5 86 Z"></path>
+  </g>
+  <path d="M44 47 L60 60 L76 47 Z" fill="#eee3d1"></path>
+  <path d="M46 49 Q60 56 74 49" fill="none" stroke="#d3c5ae" stroke-width="1.2" stroke-linecap="round"></path>
+  <path d="M42 46 L60 60 L49 64 L38 52 Z M78 46 L60 60 L71 64 L82 52 Z" fill="#7d1219"></path>
+  <g fill="#eee3d1"><circle cx="60" cy="70" r="1.5"></circle><circle cx="60" cy="81" r="1.5"></circle></g>
+  <path d="M24 20 C25 6 42 0 60 0 C78 0 95 6 96 20 Q60 6 24 20 Z" fill="#c41f2b"></path>
+  <path d="M27.5 12 Q60 -2 92.5 12 L94.5 16 Q60 2 25.5 16 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#8f1720" stroke-width="1" stroke-linecap="round" opacity="0.55">
+    <path d="M40 4.5 L37 15 M50 1.5 L49 11 M60 0.5 V9.5 M70 1.5 L71 11 M80 4.5 L83 15"></path>
+  </g>
+  <path d="M24 20 Q60 6 96 20 L97 28 Q60 14 23 28 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1" stroke-linecap="round">
+    <path d="M30 18.5 V25.5 M38 16 V23 M46 14.3 V21.4 M74 14.3 V21.4 M82 16 V23 M90 18.5 V25.5"></path>
+  </g>
+  <path d="M59.8 20.3 L59.9 18.6 L58.1 18.7 L58.3 18 L56.5 16.6 L57 16.3 L56.7 15.2 L57.8 15.3 L58 14.9 L58.9 15.7 L58.6 13.7 L59.3 14 L60 12.8 L60.7 14 L61.4 13.7 L61.1 15.7 L62 14.9 L62.2 15.3 L63.3 15.2 L63 16.3 L63.5 16.6 L61.7 18 L61.9 18.7 L60.1 18.6 L60.2 20.3 Z" fill="#c41f2b" transform="translate(60 16.5) scale(1.25) translate(-60 -16.5)"></path>
+  <circle cx="60" cy="-1.5" r="5.5" fill="#f6f1e8"></circle>
 </g>
 `),
   clawtron: staticSprite(`
