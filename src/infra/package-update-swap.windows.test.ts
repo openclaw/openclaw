@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
+  createNativePackageSwapFixture,
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
@@ -15,6 +16,7 @@ const runRetry = retry.retryAsync;
 const backupPackageRoot = packageFilesystem.backupNpmPackageRoot;
 const activatePackageRoot = packageFilesystem.activateStagedNpmPackageRoot;
 const restorePackageRoot = packageFilesystem.restoreNpmPackageRoot;
+const movePackageRoot = packageFilesystem.movePackageRoot;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
   // Select the Windows rename policy without changing fs-safe's native platform.
@@ -30,6 +32,10 @@ beforeEach(() => {
         assertCurrent,
         unjournaled && { ...unjournaled, platform: "win32" },
       ),
+  );
+  vi.spyOn(packageFilesystem, "movePackageRoot").mockImplementation(
+    (source, destination, options) =>
+      movePackageRoot(source, destination, { ...options, platform: "win32" }),
   );
   wait = vi.fn(async (_ms: number) => {});
   vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
@@ -111,6 +117,59 @@ it.each([...renameScenarios, "activation-transient", "activation-persistent"] as
     );
     await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
       transient ? "candidate launcher\n" : "old launcher\n",
+    );
+  },
+);
+
+// pnpm/bun move the whole live project; restoration republishes it after a refused activation.
+it.each(["backup-transient", "backup-persistent", "restore-transient"] as const)(
+  "retries Windows native project root renames: %s",
+  async (scenario) => {
+    const { params, native, packageRoot } = await createNativePackageSwapFixture(
+      dirs.make("swap-native-rename-"),
+    );
+    const live = native.liveProjectRoot;
+    const rename = fs.rename.bind(fs);
+    const attempts = { backup: 0, restore: 0 };
+    const denials = {
+      "backup-transient": { backup: 2, restore: 0 },
+      "backup-persistent": { backup: 16, restore: 0 },
+      "restore-transient": { backup: 0, restore: 2 },
+    }[scenario];
+    const denied = () => Object.assign(new Error("EPERM: package is in use"), { code: "EPERM" });
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from) === native.projectRoot) {
+        // A refused activation forces restoration of the backed-up project.
+        if (scenario === "restore-transient") {
+          throw denied();
+        }
+      } else {
+        const kind = String(from) === live ? "backup" : String(to) === live ? "restore" : null;
+        if (kind && ++attempts[kind] <= denials[kind]) {
+          throw denied();
+        }
+      }
+      return rename(from, to);
+    });
+
+    const result = await swapStagedPackageInstall(params);
+
+    expect(result.status).toBe(scenario === "backup-transient" ? "committed" : "failed");
+    expect(result.step.warnings).toContainEqual(
+      expect.stringContaining("EPERM: package is in use"),
+    );
+    expect(attempts).toEqual(
+      scenario === "backup-transient"
+        ? { backup: 3, restore: 0 }
+        : scenario === "backup-persistent"
+          ? { backup: 16, restore: 0 }
+          : { backup: 1, restore: 3 },
+    );
+    if (scenario !== "backup-transient") {
+      expect(result).toMatchObject({ packageRollbackVerified: true });
+    }
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      `"version":"${scenario === "backup-transient" ? "2.0.0" : "1.0.0"}"`,
     );
   },
 );
