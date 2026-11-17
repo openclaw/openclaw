@@ -15,6 +15,7 @@ import {
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import {
   discoverConfiguredPluginLoadPaths,
+  discoverOpenClawPlugins,
   resolveBundledSourceCheckoutExtensionsDir,
   resolvePluginPackageEntries,
 } from "../plugins/discovery.js";
@@ -291,6 +292,35 @@ export async function prepareUpdateCandidatePlugins(
   for (const source of params.config.plugins?.load?.paths ?? []) {
     sources.add(resolve(source));
   }
+  // Bundled payload selection remains with bundledPluginRedirects below.
+  const globalRoot = path.join(canonicalStateRoot, "extensions");
+  const discovered = discoverOpenClawPlugins({
+    env: {
+      ...params.env,
+      OPENCLAW_STATE_DIR: canonicalStateRoot,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+    installRecords: records,
+  });
+  const globalSources = new Set(
+    [
+      ...discovered.candidates.map((candidate) =>
+        candidate.origin === "global" ? candidate.packageDir : undefined,
+      ),
+      // A package skipped with preserved config must stay present, so candidate
+      // Doctor keeps the runtime's compatibility warning instead of a missing plugin.
+      ...discovered.diagnostics.map((diagnostic) =>
+        diagnostic.configDisposition === "preserve" && diagnostic.source
+          ? path.dirname(diagnostic.source)
+          : undefined,
+      ),
+    ].filter(
+      (source): source is string => source !== undefined && path.dirname(source) === globalRoot,
+    ),
+  );
+  for (const source of globalSources) {
+    sources.add(source);
+  }
   const bundledRedirects =
     sources.size > 0
       ? bundledPluginRedirects(params.candidateRoot, params.env, params.sourceBundledPlugins)
@@ -314,7 +344,9 @@ export async function prepareUpdateCandidatePlugins(
       source,
       real,
       file,
-      preserveBasename: path.basename(source) !== path.basename(real),
+      // Implicit global discovery needs its original extensions/<name> locator,
+      // including when that directory links to a package outside the state root.
+      preserveBasename: globalSources.has(source) || path.basename(source) !== path.basename(real),
     });
     // Copy the whole managed project so hoisted dependencies remain available.
     const owner = isPathInside(npmProjects, real)
@@ -391,7 +423,10 @@ export async function copyUpdateCandidatePlugins(
       { sourceRoot: plan.trees.privateRoot, destinationRoot: targetStateDir },
     ]);
   await copyUpdateCandidatePluginTrees(plan.trees, params);
-  for (const entry of plan.aliases) {
+  // Parents first: a nested alias would otherwise materialize its parent as a directory.
+  for (const entry of plan.aliases.toSorted(
+    (left, right) => left.alias.length - right.alias.length,
+  )) {
     const alias = rebase(entry.alias);
     const target = rebase(entry.target);
     // Preserve the entry basename/ID while imports use the canonical copied owner.

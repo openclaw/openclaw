@@ -1,5 +1,6 @@
 // Registered executable surfaces retain receiver binding and instance lifetime.
 import { types } from "node:util";
+import { retainPluginOwnerWork } from "./plugin-instance-invocation.js";
 import {
   createPluginIteratorBindings,
   type PluginIteratorBindingOwner,
@@ -10,6 +11,7 @@ import {
   pluginInstanceState,
   setPluginOriginalValue,
 } from "./plugin-instance-scope.js";
+import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { createPluginToolExecutionBinding } from "./plugin-tool-execution.js";
 
@@ -120,14 +122,16 @@ function bindNativeReceiver<T, R>(invoke: (receiver: T, args: unknown[]) => R) {
   };
 }
 
-type PluginInstanceBindingOwner = PluginIteratorBindingOwner & {
-  invoke: <T>(run: () => T) => T;
+type PluginInstanceBindingOwner = Omit<PluginIteratorBindingOwner, "lease"> & {
+  invoke: <T>(run: () => T, lease?: PluginInstanceCallLease) => T;
+  lease: (options?: { joinDisposal?: boolean; ownerLifetime?: true }) => PluginInstanceCallLease;
 };
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
   const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
   return {
+    retainOwnerWork: () => retainPluginOwnerWork(bindings),
     admitFactory: (
       factory: (...args: never[]) => unknown,
       resultCallbacks?: "tool" | readonly PropertyKey[],

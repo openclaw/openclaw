@@ -17,7 +17,7 @@ import type { ExecutableResolution } from "./exec-command-resolution.js";
 import { resolveSafeBinProfiles, type SafeBinProfile } from "./exec-safe-bin-policy.js";
 import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
-function evaluateSafeBinApproval(
+async function evaluateSafeBinApproval(
   params: {
     argv: string[];
     resolution?: ExecutableResolution;
@@ -27,9 +27,9 @@ function evaluateSafeBinApproval(
       "safeBins" | "platform" | "trustedSafeBinDirs" | "safeBinProfiles" | "cwd"
     >
   >,
-): boolean {
+): Promise<boolean> {
   const executableName = params.argv[0]!;
-  const result = evaluateExecAllowlist({
+  const result = await evaluateExecAllowlist({
     ...params,
     safeBins: params.safeBins ?? resolveSafeBins([executableName]),
     allowlist: [],
@@ -67,8 +67,8 @@ describe("exec approvals safe bins", () => {
     ["allows boolean long flags", ["wc", "--words"], true],
   ] satisfies Array<[string, string[], boolean, { sed: SafeBinProfile }?]>)(
     "%s",
-    (_name, argv, expected, safeBinProfiles?: { sed: SafeBinProfile }) => {
-      const ok = evaluateSafeBinApproval({
+    async (_name, argv, expected, safeBinProfiles?: { sed: SafeBinProfile }) => {
+      const ok = await evaluateSafeBinApproval({
         argv,
         safeBinProfiles,
         trustedSafeBinDirs: new Set(["/usr/bin"]),
@@ -77,7 +77,7 @@ describe("exec approvals safe bins", () => {
     },
   );
 
-  it("checks safe-bin trusted dirs against the real executable identity", () => {
+  it("checks safe-bin trusted dirs against the real executable identity", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -91,15 +91,18 @@ describe("exec approvals safe bins", () => {
     const params = { argv: ["head", "-n", "1"], resolution, safeBins: resolveSafeBins(["head"]) };
     for (const [trustedSafeBinDirs, expected] of [
       [new Set(["/opt/homebrew/bin"]), false],
-      [getTrustedSafeBinDirs({ extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"] }), true],
+      [
+        await getTrustedSafeBinDirs({ extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"] }),
+        true,
+      ],
       [new Set(["/tmp/other-bin"]), false],
     ] as const) {
-      expect(evaluateSafeBinApproval({ ...params, trustedSafeBinDirs })).toBe(expected);
+      expect(await evaluateSafeBinApproval({ ...params, trustedSafeBinDirs })).toBe(expected);
     }
   });
 
-  it("supports injected platform for deterministic safe-bin checks", () => {
-    const ok = evaluateSafeBinApproval({
+  it("supports injected platform for deterministic safe-bin checks", async () => {
+    const ok = await evaluateSafeBinApproval({
       argv: ["head", "-n", "1"],
       resolution: {
         kind: "executable",
@@ -126,7 +129,7 @@ describe("exec approvals safe bins", () => {
     expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
   });
 
-  it("allows caller-defined custom safe-bin profiles", () => {
+  it("allows caller-defined custom safe-bin profiles", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -144,11 +147,13 @@ describe("exec approvals safe bins", () => {
       safeBinProfiles,
       trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     };
-    expect(evaluateSafeBinApproval({ ...params, argv: ["echo", "hello"] })).toBe(true);
-    expect(evaluateSafeBinApproval({ ...params, argv: ["echo", "hello", "world"] })).toBe(false);
+    expect(await evaluateSafeBinApproval({ ...params, argv: ["echo", "hello"] })).toBe(true);
+    expect(await evaluateSafeBinApproval({ ...params, argv: ["echo", "hello", "world"] })).toBe(
+      false,
+    );
   });
 
-  it("threads trusted safe-bin dirs through allowlist evaluation", () => {
+  it("threads trusted safe-bin dirs through allowlist evaluation", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -161,11 +166,11 @@ describe("exec approvals safe bins", () => {
         executableName: "head",
       }),
     };
-    expect(evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/usr/bin"]) })).toBe(
-      false,
-    );
     expect(
-      evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/custom/bin"]) }),
+      await evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/usr/bin"]) }),
+    ).toBe(false);
+    expect(
+      await evaluateSafeBinApproval({ ...params, trustedSafeBinDirs: new Set(["/custom/bin"]) }),
     ).toBe(true);
   });
 

@@ -40,6 +40,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
 import { formatConsoleDiagnosticLine } from "../../logging/json-console-line.js";
 import { getLogger } from "../../logging/logger.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -64,9 +65,14 @@ type Phase =
   | "doctor"
   | "plugins"
   | "targetConfigConvergence"
-  | "completionCache";
+  | "completionCache"
+  | "gatewayRestoration";
 type DoctorPhase = "doctor" | "targetConfigConvergence";
 type Outcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
+
+// Match only Doctor's parent-held package deferral, not unfinished migrations generally.
+const PARENT_INSTALL_RECORD_DEFERRAL =
+  /^Plugin "[^"]+" data\/settings upgrade is unfinished: Package convergence must wait until the updating parent releases its install records\./u;
 
 export type UpdateFinalizationPhase = {
   signal: AbortSignal;
@@ -100,6 +106,7 @@ export class UpdateFinalizationLifecycle {
   private failureReason?: string;
   private unrecordedPhaseFailure?: { step: UpdateRunStep; reason: string };
   private readonly recordedWarningCounts = new Map<"doctor" | "plugins", number>();
+  private reportedParentDeferrals = false;
 
   constructor(
     private readonly json: boolean,
@@ -186,15 +193,20 @@ export class UpdateFinalizationLifecycle {
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
       ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     };
-    const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
       this.failureReason = failureReason;
-      defaultRuntime.error(message);
-    } else if (name.startsWith("warning:")) {
-      console.warn(message);
-    } else {
-      getLogger().info(message);
-      process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+    }
+    const parentDeferral =
+      status === "completed" &&
+      name.startsWith("warning:finalize:doctor:") &&
+      PARENT_INSTALL_RECORD_DEFERRAL.test(detail ?? "");
+    if (!parentDeferral) {
+      const level = status === "failed" ? "error" : name.startsWith("warning:") ? "warn" : "info";
+      const message = `[update finalize] ${name}: ${status}${detail ? `: ${detail}` : ""}`;
+      getLogger()[level](step, message);
+      process.stderr.write(
+        `${formatConsoleDiagnosticLine({ level, message: redactSensitiveText(message) })}\n`,
+      );
     }
     if (this.runId) {
       try {
@@ -225,6 +237,15 @@ export class UpdateFinalizationLifecycle {
 
   /** Records the phase's complete current warning list, retiring rows a shorter list drops. */
   recordWarnings(warnings: readonly string[], phase: "doctor" | "plugins" = "doctor"): void {
+    if (phase === "doctor" && !this.reportedParentDeferrals) {
+      const count = warnings.filter((detail) => PARENT_INSTALL_RECORD_DEFERRAL.test(detail)).length;
+      if (count > 0) {
+        this.reportedParentDeferrals = true;
+        const message = `[update finalize] ${count} ${count === 1 ? "plugin" : "plugins"} will converge after the parent releases install records.`;
+        getLogger().info({ count }, message);
+        process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
+      }
+    }
     warnings.forEach((detail, index) => {
       this.record(`warning:finalize:${phase}:${index}`, "completed", Date.now(), detail);
     });

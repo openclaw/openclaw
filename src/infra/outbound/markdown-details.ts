@@ -167,7 +167,7 @@ export function flattenMarkdownDetails(text: string): string {
   const codeRegions = findCodeRegions(text);
   let cursor = 0;
   for (const match of text.matchAll(DETAILS_TAG_RE)) {
-    const start = match.index ?? 0;
+    const start = match.index;
     if (isEscapedMarkdownCharacter(text, start) || isInsideCode(start, codeRegions)) {
       continue;
     }

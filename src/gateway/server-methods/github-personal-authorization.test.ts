@@ -86,6 +86,7 @@ vi.mock("../operator-role-policy.js", () => {
   };
   return {
     operatorSessionCap: () => mocks.sessionCap,
+    resolveAdministratorMemberRolePolicy: () => null,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,
@@ -292,7 +293,7 @@ it.each([
 
   mocks.roleScopes = ["operator.approvals"];
   expect(() => read.currentSession()).toThrow(
-    "GitHub requires current operator.sessions.read permission.",
+    "Personal profile requires current operator.sessions.read permission.",
   );
 });
 

@@ -47,12 +47,12 @@ rollback preserves it. `openclaw update recover --root <installation-root>`
 reconciles uncertain effects and verifies an already healthy candidate or
 predecessor without restarting it.
 
-The startup-only canary runs before drain and again on a fresh private state
-copy after live readiness, while the selected Gateway serves. Accepted startup
-config migration protection is persisted before that second canary. A final
-check must observe the same live PID and boot before the owner retires the
-operation. These receipts prove the existing canary contract, not a native model
-marker turn. Ordinary `update.status` requests refresh verified immutable
+Before drain, the owner loads the candidate's recovery runtime
+(`update-migrated-finalize --check`) and refuses a candidate that cannot load it.
+Startup is proven live: accepted startup config migration protection is persisted
+after the selected Gateway reaches readiness with the expected generation, and the
+owner then retires the operation. A failed start restores the predecessor. These
+receipts prove readiness, not a native model marker turn. Ordinary `update.status` requests refresh verified immutable
 installation facts through the existing refresh owner and bypass private
 manager status, keeping the activation record authoritative.
 
@@ -77,12 +77,12 @@ cannot retrofit it into an older running Gateway. After that bridge is healthy,
 enable adoption and prove a native cutover to a different reviewed generation
 before retiring the old controller. The immutable
 `--drain-timeout` flag independently selects the drain budget, such as 30 seconds,
-while `--timeout` retains canary/readiness phase budgets. Healthy recovery never
+while `--timeout` retains candidate check and readiness phase budgets. Healthy recovery never
 uses the drain budget. Gateway RPC privilege handoff is
 not part of this slice. Activation requires cgroup v2 and matching schema
-contracts; incompatible schema requirements refuse before drain. Startup-only
-canary rehearsal uses private copies before cutover, without Doctor pre-repair,
-so the candidate must handle its own additive startup migration. No live Doctor
+contracts; incompatible schema requirements refuse before drain. No private-copy
+rehearsal runs before cutover and Doctor does not pre-repair, so the candidate
+must handle its own additive startup migration. No live Doctor
 or optional NOCOW rewrite runs during activation. General incompatible database migration/rewind,
 generation collection, deployment adoption/proof, and private-controller
 retirement remain separate work. The broader proposed contracts below describe

@@ -1,42 +1,46 @@
 import assert from "node:assert/strict";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  createOpenClawDatabaseMaintenanceScope,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { getSqliteDatabaseAdmission } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
-const databasePath = process.argv[2];
-assert.ok(databasePath);
-const queries: string[] = [];
-const sqlite = requireNodeSqlite();
-const { DatabaseSync } = sqlite;
-sqlite.DatabaseSync = class extends DatabaseSync {
-  override prepare(sql: string) {
-    if (this.location() === databasePath) {
-      queries.push(sql);
-    }
-    return super.prepare(sql);
-  }
-
-  override exec(sql: string) {
-    if (this.location() === databasePath) {
-      queries.push(sql);
-    }
-    return super.exec(sql);
-  }
-};
-
-const reopened = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+const [databasePath, mode] = process.argv.slice(2);
+assert.ok(databasePath && (mode === "runtime" || mode === "full"));
+const maintenance =
+  mode === "full"
+    ? createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" })
+    : undefined;
 try {
-  const integrityChecked = queries.some((sql) => /\bPRAGMA\s+integrity_check/iu.test(sql));
-  queries.length = 0;
+  const open = () => openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+  const reopened = maintenance ? maintenance.run(open) : open();
+  assert.ok(!isPostgresSqlConnection(reopened.db));
+  const verification = getSqliteDatabaseAdmission(reopened.db, {
+    name: "sqlite.full-verification",
+    read: (value) => (typeof value === "number" ? value : undefined),
+  });
+  let schemaRebuilt = false;
+  for (const method of ["exec", "prepare"] as const) {
+    Object.defineProperty(reopened.db, method, {
+      value: new Proxy(reopened.db[method], {
+        apply(target, receiver, args) {
+          schemaRebuilt ||= /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|TRIGGER|VIRTUAL)\b/iu.test(
+            args[0],
+          );
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    });
+  }
   const { ftsAvailable } = ensureMemoryIndexSchema({
     db: reopened.db,
     cacheEnabled: true,
     ftsEnabled: true,
   });
-  const schemaRebuilt = queries.some((sql) =>
-    /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|TRIGGER|VIRTUAL)\b/iu.test(sql),
-  );
-  console.log(JSON.stringify({ integrityChecked, schemaRebuilt, ftsAvailable }));
+  console.log(JSON.stringify({ verification: verification ?? null, schemaRebuilt, ftsAvailable }));
 } finally {
-  reopened.db.close();
+  await (maintenance ? maintenance.close() : closeOpenClawAgentDatabasesAsync());
 }

@@ -73,30 +73,6 @@ export function listSessionEntriesReadOnly(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
-      captureListingSource(database, scope);
-      const sessionKeys = scope.sessionKeys;
-      const readSelected = () =>
-        runSqliteReadOperationSync(database.db, () => {
-          const entries = readSelectedSessionEntriesInDatabase(
-            database,
-            sessionKeys,
-            scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
-          );
-          if (options.deferParticipants || scope.includeParticipants === false) {
-            return entries;
-          }
-          return [
-            ...projectSqliteSessionParticipantsBatch(
-              database.db,
-              new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-            ),
-          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-        });
-      return options.continuation
-        ? readWithCanonicalSessionReaderContinuation(database, options.continuation, readSelected)
-        : readSelected();
-    }
     const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
     return options.continuation
       ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
@@ -118,15 +94,33 @@ export function listSqliteSessionEntriesFromDatabase(
   captureListingSource(database, scope);
   const deferParticipants =
     options.deferParticipants || scope.includeParticipants === false ? true : undefined;
+  if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
+    const sessionKeys = scope.sessionKeys;
+    return runSqliteReadOperationSync(database.db, () => {
+      const entries = readSelectedSessionEntriesInDatabase(
+        database,
+        sessionKeys,
+        scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
+      );
+      if (deferParticipants) {
+        return entries;
+      }
+      return [
+        ...projectSqliteSessionParticipantsBatch(
+          database.db,
+          new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+        ),
+      ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    });
+  }
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
       runSqliteReadSnapshotSync(database.db, () => {
-        let entries: SessionEntrySummary[];
+        const keys: string[] = [];
         if (scope.cronRetention) {
           const page = scope.cronRetention;
-          const keys: string[] = [];
           for (const row of iterateSqliteQuerySync(
             database.db,
             getNodeSqliteKysely<DB>(database.db)
@@ -143,15 +137,27 @@ export function listSqliteSessionEntriesFromDatabase(
             }
           }
           options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
-          entries = readSelectedSessionEntriesInDatabase(database, keys);
         } else {
-          const snapshot = readSessionEntryCache(database, {
-            cache: false,
-            projection: "list",
-            deferParticipants: true,
-          });
-          entries = Array.from(iterateSessionEntriesForListing(snapshot));
+          // Even unexpired cron rows need JSON identity validation before scheduling their
+          // next expiry. Discover only this logical owner's keys without hydrating the store.
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<DB>(database.db)
+              .selectFrom("session_nodes")
+              .select("session_key")
+              .orderBy("session_key"),
+          )) {
+            if (
+              !isCronRunSessionKey(row.session_key) ||
+              normalizeAgentId(parseAgentSessionKey(row.session_key)!.agentId) !== requestedOwner
+            ) {
+              continue;
+            }
+            keys.push(row.session_key);
+          }
         }
+        // Even an empty selection must validate unrelated pending delivery aliases.
+        const entries = readSelectedSessionEntriesInDatabase(database, keys);
         let oldestUpdatedAt: number | null = null;
         let selected = entries.filter(({ sessionKey, entry }) => {
           if (
@@ -211,20 +217,15 @@ export function listSqliteSessionEntriesFromDatabase(
     projection,
     deferParticipants,
   });
-  return Array.from(
-    iterateSessionEntriesForListing(
-      snapshot,
-      projection === "list" && scope.clone !== false,
-      scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
-    ),
-  );
+  // Deferred participant views are never cached and already own their decoded metadata.
+  const cloneEntries = projection === "list" && scope.clone !== false && !deferParticipants;
+  return Array.from(iterateSessionEntriesForListing(snapshot, cloneEntries));
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
 function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
-  sessionKeys?: ReadonlySet<string>,
 ): IterableIterator<SessionEntrySummary> {
   for (const sessionKey of snapshot.keys) {
     if (isInternalSessionEffectsKey(sessionKey)) {
@@ -239,10 +240,6 @@ function* iterateSessionEntriesForListing(
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
-    }
-    // Selection cannot hide a non-canonical row elsewhere in the same snapshot.
-    if (sessionKeys && !sessionKeys.has(sessionKey)) {
-      continue;
     }
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {

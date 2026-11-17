@@ -26,7 +26,7 @@ export function TerminalPanelHostedActions(props: {
         <openclaw-tooltip prop:content={t("terminal.dockBottom")}>
           <button
             ref={nativeListener("click", () => props.view().onDock("bottom"))}
-            class="rail-header__action"
+            class="oc-icon-button oc-icon-button--28 rail-header__action"
             type="button"
             aria-label={t("terminal.dockBottom")}
             disabled={props.view().dockDisabled}
@@ -81,6 +81,7 @@ export function SessionMenu(props: {
           <Show when={props.inline && props.mobile}>
             <PanelIconButton
               label={t("common.back")}
+              title={false}
               icon={<Icon name="chevronLeft" />}
               class="tp-rail__icon"
               onClick={() => props.state.onDismiss(true)}
@@ -97,7 +98,6 @@ export function SessionMenu(props: {
               ]}
               type="button"
               aria-label={t("terminal.refreshSessions")}
-              title={t("terminal.refreshSessions")}
               onClick={() => props.state.onRefresh()}
             >
               <Show when={props.inline || !props.mobile} fallback={t("terminal.refreshSessions")}>
@@ -278,6 +278,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
         <PanelIconButton
           class="rail-header__action tp-icon tp-upload"
           label={t("terminal.addFiles")}
+          title={t("terminal.addFilesLabel")}
           icon={<Icon name="paperclip" />}
           disabled={
             !props.state.connected ||
@@ -293,7 +294,9 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
             <button
               ref={(element) => props.state.picker.triggerRef(element)}
               class={
-                props.state.picker.hosted ? "rail-header__action" : "rail-header__action tp-icon"
+                props.state.picker.hosted
+                  ? "oc-icon-button oc-icon-button--28 rail-header__action"
+                  : "oc-icon-button oc-icon-button--28 rail-header__action tp-icon"
               }
               type="button"
               title={props.state.picker.hosted ? undefined : t("terminal.sessions")}
@@ -330,26 +333,24 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
           <span class="tp-dock-modes" role="group" aria-label={t("terminal.dockMode")}>
             <For each={destinations()} keyed={(destination) => destination.dock}>
               {(destination) => (
-                <openclaw-tooltip prop:content={destination().label}>
-                  <Show
-                    when={!props.state.mobile && destination().dock !== "main"}
-                    fallback={
-                      <PanelIconButton
-                        class="rail-header__action tp-icon"
-                        label={destination().label}
-                        icon={<Icon name={destination().icon} />}
-                        disabled={props.state.dockDisabled}
-                        onClick={() => props.state.onDock(destination().dock)}
-                      />
-                    }
-                  >
-                    <DockButton
-                      dock={destination().dock === "bottom" ? "bottom" : "right"}
+                <Show
+                  when={!props.state.mobile && destination().dock !== "main"}
+                  fallback={
+                    <PanelIconButton
+                      class="rail-header__action tp-icon"
+                      label={destination().label}
+                      icon={<Icon name={destination().icon} />}
                       disabled={props.state.dockDisabled}
                       onClick={() => props.state.onDock(destination().dock)}
                     />
-                  </Show>
-                </openclaw-tooltip>
+                  }
+                >
+                  <DockButton
+                    dock={destination().dock === "bottom" ? "bottom" : "right"}
+                    disabled={props.state.dockDisabled}
+                    onClick={() => props.state.onDock(destination().dock)}
+                  />
+                </Show>
               )}
             </For>
           </span>
@@ -357,6 +358,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
             <PanelIconButton
               class="rail-header__action tp-icon tp-open-fullscreen"
               label={t("terminal.openWindow")}
+              title={t("terminal.openWindowTooltip")}
               icon={<Icon name="maximize" />}
               newTab
               onClick={props.state.onOpenFullscreen}
@@ -365,6 +367,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
           <PanelIconButton
             class="rail-header__action tp-icon"
             label={t("terminal.hide")}
+            title={false}
             icon={<Icon name="x" />}
             onClick={props.state.onHide}
           />

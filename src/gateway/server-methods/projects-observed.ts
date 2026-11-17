@@ -63,6 +63,17 @@ function retainNewestRawProjectCandidate(
   candidates: RawProjectCandidate[],
   candidate: RawProjectCandidate,
 ) {
+  if (candidate.kind === "session") {
+    const previous = candidates.findIndex(
+      (existing) => existing.kind === "session" && existing.checkoutPath === candidate.checkoutPath,
+    );
+    if (previous >= 0) {
+      if (candidates[previous]!.lastUsedAt >= candidate.lastUsedAt) {
+        return;
+      }
+      candidates.splice(previous, 1);
+    }
+  }
   const insertionIndex = candidates.findIndex(
     (existing) => compareRawProjectCandidates(candidate, existing) < 0,
   );
@@ -183,8 +194,15 @@ export async function listObservedProjects(
     if (visibilityFilter && !isVisible(sessionKey)) {
       continue;
     }
-    const checkoutPath = entry.execCwd?.trim();
-    if (checkoutPath && !entry.execNode?.trim()) {
+    // Host sessions persist their task cwd separately from node-only execCwd.
+    const checkoutPath = entry.spawnedCwd?.trim();
+    if (
+      checkoutPath &&
+      !entry.execNode?.trim() &&
+      entry.execHost !== "node" &&
+      !entry.deviceFolder &&
+      !entry.repositoryWorkspaceId
+    ) {
       retainNewestRawProjectCandidate(rawCandidates, {
         kind: "session",
         checkoutPath,

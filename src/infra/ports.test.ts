@@ -381,18 +381,24 @@ describeUnix("inspectPortUsage", () => {
       { ppid: 1, commandLine: "node fixture" },
     ],
     ["malformed row", commandOutput("\n"), undefined, {}],
+    ["known runtime", commandOutput("1 node\n"), "u", {}, 111],
+    ["child", commandOutput("1 node\n"), "u", { ppid: 1, commandLine: "node", user: "u" }, 1],
+    ["foreign", commandOutput("1 node\n"), "u", { ppid: 1, commandLine: "node", user: "u" }, 222],
   ] as const)(
     "preserves socket evidence with %s metadata",
-    async (_name, output, user, metadata) => {
+    async (_name, output, user, metadata, knownRuntimePid?: number) => {
       mockUnixCommands({
         lsof: commandOutput("p111\ncnode\nnTCP *:18789 (LISTEN)\n"),
         processInfo: output,
         user,
       });
-      const result = await inspectPortUsage(18789);
+      const result = await inspectPortUsage(18789, { knownRuntimePid });
       expect(result.listeners).toEqual([
         { pid: 111, command: "node", address: "TCP *:18789 (LISTEN)", ...metadata },
       ]);
+      expect(
+        runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ps"),
+      ).toHaveLength(knownRuntimePid === 111 ? 0 : 2);
     },
   );
 
@@ -623,26 +629,15 @@ describe("inspectPortUsage on Windows", () => {
     ["INFORMATION: Keine Tasks entsprechen den angegebenen Kriterien.\r\n", undefined],
     ["ssh.exe,4242,Console,1,10,000 K\r\n", undefined],
     ['"ssh.exe","4242"\r\n', undefined],
-  ])("reads exact-PID quoted tasklist rows: %s", async (output, command) => {
-    mockWindowsCommands({ tasklist: commandOutput(output) });
-
-    const result = await inspectPortUsage(18789);
-
-    expect(result.listeners[0]?.command).toBe(command);
-  });
-
-  it.each([
-    { name: "nonzero tasklist exit", tasklist: commandOutput("", 1, "access denied") },
-    { name: "tasklist timeout", tasklist: new Error("tasklist timed out") },
-  ])("keeps generic diagnostics after $name", async ({ tasklist }) => {
+    [commandOutput("", 1, "access denied"), undefined],
+    [new Error("tasklist timed out"), undefined],
+  ])("preserves process metadata across tasklist results: %s", async (output, command) => {
     mockWindowsCommands({
-      tasklist,
+      tasklist: typeof output === "string" ? commandOutput(output) : output,
       powershell: commandOutput("node fixture"),
     });
-
     const result = await inspectPortUsage(18789);
-
-    expect(result.listeners[0]?.command).toBeUndefined();
+    expect(result.listeners[0]?.command).toBe(command);
     expect(result.listeners[0]?.commandLine).toBe("node fixture");
     expect(result.hints).toContain("Another process is listening on this port.");
   });

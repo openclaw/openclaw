@@ -18,32 +18,35 @@ it(
   "refuses another person's steering without queueing or reaching the model",
   { timeout: TEST_TIMEOUT_MS },
   () =>
-    withPeopleGateway({}, async (gateway) => {
-      const session = gateway.session();
-      const first = gateway.held("Alice's answer.");
-      gateway.model.script(first.turn);
-      const original = await session.send("Alice asks a question.");
-      await first.entered;
+    withPeopleGateway(
+      { allowCollaborativeSteering: false, collaborativeSteeringFallback: "reject" },
+      async (gateway) => {
+        const session = gateway.session();
+        const first = gateway.held("Alice's answer.");
+        gateway.model.script(first.turn);
+        const original = await session.send("Alice asks a question.");
+        await first.entered;
 
-      const bob = await gateway.connectAs(BOB);
-      const attempt = await session.send("Bob wants to redirect the work.", bob);
-      const refusal = await session.final(attempt.runId);
-      expect(finalText(refusal)).toContain("collaborative steering is disabled");
-      expect(finalText(refusal)).toContain("/followup");
+        const bob = await gateway.connectAs(BOB);
+        const attempt = await session.send("Bob wants to redirect the work.", bob);
+        const refusal = await session.final(attempt.runId);
+        expect(finalText(refusal)).toContain("collaborative steering is disabled");
+        expect(finalText(refusal)).toContain("/followup");
 
-      first.release();
-      expect(await session.wait(original.runId)).toMatchObject({ status: "ok" });
-      expect(deliveries(session, "Bob wants to redirect")).toEqual([0]);
-      expect(session.executedRuns()).toEqual([original.runId]);
-      const history = await session.history();
-      expect(roleTexts(history, "user")).toEqual(["Alice asks a question."]);
-      expect(roleTexts(history, "assistant").at(-1)).toBe("Alice's answer.");
-      // Settled without executable custody: it never runs after Alice's turn.
-      expect(history.pendingInputs).toMatchObject({
-        total: 1,
-        items: [{ state: "cancelled", runId: attempt.runId }],
-      });
-    }),
+        first.release();
+        expect(await session.wait(original.runId)).toMatchObject({ status: "ok" });
+        expect(deliveries(session, "Bob wants to redirect")).toEqual([0]);
+        expect(session.executedRuns()).toEqual([original.runId]);
+        const history = await session.history();
+        expect(roleTexts(history, "user")).toEqual(["Alice asks a question."]);
+        expect(roleTexts(history, "assistant").at(-1)).toBe("Alice's answer.");
+        // Settled without executable custody: it never runs after Alice's turn.
+        expect(history.pendingInputs).toMatchObject({
+          total: 1,
+          items: [{ state: "cancelled", runId: attempt.runId }],
+        });
+      },
+    ),
 );
 
 it(
@@ -108,6 +111,11 @@ it(
       expect(session.chatStates(queued.runId).at(-1)).toBe("aborted");
       expect(deliveries(session, "Bob queued before losing access.")).toEqual([0]);
       expect(session.executedRuns()).toEqual([original.runId]);
-      expect((await session.history()).pendingInputs).toMatchObject({ total: 0 });
+      // Cancellation stays readable; it must retain no executable queue custody.
+      expect((await session.history()).pendingInputs).toMatchObject({
+        total: 1,
+        queuedCount: 0,
+        items: [{ state: "cancelled", runId: queued.runId }],
+      });
     }),
 );

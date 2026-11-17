@@ -693,9 +693,24 @@ async function prepareRuntime(artifacts, packageRoot) {
   const frequency = `17 12 ${scheduled.getUTCDate()} ${scheduled.getUTCMonth() + 1} *`;
   // Only this post-Doctor runtime fixture runs the scheduler. Keep model work dormant.
   config.cron.enabled = true;
-  config.skills ??= {};
-  config.skills.workshop ??= {};
-  config.skills.workshop.autonomous = { mode: "off" };
+  // Newer candidates validate Workshop settings in the plugin config; older ones
+  // still read skills.workshop. The candidate's own manifest says which applies.
+  const workshopManifest = path.join(
+    packageRoot,
+    "dist/extensions/skill-workshop/openclaw.plugin.json",
+  );
+  const pluginOwnsWorkshopSettings =
+    fs.existsSync(workshopManifest) &&
+    readJson(workshopManifest).configSchema?.properties?.autonomous !== undefined;
+  if (pluginOwnsWorkshopSettings) {
+    const entry = (config.plugins.entries["skill-workshop"] ??= {});
+    entry.config ??= {};
+    entry.config.autonomous = { ...entry.config.autonomous, mode: "off" };
+  } else {
+    config.skills ??= {};
+    config.skills.workshop ??= {};
+    config.skills.workshop.autonomous = { mode: "off" };
+  }
   const dreaming = config.plugins.entries["memory-core"].config.dreaming;
   dreaming.frequency = frequency;
   dreaming.timezone = "UTC";

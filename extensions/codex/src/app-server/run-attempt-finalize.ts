@@ -15,6 +15,7 @@ import {
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
+import { applyCodexAssistantTerminalOutcome } from "./event-projector-assistant-message.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -325,19 +326,7 @@ export async function finalizeCodexAttempt(
         result.currentAttemptAssistant,
         terminalAssistantSource,
       ]) {
-        if (message?.role === "assistant") {
-          const providerRefusal = message.diagnostics?.some(
-            (diagnostic) => diagnostic.type === "provider_refusal",
-          );
-          // The projector owns refusal classification. Preserve it unless a stronger
-          // local abort or prompt failure supersedes this turn's provider outcome.
-          if (!providerRefusal || finalAborted || finalPromptError) {
-            message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
-            message.errorMessage = finalPromptError
-              ? formatErrorMessage(finalPromptError)
-              : undefined;
-          }
-        }
+        applyCodexAssistantTerminalOutcome(message, finalAborted, finalPromptError);
       }
       return {
         effectiveTimedOut,
@@ -508,22 +497,22 @@ export async function finalizeCodexAttempt(
       (diagnostic) => diagnostic.type === "provider_refusal",
     );
     await runCodexAgentEndHook(params, {
-      skillExperienceReviewSource: providerRefusal ? undefined : terminalAnchor,
+      completedTurnSource: providerRefusal ? undefined : terminalAnchor,
       event: {
         messages: buildCodexAgentEndMessages(params, result.messagesSnapshot, activeTurnId),
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
+        modelIterations: result.modelIterations,
       },
       ctx: {
         ...hookContext,
         modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
         modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
         authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
-        modelIterations: result.modelIterations ?? 0,
-        skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
-          attemptTools.toolBridge.availableSpecs,
-        ).some((tool) => tool.name === "skill_workshop"),
+        toolNames: flattenCodexDynamicToolFunctions(attemptTools.toolBridge.availableSpecs).map(
+          (tool) => tool.name,
+        ),
         compacted: (result.compactionCount ?? 0) > 0,
         senderId: params.senderId ?? undefined,
         foregroundPromptContext: buildEmbeddedForegroundPromptContext(
@@ -718,7 +707,7 @@ export async function finalizeCodexAttempt(
     }
     emitLifecycleTerminal({
       phase: finalPromptError ? "error" : "end",
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(finalPromptError ? { error: finalPromptError } : {}),
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...buildLifecycleTerminalMeta({
         aborted: finalAborted,

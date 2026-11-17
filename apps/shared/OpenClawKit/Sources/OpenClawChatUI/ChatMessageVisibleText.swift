@@ -40,6 +40,10 @@ public enum ChatMessageVisibleText {
     }
 
     static func displayText(in message: OpenClawChatMessage, includeThinking: Bool) -> String {
+        #if os(macOS)
+        // Shared content stays unchanged for mobile and channel clients.
+        if let summary = message.desktopFailureSummary { return summary }
+        #endif
         let isAssistant = message.role.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() == "assistant"
         let parts = message.content.compactMap { content -> String? in

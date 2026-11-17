@@ -20,6 +20,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type {
   DoctorDatabaseEngineInspection,
   DoctorDatabaseEngineInspectionInput,
@@ -27,7 +28,7 @@ import type {
 import { inspectDoctorDatabaseLegacyMigrations } from "./doctor-database-legacy-inspection.js";
 
 serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionInput>(
-  async (input) => {
+  async (input, _channel, control) => {
     const env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
     const stores: DatabaseStoreDiagnostic[] = [];
     const result: DoctorDatabaseEngineInspection = {
@@ -196,18 +197,34 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         );
       }
     };
-    const inspectState = () =>
-      selection?.effectiveEngines.state === "sqlite"
-        ? withOpenClawStateDatabaseReadSnapshot(inspect, { env, lazy: true })
-        : inspect();
+    const inspectState = () => {
+      if (selection?.effectiveEngines.state !== "sqlite") {
+        return inspect();
+      }
+      try {
+        const pathname = resolveOpenClawStateSqlitePath(env);
+        if (!fs.statSync(pathname, { throwIfNoEntry: false })?.isFile()) {
+          return inspect();
+        }
+        fs.accessSync(pathname, fs.constants.R_OK);
+      } catch {
+        // Per-store inspection retains inaccessible roots and reports their contents as unknown.
+        return inspect();
+      }
+      return withOpenClawStateDatabaseReadSnapshot(inspect, { env });
+    };
     // The caller's inspection context does not cross this worker boundary.
-    await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
-      withArtifactPreservingStateReads(
-        () =>
-          withSqliteReadOnlyWorkerScope(() =>
-            selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
-          ),
-        { agentDatabases: true },
+    await control.runNativeSection(() =>
+      withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+        withArtifactPreservingStateReads(
+          () =>
+            withSqliteReadOnlyWorkerScope(
+              () =>
+                selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
+              { signal: control.signal, deadlineOwnedByCaller: true },
+            ),
+          { agentDatabases: true },
+        ),
       ),
     );
     return result;

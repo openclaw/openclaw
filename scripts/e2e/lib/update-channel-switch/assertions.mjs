@@ -9,7 +9,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
 }
@@ -198,6 +198,12 @@ function assertRuntimeStagingClean(root) {
   assert.deepEqual(leftovers, [], "successful update retained runtime staging entries");
 }
 
+function assertMainRefusal() {
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.status, "error");
+  assert.equal(payload.reason, "unsupported-package-target");
+}
+
 function assertDirtyUpdate(root, expectedHead) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
@@ -262,6 +268,7 @@ const commands = {
   "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
+  "assert-main-refusal": assertMainRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,

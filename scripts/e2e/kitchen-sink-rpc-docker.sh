@@ -9,6 +9,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
+TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
+if [[ -z "${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-}" ]]; then
+  KITCHEN_SINK_NPM_VERSION_FILE="$TARGET_ROOT_DIR/scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt"
+  if [[ ! -f "$KITCHEN_SINK_NPM_VERSION_FILE" ]]; then
+    echo "Frozen target is missing its branch-recorded Kitchen Sink npm version: $KITCHEN_SINK_NPM_VERSION_FILE" >&2
+    exit 2
+  fi
+  KITCHEN_SINK_NPM_VERSION="$(tr -d '[:space:]' <"$KITCHEN_SINK_NPM_VERSION_FILE")"
+  if [[ ! "$KITCHEN_SINK_NPM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+    echo "Invalid branch-recorded Kitchen Sink npm version: $KITCHEN_SINK_NPM_VERSION" >&2
+    exit 2
+  fi
+  export OPENCLAW_KITCHEN_SINK_NPM_SPEC="npm:@openclaw/kitchen-sink@$KITCHEN_SINK_NPM_VERSION"
+fi
+
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB 2048)"
 MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT 1200)"

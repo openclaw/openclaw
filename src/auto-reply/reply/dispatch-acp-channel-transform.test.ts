@@ -48,7 +48,7 @@ describe("ACP channel reply transforms", () => {
       deliver: transport,
       transformReplyPayload: () => null,
     });
-    const coordinator = createCoordinator({ dispatcher });
+    const coordinator = await createCoordinator({ dispatcher });
 
     await expect(coordinator.deliver("final", { text: "private reply" })).resolves.toBe(false);
     dispatcher.markComplete();
@@ -68,7 +68,7 @@ describe("ACP channel reply transforms", () => {
       text: `${payload.text}!`,
     }));
     const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
-    const coordinator = createCoordinator({ dispatcher, suppressBlockUserDelivery: true });
+    const coordinator = await createCoordinator({ dispatcher, suppressBlockUserDelivery: true });
 
     await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
     dispatcher.markComplete();

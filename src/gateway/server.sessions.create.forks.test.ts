@@ -11,6 +11,7 @@ import { resetContextWindowCacheForTest } from "../agents/context.test-support.j
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
@@ -161,7 +162,7 @@ test("sessions.create forks the parent transcript into the new session", async (
         sessionRoot: projectRoot,
         totalTokens: 123,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         cliSessionBindings: {
           "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
         },
@@ -276,7 +277,7 @@ async function seedSizedForkParent(dir: string, entry: Parameters<typeof session
       main: sessionStoreEntry(parent.sessionId, {
         sessionFile: parent.sessionFile,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         ...entry,
       }),
     },
@@ -455,7 +456,7 @@ test.each([undefined, "last-completed"] as const)(
           // selected completed prefix should govern this fork.
           totalTokens: 200_000,
           totalTokensFresh: true,
-          totalTokensVersion: 1,
+          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         }),
       },
     });

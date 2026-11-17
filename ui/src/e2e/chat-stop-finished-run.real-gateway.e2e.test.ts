@@ -370,7 +370,7 @@ suite.define(() => {
             const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
             await composer.fill("Finish this fixture turn.");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
-            const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+            const stop = page.getByRole("button", { name: "Stop", exact: true });
             await stop.waitFor({ state: "visible" });
             const send = sent.find((frame) => frame.method === "chat.send");
             const sessionId = send?.params?.sessionId;

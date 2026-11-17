@@ -1,5 +1,38 @@
 import type { Serializable, SpawnOptions } from "node:child_process";
+import type {
+  ReadFilePage,
+  ReadFilePageParams,
+} from "../../agents/sessions/tools/read-file-page.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
+
+// Startup backpressure is separate from custody of already running children.
+export const MAX_PENDING_SPAWNS = 256;
+export const MAX_NATIVE_RESOURCES = 256;
+// Keep 64 child slots available to commands even when MCP custody is full.
+const MAX_OWNED_CHILDREN = 512;
+const MAX_MCP_CHILDREN = 448;
+export type BrokerAdmission = "command" | "mcp";
+
+export function childCapacityError(
+  admissions: Iterable<BrokerAdmission>,
+  admission: BrokerAdmission,
+): string | undefined {
+  let total = 0;
+  let mcp = 0;
+  for (const retained of admissions) {
+    total++;
+    if (retained === "mcp") {
+      mcp++;
+    }
+  }
+  if (total >= MAX_OWNED_CHILDREN) {
+    return `Spawn broker child capacity exceeded (${MAX_OWNED_CHILDREN}); close running processes before retrying`;
+  }
+  if (admission === "mcp" && mcp >= MAX_MCP_CHILDREN) {
+    return `Spawn broker MCP child capacity exceeded (${MAX_MCP_CHILDREN}); close unused MCP sessions before retrying`;
+  }
+  return undefined;
+}
 
 export type BrokerSpawnOptions = Pick<
   SpawnOptions,
@@ -14,8 +47,14 @@ export type BrokerSpawnOptions = Pick<
   | "uid"
   | "gid"
 > & { stdio: ("pipe" | "ignore" | "inherit" | "ipc")[] };
+export type ProcessOutputFile = { path: string; maxBytes?: number };
 export type BrokerRequest =
-  | { type: "read-file"; id: number; filePath: string }
+  | {
+      type: "read-file";
+      id: number;
+      filePath: string;
+      page?: ReadFilePageParams;
+    }
   | { type: "cancel-read-file"; id: number }
   | {
       type: "spawn" | "prepare-spawn";
@@ -23,6 +62,8 @@ export type BrokerRequest =
       argv: string[];
       options: BrokerSpawnOptions;
       execCgroup?: string;
+      outputFile?: ProcessOutputFile;
+      admission?: BrokerAdmission;
     }
   | { type: "launch"; id: number; allowed: boolean }
   | {
@@ -31,6 +72,7 @@ export type BrokerRequest =
       argv: string[];
       options: BrokerExecaOptions;
       execCgroup?: string;
+      admission?: BrokerAdmission;
     }
   | { type: "kill"; id: number; signal: NodeJS.Signals | number }
   | { type: "ipc"; id: number; sequence: number; message: Serializable }
@@ -48,10 +90,11 @@ export type BrokerError = {
   spawnargs?: string[];
 };
 export type BrokerResponse =
+  | ({ type: "file-output"; id: number } & ({ bytes: number } | { error: BrokerError }))
   // Initialization failed before any native resource server or child launch was admitted.
   | { type: "startup-failed"; error: BrokerError }
   | { type: "file-read-chunk"; id: number; bytes: Buffer }
-  | { type: "file-read-result"; id: number; error?: Error; code?: string }
+  | { type: "file-read-result"; id: number; page?: ReadFilePage; error?: Error; code?: string }
   | { type: "prepared"; id: number }
   | { type: "ready"; pid: number }
   | { type: "owned"; id: number; pid: number }
@@ -66,7 +109,7 @@ export type BrokerResponse =
       connected: boolean;
       stdioLength: number;
     }
-  | { type: "error"; id: number; error: BrokerError; resultUnavailable?: true }
+  | { type: "error"; id: number; error: BrokerError; resultUnavailable?: true; notStarted?: true }
   | { type: "ipc-sent"; id: number; sequence: number; error?: BrokerError }
   | { type: "exit"; id: number; code: number | null; signal: NodeJS.Signals | null }
   | { type: "closed"; id: number }

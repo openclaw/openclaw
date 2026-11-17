@@ -197,9 +197,15 @@ describe("models cli", () => {
     program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
     registerModelsCli(program);
 
-    await expect(program.parseAsync(["models", "auth"], { from: "user" })).rejects.toMatchObject({
-      exitCode: 0,
-    });
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+    try {
+      await expect(program.parseAsync(["models", "auth"], { from: "user" })).rejects.toMatchObject({
+        exitCode: 0,
+      });
+    } finally {
+      process.exitCode = originalExitCode;
+    }
   });
 
   it.each([

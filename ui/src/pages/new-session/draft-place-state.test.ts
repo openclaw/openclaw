@@ -83,6 +83,30 @@ const cloudProfile: DraftCloudProfile = {
   machines: [{ id: "fast", label: "Fast" }],
 };
 
+describe("DraftPlaceState agent selection", () => {
+  it("resolves the normalized selected workspace from the current non-system roster", () => {
+    const { state, context } = createRepositoryFixture();
+    const system: GatewayAgentRow = { id: "research", kind: "system", workspace: "/system" };
+    const original: GatewayAgentRow = { id: "Research", workspace: "/research" };
+    const roster = context.agents.state.agentsList!;
+    roster.agents = [system, original];
+    state.applyPendingPlacement({ agentId: " RESEARCH ", profileId: "" });
+
+    expect(state.selectedAgent()).toBe(original);
+    expect(state.workspacePath()).toBe("/research");
+    expect(state.agents()).toEqual([original]);
+
+    const replacement: GatewayAgentRow = { id: "research", workspace: "/new-research" };
+    context.agents.state.agentsList = { ...roster, agents: [system, replacement] };
+    expect(state.selectedAgent()).toBe(replacement);
+    expect(state.workspacePath()).toBe("/new-research");
+
+    context.agents.state.agentsList = { ...roster, agents: [system] };
+    expect(state.selectedAgent()).toBeUndefined();
+    expect(state.workspacePath()).toBe("");
+  });
+});
+
 describe("DraftPlaceState repository selection", () => {
   it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },
@@ -205,10 +229,11 @@ describe("DraftPlaceState repository selection", () => {
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
     // This test owns draft selection; settle lazy code loading before the interaction deadline.
     await import("../chat/components/chat-model-picker-panel.tsx");
-    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
-      data: routeData({ requestedModel: "example/first" }),
-      models: models("first", "second", "remembered"),
-    });
+    const { state, context, readPreference, persistModelPreference, request } =
+      createRepositoryFixture({
+        data: routeData({ requestedModel: "example/first" }),
+        models: models("first", "second", "remembered"),
+      });
     onTestFinished(() => state.modelControl.reset());
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
@@ -221,7 +246,7 @@ describe("DraftPlaceState repository selection", () => {
     );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
-    expect(persistPreference).not.toHaveBeenCalled();
+    expect(persistModelPreference).not.toHaveBeenCalled();
 
     const choice = await vi.waitFor(() => {
       const option = view.querySelector<HTMLButtonElement>(
@@ -244,9 +269,8 @@ describe("DraftPlaceState repository selection", () => {
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
+    expect(persistModelPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
-      "/workspace",
       expect.objectContaining({ model: "example/second" }),
     );
     context.agents.state.agentsList!.agents.push({ id: "scout", workspace: "/workspace" });

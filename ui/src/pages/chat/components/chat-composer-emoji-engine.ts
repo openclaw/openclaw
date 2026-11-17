@@ -3,6 +3,12 @@ import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts"
 import type { Overlay } from "../../../components/overlay-lifecycle.ts";
 import { createTextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
 import type { EmojiTarget } from "../../../lib/chat/emoji.ts";
+import {
+  composerInputHasFocus,
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../../lib/composer-input.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import type { EmojiMenuState } from "./chat-composer-emoji-state.ts";
 
@@ -78,7 +84,7 @@ export function createComposerEmojiEngine(
       const eligible =
         enabled &&
         target.isConnected &&
-        target.ownerDocument.activeElement === target &&
+        composerInputHasFocus(target) &&
         !target.disabled &&
         !target.readOnly &&
         target.selectionStart === target.selectionEnd;
@@ -105,12 +111,18 @@ export function createComposerEmojiEngine(
     if (target.disabled || target.readOnly || inserting) {
       return false;
     }
-    target.focus({ preventScroll: true });
+    focusComposerInput(target, { preventScroll: true });
     const start = target.selectionStart;
     const end = target.selectionEnd;
     inserting = true;
     close();
-    target.setSelectionRange(token.start, token.end);
+    selectComposerInput(target, token.start, token.end);
+    const editor = readComposerEditor(target);
+    if (editor) {
+      editor.replace(replacement, token.start, token.end);
+      inserting = false;
+      return true;
+    }
     // The browser editing command records undo and sends input through the draft owner.
     let inserted = false;
     try {
@@ -119,7 +131,7 @@ export function createComposerEmojiEngine(
       inserting = false;
     }
     if (!inserted) {
-      target.setSelectionRange(start, end);
+      selectComposerInput(target, start, end);
     }
     return inserted;
   }

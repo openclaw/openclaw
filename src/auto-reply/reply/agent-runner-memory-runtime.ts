@@ -6,11 +6,14 @@ import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { resolveModelContextWindowProfile } from "../../agents/model-context-window.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { resolveProjectedSessionContextTokens } from "../../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MemoryFlushRunParams } from "./agent-runner-memory.types.js";
 import type { FollowupRun } from "./queue.js";
 
 type FollowupRuntimeParams = {
@@ -27,6 +30,35 @@ type FollowupRuntimeParams = {
   sessionKey?: string;
   agentHarnessId?: string;
 };
+
+/** One source classification supplies both workspace and persistence-tool eligibility. */
+export async function resolveMemoryFlushSandbox(
+  params: Pick<
+    MemoryFlushRunParams,
+    "cfg" | "followupRun" | "sessionKey" | "runtimePolicySessionKey"
+  >,
+  assertCurrent: () => void,
+) {
+  if (!params.sessionKey) {
+    return { writable: true, toolPolicy: undefined };
+  }
+  return await withSandboxRuntimeStatusInWorker(
+    {
+      cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
+      sessionKey: params.sessionKey,
+      classificationSessionKey:
+        params.runtimePolicySessionKey ?? params.followupRun.run.runtimePolicySessionKey,
+    },
+    { env: process.env, cwd: process.cwd(), assertCurrent },
+    async ({ sandboxed, toolPolicy, workspaceAccess: access, classificationAgentId: agentId }) => ({
+      writable:
+        !sandboxed ||
+        (access ?? resolveSandboxConfigForAgent(params.cfg, agentId).workspaceAccess) === "rw",
+      toolPolicy: sandboxed ? toolPolicy : undefined,
+    }),
+  );
+}
 
 export function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string): boolean {
   const provider = params.followupRun.run.provider;

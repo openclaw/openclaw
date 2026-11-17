@@ -134,6 +134,8 @@ type WorkspaceSkillCommandOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   reservedNames?: Set<string>;
   gatewayOnly?: boolean;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
@@ -151,6 +153,8 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
     eligibility: opts?.eligibility,
     pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
     gatewayOnly: opts?.gatewayOnly,
+    executionWorkspaceDir: opts?.executionWorkspaceDir,
+    executionWorkspaceFileHost: opts?.executionWorkspaceFileHost,
   };
 }
 

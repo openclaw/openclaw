@@ -23,6 +23,13 @@ vi.mock("../plugins/providers.runtime.js", async () => {
   );
   return {
     ...actual,
+    withPluginProviders: <T>(
+      params: Parameters<typeof actual.withPluginProviders>[0],
+      run: (providers: ProviderPlugin[]) => Promise<T>,
+    ) =>
+      providerRuntimeMocks.useMockProviders
+        ? run(providerRuntimeMocks.resolvePluginProvidersCore(params))
+        : actual.withPluginProviders(params, run),
     resolvePluginProvidersCore: (
       params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
     ): ProviderPlugin[] =>

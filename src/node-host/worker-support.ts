@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  addTimerTimeoutGraceMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { MCP_ELICITATION_TIMEOUT_MS } from "../agents/mcp-client-elicitation.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
@@ -63,13 +68,21 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
       this.writeMessage({ type: "invoke-result", generation, result: params ?? {} });
       return {} as T;
     }
-    if (method === "node.event") {
+    const isMcpQuestion =
+      method === "node.event" && isRecord(params) && params.event === "mcp.elicitation";
+    if (method === "node.event" && !isMcpQuestion) {
       this.writeMessage({ type: "node-event", generation, event: params ?? {} });
       return {} as T;
     }
 
     const id = `gateway-${this.nextRequestId++}`;
-    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 15_000);
+    // The native bridge requires a finite timeout even when the MCP caller owns cancellation.
+    const timeoutMs = resolveTimerTimeoutMs(
+      isMcpQuestion && opts?.timeoutMs === null
+        ? addTimerTimeoutGraceMs(MCP_ELICITATION_TIMEOUT_MS)
+        : opts?.timeoutMs,
+      15_000,
+    );
     const signal = opts?.signal;
     const onAbort = () => this.pending.take(id)?.reject(signal?.reason);
     const pending = this.pending.add(id, {

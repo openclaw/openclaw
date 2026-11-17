@@ -11,12 +11,47 @@ import {
   publicationOptions,
   waitForWatchedSessionKey,
 } from "./chat-github-publication.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details Environment changes" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
+  it("explains host workspace restrictions without requesting a forbidden diff", async () => {
+    await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
+      const reason =
+        "Your operator role requires a sandboxed session. Ask the owner to share the files in your own session.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...publicationMethods, "sessions.diff"],
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: "/workspace/project",
+        workspaceGit: true,
+        sessions: [
+          createControlUiSessionRow("agent:main:main", "Shared host session", 1, {
+            workspaceReadDisabledReason: reason,
+          }),
+        ],
+        methodResponses: {
+          "sessions.diff": { __mockError: { code: "FORBIDDEN", message: reason } },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await openChatDetails(page);
+      await openChatSidePanelType(page, "Review");
+      const panel = page.locator('[data-panel-slot="detail"]:not([hidden])');
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, panel, [panel], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, "restricted-workspace.png"), frame.png);
+      }
+      expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+      await panel.getByText(reason, { exact: true }).waitFor();
+      expect(await panel.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+    });
+  });
+
   it.each(["published", "failed"] as const)(
     "shows local changes beside an existing PR after a %s publication",
     async (status) => {
@@ -138,7 +173,7 @@ suite.define(() => {
     },
   );
 
-  it("shares read-only Uncommitted demand between Environment and Review and recovers retained counts", async () => {
+  it("loads read-only Environment totals separately from Review patches and recovers retained counts", async () => {
     await suite.withPage({ viewport: { width: 1180, height: 800 } }, async ({ page }) => {
       await page.clock.install();
       const result = (additions: number, deletions: number) => ({
@@ -178,37 +213,63 @@ suite.define(() => {
       await readCount().toBe(1);
       await expect.poll(() => action.textContent()).toContain("+248");
       expect(await action.textContent()).toContain("−61");
-      expect((await reads())[0]?.params).toMatchObject({ scope: "uncommitted" });
+      const summaryMatch = { scope: "uncommitted", summaryOnly: true };
+      const initialParams = (await reads())[0]?.params;
+      expect(initialParams).toMatchObject(summaryMatch);
+      // SAFETY: the assertion above verifies the recorded request params object.
+      const patchParams = { ...(initialParams as Record<string, unknown>) };
+      delete patchParams.summaryOnly;
       expect(await page.locator(".session-diff").count()).toBe(0);
 
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await gateway.deferNext("sessions.diff", summaryMatch);
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(2);
-      await gateway.rejectDeferred("sessions.diff", {
-        code: "UNAVAILABLE",
-        message: "Checkout unavailable",
-      });
+      await gateway.rejectDeferred(
+        "sessions.diff",
+        { code: "UNAVAILABLE", message: "Checkout unavailable" },
+        { match: summaryMatch },
+      );
       expect(await action.textContent()).toContain("+248");
       expect(await action.textContent()).toContain("−61");
 
       await closeChatDetails(page);
       await pauseVirtualClock(page);
       await page.clock.fastForward(60_000);
-      await gateway.setMethodResponse("sessions.diff", { ...result(12480, 1030), truncated: true });
-      await gateway.deferNext("sessions.diff", { scope: "uncommitted" });
+      await gateway.deferNext("sessions.diff", summaryMatch);
       await page.clock.resume();
       await openChatDetails(page);
       await readCount().toBe(3);
-      // Review must join the Environment read, not issue a competing request.
+      await gateway.deferNext("sessions.diff", patchParams, { exactParams: true });
       await action.click();
       const review = page.locator(".session-diff");
+      await readCount().toBe(4);
+      expect((await reads())[3]?.params).not.toHaveProperty("summaryOnly");
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
-      expect(await reads()).toHaveLength(3);
-      await gateway.resolveDeferred("sessions.diff");
+
+      // The older summary cannot complete Review or replace its retained counts.
+      await gateway.resolveDeferred("sessions.diff", result(310, 72), { match: summaryMatch });
+      await expect.poll(() => review.getAttribute("aria-busy")).toBe("true");
+      expect(await action.textContent()).toContain("+248");
+      expect(await action.textContent()).toContain("−61");
+      expect(await review.textContent()).not.toContain("recovered navigation");
+
+      const recovered = { ...result(12480, 1030), truncated: true };
+      await gateway.resolveDeferred(
+        "sessions.diff",
+        {
+          ...recovered,
+          files: recovered.files.map((file) =>
+            Object.assign({}, file, {
+              patch: "@@ -1 +1 @@\n-old navigation\n+recovered navigation\n",
+            }),
+          ),
+        },
+        { match: patchParams, exactParams: true },
+      );
       await expect.poll(() => review.getAttribute("aria-busy")).toBe("false");
       await expect.poll(() => action.textContent()).toContain("+12,480");
       expect(await action.textContent()).toContain("−1,030");
@@ -221,10 +282,18 @@ suite.define(() => {
           .textContent(),
       ).toBe("Uncommitted");
       expect(await review.locator(".session-diff__filename").allTextContents()).toEqual(["app.ts"]);
-      expect(await reads()).toHaveLength(3);
-      for (const params of [{ scope: "all" }, { summaryOnly: true }]) {
-        expect(await gateway.getRequests("sessions.diff", params)).toHaveLength(0);
-      }
+      await review.locator(".session-diff__file-toggle").click();
+      await expect.poll(() => review.textContent()).toContain("recovered navigation");
+      await expect
+        .poll(() => review.locator(".chat-diff__row--add").textContent())
+        .toContain("recovered navigation");
+      expect(await reads()).toHaveLength(4);
+      expect(await gateway.getRequests("sessions.diff", summaryMatch)).toHaveLength(3);
+      expect(await gateway.getRequests("sessions.diff", { summaryOnly: true })).toHaveLength(3);
+      expect(
+        await gateway.getRequests("sessions.diff", patchParams, { exactParams: true }),
+      ).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.diff", { scope: "all" })).toHaveLength(0);
       for (const method of [
         "sessions.files.list",
         "sessions.files.get",

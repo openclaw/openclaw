@@ -60,10 +60,13 @@ const header = (id = "pi-session", version = 3) =>
   piSessionHeader({ id, version, timestamp: "2026-07-13T10:00:00Z" });
 
 function usePiCandidateCacheClock(): () => void {
-  let now = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  let wallClock = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   return () => {
     now += 32_001;
+    wallClock -= 60_000;
   };
 }
 

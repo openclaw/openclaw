@@ -86,6 +86,20 @@ function fixture() {
 }
 
 describe("session-scoped attached worker portals", () => {
+  it("closes a padded owned id while rejecting a padded foreign id", async () => {
+    const f = fixture();
+    await f.invoke("open", { port: 3000 });
+    const owned = f.service.list()[0]!;
+    const foreign = await f.service.open({ targetPort: 3000 });
+    expect((await f.invoke("close", { id: ` ${foreign.id}\n` }))?.[0]).toBe(false);
+    expect((await f.invoke("close", { id: ` ${owned.id}\n` }))?.slice(0, 2)).toEqual([
+      true,
+      { closed: true },
+    ]);
+    expect((await f.invoke("list"))?.[1]).toEqual({ portals: [] });
+    expect(f.service.list()).toEqual([foreign]);
+  });
+
   it.each([
     { kind: "worker", retire: "resetSession" },
     { kind: "worker", retire: "unqualify" },

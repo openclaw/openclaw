@@ -19,7 +19,6 @@ import {
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAndroidBuildVersion } from "../../../scripts/lib/android-version.ts";
-import { renderMobileReleaseNotes } from "../../../scripts/lib/mobile-release-notes.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -373,17 +372,6 @@ function main() {
   }
 
   const version = resolveAndroidBuildVersion(rootDir);
-  if (process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
-    for (const audience of ["phone", "wear"] as const) {
-      renderMobileReleaseNotes({
-        rootDir,
-        platform: "android",
-        version: version.canonicalVersion,
-        build: String(version.versionCode),
-        audience,
-      });
-    }
-  }
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(
     (artifact) =>

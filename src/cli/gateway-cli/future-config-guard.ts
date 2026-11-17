@@ -9,6 +9,10 @@ import {
 } from "../../config/future-version-guard.js";
 // Gateway-specific future-config actions shared by pre-bootstrap and runtime startup.
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
+import {
+  isUpdateRehearsalReadOnlyPath,
+  resolveUpdateRehearsalRoot,
+} from "../../infra/update-rehearsal-paths.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayRunOpts } from "./run-options.js";
 
@@ -52,6 +56,18 @@ export function enforceGatewayRunFutureConfigGuard(params: {
     serviceMode,
   });
   if (!block) {
+    return true;
+  }
+  if (
+    !serviceMode &&
+    !params.opts.reset &&
+    !params.opts.force &&
+    params.snapshot?.valid &&
+    resolveUpdateRehearsalRoot(process.env) &&
+    !isUpdateRehearsalReadOnlyPath(params.snapshot.path, process.env)
+  ) {
+    // Rehearsal preserves writer stamps for shipped-driver capture comparisons.
+    // The target's live finalizer restamps validated downgrade config before restart.
     return true;
   }
   if (serviceMode) {

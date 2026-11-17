@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
@@ -413,15 +414,20 @@ it("prepares its originally missing store and records native birth without chang
       get: unrelatedInitialization,
     });
   }
-  const warm = capture({
-    ...options,
-    env,
-  });
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
   try {
-    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-    expect(unrelatedInitialization).not.toHaveBeenCalled();
+    const warm = capture({ ...options, env });
+    try {
+      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+      expect(unrelatedInitialization).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      await warm.release();
+    }
   } finally {
-    await warm.release();
+    stat.mockRestore();
+    syncBuiltinESMExports();
   }
   const windows = (() => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -557,6 +563,33 @@ it.each([
     expect(read.entries).toEqual([{ sessionKey, entry: written }]);
   },
 );
+
+it("allows the first session after a released missing-store reader", async () => {
+  const options = fixture();
+  {
+    const reader = capture(options);
+    await using _ = onExit(() => reader.release());
+    await expect(reader.runExisting(source(), async () => "unexpected")).resolves.toBeUndefined();
+    expect(fs.existsSync(options.path)).toBe(false);
+    await reader.release();
+  }
+
+  const sessionKey = "agent:main:after-missing-read";
+  const entry = { sessionId: "first-session", updatedAt: 1 };
+  const written = await upsertSessionEntryCore(
+    { agentId: options.agentId, env: options.env, storePath: options.path, sessionKey },
+    entry,
+  );
+  expect(written).toMatchObject({ sessionId: entry.sessionId });
+  {
+    const following = capture(options);
+    await using _ = onExit(() => following.release());
+    const read = await following.runExisting(source(), (scope) =>
+      scope.execute({ type: "session.entry.read", input: { sessionKeys: [sessionKey] } }),
+    );
+    expect(read).toMatchObject({ entries: [{ sessionKey, entry: written }] });
+  }
+});
 
 it.each(["unused", "refused"] as const)(
   "releases the %s creation reservation while a sibling remains",
@@ -751,8 +784,8 @@ it.skipIf(process.platform === "win32")(
         replaced = true;
       }
     };
-    const readEntry = (request = source()) =>
-      execution.runExisting(request, (scope) =>
+    const readEntry = (request = source(), borrowed = execution) =>
+      borrowed.runExisting(request, (scope) =>
         scope.execute({
           type: "session.entry.read",
           input: { sessionKeys: ["agent:main:missing"] },
@@ -762,7 +795,12 @@ it.skipIf(process.platform === "win32")(
       await execution.prepare(source());
       await expect(readEntry(requestSource)).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
-      await expect(readEntry()).rejects.toThrow(/identity changed/);
+      const borrowed = capture(options);
+      try {
+        await expect(readEntry(source(), borrowed)).rejects.toThrow(/identity changed/);
+      } finally {
+        await borrowed.release();
+      }
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);

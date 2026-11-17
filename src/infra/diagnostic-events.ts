@@ -455,13 +455,7 @@ export type DiagnosticToolLoopEvent = DiagnosticSessionEvent & {
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
-  detector:
-    | "generic_repeat"
-    | "argument_churn"
-    | "unknown_tool_repeat"
-    | "known_poll_no_progress"
-    | "global_circuit_breaker"
-    | "ping_pong";
+  detector: "tool_repeat";
   count: number;
   message: string;
   pairedToolName?: string;
@@ -1291,7 +1285,7 @@ export function createQueuedDiagnosticPhaseEmitter() {
         ...phase,
         type: "diagnostic.phase.completed",
         trace,
-        details: phase.details ? { ...phase.details } : undefined,
+        details: phase.details,
       },
       true,
       // Measurements do not establish outbound trace state before dispatch.

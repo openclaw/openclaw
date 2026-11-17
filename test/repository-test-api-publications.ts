@@ -8,7 +8,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/agent-hooks/compaction-safeguard.ts": Symbol.for(
     "openclaw.compactionSafeguardTestApi",
   ),
-  "src/agents/auth-profiles/external-auth.ts": Symbol.for("openclaw.externalAuthTestApi"),
   "src/agents/auth-profiles/mutation-lineage.ts": Symbol.for(
     "openclaw.runtimeAuthSnapshotsTestApi",
   ),
@@ -20,7 +19,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
-  "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),

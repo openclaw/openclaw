@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
@@ -135,7 +135,8 @@ describe("image custom provider auth regression", () => {
         authStorage: {} as never,
         modelRegistry: {} as never,
       }),
-      loadImageWebMediaRuntime: async () => mediaRuntimeMock,
+      loadWebMedia: mediaRuntimeMock.loadWebMedia,
+      optimizeImageBufferForWebMedia: mediaRuntimeMock.optimizeImageBufferForWebMedia,
     });
   });
 
@@ -288,7 +289,8 @@ describe("image tool provider loading", () => {
       },
       resolveRegisteredMediaUnderstandingProvider: resolveProvider,
       resolveImageCompressionPolicy: async () => ({ imageCount: 1 }),
-      loadImageWebMediaRuntime: async () => mediaRuntimeMock,
+      loadWebMedia: mediaRuntimeMock.loadWebMedia,
+      optimizeImageBufferForWebMedia: mediaRuntimeMock.optimizeImageBufferForWebMedia,
     });
   });
 

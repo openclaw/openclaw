@@ -3,6 +3,8 @@ import { page, userEvent } from "vitest/browser";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ChatNotice } from "./chat-notice-view.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/grouped.css";
 
@@ -35,12 +37,11 @@ it.each([
   root.dataset.theme = theme;
   root.dataset.themeMode = theme;
   await page.viewport(width, 900);
-  const pluginName = "release-review-plugin-with-a-long-unbroken-display-name";
-  const label = `${pluginName} guidance`;
+  const label = "release-review-plugin-with-a-long-unbroken-display-name";
   const item: Extract<ChatItem, { kind: "notice" }> = {
     kind: "notice",
     key: "plugin-steering",
-    icon: "cpu",
+    icon: "compass",
     label,
     timestamp: new Date(2026, 9, 16, 14, 37).getTime(),
     text: "Check the **rollback path** before continuing.",
@@ -65,6 +66,9 @@ it.each([
   await expect.element(body).toBeVisible();
   expect(body.textContent?.trim()).toBe("Check the rollback path before continuing.");
   expect(body.querySelector("strong")?.textContent).toBe("rollback path");
+  const chevron = row.querySelector<HTMLElement>(".chat-notice-inline__chevron")!;
+  // The rotating chevron extends past the summary mid-transition at narrow widths.
+  await Promise.all(chevron.getAnimations().map((animation) => animation.finished));
   expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
   // The row reads as part of the agent's turn: body text starts at the row's left edge, not centered.
   expect(getComputedStyle(body).textAlign).not.toBe("center");
@@ -72,4 +76,31 @@ it.each([
   await userEvent.click(summary);
   expect(row.open).toBe(false);
   await expect.element(body).not.toBeVisible();
+});
+
+it("offers notice text to transcript search highlighting", async () => {
+  const item: Extract<ChatItem, { kind: "notice" }> = {
+    kind: "notice",
+    key: "search-notice",
+    icon: "cpu",
+    label: "Guidance",
+    timestamp: new Date(2026, 9, 16, 14, 37).getTime(),
+    text: "Check the **rollback path** before continuing.",
+  };
+  const view = mountSolid(() => <ChatNotice item={item} />);
+  const search = new TranscriptSearchState();
+  const stop = watchChatSearchHighlight(view.container, search);
+  search.toggle();
+  search.setQuery("the rollback");
+  try {
+    await expect
+      .poll(() =>
+        Array.from(CSS.highlights.get("openclaw-chat-search") ?? [], (range) =>
+          range instanceof Range ? range.toString() : null,
+        ),
+      )
+      .toEqual(["the ", "rollback"]);
+  } finally {
+    stop();
+  }
 });

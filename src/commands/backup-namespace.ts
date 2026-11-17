@@ -1,7 +1,7 @@
 import os from "node:os";
 import { z } from "zod";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { parseRemoteBackupTimestamp, resolveBackupNamespace } from "../infra/backup-retention.js";
 import type { StorageLocation } from "../storage/locations.js";
 

@@ -9,6 +9,7 @@ import {
   wsInstances,
 } from "../../ui/src/api/gateway-socket.test-support.js";
 import { GatewayBrowserClient } from "../../ui/src/api/gateway.js";
+import { expectCollected } from "../test-utils/retention.js";
 import {
   broadcastFor as broadcaster,
   coalesced,
@@ -75,6 +76,29 @@ function harness(peer = createPeer("subscriber"), options: Parameters<typeof bro
 }
 
 const payloads = (peer: ReturnType<typeof createPeer>) => peer.frames.map(({ payload }) => payload);
+
+it("releases completed runs while their delivery socket remains open", async () => {
+  class RetiredRun {
+    readonly fixtureLabel = "RetiredRun";
+  }
+  const peer = createPeer("retained-socket", true);
+  const { broadcast } = broadcaster([peer]);
+  const retired: WeakRef<RetiredRun>[] = [];
+  function completeRuns() {
+    for (let index = 0; index < 20; index += 1) {
+      const owner = new AbortController();
+      broadcast("chat", text(`run-${index}`), textOptions(owner.signal));
+      const reason = new RetiredRun();
+      retired.push(new WeakRef(reason));
+      owner.abort(reason);
+    }
+    peer.socket.send.mockClear();
+  }
+  completeRuns();
+  await expectCollected(...retired);
+  expect(peer.frames).toHaveLength(20);
+  expect(peer.socket.close).not.toHaveBeenCalled();
+});
 
 it("keeps a shared chat stream when one full observer unsubscribes", async () => {
   useNodeFakeTimers();

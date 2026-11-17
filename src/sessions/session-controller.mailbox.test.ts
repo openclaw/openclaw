@@ -5,6 +5,7 @@ import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { reserveSteerCandidate, enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { admitFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { deferSessionControllerClaimBeforeExecution } from "./session-controller.mailbox-claim.js";
@@ -107,15 +108,18 @@ function source(prompt: string) {
   return run;
 }
 function revocableAuthority(message: string, beforeThrow?: () => void) {
+  const revocation = new AbortController();
   let current = true;
   return {
     revoke: () => {
       current = false;
     },
     authority: {
+      signal: revocation.signal,
       assertCurrent() {
         if (!current) {
           beforeThrow?.();
+          revocation.abort(new Error(message));
           throw new Error(message);
         }
       },
@@ -206,6 +210,48 @@ describe("controller mailbox scheduling", () => {
       expect(retried.inputs).toContain(input);
     },
   );
+  it.each(["run", "adapter"] as const)(
+    "retains the exact queued input after its %s assertion refuses without revocation",
+    async (owner) => {
+      let failure: Error | undefined;
+      const signal = new AbortController().signal;
+      const authority = {
+        profileId: "queued-person",
+        scopes: ["operator.write"],
+        signal,
+        assertCurrent() {
+          if (failure) {
+            throw failure;
+          }
+        },
+      };
+      const input = reserveSource(owner === "adapter" ? { adapter: { authority } } : {});
+      const run = source("keep this queued message");
+      if (owner === "run") {
+        run.operatorAuthority = authority;
+      }
+      bindSessionControllerSource(input, run);
+      for (const refusal of [
+        new GatewayOperatorAccessUnavailableError(),
+        new Error("internal SDK assertion failure"),
+      ]) {
+        const claim = await claimSessionControllerInput(run);
+        failure = refusal;
+        expect(() => authority.assertCurrent()).toThrow(refusal);
+        expect(deferSessionControllerClaimBeforeExecution(claim)).toBe(true);
+        await releaseClaim(claim);
+        expect(input.phase).toBe("waiting");
+        expect(input.custody.completed).not.toBe(true);
+        expect(input.abortSignal.aborted).toBe(false);
+        failure = undefined;
+      }
+      const recovered = await claimSessionControllerInput(run);
+      expect(recovered.inputs).toContain(input);
+      await releaseClaim(recovered);
+      expect(input.phase).toBe("consumed");
+    },
+  );
+
   it("retires a queued injection before releasing its receipt when live authority rejects", async () => {
     const active = activeOperation("active");
     const authority = revocableAuthority("source authority revoked", () => active.complete());
@@ -223,7 +269,7 @@ describe("controller mailbox scheduling", () => {
       dispatch,
     );
     authority.revoke();
-    await expect(injection?.admit()).rejects.toThrow("source authority revoked");
+    await expect(injection?.admit()).resolves.toBe("cancelled");
     await captureSessionControllerSourceSettlement(input);
     expect(dispatch).not.toHaveBeenCalled();
     expect(findSessionControllerEntry(key)).toBeUndefined();
@@ -341,7 +387,6 @@ it("clearFollowupQueue retains delayed native injection and source adoption unti
   clearFollowupQueue(key);
   expect(input.mailbox.entries).toContain(input);
   expect(input.injection).toBe(injection);
-  expect(injection?.accepted).toBeUndefined();
   expect(settled).not.toHaveBeenCalled();
   reservation.accepted(true);
   reservation.consume("consumed");
@@ -427,8 +472,8 @@ describe("early source injection custody", () => {
     await Promise.resolve();
     expect(admitted).not.toHaveBeenCalled();
     await expect(claimSessionControllerTask(first, () => {})).rejects.toThrow(/injection/);
-    // Acceptance wins even if a late caller mistakes the outcome for rejection.
-    a.finish(false);
+    // The injection owner settles accepted custody after its native receipt.
+    a.finish(true);
     expect(await next).toBe(true);
     expect([first.phase, second.phase]).toEqual(["consumed", "injecting"]);
     // Old callbacks must not consume a same-ID sibling.
@@ -486,7 +531,7 @@ describe("early source injection custody", () => {
       const b = inject(second);
       const admission = b.admit();
       if (outcome === "revoked") {
-        const rejected = expect(admission).rejects.toThrow("source revoked");
+        const rejected = expect(admission).resolves.toBe(false);
         authority.revoke();
         a.finish(true);
         await rejected;

@@ -230,7 +230,7 @@ test.each([
               : { phase: "remoteError" };
         }
         if (command === "close_connection_settings" && failure) {
-          throw new Error("The previous dashboard is unavailable. Try again.");
+          throw new Error("The previous page is unavailable. Try again.");
         }
         return [];
       },
@@ -265,7 +265,7 @@ test.each([
     if (failure) {
       assert.equal(h.text("#title"), "Connection Settings");
       assert.equal(h.hidden(".setup-navigation"), false);
-      assert.match(h.text("#remote-feedback") ?? "", /previous dashboard is unavailable/);
+      assert.match(h.text("#remote-feedback") ?? "", /previous page is unavailable/);
     }
   },
 );

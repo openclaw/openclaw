@@ -1,27 +1,20 @@
-import { EventEmitter } from "node:events";
-import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reconcileCodexCatalogFiles } from "./session-catalog-index-files.js";
-import { catalogRow } from "./session-catalog-index.test-support.js";
+import {
+  catalogRow,
+  freezeCatalogDirectoryClocks,
+  watchWithControlledEvents,
+} from "./session-catalog-index.test-support.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
 import { CodexCatalogRolloutScanner } from "./session-catalog-rollout-scanner.js";
 import { readCodexCatalogRollout } from "./session-catalog-rollouts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scanners = new Set<CodexCatalogRolloutScanner>();
-class ControlledWatcher extends EventEmitter {
-  close = vi.fn();
-  ref() {
-    return this;
-  }
-  unref() {
-    return this;
-  }
-}
 afterEach(() => {
   for (const scanner of scanners) {
     scanner.close();
@@ -37,16 +30,6 @@ function makeScanner(root: string) {
 const emptyScan = { files: new Map(), present: new Set() };
 const denied = (message = "permission denied", code = "EACCES") =>
   Object.assign(new Error(message), { code });
-function watchWithControlledEvents(platform: NodeJS.Platform) {
-  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-  const watchers: ControlledWatcher[] = [];
-  const watch = vi.spyOn(nodeFs, "watch").mockImplementation(() => {
-    const watcher = new ControlledWatcher();
-    watchers.push(watcher);
-    return watcher;
-  });
-  return { watchers, watch };
-}
 function expectNoReads(...methods: Array<"readFile" | "open" | "readdir">) {
   const spies = methods.map((method) => vi.spyOn(fs, method));
   return () => spies.forEach((spy) => expect(spy).not.toHaveBeenCalled());
@@ -165,12 +148,15 @@ describe("resident catalog rollout currency", () => {
   });
 
   it("scans new day folders without content reads and prefers plain rollout siblings", async () => {
+    const { notifyRename } = watchWithControlledEvents("linux");
+    freezeCatalogDirectoryClocks();
     const f = await fixture();
     const noReads = expectNoReads("readFile", "open");
     const tracked = [f.file];
     const { files: first } = await f.scan(tracked);
     const compressedSibling = `${f.file}.zst`;
     await fs.writeFile(compressedSibling, zstdCompressSync(meta()));
+    notifyRename(compressedSibling);
     const newDay = path.join(f.root, "2026", "09", "17");
     await fs.mkdir(newDay);
     const added = path.join(newDay, "rollout-new.jsonl.zst");
@@ -182,13 +168,23 @@ describe("resident catalog rollout currency", () => {
     expect(next.has(added)).toBe(true);
     expect(present).toEqual(new Set([f.file]));
     noReads();
+    const directories = vi.spyOn(fs, "opendir");
+    await f.scan(tracked);
+    expect(directories.mock.calls.map(([directory]) => directory)).not.toContain(f.day);
+    expect(directories.mock.calls.map(([directory]) => directory)).not.toContain(newDay);
+    directories.mockRestore();
 
     const renamed = path.join(newDay, "rollout-renamed.jsonl.zst");
     await fs.rename(added, renamed);
+    notifyRename(added);
+    notifyRename(renamed);
     await fs.unlink(f.file);
+    // Filesystem completion is not a watcher receipt; assert convergence after delivery.
+    notifyRename(f.file);
     const final = await f.scan([f.file, added.slice(0, -4), renamed.slice(0, -4)]);
     expect(new Set(final.files.keys())).toEqual(new Set([compressedSibling, renamed]));
     expect(final.present).toEqual(new Set([f.file, renamed.slice(0, -4)]));
+    noReads();
   });
 
   it("closes the Darwin watcher arm gap before cache reuse at fractional time", async () => {
@@ -241,7 +237,7 @@ describe("resident catalog rollout currency", () => {
 
   it("falls back to file stats after watcher loss and releases watches when retired", async () => {
     const f = await fixture();
-    const watch = vi.spyOn(nodeFs, "watch");
+    const { watch } = watchWithControlledEvents("linux");
     await f.scan();
     const watcher = watch.mock.results[0]!.value;
     const close = vi.spyOn(watcher, "close");
@@ -256,7 +252,7 @@ describe("resident catalog rollout currency", () => {
     await fs.unlink(f.file);
     expect((await f.scan([f.file])).present.size).toBe(0);
     watch.mockRestore();
-    const restoredWatch = vi.spyOn(nodeFs, "watch");
+    const { watch: restoredWatch } = watchWithControlledEvents("linux");
     await f.scan();
     const restoredClose = vi.spyOn(restoredWatch.mock.results[0]!.value, "close");
     f.scanner.close();

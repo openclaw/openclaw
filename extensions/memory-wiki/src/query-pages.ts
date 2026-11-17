@@ -27,7 +27,7 @@ const WIKI_SCAN_CHECKPOINT_PAGES = 64;
 /** The host's checkpoint reply that ends a scan task early; the host resubmits the rest. */
 export const WIKI_SCAN_YIELD = "yield";
 
-/** Serializable sandbox scope for bridge pages; `null` admits every page. */
+/** Serializable ownership scope for bridge pages; `null` admits every page. */
 export type WikiPageVisibility = { scopedAgentId: string };
 
 /** A scan's scope as callers pass it to the reader pool. */
@@ -123,20 +123,14 @@ async function readQueryableWikiPagesByPaths<T>(
   return results.filter((result): result is T => result !== null);
 }
 
-function isBridgeCompiledPage(page: QueryableWikiPage): boolean {
-  return (
-    page.sourceType === "memory-bridge" ||
-    page.sourceType === "memory-bridge-events" ||
-    page.bridgeAgentIds.length > 0
-  );
-}
-
 export function isWikiPageVisible(page: QueryableWikiPage, visibility: WikiPageVisibility | null) {
   if (!visibility) {
     return true;
   }
   return (
-    !isBridgeCompiledPage(page) ||
+    (page.sourceType !== "memory-bridge" &&
+      page.sourceType !== "memory-bridge-events" &&
+      page.bridgeAgentIds.length === 0) ||
     (visibility.scopedAgentId.length > 0 &&
       page.bridgeAgentIds.some(
         (agentId) => normalizeLowercaseStringOrEmpty(agentId) === visibility.scopedAgentId,

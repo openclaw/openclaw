@@ -510,6 +510,43 @@ it("carries a signed live native requester grant without claiming complete tool 
   }
 });
 
+it("round-trips scoped cron requester grants without promoting them to local authority", async () => {
+  const grants = await import("./cron-creator-authority-grant.js");
+  const run = operationalRun("run-scoped-requester");
+  const scope = grants.createCronCreatorAuthorityRunScope(
+    run.operationalRunInstance.runId,
+    { kind: "unknown" },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+  try {
+    const grant = grants.mintCronCreatorAuthorityGrant(
+      scope,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+    const params = runtimeParams({ cronCreatorAuthorityGrant: grant }, run);
+    const token = await api.mint(params);
+    const identity = await api.verify(token);
+    expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+    expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+    expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+    grants.revokeCronCreatorAuthorityRunScope(scope);
+    await expect(api.verify(token)).resolves.toBeUndefined();
+    await expect(api.mint(params)).rejects.toThrow("authenticated-requester provenance");
+  } finally {
+    grants.revokeCronCreatorAuthorityRunScope(scope);
+  }
+});
+
 it("does not mint local credentials while rejecting invalid presented tokens", async () => {
   await expect(api.verify("not-a-valid-token")).resolves.toBeUndefined();
   expect(readSocketToken()).toBeUndefined();

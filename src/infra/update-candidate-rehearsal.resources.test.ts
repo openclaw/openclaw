@@ -98,6 +98,23 @@ async function fixture(sizeMiB = 0, ids = ["main"], worker = true) {
   return { root, stateDir, files, file: files[0]! };
 }
 
+it("records deferred credential availability in the snapshot receipt", async () => {
+  const f = await fixture();
+  const config: OpenClawConfig = {
+    secrets: {
+      providers: { vault: { source: "exec", command: path.join(f.root, "missing-resolver") } },
+    },
+  };
+  const original = structuredClone(config);
+  await withRehearsal(prepare(f, { config }), async (rehearsal) => {
+    expect(rehearsal.snapshotWarnings).toContain(
+      "Update rehearsal leaves exec SecretRef providers cold; credential availability is not verified.",
+    );
+    expect((await readConfig(rehearsal.configPath)).secrets).toEqual(config.secrets);
+    expect(config).toEqual(original);
+  });
+});
+
 it.each([
   { table: "retained", index: "retained_value", fullIntegrityCheck: undefined, rejects: false },
   { table: "retained", index: "retained_value", fullIntegrityCheck: true, rejects: true },
@@ -387,32 +404,13 @@ async function capacityFixture(mebibytes: number | null, worker = false) {
   const before = await hashes();
   return {
     ...f,
-    assess: () =>
-      assessInitialUpdateSnapshotCapacity({ config: {}, stateDir: f.stateDir, env: {} }),
     prepare: (options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {}) =>
       prepare(f, options),
     unchanged: async () => expect(await hashes()).toEqual(before),
   };
 }
 
-it.each([
-  { space: 100, exitCode: 0, diagnostic: "" },
-  { space: 70, exitCode: 1, diagnostic: "snapshot-capacity-insufficient" },
-  { space: null, exitCode: 0, diagnostic: "free space unknown" },
-])(
-  "preflights one generation with $space MiB free (exit=$exitCode)",
-  async ({ space, exitCode, diagnostic }) => {
-    const f = await capacityFixture(space);
-    const result = await f.assess();
-    expect(result.exitCode, result.stderrTail ?? undefined).toBe(exitCode);
-    if (diagnostic) {
-      expect(result.stderrTail ?? result.diagnostics?.join("\n")).toContain(diagnostic);
-    }
-    await f.unchanged();
-  },
-);
-
-it("preflights activation backup separately from candidate copy capacity", async () => {
+it("preflights activation database backup space before the update changes anything", async () => {
   const f = await fixture(0, ["main", "second"], false);
   // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
   for (const file of f.files) {
@@ -469,6 +467,16 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
   const f = await capacityFixture(100, true);
   const worker = path.join(f.root, "dist", "infra", "update-candidate-state.worker.js");
   // Exercise the real worker, but present the inventory contract of an older candidate.
+  const run = exec.runUtf8CommandWithTimeout;
+  vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number" || typeof options.input !== "string") {
+      return run(argv, options);
+    }
+    const input = JSON.parse(options.input);
+    // Older workers also ignore the opt-in result transport and reply on stdout.
+    delete input.resultPath;
+    return run(argv, { ...options, input: JSON.stringify(input) });
+  });
   const source = await fs.readFile(worker, "utf8");
   await fs.writeFile(
     worker,

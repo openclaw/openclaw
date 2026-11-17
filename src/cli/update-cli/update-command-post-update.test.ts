@@ -5,11 +5,13 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
   getUpdateRun,
+  readOwedUpdateSteps,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
@@ -31,6 +33,7 @@ import {
   registerManagedInstallEnvironmentTest,
   recordVerifiedGatewayRun,
   successfulPluginUpdate,
+  runFinalizationFailureWithNativeExecutor,
   taskRecovery,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
@@ -161,8 +164,11 @@ afterEach(() => {
 });
 
 describe("successful update finalization ordering", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const control = tempDirs.make("post-update-native-control-");
+    await fs.chmod(control, 0o700);
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     // These roots are package fixtures; separate process tests cover Git discovery.
     vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
     mocks.readServiceState.mockReset();
@@ -190,6 +196,13 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
+
+  // A failed completion refresh stays owed, so those cases keep it out of the shared ledger.
+  const ownLedger = () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("post-update-owed-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    return { restartEnvironment: process.env, run };
+  };
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);
@@ -289,7 +302,8 @@ describe("successful update finalization ordering", () => {
         },
       );
       const recovery = taskRecovery((phase) => events.push(phase));
-      mocks.restartService.mockImplementationOnce(async () => {
+      mocks.restartService.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+        onGatewayStartAttempted?.();
         events.push("start");
         return "ok";
       });
@@ -320,8 +334,8 @@ describe("successful update finalization ordering", () => {
       } finally {
         identity.restore();
       }
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
-      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("restore")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
@@ -334,7 +348,7 @@ describe("successful update finalization ordering", () => {
       Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
     );
 
-    await expect.soft(finishSuccessfulPackageSwitch()).resolves.toBeUndefined();
+    await expect.soft(finishSuccessfulPackageSwitch(ownLedger())).resolves.toBeUndefined();
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(output).toContain("Shell completion refresh failed");
@@ -346,6 +360,33 @@ describe("successful update finalization ordering", () => {
 
   registerVerifiedActivationFailureTests({ tempDirs, mocks });
 
+  it("converges plugins for a switched Git release only after it verified", async () => {
+    const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+    const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+    const prefix = path.join(
+      await fs.realpath(tempDirs.make("git-release-finalize-")),
+      "git-install",
+    );
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+
+    await finishSuccessfulPackageSwitch(
+      {
+        packageRoot: gitReleaseSlot(prefix),
+        updateMode: "git",
+        sealed: true,
+        restartEnvironment: process.env,
+      },
+      { gitRelease: true },
+    );
+
+    // A failed trial switches core back; plugins replaced before that would require the new core.
+    expect(mocks.restartService).toHaveBeenCalled();
+    expect(mocks.updatePlugins).toHaveBeenCalled();
+    expectBefore(mocks.restartService, mocks.updatePlugins);
+  });
+
   it("restarts when completion cache refresh reports failure", async () => {
     const root = tempDirs.make("openclaw-completion-failure-");
     await fs.writeFile(
@@ -353,10 +394,7 @@ describe("successful update finalization ordering", () => {
       'process.stderr.write("injected completion cache failure"); process.exit(1);',
     );
 
-    await finishSuccessfulPackageSwitch({
-      packageRoot: root,
-      restartEnvironment: process.env,
-    });
+    await finishSuccessfulPackageSwitch({ ...ownLedger(), packageRoot: root });
 
     const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
     const warningIndex = logCalls.findIndex((call) =>
@@ -378,9 +416,11 @@ describe("successful update finalization ordering", () => {
       usesSlowPattern: true,
     });
     mocks.ensureCompletionCache.mockResolvedValueOnce(false);
+    const ledger = ownLedger();
 
-    await finishSuccessfulPackageSwitch();
+    await finishSuccessfulPackageSwitch(ledger);
 
+    expect(readOwedUpdateSteps(ledger.run)).toMatchObject([{ id: "shell-completion" }]);
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
     expect(output).toContain("Resolve the reported error before retrying");
@@ -396,22 +436,34 @@ describe("successful update finalization ordering", () => {
       throw restoreError;
     });
 
-    await expectUpdateFailure(
-      finishSuccessfulPackageSwitch({
-        restartEnvironment: process.env,
-        json: true,
-        windowsTaskAutoStartRecovery: {
-          ...taskRecovery(),
-          restore,
-        },
-      }),
-      "windows-task-autostart-restore-failed",
-      { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
-    );
+    const root = tempDirs.make("post-update-task-recovery-");
+    const env = { ...process.env };
+    const run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const ownerFailure = await runFinalizationFailureWithNativeExecutor(root, run, async () => {
+      await expectUpdateFailure(
+        finishSuccessfulPackageSwitch({
+          packageRoot: root,
+          run,
+          restartEnvironment: process.env,
+          json: true,
+          windowsTaskAutoStartRecovery: {
+            ...taskRecovery(),
+            restore,
+          },
+        }),
+        "windows-task-autostart-restore-failed",
+        { cause: restoreError, detail: expect.stringContaining(restoreError.message) },
+      );
 
-    expect(restore).toHaveBeenCalledOnce();
-    expect(mocks.restartService).not.toHaveBeenCalled();
-    expectReportedFailure("windows-task-autostart-restore-failed");
+      expect(restore).toHaveBeenCalledOnce();
+      expect(mocks.restartService).not.toHaveBeenCalled();
+      expectReportedFailure("windows-task-autostart-restore-failed");
+      return restoreError;
+    });
+    expect(ownerFailure).toBe(restoreError);
   });
 
   it.each([
@@ -488,7 +540,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: expect.arrayContaining([retained]),
+        steps: expect.arrayContaining([{ ...retained, durationMs: expect.any(Number) }]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
@@ -553,7 +605,6 @@ describe("successful update finalization ordering", () => {
           env: serviceEnv,
         };
         const clock = { origin: Date.now(), elapsed: 1_000 };
-        vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
         const windowsEvents: string[] = [];
         const oldRecovery = taskRecovery((phase) => {
@@ -572,7 +623,7 @@ describe("successful update finalization ordering", () => {
             return "restart-health-failed";
           }
           recordVerifiedGatewayRun(run);
-          params.onVerified?.(Date.now());
+          params.onVerified?.(clock.origin + clock.elapsed);
           return "ok";
         });
         const plugins = { ...successfulPluginUpdate, changed };
@@ -623,7 +674,7 @@ describe("successful update finalization ordering", () => {
                       },
               },
               rolledBack: outcome === "rolled-back",
-              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
+              ...(outcome === "rolled-back" ? { verifiedAtMs: clock.origin + clock.elapsed } : {}),
             };
           },
         );
@@ -935,7 +986,9 @@ process.exitCode = 1;
       );
 
       expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      const steps = mocks.printResult.mock.lastCall?.[0].steps.filter(
+        (step: { name: string }) => !step.name.endsWith("-timing"),
+      );
       if (!runs) {
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual(initialSteps);

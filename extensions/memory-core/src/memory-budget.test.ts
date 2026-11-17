@@ -117,18 +117,18 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
     });
   });
 
-  it("preserves an entire mixed block when user text follows a generated entry", () => {
+  it("preserves an entire mixed block when a generated marker has a handwritten comment", () => {
     const existing = [
       promotionSection("2026-04-10", 400),
       "",
-      "USER-AUTHORED: keep this unheaded durable note.",
+      `${PROMOTION_MARKER_LINE} <!-- USER-AUTHORED -->\n- handwritten bullet`,
       "",
       promotionSection("2026-04-20", 400),
     ].join("\n");
     const result = compact(existing, `\n${promotionSection("2026-04-29", 400)}`, 900);
     expect(result.droppedDates).toEqual(["2026-04-20"]);
     expect(result.compacted).toContain("(2026-04-10)");
-    expect(result.compacted).toContain("USER-AUTHORED: keep this unheaded durable note.");
+    expect(result.compacted).toContain("<!-- USER-AUTHORED -->");
     expect(result.compacted).not.toContain("(2026-04-20)");
   });
 });

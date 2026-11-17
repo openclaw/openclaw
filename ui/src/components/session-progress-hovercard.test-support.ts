@@ -65,7 +65,13 @@ export function createHovercard({
         ? params.sessionKey
         : `agent:${params.agentId}:${params.sessionKey}`;
       return {
-        card: { sessionKey: key, revision: 1, updatedAt: 1, markdown: `${owner} progress` },
+        card: {
+          sessionKey: key,
+          revision: 1,
+          updatedAt: 1,
+          markdown: `${owner} progress`,
+          steps: [{ step: `${owner} progress`, status: "in_progress" }],
+        },
       };
     },
   );

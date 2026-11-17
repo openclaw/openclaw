@@ -220,7 +220,7 @@ export function validateFullReleaseNpmPreflight({
     !/^[1-9][0-9]*$/u.test(producer?.runAttempt ?? "") ||
     qualified.artifact.runId !== producer?.runId ||
     qualified.artifact.runAttempt !== producer?.runAttempt ||
-    producer?.workflowSha !== toolingSha ||
+    producer?.workflowSha !== (retainedSource?.workflow.sha ?? toolingSha) ||
     (independentProducer
       ? !/^refs\/(?:heads|tags)\/.+$/u.test(manifest.workflowFullRef ?? "")
       : !retainedParentProducer &&
@@ -246,7 +246,7 @@ export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ..
   const { run } = verifyNpmBundleProducer({
     producer,
     repository: options.repository,
-    toolingSha: options.toolingSha,
+    toolingSha: producer.workflowSha,
     qualified: true,
     requireCompletedParent: true,
     runGh,
@@ -261,7 +261,7 @@ export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ..
     artifact.digest !== `sha256:${descriptor.artifact.digest}` ||
     artifact.expired !== false ||
     String(artifact.workflow_run?.id) !== producer.runId ||
-    artifact.workflow_run?.head_sha !== options.toolingSha
+    artifact.workflow_run?.head_sha !== producer.workflowSha
   ) {
     throw new Error("Qualified npm preflight artifact identity changed.");
   }
@@ -292,7 +292,7 @@ export async function downloadFullReleaseNpmPreflight({
       artifactSizeBytes: artifact.size_in_bytes,
       artifactExpiresAt: artifact.expires_at,
       runId: Number(producer.runId),
-      workflowSha: options.toolingSha,
+      workflowSha: producer.workflowSha,
     },
   });
   const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
@@ -344,6 +344,32 @@ export function validateReleasePreflightTagIdentity({ branches, ...identity }) {
   return validated;
 }
 
+// Structural binding only; the caller must authenticate the full qualification.
+export function validateNpmPreflightQualification({
+  manifest,
+  repository,
+  sourceSha,
+  toolingSha,
+  producerRunId,
+  producerRunAttempt,
+}) {
+  const qualified = validateFullReleaseNpmPreflight({
+    manifest,
+    repository,
+    runId: manifest.runId,
+    runAttempt: manifest.runAttempt,
+    sourceSha,
+    toolingSha,
+  });
+  if (
+    qualified.producer.runId !== String(producerRunId) ||
+    qualified.producer.runAttempt !== String(producerRunAttempt)
+  ) {
+    throw new Error("Npm producer differs from the authenticated frozen qualification");
+  }
+  return qualified;
+}
+
 /**
  * @param {{ manifest?: unknown, repository: string, sourceSha: string, toolingSha: string,
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
@@ -379,20 +405,14 @@ export async function verifyNpmPreflightPublicationLineage({
     if (!authenticated) {
       throw new Error("Candidate publication requires authenticated qualification authority");
     }
-    const qualified = validateFullReleaseNpmPreflight({
+    const qualified = validateNpmPreflightQualification({
       manifest,
       repository,
-      runId: manifest.runId,
-      runAttempt: manifest.runAttempt,
       sourceSha,
       toolingSha,
+      producerRunId,
+      producerRunAttempt,
     });
-    if (
-      qualified.producer.runId !== String(producerRunId) ||
-      qualified.producer.runAttempt !== String(producerRunAttempt)
-    ) {
-      throw new Error("Npm producer differs from the authenticated frozen qualification");
-    }
     if (publicationAuthority) {
       verifyReleaseToolingIdentity(publicationAuthority);
     }
@@ -473,7 +493,7 @@ export function verifyReleasePreflightToolingIdentity({
   return validated;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+async function main() {
   try {
     const { values } = parseArgs({
       options: {
@@ -615,4 +635,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  // Let this module finish evaluating before a lazy import cycles back to it.
+  void main();
 }

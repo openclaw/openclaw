@@ -15,6 +15,17 @@ const generationOnly = process.argv[3] === "generations-only";
 const samples = Number(process.argv[4] ?? 5);
 assert.ok(Number.isSafeInteger(samples) && samples > 0);
 const sourceRoot = path.resolve(process.argv[5] ?? ".");
+if (process.argv[3] === "stopped-backup-phases") {
+  const { measureStoppedBackupPhases } = await import("./stopped-backup-measure.ts");
+  await measureStoppedBackupPhases({
+    label,
+    samples,
+    sourceRoot,
+    fixture: process.argv[6],
+    hashSource: hashFile,
+  });
+  process.exit(0);
+}
 if (process.argv[3] === "backup-capture") {
   await measureBackupCapture();
   process.exit(0);

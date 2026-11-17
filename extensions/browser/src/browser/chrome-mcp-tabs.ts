@@ -30,21 +30,7 @@ export async function ensureChromeMcpAvailable(
   profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
-  await withChromeMcpLease(profileName, profileOptions, options, async (operation) => {
-    if (!options.pageProbe) {
-      return;
-    }
-    try {
-      const pages = await operation.listTargets({
-        ...options,
-        timeoutMs: options.pageProbe.timeoutMs?.() ?? options.timeoutMs,
-      });
-      options.pageProbe.onResult(pages.length);
-    } catch {
-      options.signal?.throwIfAborted();
-      options.pageProbe.onResult(null);
-    }
-  });
+  await withChromeMcpLease(profileName, profileOptions, options, async () => {});
 }
 
 /** List Chrome MCP pages converted to persistent BrowserTab handles. */

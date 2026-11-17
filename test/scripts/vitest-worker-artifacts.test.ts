@@ -88,7 +88,9 @@ function heldWorkerBorrowingProbe(directory: string) {
 }
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
-  it("keeps source-host SDK imports native in maintenance workers", ({ workerArtifacts }) =>
+  it("keeps source-host SDK imports native in state and maintenance workers", ({
+    workerArtifacts,
+  }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const owner = workerArtifacts.createWorkerRun();
@@ -103,10 +105,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           import {parentPort,workerData} from 'node:worker_threads';
           await import(workerData.entry);
           const {tryNativeRequireModule}=await import(workerData.nativeRequire);
-          const native=tryNativeRequireModule(workerData.sdk);
-          assert(native.ok,'source-host SDK must load natively');
-          const imported=await import(workerData.sdk);
-          assert.equal(native.moduleExport,imported,'source SDK must retain one module identity');
+          for (const sdk of workerData.sdks) {
+            const native=tryNativeRequireModule(sdk);
+            assert(native.ok,'source-host SDK must load natively: '+sdk);
+            const imported=await import(sdk);
+            assert.equal(native.moduleExport,imported,'source SDK must retain one module identity');
+          }
           parentPort.postMessage('native-sdk-ready');
           parentPort.close();
           `,
@@ -119,21 +123,37 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import assert from 'node:assert/strict';
             import path from 'node:path';
             import {pathToFileURL} from 'node:url';
-            import {Worker} from 'node:worker_threads';
+            import {MessagePort,Worker} from 'node:worker_threads';
             const [probe,directory,root]=process.argv.slice(1);
-            for(const entry of ['commands/doctor-database-engine-inspection.worker.js','snapshot/database-backup.worker.js','infra/database-engine/port-command.entry.worker.js']) {
+            for(const entry of [
+              'infra/sqlite-store.worker.js',
+              'state/openclaw-state.worker.js',
+              'commands/doctor-database-engine-inspection.worker.js',
+              'snapshot/database-backup.worker.js',
+              'infra/database-engine/port-command.entry.worker.js',
+            ]) {
               const worker=new Worker(pathToFileURL(probe),{
                 execArgv:[],
                 env:{...process.env,NODE_OPTIONS:'',TSX_TSCONFIG_PATH:path.join(root,'tsconfig.json')},
                 workerData:{
                   entry:pathToFileURL(path.join(directory,'dist',entry)).href,
                   nativeRequire:pathToFileURL(path.join(root,'src/plugins/native-module-require.ts')).href,
-                  sdk:pathToFileURL(path.join(root,'src/plugin-sdk/sqlite-worker-runtime.ts')).href,
+                  sdks:['sqlite-worker-runtime.ts','time-runtime.ts'].map(sdk=>
+                    pathToFileURL(path.join(root,'src/plugin-sdk',sdk)).href),
                 },
               });
               try {
                 const ready=await new Promise((resolve,reject)=>{
-                  worker.once('message',resolve);
+                  worker.on('message',message=>{
+                    // The real SQLite worker publishes its diagnostic port before the SDK proof.
+                    if(message?.status==='memory') {
+                      assert(message.port instanceof MessagePort);
+                      assert(Array.isArray(message.postgresBridgeCounters));
+                      message.port.close();
+                      return;
+                    }
+                    resolve(message);
+                  });
                   worker.once('error',reject);
                   worker.once('exit',code=>reject(new Error('worker exited before SDK proof: '+code)));
                 });
@@ -258,46 +278,81 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(directory)).toBe(false);
     }));
 
-  it("rejects compiler output altered before publishing a manifest", ({ workerArtifacts }) =>
-    workerArtifacts.fixtureLifetime.run(async () => {
-      const { node } = workerArtifacts.createFixtureCommands();
-      const directory = workerArtifacts.fixtureDirectory();
-      const altered = path.join(directory, "altered");
-      const preload = writeFixture(
-        directory,
-        "compiler-fault.mjs",
-        interceptCompilerBuild(
-          directory,
-          `
+  it.for([false, true])(
+    "publishes one verified compiler manifest (altered output: %s)",
+    (alterOutput, { workerArtifacts }) =>
+      workerArtifacts.fixtureLifetime.run(async () => {
+        const { node } = workerArtifacts.createFixtureCommands();
+        const directory = workerArtifacts.fixtureDirectory();
+        const altered = path.join(directory, "altered");
+        const writes = path.join(directory, "manifest-writes.json");
+        const owner = workerArtifacts.createWorkerRun();
+        try {
+          const preload = writeFixture(
+            directory,
+            "compiler-fault.mjs",
+            interceptCompilerBuild(
+              directory,
+              `
         import fs from 'node:fs';
         import path from 'node:path';
+        const manifestPath = ${JSON.stringify(path.join(owner.descriptor.directory, "manifest.json"))};
+        const publications = [];
+        let serializations = 0;
+        const stringify = JSON.stringify;
+        JSON.stringify = (value, ...options) => {
+          if (value?.inputs && value?.outputs && typeof value.identity === 'string' && typeof value.durationMs === 'number') serializations++;
+          return stringify(value, ...options);
+        };
+        const writeFile = fs.writeFileSync;
+        fs.writeFileSync = (filename, contents, ...options) => {
+          const result = writeFile(filename, contents, ...options);
+          if (filename === manifestPath) publications.push(Buffer.byteLength(contents));
+          return result;
+        };
+        process.on('exit', () => writeFile(${JSON.stringify(writes)}, stringify({publications, serializations})));
         export async function build(options) {
           const result = await compile(options);
-          fs.appendFileSync(path.join(options.outDir,options.unbundle?'src/infra/runtime-process-entrypoints.js':'infra/runtime-process-entrypoints.js'),'altered after compile');
-          fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          if (${alterOutput}) {
+            fs.appendFileSync(path.join(options.outDir,options.unbundle?'src/infra/runtime-process-entrypoints.js':'infra/runtime-process-entrypoints.js'),'altered after compile');
+            fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          }
           return result;
         }
         `,
-        ),
-      );
-      const owner = workerArtifacts.createWorkerRun();
-      try {
-        // Inject only into the actual native compiler entry, never the parent's
-        // module cache or a production build flag. node() joins this direct child.
-        const result = await node([
-          ...fixturePreloadArgs(preload),
-          path.join(root, compilerEntry),
-          owner.descriptor.directory,
-        ]);
-        expect(result.code).not.toBe(0);
-        expect(result.stderr).toContain("Compiled subprocess artifact changed");
-        expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
-        expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
-      } finally {
-        await owner.dispose();
-      }
-      expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
-    }));
+            ),
+          );
+          // Inject only into the actual native compiler entry, never the parent's
+          // module cache or a production build flag. node() joins this direct child.
+          const result = await node([
+            ...fixturePreloadArgs(preload),
+            path.join(root, compilerEntry),
+            owner.descriptor.directory,
+          ]);
+          const publication: { publications: number[]; serializations: number } = JSON.parse(
+            fs.readFileSync(writes, "utf8"),
+          );
+          const manifestPath = path.join(owner.descriptor.directory, "manifest.json");
+          if (alterOutput) {
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toContain("Compiled subprocess artifact changed");
+            expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
+            expect(fs.existsSync(manifestPath)).toBe(false);
+            expect(publication).toEqual({ publications: [], serializations: 0 });
+          } else {
+            expect(result.code, result.stderr).toBe(0);
+            await verifyVitestWorkerArtifacts(owner.descriptor.directory);
+            expect(publication).toEqual({
+              publications: [fs.statSync(manifestPath).size],
+              serializations: 1,
+            });
+          }
+        } finally {
+          await owner.dispose();
+        }
+        expect(fs.existsSync(owner.descriptor.directory)).toBe(false);
+      }),
+  );
 
   it
     .runIf(process.platform !== "win32")
@@ -806,7 +861,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               },
             }});
             const unprepared = buildEmbeddedRunPayloads(input('403 fixture refusal'));
-            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
+            assert.deepEqual(unprepared,[{text:"⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run \`openclaw configure\`.",isError:true}], 'an unprepared error must show sign-in guidance without provider hook policy');
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {
@@ -1595,6 +1650,23 @@ export default class {
           };
           export const preservedModuleBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
           export const preservedModuleBuildAssets = [];
+          `,
+        );
+        // Retain the declaration inputs exercised by the integrity assertions below.
+        const declarations = "scripts/lib/vitest-worker-declarations.mts";
+        fs.renameSync(
+          path.join(fixture, declarations),
+          path.join(fixture, "scripts/lib/vitest-worker-declarations.original.mts"),
+        );
+        writeFixture(
+          fixture,
+          declarations,
+          `export * from "./vitest-worker-declarations.original.mts";
+          export const vitestWorkerDeclarationEntries = {
+            "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
+            "plugins/runtime-retention-entrypoint.test-support": "src/plugins/runtime-retention-entrypoint.test-support.ts",
+            "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
+          };
           `,
         );
         const databasePath = path.join(fixture, "probe.sqlite");

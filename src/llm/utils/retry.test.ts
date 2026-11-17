@@ -70,7 +70,8 @@ describe("isRetryableAssistantError", () => {
   it.each([
     PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
     PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
-    "openclaw_repeated_tool_error",
+    "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+    "tool_repeat_limit",
     "openclaw_repetitive_output",
   ])("does not retry terminal outcome %s", (errorCode) => {
     expectRetry("The WebSocket closed after dispatch", false, { errorCode }, true);

@@ -9,6 +9,7 @@ import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
@@ -55,6 +56,9 @@ import {
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   verifyManagedCandidateRetirement,
+  verifyOverlappingCandidatePreparationFailure,
+  verifyOverlappingGenerationRetirement,
+  verifySerializedCandidateStartup,
   verifyExpandedReplacementTargets,
   verifyPreCommitRetirementOwnership,
   verifyPendingServiceCleanupRetry,
@@ -76,8 +80,10 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
+  verifyOverlapPublishesDuringAdmittedCall,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
+  verifySerializedSuccessorJoinsOverlappingPredecessor,
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
@@ -113,10 +119,10 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-startup-model-runtime.js")>()),
   publishConfiguredModelRuntimeSnapshots: async () => {},
 }));
-// mock-isolation: Transcript reload startup does not execute config-driven replies or their agent-runtime graph.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: async () => {},
+// mock-isolation: Transcript reload startup does not execute the agent-runtime graph.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 // mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
 vi.mock("./server/ws-connection/message-handler.js", () => ({
@@ -268,6 +274,45 @@ it("flushes failed candidate services before closing their shared resources", ()
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
 
+it("settles captured rollback custody but cancels before draining the live plugin", async () => {
+  const controller = new AbortController();
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  const dispose = vi.fn(async () => {});
+  const fixture = await createRecoveryFixture({
+    waitForDrain: true,
+    drainSignal: controller.signal,
+  });
+  const old = fixture.previousRegistry.plugins.find((entry) => entry.id === "first")!;
+  bindPluginRuntimeArtifactSelection(old, { runtimeEntry: { source: "first.js", rootDir: "." } });
+  const instance = fixture.instance();
+  const drain = vi.spyOn(instance, "waitForRetainedWork");
+  const idle = vi.spyOn(instance, "waitForIdle");
+  instance.bindModuleLoaderRecovery(async () => {
+    started.resolve();
+    await finish.promise;
+    return { bind() {}, dispose };
+  });
+  const reloading = observeSettlement(fixture.reload());
+  try {
+    expect(await Promise.race([started.promise, reloading.result])).toBeUndefined();
+    controller.abort(new Error("operator cancelled during rollback capture"));
+    finish.resolve();
+    expect(await reloading.result).toMatchObject({
+      cause: controller.signal.reason,
+      details: { phase: "prepare", committed: false },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
+    expect(idle).not.toHaveBeenCalled();
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(instance.run(() => "still live")).toBe("still live");
+  } finally {
+    finish.resolve();
+    await reloading.result;
+  }
+});
+
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",
   async (outcome) => {
@@ -362,6 +407,33 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
+
+it.for([undefined, false] as const)(
+  "keeps registration serialized without generation overlap opt-in (%s)",
+  (generationOverlap, { signal }) =>
+    verifySerializedCandidateStartup(createRecoveryFixture, generationOverlap, signal),
+);
+
+it("serializes mixed plugins without draining an opted predecessor's idle background authority", ({
+  signal,
+}) => verifySerializedCandidateStartup(createRecoveryFixture, "mixed", signal));
+
+it("publishes an opted-in successor before stopping an admitted call's service", ({ signal }) =>
+  verifyOverlapPublishesDuringAdmittedCall(createRecoveryFixture, signal));
+
+it("keeps the admitted predecessor serving when an overlapping successor fails preparation", ({
+  signal,
+}) => verifyOverlappingCandidatePreparationFailure(createRecoveryFixture, signal));
+
+it.for(["reload again", "restart"] as const)(
+  "owns overlapping plugin generations until their admitted callers finish across %s",
+  (action, { signal }) =>
+    verifyOverlappingGenerationRetirement(createRecoveryFixture, action, signal),
+);
+
+it("joins an older overlapping predecessor before registering a serialized successor", ({
+  signal,
+}) => verifySerializedSuccessorJoinsOverlappingPredecessor(createRecoveryFixture, signal));
 
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",

@@ -15,8 +15,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
 import { requestCostUsageCacheRefresh as requestRefresh } from "./session-cost-usage-cache-runtime.js";
+import { acquireUsageLock } from "./session-cost-usage-cache.fixtures.test-support.js";
 import {
   loadCostUsageSummaryFromCache as loadSummary,
+  loadSessionCostSummary,
   loadSessionCostSummariesFromCache as loadSessions,
   loadSessionUsageOverviewFromCache as loadOverview,
 } from "./session-cost-usage.js";
@@ -222,6 +224,49 @@ async function withRefreshFixture(
 
 const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
+});
+
+it("returns marked stale session costs when another direct refresh stays busy", async () => {
+  const actual = await vi.importActual<typeof import("./session-cost-usage-aggregation.js")>(
+    "./session-cost-usage-aggregation.js",
+  );
+  await withRefreshFixture(
+    async ({ agentId, files: [sessionFile], refresh, scope }) => {
+      refresh.mockImplementation(actual.refreshCostUsageCacheForAgent);
+      await actual.refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      await fs.appendFile(sessionFile, usageLine("later"));
+      await using lock = await acquireUsageLock(agentId);
+      vi.useFakeTimers();
+      const reading = scope.track(() => loadSessionCostSummary({ config, agentId, sessionFile }));
+      const settled = vi.fn();
+      void reading.then(settled, settled);
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalled(), {
+          timeout: 10_000,
+          interval: 1,
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.waitFor(
+          () => expect(settled, "session-cost report wait budget").toHaveBeenCalled(),
+          {
+            timeout: 1_000,
+          },
+        );
+        expect(await reading).toMatchObject({
+          totalTokens: 10,
+          totalCost: 1,
+          staleSince: expect.any(Number),
+          refreshing: true,
+        });
+        expect(scope.hasPendingWork).toBe(true);
+      } finally {
+        await lock.release();
+        vi.useRealTimers();
+        await reading;
+      }
+    },
+    { fileCount: 1, fakeTimers: false, firstRecord: usageLine("first") },
+  );
 });
 
 test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({

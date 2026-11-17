@@ -11,6 +11,8 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 export type StringCharBudgetOptions = { minimumRawWeight?: number };
 const DEFAULT_BUDGET_OPTIONS: StringCharBudgetOptions = {};
+const TOKEN_PRESSURE_RUN_RE = /[A-Za-z0-9+/_=-]{16,}|\b[0-9]+\b|[{}[\]:,]/g;
+const TOKEN_PRESSURE_PART_RE = /[A-Za-z]+|[0-9]{1,3}|[^A-Za-z0-9]/y;
 const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
 
 const WEIGHTED_CJK_RANGES = [
@@ -46,23 +48,26 @@ const WEIGHTED_CJK_RANGES = [
   [[0x1d360, 0x1d371]],
   [
     [0x16fe0, 0x16fff],
+    [0x17000, 0x18d0f],
     [0x1aff0, 0x1afff],
-    [0x1b000, 0x1b16f],
+    [0x1b000, 0x1b2ff],
     [0x1f200, 0x1f2ff],
     [0x20000, 0x2fa1f],
     [0x30000, 0x3347f],
   ],
 ] as const;
 
-const WEIGHTED_CJK_RE = new RegExp(
-  `[${WEIGHTED_CJK_RANGES.flatMap((ranges) =>
-    ranges.map(([start, end]) => `\\u{${start.toString(16)}}-\\u{${end.toString(16)}}`),
-  ).join("")}]`,
-  "u",
-);
+// Consumers of only the constants do not need the static character tables.
+const WEIGHTED_CJK_RE = /* @__PURE__ */ (() =>
+  new RegExp(
+    `[${WEIGHTED_CJK_RANGES.flatMap((ranges) =>
+      ranges.map(([start, end]) => `\\u{${start.toString(16)}}-\\u{${end.toString(16)}}`),
+    ).join("")}]`,
+    "u",
+  ))();
 
 // A fixed 205 KiB lookup avoids rescanning multilingual text for each weight.
-const CJK_CATEGORY: Readonly<ArrayLike<number>> = (() => {
+const CJK_CATEGORY: Readonly<ArrayLike<number>> = /* @__PURE__ */ (() => {
   const maxCodePoint = Math.max(
     ...WEIGHTED_CJK_RANGES.flatMap((ranges) => ranges.map(([, end]) => end)),
   );
@@ -152,4 +157,71 @@ export function estimateStringCharsWithMinimumRawWeight(
 
 export function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN_ESTIMATE);
+}
+
+export function estimateStringTokenPressure(
+  text: string,
+  charsPerToken = CHARS_PER_TOKEN_ESTIMATE,
+) {
+  let tokens = estimateStringChars(text) / charsPerToken;
+  // Encoded runs, numeric groups and JSON delimiters have lexical boundaries
+  // that prose character averages miss, regardless of the message's tool role.
+  TOKEN_PRESSURE_RUN_RE.lastIndex = 0;
+  let previousEnd = 0;
+  while (TOKEN_PRESSURE_RUN_RE.test(text)) {
+    const end = TOKEN_PRESSURE_RUN_RE.lastIndex;
+    let start = end;
+    let numericStart = end;
+    let hasLetter = false;
+    let hasDigit = false;
+    // Recover the match bounds without allocating a match array or substring.
+    while (start > previousEnd) {
+      const code = text.charCodeAt(start - 1);
+      const digit = code >= 48 && code <= 57;
+      const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+      if (
+        !digit &&
+        !letter &&
+        code !== 43 &&
+        code !== 47 &&
+        code !== 95 &&
+        code !== 61 &&
+        code !== 45
+      ) {
+        break;
+      }
+      start--;
+      hasLetter ||= letter;
+      hasDigit ||= digit;
+      if (digit && numericStart === start + 1) {
+        numericStart = start;
+      }
+    }
+    previousEnd = end;
+    // A short match is either a delimiter or a word-bounded numeric suffix.
+    if (start === end) {
+      start--;
+    } else if (end - start < 16) {
+      start = numericStart;
+    }
+    const length = end - start;
+    let denseTokens = 0;
+    if (numericStart === start) {
+      denseTokens = Math.ceil(length / 3);
+    } else if (length === 1) {
+      denseTokens = 1;
+    } else {
+      if (length < 64 && !(hasLetter && hasDigit)) {
+        continue;
+      }
+      TOKEN_PRESSURE_PART_RE.lastIndex = start;
+      while (start < end && TOKEN_PRESSURE_PART_RE.test(text)) {
+        const partEnd = TOKEN_PRESSURE_PART_RE.lastIndex;
+        denseTokens += Math.ceil((partEnd - start) / charsPerToken);
+        start = partEnd;
+      }
+    }
+    tokens += Math.max(0, denseTokens - length / charsPerToken);
+  }
+  return Math.ceil(tokens);
 }

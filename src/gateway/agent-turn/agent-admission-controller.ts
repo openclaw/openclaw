@@ -27,7 +27,7 @@ import {
   readGatewayDedupeEntry,
   setAbortedAgentDedupeEntries,
 } from "./agent-dedupe.js";
-import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
+import { resolveAgentSessionWorkStartBlock } from "./agent-handler-helpers.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 export function createAgentAdmissionController(params: {
@@ -130,9 +130,9 @@ export function createAgentAdmissionController(params: {
     if (params.getSessionPersisted() && !latestEntry) {
       throw new Error(`Session "${resolvedSessionKey}" was deleted while starting work. Retry.`);
     }
-    const archivedError = resolveAgentSessionWorkStartError(resolvedSessionKey, latestEntry);
-    if (archivedError) {
-      throw new Error(archivedError);
+    const workStartBlock = resolveAgentSessionWorkStartBlock(resolvedSessionKey, latestEntry);
+    if (workStartBlock) {
+      throw new Error(workStartBlock.message);
     }
     if (
       commitOutcome &&

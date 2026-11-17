@@ -38,7 +38,6 @@ const OMITTED_DIST_PREFIXES = [
 const OMITTED_PLUGIN_SDK_TEST_NAMES = [
   "agent-runtime-test-contracts",
   "channel-contract-testing",
-  "channel-target-testing",
   "channel-test-helpers",
   "compiled-subprocess-testing",
   "plugin-test-api",

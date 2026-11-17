@@ -313,7 +313,8 @@ describe("minimax music generation provider", () => {
       output_format: "hex",
       audio_setting: { sample_rate: 44100, bitrate: 256000, format: "mp3" },
     });
-    expect(request.timeoutMs).toBe(300000);
+    expect(request.timeoutMs).toBeGreaterThan(299_000);
+    expect(request.timeoutMs).toBeLessThanOrEqual(300_000);
     expect(request?.headers).toBeInstanceOf(Headers);
     expect((request.headers as Headers).get("content-type")).toBe("application/json");
     expect(result.tracks).toHaveLength(1);

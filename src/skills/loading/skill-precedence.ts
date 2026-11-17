@@ -1,4 +1,3 @@
-import { canonicalizePath } from "../../agents/utils/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Skill } from "./skill-contract.js";
@@ -113,11 +112,7 @@ export function mergeSkillRecords<T extends { skill: Skill }>(
   const merged = new Map<string, T>();
   for (const record of records) {
     const replaced = discoveredCollisions && merged.get(record.skill.name);
-    if (
-      discoveredCollisions &&
-      replaced &&
-      canonicalizePath(record.skill.filePath) !== canonicalizePath(replaced.skill.filePath)
-    ) {
+    if (discoveredCollisions && replaced && record.skill.filePath !== replaced.skill.filePath) {
       discoveredCollisions.push({ winner: record.skill, loser: replaced.skill });
     }
     merged.set(record.skill.name, record);

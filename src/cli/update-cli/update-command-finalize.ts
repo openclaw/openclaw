@@ -24,11 +24,14 @@ import type { ManagedHandoffRepair } from "../../infra/update-managed-service-ha
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
+import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -65,6 +68,7 @@ import {
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -72,6 +76,7 @@ import {
 } from "./update-command-fresh-doctor.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
+import { settleOwedStepsAfterFinalization } from "./update-command-owed.js";
 import {
   collectPostCorePluginAdvisories,
   collectPostCorePluginFailureFacts,
@@ -91,6 +96,8 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
+import { restoreRepairGateway } from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -116,6 +123,7 @@ async function finalizeUpdate(
   handoff?: ManagedHandoffRepair,
   retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
+  await settleManagedHandoffPluginCohort();
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
@@ -372,6 +380,9 @@ async function updateFinalizeCommandInternal(
   retained?: RetainedUpdateCustodyReport,
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
+  const interruptedGateway = recoveryRunIds.length
+    ? findUpdateGatewayStop(listUpdateRuns({ limit: 100 }))
+    : undefined;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
@@ -404,7 +415,8 @@ async function updateFinalizeCommandInternal(
       options: { repair: true, nonInteractive: true, json: opts.json },
       runtime: { ...defaultRuntime, log: defaultRuntime.error },
       serviceInspectionDeadlineAtMs,
-      reportStoppedService: lifecycle.ownsUpdateRepairRun,
+      // An update-owned stop is restored below; Doctor only reports other stopped services.
+      reportStoppedService: lifecycle.ownsUpdateRepairRun && !interruptedGateway,
     });
     lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
     // Fresh Doctor owns database fences; the parent retains service custody.
@@ -514,14 +526,64 @@ async function updateFinalizeCommandInternal(
     const completionBudget = lifecycle.budget("completionCache");
     // Leave shutdown time inside the phase deadline so optional cache failures can settle.
     const completionTimeout = completionBudget - Math.min(1_000, completionBudget / 2);
+    let completionFailure: string | undefined;
     await lifecycle.run(
       "completionCache",
       async () =>
         opts.deferCompletionCache
           ? ("deferred" as const)
-          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout, nodeRunner),
+          : await tryWriteCompletionCache(
+              root,
+              Boolean(opts.json),
+              completionTimeout,
+              nodeRunner,
+              (reason) => {
+                completionFailure = reason;
+              },
+            ),
       (result) => result,
     );
+    // A post-core child defers completion to its parent, which then owns owed steps too.
+    // Owed steps are reported beside the status, which parents read as the maintenance outcome.
+    const owedSteps = opts.deferCompletionCache
+      ? []
+      : await settleOwedStepsAfterFinalization(
+          { runId: invokingRunId, env: process.env },
+          { root, completionFailure, plugins: pluginUpdate, timeoutMs: completionBudget },
+        );
+    for (const step of owedSteps) {
+      defaultRuntime.error(`Warning: ${formatUpdateOwedStep(step)}`);
+    }
+
+    const gateway =
+      interruptedGateway && pluginUpdate.status !== "error" && !retained
+        ? await lifecycle.run("gatewayRestoration", async (phase) => {
+            const restore = (assertCurrent: () => void) =>
+              restoreRepairGateway({
+                originalRunId: interruptedGateway.runId,
+                repairRunId: invokingRunId,
+                root,
+                config: configSnapshot.config,
+                env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
+                json: Boolean(opts.json),
+                phase: { ...phase, assertCurrent },
+                timeoutMs: lifecycle.budget("gatewayRestoration"),
+              });
+            if (lifecycle.handoff) {
+              return await restore(phase.assertCurrent);
+            }
+            return await withUpdateCommandExecutor(invokingRunId, async (executor) => {
+              const fence = await executor.enter(root);
+              return await restore(() => {
+                phase.assertCurrent();
+                fence.assertCurrent();
+              });
+            });
+          })
+        : undefined;
+    if (gateway?.warning) {
+      onDoctorWarnings([gateway.warning]);
+    }
 
     const reconciledRuns: string[] = [];
     const result = {
@@ -539,8 +601,10 @@ async function updateFinalizeCommandInternal(
           ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
           : null) ??
         channel,
-      restart: false,
+      restart: gateway?.restart ?? false,
+      ...(gateway?.verification ? { verification: gateway.verification } : {}),
       ...(recoveryRunIds.length ? { reconciledRuns } : {}),
+      ...(owedSteps.length ? { owedSteps } : {}),
       ...retained,
       phaseTimings: lifecycle.phaseTimings,
       postUpdate: {
@@ -604,6 +668,11 @@ async function updateFinalizeCommandInternal(
           }
         } else {
           defaultRuntime.log(theme.error("Update finalization failed."));
+        }
+        if (!opts.json && gateway?.verification) {
+          defaultRuntime.log(
+            `Managed Gateway ${gateway.restart ? "started and " : ""}verified after update repair.`,
+          );
         }
         lifecycle.complete(result.status === "error" ? 1 : 0);
         if (failure) {

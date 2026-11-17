@@ -16,6 +16,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as nodeRuntime from "../infra/node-runtime-executable.js";
+import * as systemBin from "../infra/resolve-system-bin.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
@@ -144,6 +145,7 @@ describe("terminal PTY spawn diagnostics", () => {
     "bun-native",
     "node-helper",
     "cgroup-helper",
+    "gateway-cgroup",
     "bun-native-no-node",
   ] as const)("counts an admitted %s PTY once with the agent owner", async (backend) => {
     const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
@@ -156,11 +158,16 @@ describe("terminal PTY spawn diagnostics", () => {
       value: backend === "node-pty" ? undefined : "synthetic-bun",
     });
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const isolation = backend === "cgroup-helper" || backend === "bun-native-no-node";
+    // Synthetic Linux backends must not discover executables on the actual host.
+    vi.spyOn(systemBin, "resolveSystemBin").mockReturnValue("/synthetic/prlimit");
+    const isolation =
+      backend === "cgroup-helper" ||
+      backend === "gateway-cgroup" ||
+      backend === "bun-native-no-node";
     vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(
       isolation ? "/synthetic/agent-exec" : undefined,
     );
-    vi.spyOn(nodeRuntime, "resolveNodeRuntimeExecutable").mockReturnValue(
+    vi.spyOn(nodeRuntime, "resolveNodeRuntimeExecutableAsync").mockResolvedValue(
       backend === "bun-native-no-node" ? undefined : "/synthetic/node",
     );
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
@@ -188,8 +195,32 @@ describe("terminal PTY spawn diagnostics", () => {
       expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
       expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
       await withChildProcessOperation("agent.exec", () =>
-        spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
+        spawnTerminalPty({
+          executionIntent: backend === "gateway-cgroup" ? "gateway-internal" : "agent-tool",
+          file: "/bin/bash",
+          args: ["-c", "synthetic"],
+          cols: 80,
+          rows: 24,
+        }),
       );
+      if (backend === "node-pty") {
+        expect(mocks.spawn).toHaveBeenCalledWith(
+          "/synthetic/prlimit",
+          ["--core=0:0", "--", "/bin/bash", "-c", "synthetic"],
+          expect.any(Object),
+        );
+      } else if (backend === "bun-native" || backend === "bun-native-no-node") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledWith(
+          expect.objectContaining({
+            file: "/synthetic/prlimit",
+            args: ["--core=0:0", "--", "/bin/bash", "-c", "synthetic"],
+          }),
+        );
+      } else if (backend === "gateway-cgroup") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledWith(
+          expect.objectContaining({ file: "/bin/bash", args: ["-c", "synthetic"] }),
+        );
+      }
       if (backend === "bun-native-no-node") {
         expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
         expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
@@ -197,6 +228,10 @@ describe("terminal PTY spawn diagnostics", () => {
       } else if (backend === "cgroup-helper") {
         expect(mocks.spawnNodeTerminalPty).toHaveBeenCalledOnce();
         expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(warning).not.toHaveBeenCalled();
+      } else if (backend === "gateway-cgroup") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
         expect(warning).not.toHaveBeenCalled();
       }
     } finally {

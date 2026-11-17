@@ -59,7 +59,7 @@ export const recoveryCleanupStep = () => ({
 });
 
 export function registerForegroundFailureRecoveryTests(deps: {
-  setupUpdatedRootRefresh: () => { root: string };
+  setupUpdatedRootRefresh: (params: { admitMutation: false }) => { root: string };
   spawn: Mock;
   updateCommand: typeof UpdateCommand;
   defaultRuntime: typeof DefaultRuntime;
@@ -77,7 +77,7 @@ export function registerForegroundFailureRecoveryTests(deps: {
   ])(
     "preserves foreground failure $exitCode without granting handoff $handoff authority",
     async ({ exitCode, handoff, expectedExit }) => {
-      deps.setupUpdatedRootRefresh();
+      deps.setupUpdatedRootRefresh({ admitMutation: false });
       deps.spawn.mockImplementationOnce(() => {
         const child = new EventEmitter();
         queueMicrotask(() => {

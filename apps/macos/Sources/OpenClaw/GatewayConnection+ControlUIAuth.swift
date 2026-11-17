@@ -123,6 +123,10 @@ extension GatewayConnection {
         case "password":
             guard source == .password else { return nil }
             return config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map { .password($0) }
+        case "remote-ingress":
+            // Ingress issues no reusable device token; its live grant authorizes the signed proof.
+            guard source == .none else { return nil }
+            return .ingress
         case "device-token", "bootstrap-token", "tailscale", "trusted-proxy", "none":
             // Nonshared native authentication can authorize a reusable device
             // grant, but never permits exporting bootstrap or rejected config.

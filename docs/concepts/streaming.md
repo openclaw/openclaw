@@ -428,7 +428,8 @@ Slack-only:
   is otherwise unavailable at finalize time.
 - Sends the final answer as a new post and deletes the preview when anything
   was posted after the preview in its thread (or channel), such as a `message`
-  tool send, so the answer lands last and notifies.
+  tool send, so the answer lands last and notifies. Answer text is not
+  streamed into a preview that already has a newer post below it.
 - Final media/error payloads cancel pending preview updates before normal
   delivery instead of flushing a temporary preview post.
 

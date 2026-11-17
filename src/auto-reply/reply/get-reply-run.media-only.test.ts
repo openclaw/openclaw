@@ -617,8 +617,8 @@ describe("runPreparedReply media-only handling", () => {
           }
           if (kind === "owner-overflow") {
             expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(1);
-            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.sources).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(1);
+            expect(getExistingFollowupQueue(key)?.summaryElisions[0]?.entries).toHaveLength(1);
           }
           if (kind === "revoked-before-drain") {
             current = false;
@@ -914,6 +914,52 @@ describe("runPreparedReply media-only handling", () => {
       }
     },
   );
+
+  it.each([
+    ["off", "low"],
+    ["low", "low"],
+    ["high", "high"],
+  ] as const)(
+    "resolves Talk preference %s against the selected consult model",
+    async (requested, expected) => {
+      const catalog = [
+        {
+          provider: "anthropic",
+          id: "claude-opus-5-5",
+          name: "Claude Opus",
+          reasoning: true,
+          compat: { thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" },
+        },
+      ];
+      await runPrepared({
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+        modelState: {
+          ...nonReasoningModelState(),
+          allowedModelCatalog: catalog,
+          resolveThinkingCatalog: async () => catalog,
+        },
+        resolvedThinkLevel: requested,
+        opts: { thinkingLevelOverride: requested, normalizeThinkingLevelOverride: true },
+      });
+      const run = requireRunReplyAgentCall().followupRun.run;
+      expect(run.thinkLevel).toBe(expected);
+      expect(run.thinkLevelOverride).toBe(requested);
+    },
+  );
+
+  it("does not clamp inherited thinking without a Talk override", async () => {
+    await runPrepared({
+      provider: "openai",
+      model: "chat-latest",
+      modelState: nonReasoningModelState(),
+      resolvedThinkLevel: "high",
+      opts: { normalizeThinkingLevelOverride: true },
+    });
+    const run = requireRunReplyAgentCall().followupRun.run;
+    expect(run.thinkLevel).toBe("high");
+    expect(run.thinkLevelOverride).toBeUndefined();
+  });
 
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
@@ -1354,7 +1400,7 @@ describe("runPreparedReply media-only handling", () => {
     const { resolveSessionAuthSelection } =
       await import("../../agents/auth-profiles/session-override.js");
     const sessionId = "reply-operation-auth-failure";
-    const activeBefore = sessionQueries.listActiveReplyRunSessionKeys().length;
+    const activeBefore = sessionQueries.listActiveSessionRunKeys().length;
     vi.mocked(resolveSessionAuthSelection).mockRejectedValueOnce(new Error("auth failed"));
 
     await expect(
@@ -1363,7 +1409,7 @@ describe("runPreparedReply media-only handling", () => {
       }),
     ).rejects.toThrow("auth failed");
 
-    expect(sessionQueries.listActiveReplyRunSessionKeys().length).toBe(activeBefore);
+    expect(sessionQueries.listActiveSessionRunKeys().length).toBe(activeBefore);
   });
 
   it("routes a channel-configured interrupt through session-work admission", async () => {

@@ -23,7 +23,6 @@ import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
 } from "./chat-aborted-partial.js";
-import { assertExpectedLeafActiveAsync } from "./chat-send-active-leaf.js";
 import {
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
@@ -44,7 +43,7 @@ type ChatSendRetryParams = Pick<
 > & {
   request: Pick<
     ChatSendPreAdmissionParams["request"],
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext"
+    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
@@ -348,26 +347,6 @@ export async function runChatSendPreAdmission(
         throw error;
       }
     };
-    const beforeAbort = async () => {
-      try {
-        if (request.p.queueMode !== "steer" && session.expectedLeafEntryId !== undefined) {
-          await assertExpectedLeafActiveAsync(
-            {
-              canonicalKey: sessionKey,
-              storePath: stopStorePath,
-              entry,
-            },
-            session.agentId,
-            session.expectedLeafEntryId,
-            session.requestedSessionId,
-          );
-        }
-        assertCurrent();
-      } catch (error) {
-        guard.failure = { error };
-        throw error;
-      }
-    };
     let res: Awaited<ReturnType<typeof abortChatRunsForSessionKeyWithPartials>>;
     try {
       if (await respondPreparedChatSendRetry(params, true)) {
@@ -418,19 +397,12 @@ export async function runChatSendPreAdmission(
           senderId: stopRequester.deviceId ?? stopRequester.connId,
         },
         assertCurrent,
-        beforeAbort,
         cascadeDescendants: true,
+        // A Gateway chat.send "/stop" is an explicit user Stop.
+        announceRunStopped: true,
       });
-      // A stale child refusal can precede beforeAbort; the request's leaf error wins.
-      if (!guard.failure && (res.error || (res.descendants && res.descendants.status !== "ok"))) {
-        try {
-          await beforeAbort();
-        } catch (error) {
-          throw abortedPartialPersistenceError(error, res.warning);
-        }
-      }
       try {
-        // Descendant cancellation can aggregate a later authority or leaf failure.
+        // Descendant cancellation can aggregate a later authority failure.
         assertCurrent();
       } catch (error) {
         throw abortedPartialPersistenceError(error, res.warning);

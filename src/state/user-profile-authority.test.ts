@@ -12,7 +12,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext as captureContext } from "./openclaw-state-worker-context.js";
-import { readProfileAuthority as readAuthority } from "./user-profile-authority.js";
+import {
+  prepareProfileAuthorityRead,
+  readProfileAuthority as readAuthority,
+} from "./user-profile-authority.js";
 import {
   captureUserProfileAuthorityRead as captureAuthority,
   fenceUserProfileMutationAuthority as fenceAuthority,
@@ -40,9 +43,17 @@ async function fixture(validateSchema = false) {
   const bound = authority.bind(profile.id)!;
   const unrelated = authority.bind(other.id)!;
   const settled = authority.transferSettled(profile.id);
+  const readBound = prepareProfileAuthorityRead(bound.transferable);
+  const readSettled = prepareProfileAuthorityRead(settled);
   const check = (binding: Status, settlement: Status) => {
-    const actual = [bound(), readAuthority(bound.transferable), readAuthority(settled)];
-    expect(actual).toEqual([binding === "current", binding, settlement]);
+    const actual = [
+      bound(),
+      readAuthority(bound.transferable),
+      readAuthority(settled),
+      readBound(),
+      readSettled(),
+    ];
+    expect(actual).toEqual([binding === "current", binding, settlement, binding, settlement]);
     if (settlement === "current") {
       expect(() => authority.assertSettled(profile.id)).not.toThrow();
     } else {

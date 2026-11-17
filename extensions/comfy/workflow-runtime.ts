@@ -683,7 +683,7 @@ export async function runComfyWorkflow(params: {
       const buffer = await readProviderBinaryResponse(
         firstResponse.response,
         downloadLabel,
-        params.capability,
+        params.capability === "music" ? "audio" : params.capability,
         {
           maxBytes,
           chunkTimeoutMs: remainingMs(),

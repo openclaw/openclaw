@@ -1,5 +1,16 @@
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -25,6 +36,8 @@ import {
   releasePullRequestReferencesToSuppress,
   releaseProvenanceMarkers,
   recoverUnavailablePullRequests,
+  recoverUnavailableIssues,
+  loadHistoricalIssueSnapshot,
   renderedContributionRecordReferences,
   resolvedReleasePullRequests,
   standardRevertedHash,
@@ -147,6 +160,240 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it.each(["missing", "docs-mirror"])(
+    "verifies pinned initial 11.4 notes with %s working-tree notes",
+    (state) => {
+      const version = "2026.11.4";
+      const { cwd, base } = seedRepository(
+        "openclaw-pinned-source-",
+        undefined,
+        createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version),
+      );
+      splitChangelog({ rootDir: cwd });
+      expect(runVerifier(cwd, { base, version }).status).toBe(0);
+      const sourceRef = commitAll(cwd, "docs: initial release record");
+      git(cwd, ["tag", "initial-source"]);
+      const entry = join(cwd, `CHANGELOG/${version}.md`);
+      const initial = readFileSync(entry, "utf8");
+      if (state === "missing") {
+        rmSync(entry);
+      } else {
+        writeFileSync(
+          entry,
+          `## ${version}\n\n<!-- openclaw-docs-mirror-v1 {} -->\nReader prose.\n`,
+        );
+      }
+      const before = git(cwd, ["diff"]);
+      const defaults = runVerifier(cwd, { base, version, write: false });
+      expect(defaults.status).not.toBe(0);
+      expect(defaults.stderr).toContain(
+        state === "missing" ? "Missing changelog release section" : "docs-publication workflow",
+      );
+      for (const alias of ["notes-link", "root-link"]) {
+        const link = join(cwd, alias);
+        symlinkSync(alias === "root-link" ? cwd : join(cwd, "CHANGELOG"), link, "dir");
+        for (const flag of ["--manifest", "--github-snapshot"]) {
+          const output = join(
+            link,
+            ...(alias === "root-link" ? ["CHANGELOG"] : []),
+            `${version}.md`,
+          );
+          const rejected = runVerifier(cwd, {
+            base,
+            version,
+            write: false,
+            extraArgs: ["--source-ref", "initial-source", flag, output],
+          });
+          expect(rejected.status).not.toBe(0);
+          expect(rejected.stderr).toContain("source artifact must not be an output path");
+        }
+        rmSync(link);
+      }
+      expect(git(cwd, ["diff"])).toBe(before);
+      const preload = join(cwd, "move-source-tag.mjs");
+      writeFileSync(
+        preload,
+        `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.execFileSync;
+cp.execFileSync = function(command, args, options) {
+  const result = original.call(this, command, args, options);
+  if (command === 'git' && args.includes('initial-source^{commit}')) {
+    original.call(this, 'git', ['update-ref', 'refs/tags/initial-source', '${base}']);
+  }
+  return result;
+};
+syncBuiltinESMExports();
+`,
+      );
+      const manifest = join(cwd, "proposal.json");
+      const result = runVerifier(cwd, {
+        base,
+        target: base,
+        version,
+        manifest,
+        write: false,
+        extraArgs: ["--source-ref", "initial-source"],
+        preload,
+      });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      for (const output of [
+        JSON.parse(result.stdout),
+        JSON.parse(readFileSync(manifest, "utf8")),
+      ]) {
+        expect(output.changelogSource).toEqual({
+          ref: sourceRef,
+          sourcePath: `CHANGELOG/${version}.md`,
+          recordPath: `CHANGELOG/records/${version}.md`,
+          format: "initial",
+        });
+        expect(output.errors ?? []).toEqual([]);
+      }
+      expect(git(cwd, ["diff"])).toBe(before);
+      expect(git(cwd, ["rev-parse", "initial-source"])).toBe(base);
+      expect(git(cwd, ["show", `${sourceRef}:CHANGELOG/${version}.md`])).toContain("0 unique PRs");
+      writeFileSync(entry, initial);
+      const restored = runVerifier(cwd, { base, target: base, version, write: false });
+      expect(restored.status, restored.stderr || restored.stdout).toBe(0);
+      expect(JSON.parse(restored.stdout)).not.toHaveProperty("changelogSource");
+    },
+  );
+
+  it.each([
+    { args: ["--source-ref", "absent"], error: "Needed a single revision" },
+    { args: ["--source-ref", "-bad"], error: "Invalid changelog Git ref" },
+    { args: ["--source-ref", "HEAD:CHANGELOG.md"], error: "Needed a single revision" },
+    { args: ["--source-ref"], error: "missing value" },
+    { args: ["--source-ref", "HEAD", "--version"], error: "missing value for --version" },
+    {
+      args: ["--source-ref", "HEAD", "--version", "2026.11.4"],
+      error: "Missing changelog release section",
+    },
+    { args: ["--source-ref", "HEAD", "--version", "../bad"], error: "Invalid changelog version" },
+    { args: ["--source-ref", "HEAD", "--write-ledger"], error: "cannot be combined" },
+  ])("rejects invalid pinned source invocation $args", ({ args, error }) => {
+    const { cwd } = seedRepository("openclaw-source-ref-invalid-");
+    const before = git(cwd, ["status", "--porcelain"]);
+    const result = runVerifier(cwd, { write: false, extraArgs: args });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(error);
+    expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+  });
+
+  it("rejects a selected immutable docs mirror even with initial working-tree notes", () => {
+    const { cwd, changelog } = seedRepository("openclaw-source-ref-mirror-");
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog + "\n<!-- openclaw-docs-mirror-v1 {} -->\n");
+    commitAll(cwd, "docs: mirror");
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+    const result = runVerifier(cwd, { write: false, extraArgs: ["--source-ref", "HEAD"] });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("docs-publication workflow");
+    expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(changelog);
+  });
+
+  it.each(["--manifest", "--github-snapshot"])(
+    "rejects %s overwriting pinned-source artifact paths",
+    (flag) => {
+      const { cwd } = seedRepository("openclaw-source-ref-output-");
+      splitChangelog({ rootDir: cwd });
+      commitAll(cwd, "docs: split");
+      const before = git(cwd, ["status", "--porcelain"]);
+      for (const file of [
+        "CHANGELOG.md",
+        "CHANGELOG/2026.7.1.md",
+        "CHANGELOG/records/2026.7.1.md",
+      ]) {
+        const result = runVerifier(cwd, {
+          write: false,
+          extraArgs: ["--source-ref", "HEAD", flag, join(cwd, file)],
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("source artifact must not be an output path");
+      }
+      expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+      for (const alias of [symlinkSync, linkSync]) {
+        const output = join(cwd, "alias.json");
+        alias(join(cwd, "CHANGELOG.md"), output);
+        const result = runVerifier(cwd, {
+          write: false,
+          extraArgs: ["--source-ref", "HEAD", flag, output],
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("source artifact must not be an output path");
+        rmSync(output);
+      }
+      expect(git(cwd, ["status", "--porcelain"])).toBe(before);
+    },
+  );
+
+  it("preserves concurrent edits during ledger generation", () => {
+    const artifact = "CHANGELOG/2026.7.1.md";
+    const { cwd, base } = seedRepository("openclaw-notes-concurrent-");
+    splitChangelog({ rootDir: cwd });
+    const initialized = runVerifier(cwd, { base });
+    expect(initialized.status, initialized.stderr).toBe(0);
+    const before = new Map(
+      ["CHANGELOG.md", "CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"].map((file) => [
+        file,
+        readFileSync(join(cwd, file), "utf8"),
+      ]),
+    );
+    const edited = before
+      .get(artifact)!
+      .replace("- One.", "- Operator edit made during discovery.");
+    const preload = join(cwd, "edit-during-discovery.mjs");
+    writeFileSync(
+      preload,
+      `import childProcess from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = childProcess.execFileSync;
+let edited = false;
+childProcess.execFileSync = function(command, args, options) {
+  if (!edited && command === 'git' && args.includes('log')) {
+    edited = true;
+    writeFileSync(${JSON.stringify(join(cwd, artifact))}, ${JSON.stringify(edited)});
+  }
+  return original.call(this, command, args, options);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const result = runVerifier(cwd, { base, preload });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("changed during release-note generation");
+    for (const [file, contents] of before) {
+      expect(readFileSync(join(cwd, file), "utf8")).toBe(file === artifact ? edited : contents);
+    }
+  });
+
+  it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
+    const origin = tempDirs.make("openclaw-shallow-release-origin-");
+    git(origin, ["init", "-q", "-b", "main"]);
+    git(origin, ["config", "commit.gpgsign", "false"]);
+    commitAll(origin, "chore: baseline");
+    git(origin, ["tag", "--no-sign", "v2026.7.1"]);
+    commitAll(origin, "chore: candidate");
+
+    const cloneParent = tempDirs.make("openclaw-shallow-release-clone-");
+    const cwd = join(cloneParent, "repo");
+    git(cloneParent, ["clone", "-q", "--depth=1", "--no-tags", `file://${origin}`, cwd]);
+    git(cwd, ["fetch", "-q", "--depth=1", "origin", "tag", "v2026.7.1"]);
+
+    const result = runVerifier(cwd, {
+      base: "v2026.7.1",
+      target: "HEAD",
+      version: "2026.7.2-beta.1",
+      mainRef: null,
+      write: false,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry",
+    );
+  });
+
   it("rejects an off-branch generation target before release-note discovery", () => {
     const cwd = tempDirs.make("openclaw-off-branch-notes-");
     git(cwd, ["init", "-q", "-b", "main"]);
@@ -352,9 +599,18 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    expect(isEligibleHandle("steipete-oai")).toBe(false);
-    expect(isEligibleHandle("hugin-bot")).toBe(false);
-    expect(isEligibleHandle("roboclaw-bot")).toBe(false);
+    expect(isEligibleHandle("copilot-contributor")).toBe(true);
+    for (const handle of [
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "Copilot",
+      "copilot",
+      "COPILOT",
+    ]) {
+      expect(isEligibleHandle(handle)).toBe(false);
+    }
   });
 
   it("accepts only canonical commit PR suffixes", () => {
@@ -440,6 +696,422 @@ process.exitCode = errors.length ? 1 : 0;
     expect(record).toContain("**PR #156166** Thanks @contributor.");
     expect(record).not.toContain("155121");
   });
+
+  it.each([
+    "source",
+    "late",
+    "adaptation",
+    "adaptation-missing",
+    "adaptation-conflicting",
+    "adaptation-ambiguous",
+    "cumulative",
+    "cumulative-wrong-record",
+    "cumulative-conflicting-origin",
+    "proxy",
+    "mixed-transport",
+    "unrelated",
+    "no-evidence",
+    "forbidden",
+    "rate",
+    "transport",
+    "later-conflict",
+    "snapshot-collision",
+    "manifest-collision",
+    "symlink-collision",
+  ])("recovers historical issues through collector passes without masking failures: %s", (mode) => {
+    const { cwd, base, changelog } = seedRepository("release-historical-issue-", "main");
+    const cumulative = mode.startsWith("cumulative");
+    writeFileSync(join(cwd, "prior.txt"), "prior release");
+    const historicalBase = cumulative ? commitAll(cwd, "chore: beta base") : base;
+    writeFileSync(join(cwd, "product.txt"), "original");
+    const merge = commitAll(
+      cwd,
+      "fix: preserve delivery (#123)" + (mode === "late" ? "" : "\n\nCloses #122."),
+    );
+    let covered = merge;
+    if (mode.startsWith("adaptation") || cumulative) {
+      git(cwd, ["checkout", "-qb", "release", historicalBase]);
+      writeFileSync(join(cwd, "product.txt"), "adapted");
+      covered = commitAll(
+        cwd,
+        cumulative
+          ? "fix: preserve delivery (#123)\n\n(cherry picked from commit " +
+              merge +
+              ")" +
+              (mode === "cumulative-conflicting-origin" ? "\nSource commit: " + base : "")
+          : "fix: preserve delivery (#123)\n\nSource commit: " +
+              merge +
+              (mode === "adaptation-missing"
+                ? ""
+                : "\nSource PR: https://github.com/openclaw/openclaw/pull/123") +
+              (mode === "adaptation-conflicting" ? "\nSource commit: " + base : ""),
+      );
+    }
+    writeFileSync(
+      join(cwd, "CHANGELOG.md"),
+      changelog +
+        "\n" +
+        contributionRecord(historicalBase, mode === "cumulative-wrong-record" ? base : covered, [
+          "- **PR #123** Related #122. Thanks @writer and @reporter.",
+        ]),
+    );
+    if (cumulative) {
+      const prior = readFileSync(join(cwd, "CHANGELOG.md"), "utf8").replace(
+        "## 2026.7.1",
+        "## 2026.7.1-beta.1",
+      );
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        changelog +
+          "\n" +
+          prior.replace("# Changelog\n", "") +
+          "\n## 2026.6.1\n\n### Complete contribution record\n\n" +
+          `This audited record covers the complete ${base}..${base} history: 1 merged PR.\n` +
+          "\n#### Pull requests\n",
+      );
+    }
+    if (mode === "adaptation-ambiguous") {
+      writeFileSync(join(cwd, "product.txt"), "second adaptation");
+      commitAll(
+        cwd,
+        "fix: preserve delivery (#123)\n\nSource commit: " +
+          merge +
+          "\nSource PR: https://github.com/openclaw/openclaw/pull/123",
+      );
+    }
+    const target = commitAll(cwd, "docs: freeze contribution record");
+    splitChangelog({ rootDir: cwd });
+    const pr = {
+      __typename: "PullRequest",
+      number: 123,
+      title: "fix: preserve delivery",
+      baseRefName: "main",
+      mergedAt: "2026-01-01T00:00:00Z",
+      mergeCommit: { oid: merge },
+      author: { __typename: "User", login: "writer" },
+      closingIssuesReferences: { nodes: [{ number: 122 }], pageInfo: { hasNextPage: false } },
+    };
+    const issue = {
+      __typename: "Issue",
+      number: 122,
+      title: "Lost delivery",
+      author: { __typename: "User", login: "reporter" },
+      closedByPullRequestsReferences: {
+        nodes: [{ number: 123 }],
+        pageInfo: { hasNextPage: false },
+      },
+    };
+    const evidencePath = join(cwd, "historical.json");
+    const evidenceBytes = JSON.stringify({
+      schemaVersion: 1,
+      repository: "openclaw/openclaw",
+      base: historicalBase,
+      target: covered,
+      responses: {
+        [JSON.stringify([
+          "graphql",
+          "-f",
+          'query=query { n122: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 122) { __typename } } n123: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 123) { __typename } } }',
+        ])]: {
+          data: { n122: { issueOrPullRequest: issue }, n123: { issueOrPullRequest: pr } },
+        },
+      },
+    });
+    writeFileSync(evidencePath, evidenceBytes);
+    writeFileSync(
+      join(cwd, "gh"),
+      [
+        "#!" + process.execPath,
+        'const fs = require("node:fs"), mode = process.env.RECOVERY_CASE;',
+        'const query = process.argv.find(arg => arg.startsWith("query="))?.slice(6) ?? "";',
+        "const data = {}, errors = [];",
+        "const pr = " + JSON.stringify(pr) + ";",
+        'if (mode.startsWith("adaptation")) pr.closingIssuesReferences.nodes = [];',
+        'const other = { ...pr, number: 124, title: "fix: context #122", author: { __typename: "User", login: "other" }, closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } };',
+        'let calls = 0; if (fs.existsSync("calls")) calls = Number(fs.readFileSync("calls", "utf8"));',
+        'if (query.includes("issueOrPullRequest")) { calls++; fs.writeFileSync("calls", String(calls)); }',
+        'for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) data[alias] = { object: { associatedPullRequests: { nodes: mode === "unrelated" ? [pr, other] : [pr], pageInfo: { hasNextPage: false } } } };',
+        "for (const [, alias] of query.matchAll(/(n\\d+): repository/g)) {",
+        '  data[alias] = { issueOrPullRequest: alias === "n123" ? pr : alias === "n124" && mode === "unrelated" ? other : null };',
+        '  if (alias === "n122") errors.push({ type: "NOT_FOUND", path: [alias, "issueOrPullRequest"], message: "Missing issue" });',
+        "}",
+        'if (query.includes("issueOrPullRequest")) {',
+        '  if (["forbidden", "rate"].includes(mode)) errors.push({ type: mode === "forbidden" ? "FORBIDDEN" : "RATE_LIMITED", path: ["n123", "issueOrPullRequest"], message: "Denied" });',
+        '  if (mode === "later-conflict" && calls >= 3) { errors.length = 0; data.n122 = { issueOrPullRequest: { __typename: "Issue", number: 122, title: "Changed", author: { __typename: "User", login: "someone-else" } } }; }',
+        '  if (mode === "transport") { errors.length = 0; console.error("authentication failed"); process.exitCode = 1; }',
+        "}",
+        'if (mode === "proxy" && errors.length) { console.error("octopool: graphql delegated to personal token"); console.error("error: GraphQL request failed"); }',
+        'if (mode === "mixed-transport" && errors.length) console.error("ECONNRESET");',
+        "console.log(JSON.stringify({ data, errors }));",
+        "process.exitCode ||= errors.length ? 1 : 0;",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const alias = join(cwd, "evidence-alias.json");
+    if (mode === "symlink-collision") {
+      symlinkSync(evidencePath, alias);
+    }
+    const result = runVerifier(cwd, {
+      base,
+      target,
+      mainRef: merge,
+      manifest:
+        mode === "manifest-collision"
+          ? evidencePath
+          : mode === "symlink-collision"
+            ? alias
+            : join(cwd, "manifest.json"),
+      extraArgs: [
+        ...(mode === "no-evidence"
+          ? []
+          : [
+              "--historical-issue-snapshot",
+              evidencePath,
+              "--historical-issue-snapshot-sha256",
+              createHash("sha256").update(evidenceBytes).digest("hex"),
+            ]),
+        ...(mode === "snapshot-collision"
+          ? ["--github-snapshot", evidencePath, "--refresh-github-snapshot"]
+          : []),
+      ],
+      env: { RECOVERY_CASE: mode, PATH: cwd + ":" + process.env.PATH },
+    });
+    expect(readFileSync(evidencePath, "utf8")).toBe(evidenceBytes);
+    if (!["source", "late", "adaptation", "cumulative", "proxy", "unrelated"].includes(mode)) {
+      expect(result.status, result.stderr).not.toBe(0);
+      return;
+    }
+    expect(result.status, result.stderr).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(cwd, "manifest.json"), "utf8"));
+    expect(manifest.pullRequests[0]).toMatchObject({
+      number: 123,
+      thanks: ["writer", "reporter"],
+      relatedReferences: [122],
+    });
+    if (mode === "unrelated") {
+      expect(manifest.pullRequests[1]).toMatchObject({
+        number: 124,
+        thanks: ["other"],
+        relatedReferences: [],
+      });
+    }
+    expect(manifest.recoveredIssues).toMatchObject([
+      {
+        number: 122,
+        historicalIdentity: issue.author,
+        snapshot: { base: historicalBase, target: covered },
+        pullRequest: 123,
+        mergeCommit: merge,
+        coveredCommit: covered,
+      },
+    ]);
+    const [snapshotFile] = readdirSync(join(cwd, ".git/openclaw-release-cache"));
+    assert(snapshotFile, "collector must persist a live GitHub snapshot");
+    const liveSnapshot = JSON.parse(
+      readFileSync(join(cwd, ".git/openclaw-release-cache", snapshotFile), "utf8"),
+    );
+    expect(liveSnapshot.target).toBe(target);
+    expect(JSON.stringify(liveSnapshot)).not.toContain("historicalProvenance");
+    expect(JSON.stringify(liveSnapshot)).not.toContain('"login":"reporter"');
+  });
+
+  it.each([
+    "covered",
+    "no-evidence",
+    "no-not-found",
+    "no-issue",
+    "wrong-type",
+    "no-author",
+    "ambiguous",
+    "partial-issue",
+    "partial-pr",
+    "missing-pr",
+    "wrong-pr-author",
+    "wrong-merge",
+    "no-reciprocal",
+    "no-live-reciprocal",
+    "conflicting-pr",
+    "no-row",
+    "no-reference",
+    "no-credit",
+    "wrong-record-base",
+    "uncovered",
+    "not-in-source",
+    "outside-history",
+    "live",
+    "changed-author",
+    "changed-type",
+  ])("bounds historical issue recovery and identity: %s", (mode) => {
+    const base = "a".repeat(40),
+      merge = "b".repeat(40),
+      target = "c".repeat(40);
+    const issue = {
+      __typename: mode === "wrong-type" ? "PullRequest" : "Issue",
+      number: 122,
+      title: "Lost delivery",
+      author: mode === "no-author" ? null : { __typename: "User", login: "reporter" },
+      closedByPullRequestsReferences: {
+        nodes: [{ number: 123 }, ...(mode === "ambiguous" ? [{ number: 124 }] : [])],
+        pageInfo: { hasNextPage: mode === "partial-issue" },
+      },
+    };
+    const pr = {
+      __typename: "PullRequest",
+      number: 123,
+      title: "fix: delivery",
+      baseRefName: "main",
+      mergedAt: "2026-01-01T00:00:00Z",
+      mergeCommit: { oid: merge },
+      author: { __typename: "User", login: "writer" },
+      closingIssuesReferences: {
+        nodes: mode === "no-reciprocal" ? [] : [{ number: 122 }],
+        pageInfo: { hasNextPage: mode === "partial-pr" },
+      },
+    };
+    const evidenceNodes = new Map<number, typeof issue | typeof pr>([
+      [122, issue],
+      [123, pr],
+    ]);
+    if (mode === "no-issue") {
+      evidenceNodes.delete(122);
+    }
+    if (mode === "conflicting-pr") {
+      evidenceNodes.set(124, { ...pr, number: 124 });
+    }
+    const livePr = structuredClone(pr);
+    if (mode === "wrong-pr-author") {
+      livePr.author.login = "other";
+    }
+    if (mode === "wrong-merge") {
+      livePr.mergeCommit.oid = "d".repeat(40);
+    }
+    if (mode === "no-live-reciprocal") {
+      livePr.closingIssuesReferences.nodes = [];
+    }
+    const nodes = new Map<number, typeof issue | typeof pr>(
+      mode === "missing-pr" ? [] : [[123, livePr]],
+    );
+    const live = {
+      ...issue,
+      __typename: mode === "changed-type" ? "PullRequest" : "Issue",
+      title: "New live title",
+      author: { __typename: "User", login: mode === "changed-author" ? "different" : "REPORTER" },
+    };
+    if (["live", "changed-author", "changed-type"].includes(mode)) {
+      nodes.set(122, live);
+    }
+    const attempt = () =>
+      recoverUnavailableIssues({
+        numbers: [122],
+        nodes,
+        notFound: new Set(mode === "no-not-found" ? [] : [122]),
+        evidence:
+          mode === "no-evidence"
+            ? undefined
+            : {
+                nodes: evidenceNodes,
+                snapshot: {
+                  repository: "openclaw/openclaw",
+                  base,
+                  target: merge,
+                  sha256: "e".repeat(64),
+                },
+              },
+        record: {
+          pullRequests: new Map(
+            mode === "no-row"
+              ? []
+              : [
+                  [
+                    123,
+                    {
+                      references: mode === "no-reference" ? [] : [122],
+                      thanks: mode === "no-credit" ? [] : ["reporter", "unrelated"],
+                    },
+                  ],
+                ],
+          ),
+        },
+        recordTarget: merge,
+        recordBase: mode === "wrong-record-base" ? target : base,
+        source: {
+          activeCommits: [
+            { hash: merge, pullRequests: [123], subject: "fix: delivery (#123)", body: "" },
+          ],
+          pullRequests: new Set(mode === "not-in-source" ? [] : [123]),
+          targetHistory: new Set(mode === "outside-history" ? [] : [merge]),
+          target,
+          targetTimestamp: Date.parse("2026-02-01"),
+        },
+        isAncestor: (left: string, right: string) =>
+          mode !== "uncovered" && !(left === merge && right === base),
+      });
+    if (["no-evidence", "no-not-found", "no-issue", "wrong-type", "live"].includes(mode)) {
+      expect(attempt()).toEqual([]);
+      expect(nodes.get(122)).toBe(mode === "live" ? live : undefined);
+    } else if (["covered", "no-live-reciprocal"].includes(mode)) {
+      expect(attempt()).toMatchObject([
+        {
+          number: 122,
+          pullRequest: 123,
+          mergeCommit: merge,
+          historicalIdentity: { login: "reporter" },
+        },
+      ]);
+      expect(nodes.get(122)).not.toHaveProperty("author");
+      expect(nodes.get(122)).toMatchObject({ recordedThanks: ["reporter"] });
+    } else {
+      expect(attempt).toThrow();
+      expect(nodes.has(122)).toBe(["changed-author", "changed-type"].includes(mode));
+    }
+  });
+
+  it.each(["valid", "digest", "repository", "base", "target", "ancestry", "conflict", "number"])(
+    "validates immutable historical snapshot input: %s",
+    (mode) => {
+      const base = "a".repeat(40),
+        target = "b".repeat(40);
+      const node = { __typename: "Issue", number: mode === "number" ? 125 : 122 };
+      const query =
+        'query=query { n122: repository(owner: "openclaw", name: "openclaw") { issueOrPullRequest(number: 122) { __typename } } }';
+      const response = { data: { n122: { issueOrPullRequest: node } } };
+      const snapshot = {
+        schemaVersion: 1,
+        repository: mode === "repository" ? "other/repo" : "openclaw/openclaw",
+        base: mode === "base" ? target : base,
+        target: mode === "target" ? "main" : target,
+        responses: {
+          [JSON.stringify(["graphql", "-f", query])]: response,
+          ...(mode === "conflict"
+            ? {
+                [JSON.stringify(["graphql", "-f", query + " "])]: {
+                  data: { n122: { issueOrPullRequest: { ...node, __typename: "PullRequest" } } },
+                },
+              }
+            : {}),
+        },
+      };
+      const filePath = join(tempDirs.make("historical-snapshot-"), "evidence.json");
+      const bytes = JSON.stringify(snapshot);
+      writeFileSync(filePath, bytes);
+      const load = () =>
+        loadHistoricalIssueSnapshot({
+          filePath,
+          sha256:
+            mode === "digest" ? "0".repeat(64) : createHash("sha256").update(bytes).digest("hex"),
+          base,
+          target,
+          isAncestor: (left: string, right: string) =>
+            mode !== "ancestry" && !(mode === "base" && left === base && right === target),
+        });
+      if (mode === "valid") {
+        expect(load().nodes.get(122)).toEqual(node);
+      } else {
+        expect(load).toThrow();
+      }
+      expect(readFileSync(filePath, "utf8")).toBe(bytes);
+    },
+  );
 
   it("sorts and deduplicates unavailable contextual references", () => {
     const hash = "b".repeat(40);
@@ -677,7 +1349,7 @@ Release provenance for ${hash} -> #3`
     },
   );
 
-  it("requires release provenance PRs to be merged into current main", () => {
+  it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
     const mergeCommit = "c".repeat(40);
@@ -702,11 +1374,68 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, baseRefName: "feature/unrelated" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
-    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references invalid source PR #104905");
+  });
+
+  it("checks canonical main origins through the production Git matcher", () => {
+    const { cwd, base } = seedRepository("openclaw-release-original-", "main");
+    writeFileSync(join(cwd, "shared.txt"), "main\n");
+    const main = commitAll(cwd, "fix: durable  writes (#7)");
+    const mainNode = {
+      baseRefName: "main",
+      mergedAt: "2026-07-12T00:00:00Z",
+      mergeCommit: { oid: main },
+    };
+    const cases = [
+      {
+        subject: "fix: renamed original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: true,
+      },
+      {
+        subject: "fix: renamed original",
+        body: "Backport of #7 to release/2026.7.1.",
+        shared: true,
+      },
+      { subject: "fix: durable writes", body: "", shared: true },
+      {
+        subject: "fix: independent original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      git(cwd, ["checkout", "-qb", "release/case-" + index, base]);
+      writeFileSync(join(cwd, scenario.shared ? "shared.txt" : "independent.txt"), "release\n");
+      const source = commitAll(cwd, scenario.subject + "\n\n" + scenario.body);
+      const node = {
+        __typename: "PullRequest",
+        baseRefName: "release/2026.7.1",
+        mergedAt: mainNode.mergedAt,
+        mergeCommit: { oid: source },
+      };
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { validateReleaseProvenanceOverrides as validate } from ${JSON.stringify(verifier)};
+const { source, node, main, mainNode } = ${JSON.stringify({ source, node, main, mainNode })};
+validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => new Map([[7, mainNode]]));`,
+        ],
+        { cwd, encoding: "utf8" },
+      );
+      if (scenario.shared) {
+        expect(result.stderr).toContain("references invalid source PR #9");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -736,7 +1465,7 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
   });
 
@@ -940,7 +1669,12 @@ Release provenance for ${hash} -> #3`
   it("subtracts cumulative shipped PRs deterministically from the source inventory", () => {
     const source = {
       pullRequests: new Set([1, 2, 3]),
-      references: [1, 2, 4],
+      references: [1, 2, 4, 8, 9, 10],
+      activeCommits: [
+        { pullRequests: [1, 2], references: [1, 2, 8, 9] },
+        { pullRequests: [3], references: [3, 9] },
+        { pullRequests: [], references: [10] },
+      ],
     };
 
     const result = subtractShippedPullRequests(source, [
@@ -949,7 +1683,7 @@ Release provenance for ${hash} -> #3`
     ]);
 
     expect([...source.pullRequests]).toEqual([3]);
-    expect(source.references).toEqual([]);
+    expect(source.references).toEqual([9, 10]);
     expect(result.baselines).toEqual([
       { ref: "v2026.6.10", count: 2, pullRequests: [2, 4] },
       { ref: "v2026.6.11", count: 1, pullRequests: [1] },
@@ -1087,8 +1821,16 @@ Release provenance for ${hash} -> #3`
 
   it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
     const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
-    const originalMessage =
-      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+    const helpers = Array.from({ length: 21 }, (_, index) => ({
+      email: "helper" + (index + 1) + "@example.invalid",
+      login: index === 0 ? "original-helper" : "original-helper-" + (index + 1),
+    }));
+    const originalMessage = [
+      "fix: preserve playback errors (#21)\n\nFixes #20",
+      ...helpers.map(({ email }) => "Co-authored-by: Helper <" + email + ">"),
+      "Co-authored-by: Bot <bot@example.invalid>",
+      "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
+    ].join("\n");
     writeFileSync(join(cwd, "playback.txt"), "fixed\n");
     const original = commitAll(cwd, originalMessage);
     git(cwd, ["checkout", "-qb", "release", base]);
@@ -1110,12 +1852,26 @@ Release provenance for ${hash} -> #3`
       `#!${process.execPath}\n
 const original = ${JSON.stringify(original)};
 const target = ${JSON.stringify(target)};
+const helpers = ${JSON.stringify(helpers)};
+const cursorMode = process.env.COAUTHOR_CURSOR_MODE;
 const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
 const data = {};
-for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+for (const [, alias, hash, fields] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)([\\s\\S]*?)(?=c\\d+: repository|$)/g)) {
+  const authors = [
+    { email: "author@example.invalid", user: { login: "steipete" } },
+    ...helpers.map(({ email, login }) => ({ email, user: { login } })),
+    { email: "bot@example.invalid", user: { login: "clawsweeper" } },
+    { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } },
+    ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : []),
+  ];
+  const after = JSON.parse(fields.match(/authors\\(first: 20, after: (null|"[^"]+")\\)/)?.[1] ?? "null");
+  const hasNextPage = after === null || cursorMode === "repeated";
   data[alias] = { object: {
     associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
-    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    authors: {
+      nodes: after === null ? authors.slice(0, 20) : authors.slice(20),
+      pageInfo: { hasNextPage, endCursor: cursorMode === "missing" ? null : "authors-page-1" },
+    },
     author: { user: { login: "release-operator" } }
   } };
 }
@@ -1133,30 +1889,44 @@ console.log(JSON.stringify({ data }));
     );
     chmodSync(gh, 0o755);
     splitChangelog({ rootDir: cwd });
-    const run = (write: boolean) =>
+    const manifestPath = join(cwd, "manifest.json");
+    const run = (write: boolean, cursorMode = "complete") =>
       runVerifier(cwd, {
         base,
         target,
         mainRef: original,
         write,
-        extraArgs: ["--seed-ref", seed],
-        env: { PATH: `${cwd}:${process.env.PATH}` },
+        manifest: manifestPath,
+        extraArgs: ["--seed-ref", seed, "--no-github-snapshot"],
+        env: { PATH: `${cwd}:${process.env.PATH}`, COAUTHOR_CURSOR_MODE: cursorMode },
       });
     const generated = run(true);
     expect(generated.stderr).toBe("");
     expect(generated.status, generated.stdout).toBe(0);
     const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
     const section = readFileSync(entryPath, "utf8");
-    expect(section).toContain(
-      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
+    const expectedThanks = ["steipete", ...helpers.map(({ login }) => login), "reporter"];
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+      expectedThanks,
     );
     expect(section).toContain(
-      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
+      "- **PR #21** Related #20. Authored by @steipete. Thanks " +
+        helpers.map(({ login }) => "@" + login).join(", ") +
+        ", and @reporter.",
     );
+    const editorial = section.split("\n").find((line) => line.startsWith("- Preserve playback"));
+    for (const login of expectedThanks) {
+      expect(editorial).toContain("@" + login);
+    }
+    expect(section).not.toContain("@clawsweeper");
+    expect(section).not.toContain("@Copilot");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
     expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+      expectedThanks,
+    );
     writeReleaseChangelog({
       rootDir: cwd,
       version: "2026.7.1",
@@ -1173,6 +1943,14 @@ console.log(JSON.stringify({ data }));
     const repaired = run(true);
     expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
     expect(readFileSync(entryPath, "utf8")).toBe(section);
+    for (const cursorMode of ["missing", "repeated"]) {
+      const malformed = run(false, cursorMode);
+      expect(malformed.status).toBe(1);
+      expect(malformed.stderr).toContain(
+        "GitHub returned an invalid authors cursor for commit " + original,
+      );
+      expect(readFileSync(entryPath, "utf8")).toBe(section);
+    }
   });
 
   it.each([0, 1, 2])(
@@ -1517,7 +2295,12 @@ console.log(JSON.stringify({ data }));
     mkdirSync(privateTmp);
     const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
     const originalIndex = readFileSync(index);
-    const originalObjects = git(cwd, ["count-objects", "-v"]);
+    // Packing or pruning duplicate loose copies must not affect object isolation.
+    const originalObjects = git(cwd, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ]);
     const hooks = join(cwd, "test-hooks");
     mkdirSync(hooks);
     const hook = join(hooks, "post-index-change");
@@ -1537,7 +2320,9 @@ console.log(JSON.stringify({ data }));
     });
     expect(readFileSync(index)).toEqual(originalIndex);
     expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
-    expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+    expect(git(cwd, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])).toBe(
+      originalObjects,
+    );
     expect(readdirSync(privateTmp)).toEqual([]);
     expect(readdirSync(cwd)).not.toContain("hook-fired");
     if (
@@ -1570,6 +2355,7 @@ console.log(JSON.stringify({ data }));
     "reachable-body",
     "explicit-seed",
     "canonical-carrier",
+    "large-history-carrier",
     "backport-carrier",
     "provenance-carrier",
     "unresolved-body",
@@ -1594,6 +2380,11 @@ console.log(JSON.stringify({ data }));
       2,
     );
     git(cwd, ["checkout", "-qb", "later-main"]);
+    if (mode === "large-history-carrier") {
+      const message = join(cwd, ".git", "large-message");
+      writeFileSync(message, "chore: unrelated history\n\n" + "é".repeat(33 * 1024 * 1024));
+      git(cwd, ["commit", "--allow-empty", "-q", "-F", message]);
+    }
     writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
     const future = commitAt("chore: performance work (#22)", 3);
     git(cwd, ["checkout", "-q", "release"]);
@@ -1604,7 +2395,7 @@ console.log(JSON.stringify({ data }));
     } else if (mode.endsWith("-carrier")) {
       main = future;
       commitAt("chore: release preparation", 4);
-      if (mode === "canonical-carrier") {
+      if (mode === "canonical-carrier" || mode === "large-history-carrier") {
         git(cwd, ["cherry-pick", "-x", future], { GIT_COMMITTER_DATE: "2026-07-05T12:00:00Z" });
         carrier = git(cwd, ["rev-parse", "HEAD"]);
       } else {
@@ -1711,6 +2502,72 @@ console.log(JSON.stringify({ data }));
       expect(verified.status, verified.stdout).toBe(0);
     }
   });
+
+  it("collects canonical main history exceeding the old 16 MiB command buffer", () => {
+    const { cwd, base } = seedRepository("openclaw-release-large-main-", "main");
+    const message = join(cwd, ".git", "large-message");
+    writeFileSync(
+      message,
+      "docs: long canonical history\n\n" + "history detail\n".repeat(1_200_000),
+    );
+    git(cwd, ["commit", "--allow-empty", "-q", "-F", message]);
+    const mainRef = git(cwd, ["rev-parse", "HEAD"]);
+    splitChangelog({ rootDir: cwd });
+    const manifest = join(cwd, "manifest.json");
+    const result = runVerifier(cwd, { base, target: base, mainRef, manifest });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).errors).toEqual([]);
+    expect(JSON.parse(readFileSync(manifest, "utf8")).source.directCommits).toBe(0);
+  });
+
+  it.each(["missing", "mixed", "wrong-path", "non-null"])(
+    "preserves optional missing-user semantics at the CLI boundary: %s",
+    (mode) => {
+      const { cwd, base } = seedRepository("openclaw-release-optional-user-", "main");
+      const target = commitAll(
+        cwd,
+        "chore: source\n\nCo-authored-by: Former <123+former-user@users.noreply.github.com>\nCo-authored-by: Verified <456+verified-user@users.noreply.github.com>",
+      );
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}
+const query = process.argv.find(arg => arg.startsWith("query="))?.slice(6) ?? "";
+const mode = ${JSON.stringify(mode)};
+const data = {}, errors = [];
+for (const [, alias] of query.matchAll(/(c\\d+): repository/g)) data[alias] = { object: { associatedPullRequests: { nodes: [], pageInfo: { hasNextPage: false } }, author: { user: { login: "steipete" } } } };
+for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) {
+  data[alias] = login === "former-user" && mode !== "non-null" ? null : { __typename: "User", login };
+  if (login === "former-user") errors.push({ type: "NOT_FOUND", path: mode === "wrong-path" ? [alias, "login"] : [alias], message: "Could not resolve to a User" });
+}
+if (errors.length && mode === "mixed") errors.push({ type: "FORBIDDEN", path: ["unrelated"], message: "Resource not accessible" });
+console.log(JSON.stringify({ data, ...(errors.length ? { errors } : {}) }));
+if (errors.length) { for (const error of errors) console.error("gh: " + error.message); process.exitCode = 1; }
+`,
+      );
+      chmodSync(gh, 0o755);
+      splitChangelog({ rootDir: cwd });
+      const manifest = join(cwd, "manifest.json");
+      const before = readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8");
+      const result = runVerifier(cwd, {
+        base,
+        target,
+        manifest,
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+      if (mode !== "missing") {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("GitHub GraphQL errors");
+        expect(readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8")).toBe(before);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        const output = readFileSync(manifest, "utf8");
+        expect(output).toContain("verified-user");
+        expect(output).not.toContain('"former-user"');
+        expect(JSON.parse(result.stdout).errors).toEqual([]);
+      }
+    },
+  );
 
   it.each([
     { mode: "recover", attempts: 2, error: undefined, waits: [500] },

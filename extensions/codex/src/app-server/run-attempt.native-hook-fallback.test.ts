@@ -263,6 +263,7 @@ describe("Codex participant native admission", () => {
               expect(admission?.nativeModelInputTools).toContain("spawn_agent");
               const relayId = extractRelayIdFromThreadRequest(request);
               const generation = extractGenerationFromThreadRequest(request);
+              resources.state.nativeHookRelay?.bindForegroundTurn(binding.threadId, "turn-1");
               const spawn = (toolUseId: string) =>
                 agentHarnessRuntime.invokeNativeHookRelay({
                   provider: "codex",
@@ -503,14 +504,10 @@ describe("Codex native hook Gateway fallback", () => {
         web_search: "disabled",
       }),
     });
-    const started = createDeferred<void>();
     const harness = createStartedThreadHarness(
       async (method) => {
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
-        }
-        if (method === "turn/start") {
-          started.resolve();
         }
         return undefined;
       },
@@ -539,7 +536,7 @@ describe("Codex native hook Gateway fallback", () => {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
     try {
-      await Promise.race([started.promise, run.then(() => undefined)]);
+      await run.waitForTurnAccepted();
       const request = harness.requests.find(({ method }) => method === "thread/resume");
       const relayId = extractRelayIdFromThreadRequest(request?.params);
       const generation = extractGenerationFromThreadRequest(request?.params);
@@ -552,6 +549,8 @@ describe("Codex native hook Gateway fallback", () => {
         rawPayload: {
           hook_event_name: "PreToolUse",
           tool_name: "Bash",
+          session_id: "thread-existing",
+          turn_id: "turn-1",
           tool_use_id: "listener-unavailable-tool",
           tool_input: { command: "pwd" },
         },

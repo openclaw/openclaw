@@ -59,14 +59,16 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
   ) {
     return undefined;
   }
-  const defaultTimeoutText = timedOutDuringCompaction
-    ? "Context compaction timed out before a response was generated. Please try again."
-    : idleTimedOut
-      ? "The model did not produce a response before the model idle timeout. " +
-        "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
-        "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
-      : "Request timed out before a response was generated. " +
-        "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+  const defaultTimeoutText = timedOutDuringToolExecution
+    ? "Tool execution timed out with an unknown outcome. Check the current state before repeating the operation."
+    : timedOutDuringCompaction
+      ? "Context compaction timed out before a response was generated. Please try again."
+      : idleTimedOut
+        ? "The model did not produce a response before the model idle timeout. " +
+          "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
+          "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
+        : "Request timed out before a response was generated. " +
+          "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
   const timeoutText = input.attempt.promptTimeoutOutcome?.message?.trim() || defaultTimeoutText;
   const replayInvalid =
     input.attempt.promptTimeoutOutcome?.replayInvalid ?? input.resolveReplayInvalid(null);

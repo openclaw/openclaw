@@ -2,9 +2,11 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { nativeRuntime } from "../../test-helpers/chat-model.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { resolveHostedEnvironments } from "./hosted-environments.ts";
 import { createNewSessionRouteData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
@@ -38,8 +40,36 @@ afterEach(() => {
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
-  return { control, ...controlQueries(control, context, "main", agent) };
+  const view = controlQueries(control, context, "main", agent);
+  const openPicker = () => {
+    const picker = view.draw().querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+    if (!picker.open) {
+      picker.querySelector<HTMLElement>("summary")!.click();
+      flush();
+    }
+  };
+  return { control, ...view, openPicker };
 }
+it("keeps an unavailable hosted workspace distinct from an available one", () => {
+  const unavailableRuntime = { ...runtime, id: "unavailable" };
+  const choices = resolveHostedEnvironments(
+    [
+      model,
+      {
+        ...model,
+        runtimeChoices: [{ agentRuntime: unavailableRuntime, available: false }],
+      },
+    ],
+    modelRef,
+    true,
+  );
+  expect(choices.map((choice) => choice.id)).toEqual([runtime.id, unavailableRuntime.id]);
+  expect(choices.find((choice) => choice.id === runtime.id)?.disabledReason).toBeUndefined();
+  expect(choices.find((choice) => choice.id === unavailableRuntime.id)?.disabledReason).toBe(
+    "This hosted workspace isn’t available. Check its setup or choose another workspace.",
+  );
+});
+
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });
@@ -87,10 +117,12 @@ it("keeps explicit runtime intent across a late catalog, permission loss, and re
 });
 it("uses model-picker changes and configured defaults as the environment authority", async () => {
   const { context } = contextWith([model]);
-  const { control, find } = modelControl(context);
+  const { control, find, openPicker } = modelControl(context);
   control.load(context, "main", true, { agent });
   await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
   await waitForModelControl(control, context, "main", agent);
+  openPicker();
+  await waitForSolid(() => expect(find("model-runtime", "agentsapi")).not.toBeNull());
   find("model-runtime", "agentsapi")!.click();
   expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
   expect(control.selectHostEnvironment()).toBe(true);
@@ -98,6 +130,22 @@ it("uses model-picker changes and configured defaults as the environment authori
   control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
+});
+it("returns to the Gateway's implicit host runtime without pinning it", async () => {
+  const implicitHost = {
+    ...model,
+    agentRuntime: { ...nativeRuntime(), source: "implicit" as const },
+  };
+  const { context } = contextWith([implicitHost]);
+  const { control, find, openPicker } = modelControl(context);
+  control.load(context, "main", true, { agent });
+  await waitForModelControl(control, context, "main", agent);
+  openPicker();
+  await waitForSolid(() => expect(find("model-runtime", "agentsapi")).not.toBeNull());
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBeUndefined();
+  expect(control.resolveAgentRuntime()?.id).toBe("openclaw");
 });
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");
@@ -119,14 +167,20 @@ it("retains the explicit API-key account through hosted selection and rejects a 
         : { kind: "automatic", label: "Automatic" },
     });
   });
-  const { control, find } = modelControl(context);
+  const { control, find, draw, openPicker } = modelControl(context);
   control.load(context, "main", true, { agent });
+  const accountToggle = () =>
+    draw().querySelector<HTMLButtonElement>(".chat-controls__account-trigger");
   const choose = async (id: string) => {
-    find("account-group-toggle")!.click();
+    openPicker();
+    if (accountToggle()?.getAttribute("aria-expanded") !== "true") {
+      accountToggle()!.click();
+      flush();
+    }
     await vi.waitFor(() => expect(find("account-option", "account:" + id)).not.toBeNull());
     find("account-option", "account:" + id)!.click();
   };
-  await vi.waitFor(() => expect(find("account-group-toggle")).not.toBeNull());
+  await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
   await choose(api.authProfileId);
   await vi.waitFor(() => expect(control.accountSelectionReady()).toBe(true));
   expect(control.selectHostedEnvironment("agentsapi")).toBe(true);
@@ -140,7 +194,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   });
   await choose(subscription.authProfileId);
   expect(control.accountSelectionReady()).toBe(false);
-  expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+  expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
   late.resolve({
     ...unavailableCatalog("unsupported-runtime"),
     accountSelection: {

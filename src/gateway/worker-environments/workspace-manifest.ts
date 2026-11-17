@@ -7,6 +7,7 @@ import {
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
+  WorkspaceResultLimitError,
 } from "./workspace-inventory-limits.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { projectWorkspaceEntries, buildCacheInputPaths } from "./workspace-path-exclusions.js";
@@ -57,6 +58,12 @@ export const MAX_RECONCILIATION_PACK_BYTES = 256 * 1024 * 1024;
 const MANIFEST_REF_PATTERN = /^sha256:([a-f0-9]{64})$/u;
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 
+export class UnsafeWorkspaceManifestPathError extends Error {
+  constructor() {
+    super("Worker workspace manifest contains an unsafe path");
+  }
+}
+
 export function manifestPath(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -68,7 +75,7 @@ export function manifestPath(value: unknown): string {
     value === ".." ||
     value.startsWith("../")
   ) {
-    throw new Error("Worker workspace manifest contains an unsafe path");
+    throw new UnsafeWorkspaceManifestPathError();
   }
   return value;
 }
@@ -108,10 +115,14 @@ function createManifestBudget() {
           ? Buffer.byteLength(entry.target)
           : 0;
     if (pathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw new Error("Worker workspace manifest paths exceed their byte limit");
+      throw new WorkspaceResultLimitError(
+        "Worker workspace manifest paths exceed their byte limit.",
+      );
     }
     if (totalBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-      throw new Error("Worker workspace manifest exceeds its eligible byte limit");
+      throw new WorkspaceResultLimitError(
+        "Worker workspace manifest exceeds its eligible byte limit.",
+      );
     }
   };
 }
@@ -175,7 +186,9 @@ function validateAndProjectEntries(
   directories: string[];
 } {
   if (values.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-    throw new Error("Worker workspace manifest has too many entries");
+    throw new WorkspaceResultLimitError(
+      `Worker workspace manifest has too many entries: ${values.length} files/directories (limit ${MAX_WORKSPACE_INVENTORY_ENTRIES}).`,
+    );
   }
   const rawEntries = values.map(parseRawEntry);
   let previous = "";
@@ -235,7 +248,9 @@ export function serializeWorkerWorkspaceManifest(
           manifest.buildCacheInputs !== undefined,
         );
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-    throw new Error("Worker workspace manifest has too many entries");
+    throw new WorkspaceResultLimitError(
+      `Worker workspace manifest has too many entries: ${entries.length} files/directories (limit ${MAX_WORKSPACE_INVENTORY_ENTRIES}).`,
+    );
   }
   const recordBudget = createManifestBudget();
   let entryBytes = 0;
@@ -246,7 +261,9 @@ export function serializeWorkerWorkspaceManifest(
     entryBytes += Buffer.byteLength(JSON.stringify(entry));
     recordBudget(entry);
     if (emptyBytes + entryBytes + Math.max(0, entries.length - 1) > MAX_WORKSPACE_MANIFEST_BYTES) {
-      throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
+      throw new WorkspaceResultLimitError(
+        "Worker workspace manifest exceeds the 64 MiB safety limit.",
+      );
     }
   }
   return JSON.stringify({ version: manifest.version, baseCommit: manifest.baseCommit, entries });
@@ -259,7 +276,9 @@ export function parseWorkerWorkspaceManifest(
   pathPolicy: WorkspaceManifestPathPolicy = "current",
 ): WorkerWorkspaceManifest {
   if (Buffer.byteLength(raw) > MAX_WORKSPACE_MANIFEST_BYTES) {
-    throw new Error("Worker workspace manifest exceeds the 64 MiB safety limit");
+    throw new WorkspaceResultLimitError(
+      "Worker workspace manifest exceeds the 64 MiB safety limit.",
+    );
   }
   const match = MANIFEST_REF_PATTERN.exec(expectedRef);
   if (!match) {

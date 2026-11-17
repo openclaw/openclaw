@@ -7,7 +7,10 @@ import { getGatewayServiceInstallation } from "../infra/gateway-service-installa
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import {
+  isArtifactPreservingStateRead,
+  isLiveStateRead,
+} from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveLegacyCronDefaultStoreKey } from "./openclaw-state-db-cron-identity-migration.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
@@ -17,8 +20,12 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 /** Capture read authority without constructing a worker environment. */
 export function captureOpenClawStateReadContextWithAdmission(
   pathname: string,
-  captureAdmission: (pathname: string) => OpenClawStateWorkerContext["admission"],
+  captureAdmission: (
+    pathname: string,
+    preparedIdentity?: DatabasePathIdentity,
+  ) => OpenClawStateWorkerContext["admission"],
   knownIdentity: (pathname: string) => DatabasePathIdentity | undefined,
+  preparedIdentity?: DatabasePathIdentity,
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
@@ -29,9 +36,10 @@ export function captureOpenClawStateReadContextWithAdmission(
   | "runInCapturedSchemaScope"
   | "stateIntegrity"
   | "artifactPreservingReads"
+  | "liveStateReads"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
-  const capturedAdmission = captureAdmission(pathname);
+  const capturedAdmission = captureAdmission(pathname, preparedIdentity);
   const serviceInstallation = getGatewayServiceInstallation();
   const integrity = capturedAdmission.captureIntegrity?.();
   const assertPublicationCurrent = capturedAdmission.assertCurrent;
@@ -73,6 +81,7 @@ export function captureOpenClawStateReadContextWithAdmission(
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
     artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
+    liveStateReads: isLiveStateRead() || undefined,
   };
 }
 

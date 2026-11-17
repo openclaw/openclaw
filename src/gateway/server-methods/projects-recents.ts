@@ -94,7 +94,9 @@ export async function listProjectRecents(
       }
       const projectId = normalizeOptionalString(entry.projectId);
       const explicitProject = projectId ? projectsById.get(projectId) : undefined;
-      const worktreeRoot = normalizeOptionalString(entry.worktree?.repoRoot);
+      const worktreeRoot =
+        normalizeOptionalString(entry.worktree?.canonicalWorkspaceDir) ??
+        normalizeOptionalString(entry.worktree?.repoRoot);
       const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
       const execCwd = normalizeOptionalString(entry.execCwd);
       const folder = worktreeRoot ?? spawnedCwd ?? execCwd;

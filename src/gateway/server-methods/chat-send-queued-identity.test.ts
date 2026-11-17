@@ -261,7 +261,10 @@ it.each(["old", "new"] as const)(
       {
         runId: dropped,
         state: "error",
-        errorMessage: expect.stringContaining("dropped"),
+        errorMessage:
+          dropPolicy === "old"
+            ? "Your queued message was dropped because the session queue is full."
+            : "This message was not queued because the session queue is full.",
       },
     ]);
     expect(await waitResult(dropped)).toMatchObject({ runId: dropped, status: "error" });

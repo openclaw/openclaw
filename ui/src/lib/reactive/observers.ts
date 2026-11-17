@@ -187,7 +187,7 @@ export function createResizeObserver(
   options?: ResizeObserverOptions,
 ) {
   createEffect(mountedTargets(targets), (current) => {
-    if (current.length === 0 || typeof ResizeObserver === "undefined") {
+    if (current.length === 0) {
       return undefined;
     }
     return observeResize(current, callback, options);
@@ -201,7 +201,7 @@ export function createIntersectionObserver(
   options?: IntersectionObserverInit,
 ) {
   createEffect(mountedTargets(targets), (current) => {
-    if (current.length === 0 || typeof IntersectionObserver === "undefined") {
+    if (current.length === 0) {
       return undefined;
     }
     return observeIntersection(current, callback, options);

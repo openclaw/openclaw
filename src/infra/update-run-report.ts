@@ -2,6 +2,7 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
   formatUpdateActivationTimeoutGuidance,
+  isUpdatePrerequisiteRefusal,
   isVerifiedUpdateRollback,
   UPDATE_ACTIVATION_TIMEOUT_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
@@ -20,6 +21,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
@@ -30,6 +32,8 @@ export type UpdateRunReport = { headline: string; lines: string[]; markdown: str
 
 const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
 const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
+  "preflight-local-replay-conflict":
+    "A local commit conflicts with the update target. Resolve the conflict in the paths named by the failing check (rebase the local commits onto the update target, or drop them), then rerun the update.",
   "preflight-insufficient-space":
     "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
   "pnpm-corepack-missing":
@@ -60,7 +64,7 @@ type ReportInput = Pick<
   | "repair"
   | "downtimeMs"
 > &
-  Partial<Pick<UpdateRunRecord, "target">>;
+  Partial<Pick<UpdateRunRecord, "target" | "createdAtMs" | "finishedAtMs">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -167,7 +171,9 @@ export function formatUpdateRunRecovery(
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`
-    : `not serving (${code})`;
+    : code === "stopped-free"
+      ? `not serving (${code})`
+      : `readiness unverified (${code})`;
 }
 
 function bounded(text: string, limit: number): string {
@@ -276,7 +282,21 @@ export function renderUpdateRunReport(
     run.status === "failed" &&
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
-  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  const owed = listUpdateOwedSteps(run);
+  // An owed step restates the warning it was recorded with; report that failure once.
+  const warnings = [
+    ...updateRunWarningMessages(run.steps).filter(
+      (message) => !owed.some((step) => message.startsWith(step.reason)),
+    ),
+    ...owed.map(formatUpdateOwedStep),
+  ].map((message) => `Warning: ${message}`);
+  // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
+  // then the owner's recovery steps. Saved records keep the historical-advice layout below.
+  const refusalBlock =
+    run.status === "failed" && isUpdatePrerequisiteRefusal(run.reason) && opts.nextAction
+      ? opts.nextAction.split("\n\n")[0]?.split("\n")
+      : undefined;
+  const refusalLine = refusalBlock?.[0]?.match(/^Update refused: .+/u)?.[0];
   let headline: string;
   switch (run.status) {
     case "succeeded": {
@@ -295,9 +315,11 @@ export function renderUpdateRunReport(
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : runtimeCheckFailed
-            ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
+          : refusalLine
+            ? `⚠️ ${refusalLine}`
+            : runtimeCheckFailed
+              ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+              : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -388,17 +410,30 @@ export function renderUpdateRunReport(
   )) {
     lines.push(`Warning: Doctor migration: ${message}`);
   }
-  const phases = run.steps
-    .filter((step) => PHASES.has(step.step))
-    .map((step) => {
-      const duration =
-        step.startedAtMs != null && step.endedAtMs != null
-          ? ` (${formatDurationPrecise(Math.max(0, step.endedAtMs - step.startedAtMs))})`
-          : "";
-      return `${step.step}${duration}`;
-    });
+  const phaseSteps = run.steps.filter((step) => PHASES.has(step.step));
+  const phases = phaseSteps.map((step) => {
+    const duration =
+      step.startedAtMs != null && step.endedAtMs != null
+        ? ` (${formatDurationPrecise(Math.max(0, step.endedAtMs - step.startedAtMs))})`
+        : "";
+    return `${step.step}${duration}`;
+  });
   if (phases.length) {
     lines.push(`Phases: ${phases.join(" → ")}`);
+    const phaseMs = phaseSteps.reduce(
+      (sum, step) =>
+        sum +
+        (step.startedAtMs != null && step.endedAtMs != null
+          ? Math.max(0, step.endedAtMs - step.startedAtMs)
+          : 0),
+      0,
+    );
+    const totalMs =
+      run.createdAtMs == null || run.finishedAtMs == null ? 0 : run.finishedAtMs - run.createdAtMs;
+    // Capture and terminal cleanup run outside these phases; large state makes them long.
+    if (totalMs - phaseMs >= 1_000) {
+      lines.push(`Total: ${formatDurationPrecise(totalMs)}, including work outside these phases.`);
+    }
   }
   for (const step of selectUpdateFailureReportSteps(
     run.steps.filter((item) => item.status === "failed"),
@@ -521,7 +556,22 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
+  // The terminal record owner stamps the cause; the Control UI loads this renderer.
+  if (run.status !== "succeeded" && run.origin.cause) {
+    lines.unshift(`Cause: ${run.origin.cause}`);
+  }
   const next = hints.at(-1);
+  if (refusalLine) {
+    // The terminal shows only the instruction; the saved report keeps every detail.
+    const details = ["Details:", `Reason code: ${reason}`, ...lines, ...hints].join("\n");
+    const steps = refusalBlock?.slice(1) ?? [];
+    const lead = bounded([headline, ...steps].join("\n"), 1100);
+    return {
+      headline,
+      lines: steps,
+      markdown: `${lead}\n\n${bounded(details, markdownLimit - lead.length - 2)}`,
+    };
+  }
   if (runtimeCheckFailed || run.reason === "doctor-maintenance-pending") {
     // Keep the owner's selected action ahead of the diagnostic dump, including
     // historical-advice qualifications. Neither this layout nor truncation selects recovery.
@@ -573,6 +623,8 @@ export function updateRunReportInputFromResult(
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
     target: recorded?.target,
+    createdAtMs: recorded?.createdAtMs,
+    finishedAtMs: recorded?.finishedAtMs,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],

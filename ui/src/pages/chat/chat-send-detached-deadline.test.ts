@@ -227,7 +227,7 @@ it.each(["success", "terminal error", "known rejection"] as const)(
         message,
         outcome === "known rejection"
           ? "Approval rejected"
-          : "Chat failed before the run started; try again.",
+          : "Couldn’t send your message. Try again.",
       );
     }
     const previousError = host.chatError;

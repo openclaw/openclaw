@@ -5,10 +5,10 @@ import type {
   FeatureRequestOptions,
 } from "openclaw/plugin-sdk/feature-contract";
 import { browserContract } from "./browser-contract.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 
-type Client = FeatureClient<typeof contract>;
-type Operation = keyof typeof contract.operations;
+type Client = FeatureClient<FullOutputContract>;
+type Operation = keyof FullOutputContract["operations"];
 
 /** A feature client that reads (and, for operators, writes) as the agent
  * selected in the viewing selector. The default agent uses ordinary calls;
@@ -20,9 +20,9 @@ export function viewingClient(
 ): Client {
   const invoke = async <K extends Operation>(
     operation: K,
-    input: FeatureInput<typeof contract, K>,
+    input: FeatureInput<FullOutputContract, K>,
     options?: FeatureRequestOptions,
-  ): Promise<FeatureOutput<typeof contract, K>> => {
+  ): Promise<FeatureOutput<FullOutputContract, K>> => {
     const { agent, defaultAgent } = viewing();
     if (
       !agent ||
@@ -36,7 +36,7 @@ export function viewingClient(
       browserContract.operations[operation].kind === "query" ? "agent_query" : "agent_action";
     // SAFETY: the proxy validates the inner output against operation K's own output schema.
     return (await base.invoke(proxy, { agent, operation, input }, options)) as FeatureOutput<
-      typeof contract,
+      FullOutputContract,
       K
     >;
   };

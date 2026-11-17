@@ -103,9 +103,6 @@ describe("buildExecAutoReviewTranscript", () => {
       }),
       result("inspect", "Result: tenant-private-marker"),
     ];
-    expect(JSON.stringify(buildExecAutoReviewTranscript({ messages }))).toContain(
-      "tenant-private-marker",
-    );
     const transcript = buildExecAutoReviewTranscript({ messages });
     expect(transcript.entries).toHaveLength(3);
     expect(JSON.stringify(transcript)).toContain("tenant-private-marker");

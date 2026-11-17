@@ -6,6 +6,41 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
+test("accepts opt-in proxy credit headers without changing the user principal header", () => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            gitCoauthor: { nameHeader: "x-credit-name", emailHeader: "x-credit-email" },
+          },
+        },
+      },
+    }),
+  ).toBe(true);
+});
+
+test.each([
+  { nameHeader: "", emailHeader: "x-email" },
+  { nameHeader: "x-name\r\ninjected", emailHeader: "x-email" },
+  { nameHeader: "x-name" },
+])("rejects invalid or incomplete proxy credit mapping %j", (gitCoauthor) => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          trustedProxy: {
+            userHeader: "x-user",
+            gitCoauthor,
+          },
+        },
+      },
+    }),
+  ).toBe(false);
+});
+
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
   expect(result.error?.issues).toContainEqual(
@@ -55,6 +90,28 @@ const rolesConfig = (overrides: Record<string, unknown>) => ({
 const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   agents: { entries: { shared: { models: { "fixture/fallback": { alias: "backup" } } } } },
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
+});
+
+test.each(["none", "view", "invited"])("preserves explicit session access mode %s", (others) => {
+  const config = validated(
+    rolesConfig({
+      definitions: { guest: { ...validRole, sessions: { others } } },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.sessions.others).toBe(others);
+});
+
+test("does not enable invitation-only access in an unconfigured Gateway", () => {
+  expect(validated({}).gateway?.roles).toBeUndefined();
+  expect(validated(rolesConfig({})).gateway?.roles?.definitions.guest?.sessions.others).toBe(
+    "view",
+  );
+});
+
+test("accepts a conversation-scoped automation role without operator.write", () => {
+  const scopes = ["operator.sessions.write", "operator.cron"];
+  const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
+  expect(config.gateway?.roles?.definitions.guest?.scopes).toEqual(scopes);
 });
 
 test.each([
@@ -136,7 +193,6 @@ test.each([
 
 test.each([
   [{ default: "missing", definitions: { guest: validRole } }, "default"],
-  [{ definitions: { guest: validRole } }, "default"],
   [{ definitions: {} }, "definitions"],
 ] as const)("requires a role %s", (roles, field) => {
   expectSchemaIssue({ gateway: { roles } }, ["gateway", "roles", field]);
@@ -254,4 +310,18 @@ test("validates the realtime input transcription model as an optional string", (
     { talk: { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } } },
     ["talk", "realtime", "providers", "openai", "inputTranscriptionModel"],
   );
+});
+
+test("accepts role definitions without enabling named-role enforcement", () => {
+  expect(accepts({ gateway: { roles: { definitions: { guest: validRole } } } })).toBe(true);
+});
+
+test("requires a default for GitHub role assignments, including an empty mapping", () => {
+  for (const byGithubLogin of [{ octocat: "guest" }, {}]) {
+    expectSchemaIssue(
+      { gateway: { roles: { definitions: { guest: validRole }, assignments: { byGithubLogin } } } },
+      ["gateway", "roles", "assignments", "byGithubLogin"],
+      "gateway.roles.default",
+    );
+  }
 });

@@ -135,8 +135,9 @@ describe
       },
     );
 
-    it("filters legacy JSON without losing duplicate-key precedence or rejecting scalar rows", () => {
-      admitted(() => {
+    it("filters legacy JSON without losing duplicate-key precedence or rejecting scalar rows", async () => {
+      const selected: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+      const seeded = admitted(() => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: pair.root };
         const database = openOpenClawAgentDatabase({ agentId: "scan-proof", env });
         const insert = database.db.prepare(
@@ -154,20 +155,20 @@ describe
         ] as const) {
           insert.run(key, key, json);
         }
-        const selected: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
-        scanDoctorSessionEntryRecords(
-          { agentId: "scan-proof", storePath: database.path, env },
-          (record) => selected.push(record),
-          readDatabasePathIdentitySync(database.path),
-        );
-        expect(
-          selected.toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
-        ).toEqual([
-          { sessionKey: "boolean", entry: { pendingFinalDelivery: true } },
-          { sessionKey: "duplicate", entry: { status: "done" } },
-          { sessionKey: "running", entry: { status: "running" } },
-        ]);
+        return { database, env };
       });
+      await scanDoctorSessionEntryRecords(
+        { agentId: "scan-proof", storePath: seeded.database.path, env: seeded.env },
+        (record) => selected.push(record),
+        readDatabasePathIdentitySync(seeded.database.path),
+      );
+      expect(
+        selected.toSorted((left, right) => left.sessionKey.localeCompare(right.sessionKey)),
+      ).toEqual([
+        { sessionKey: "boolean", entry: { pendingFinalDelivery: true } },
+        { sessionKey: "duplicate", entry: { status: "done" } },
+        { sessionKey: "running", entry: { status: "running" } },
+      ]);
     });
   },
 );
