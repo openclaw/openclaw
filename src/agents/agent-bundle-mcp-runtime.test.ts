@@ -423,7 +423,7 @@ async function stdioRuntime(
   return { ...files, runtime };
 }
 
-async function startSessionExpiryServer(stateful: boolean) {
+async function startSessionExpiryServer(stateful: boolean, invalidSession = false) {
   const state: {
     activeServerSessionId: string | undefined;
     initializeCount: number;
@@ -488,7 +488,9 @@ async function startSessionExpiryServer(stateful: boolean) {
           (stateful && (!sessionId || sessionId !== state.activeServerSessionId)) ||
           (!stateful && message.method === "tools/call")
         ) {
-          res.writeHead(404).end("Session not found");
+          res
+            .writeHead(invalidSession ? 400 : 404)
+            .end(invalidSession ? "invalid session" : "Session not found");
         } else if (message.method === "notifications/initialized") {
           res.writeHead(202).end();
         } else if (message.method === "tools/list") {
@@ -512,8 +514,8 @@ async function startSessionExpiryServer(stateful: boolean) {
   };
 }
 
-async function expiryRuntime(stateful: boolean) {
-  const server = await startSessionExpiryServer(stateful);
+async function expiryRuntime(stateful: boolean, invalidSession = false) {
+  const server = await startSessionExpiryServer(stateful, invalidSession);
   const name = stateful ? "stateful" : "stateless";
   const pending = getSessionRuntime(
     sessionParams(
@@ -2155,6 +2157,34 @@ describe("disposeSession timeout", () => {
       ]);
       expect(state.staleTerminations).toEqual(["server-session-1"]);
       expect(state.invalidAuthHeaders).toEqual([]);
+    },
+  );
+
+  it(
+    "recycles a stateful HTTP session after an invalid-session rejection",
+    { timeout: 15_000 },
+    async () => {
+      const { runtime, state } = await expiryRuntime(true, true);
+      expect((await runtime.getCatalog()).tools).toHaveLength(1);
+      await expect(
+        runtime.callTool("stateful", "probe", { attempt: "before" }),
+      ).resolves.toMatchObject({
+        content: [{ type: "text", text: "recovered server-session-1" }],
+      });
+      state.activeServerSessionId = undefined;
+      await expect(runtime.callTool("stateful", "probe", { attempt: "expired" })).rejects.toThrow(
+        "invalid session",
+      );
+      await expect(
+        runtime.callTool("stateful", "probe", { attempt: "after" }),
+      ).resolves.toMatchObject({
+        content: [{ type: "text", text: "recovered server-session-2" }],
+      });
+      expect(state.callAttempts).toEqual([
+        { attempt: "before", sessionId: "server-session-1" },
+        { attempt: "expired", sessionId: "server-session-1" },
+        { attempt: "after", sessionId: "server-session-2" },
+      ]);
     },
   );
 
