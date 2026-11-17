@@ -21,6 +21,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import {
@@ -78,6 +79,100 @@ function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) 
   host.invalidate();
 }
 
+const PEEK_DELAY_MS = 300;
+
+/**
+ * With the sidebar closed, resting the pointer on a rail item that has a section shows that
+ * section's sidebar floating beside the rail without changing the page. Leaving the sidebar
+ * or choosing a link in it puts the previous view back; opening the sidebar keeps the section.
+ */
+function attachRailPeek(host: AppSidebarRenderHost, rail: HTMLElement): () => void {
+  // The rail is not attached yet when its ref runs; bind the sidebar on first hover.
+  let sidebar: Element | null = null;
+  const removeListeners: Array<() => void> = [];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let previous: AppSidebarRenderHost["navigationView"] | undefined;
+  const end = (restore: boolean) => {
+    clearTimeout(timer);
+    if (previous === undefined) {
+      return;
+    }
+    sidebar?.removeAttribute("data-peek");
+    if (restore) {
+      host.navigationView = previous;
+    }
+    previous = undefined;
+    host.invalidate();
+  };
+  const sectionAt = (target: EventTarget | null) => {
+    const item =
+      target instanceof Element
+        ? target.closest("[data-navigation-view], [data-sidebar-entry]")
+        : null;
+    const view = item?.getAttribute("data-navigation-view");
+    if (view === "sessions" || view === "online") {
+      return view;
+    }
+    const entry = parseSidebarEntry(item?.getAttribute("data-sidebar-entry"));
+    return entry?.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  };
+  const over = (event: PointerEvent) => {
+    if (!sidebar) {
+      sidebar = rail.closest("openclaw-app-sidebar");
+      if (sidebar) {
+        removeListeners.push(
+          listen(sidebar, "pointerleave", leave),
+          listen(sidebar, "click", click),
+        );
+      }
+    }
+    clearTimeout(timer);
+    const section = sectionAt(event.target);
+    if (
+      !section ||
+      event.pointerType === "touch" ||
+      !host.navigationCollapsed ||
+      host.onExitSettings ||
+      isMobileNavLayout()
+    ) {
+      return;
+    }
+    const show = () => {
+      previous ??= host.navigationView;
+      host.navigationView = section;
+      sidebar?.setAttribute("data-peek", "");
+      host.invalidate();
+    };
+    // Moving between section items while peeking switches at once.
+    if (previous === undefined) {
+      timer = setTimeout(show, PEEK_DELAY_MS);
+    } else {
+      show();
+    }
+  };
+  function leave() {
+    end(true);
+  }
+  function click(event: Event) {
+    if (previous === undefined) {
+      clearTimeout(timer);
+    } else if (!host.navigationCollapsed) {
+      end(false);
+    } else if (
+      event.composedPath().some((target) => target instanceof Element && target.matches("a[href]"))
+    ) {
+      end(true);
+    }
+  }
+  removeListeners.push(listen(rail, "pointerover", over));
+  return () => {
+    clearTimeout(timer);
+    for (const remove of removeListeners) {
+      remove();
+    }
+  };
+}
+
 export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
@@ -120,6 +215,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   });
   return [
     <nav
+      ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
       class="sidebar-rail"
       aria-label={t("nav.pages")}
       data-tooltip-placement="right"
