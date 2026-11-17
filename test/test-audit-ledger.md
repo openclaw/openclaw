@@ -1085,11 +1085,16 @@ fallback with scoped environment restoration, hashed `.mjs` preference and
 three external-find rows with the no-readdir assertion. Production and shared
 helpers are unchanged.
 
-Direct execution of the original hook preserves the injected error, but loses
-both the failed and unattempted roots and makes no retry. The shared owner
-removes the healthy root, retains the failed root and succeeds on retry.
-Actual Vitest-hook proof and clean consumer runs are pending in the native PR
-workspace.
+Actual Vitest-hook fault injection preserves the original error on both
+versions. The baseline loses both roots and performs no retry; the candidate
+removes the healthy root, retains the failed root and removes it on retry.
+Both injected runs intentionally report one hook failure and three passing
+cases. Both clean runs pass all four cases (6.99 s baseline command time;
+1.90 s candidate); these correctness runs are not a performance comparison.
+The temporary instrumentation was restored byte for byte, and scoped PATH
+restoration passed. Scoped scripts-test typecheck, lint, formatting and both
+line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
+found no actionable defects.
 
 ## Pending qualification and proof repairs
 
