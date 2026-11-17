@@ -42,10 +42,7 @@ export function resolvePendingInputEndCause(
   defaultEndCause: SessionPendingInputEndCause = "failed",
 ): SessionPendingInputEndCause | undefined {
   const reason = resolveAgentRunErrorLifecycleFields(failure, signal).stopReason;
-  if (
-    reason === "stop" ||
-    isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)
-  ) {
+  if (isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)) {
     return "user-stop";
   }
   if (defaultEndCause === "delete") {

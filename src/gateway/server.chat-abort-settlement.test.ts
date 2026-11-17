@@ -302,6 +302,7 @@ describe("gateway WebSocket chat abort settlement", () => {
         const abortResponse = rpcReq(socket, "chat.abort", {
           sessionKey: "main",
           runId,
+          userInitiated: true,
         });
         frames.push(abortResponse);
         const aborted = await withinTest(abortResponse, signal);
