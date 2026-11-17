@@ -193,12 +193,22 @@ enable_registration_without_verification: true
     const bytes = fs.readFileSync(fixture);
     summary.fixtureHash = createHash("sha256").update(bytes).digest("hex");
     fs.writeFileSync(path.join(source, testFile), bytes);
+    // The live fixture uses actual SQLite-backed stores, unlike the ordinary
+    // Matrix unit shard. Keep the canonical main-process broker/fork lifecycle.
+    const liveConfig = "goal24-live.vitest.config.ts";
+    const configBytes =
+      'import config from "./test/vitest/vitest.extension-database-workers.config.ts";\n' +
+      'export default { ...config, test: { ...config.test, include: ["matrix/src/matrix/goal24-live.test.ts"] } };\n';
+    fs.writeFileSync(path.join(source, liveConfig), configBytes, { flag: "wx" });
+    summary.configHash = createHash("sha256").update(configBytes).digest("hex");
     summary.outcome = "test-failure";
     run(
       "live",
       "node",
       [
         "scripts/run-vitest.mjs",
+        "--config",
+        liveConfig,
         testFile,
         "--maxWorkers=1",
         "--reporter=json",
