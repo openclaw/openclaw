@@ -203,7 +203,7 @@ describe("connectGbrain", () => {
     }
   });
 
-  it("treats only an entry written in the root config file, unchanged by includes, as its own", () => {
+  it("treats only an entry written in the root config file, unchanged by includes or env, as its own", () => {
     const own = { url: MCP_URL, headers: { Authorization: "Bearer gbrain_a" } };
     const fromInclude = { url: MCP_URL, headers: { Authorization: "Bearer gbrain_b" } };
     expect(authoredGbrainEntry({ mcp: { servers: { gbrain: own } } }, own)).toEqual(own);
@@ -223,6 +223,16 @@ describe("connectGbrain", () => {
     expect(
       authoredGbrainEntry({ $include: "agents.json5", mcp: { servers: { gbrain: own } } }, own),
     ).toEqual(own);
+    // Headers from an include, or a bearer from an env template.
+    const withHeaders = (headers: Record<string, string>) => ({
+      mcp: { servers: { gbrain: { url: MCP_URL, headers } } },
+    });
+    expect(authoredGbrainEntry(withHeaders({ $include: "headers.json5" }), fromInclude)).toBe(
+      "foreign",
+    );
+    expect(authoredGbrainEntry(withHeaders({ Authorization: "Bearer ${T}" }), fromInclude)).toBe(
+      "foreign",
+    );
   });
 
   it("reports what blocks the connection with the next step, and changes nothing", async () => {

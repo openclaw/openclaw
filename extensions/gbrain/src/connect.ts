@@ -112,28 +112,22 @@ function isManaged(entry: GbrainMcpServerEntry | undefined, hosts: string[]): bo
 }
 
 /**
- * The `mcp.servers.gbrain` entry as written in the root config file. The plugin writes only
- * there; an entry that an `$include` supplies or changes is the user's ("foreign").
- * `resolved` is the same entry with includes and `${ENV}` resolved.
+ * The `mcp.servers.gbrain` entry as written in the root config file, when it is exactly what the
+ * runtime resolves. Anything an `$include` (at any depth) or `${ENV}` template supplies makes the
+ * written and resolved entries differ; such an entry is the user's ("foreign").
  */
 export function authoredGbrainEntry(
   parsed: unknown,
   resolved: unknown,
 ): GbrainMcpServerEntry | "foreign" | undefined {
   let node = parsed;
-  let included = false;
   for (const key of ["mcp", "servers", GBRAIN_SERVER_NAME]) {
-    const record = node && typeof node === "object" ? (node as Record<string, unknown>) : undefined;
-    included ||= record !== undefined && "$include" in record;
-    node = record?.[key];
+    node = node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined;
   }
   if (!node || typeof node !== "object") {
     return resolved ? "foreign" : undefined;
   }
-  if ("$include" in node || (included && !isDeepStrictEqual(node, resolved))) {
-    return "foreign";
-  }
-  return node as GbrainMcpServerEntry;
+  return isDeepStrictEqual(node, resolved) ? (node as GbrainMcpServerEntry) : "foreign";
 }
 
 /** The plugin owns only the URL, transport and bearer; the user's other settings on the entry stay. */
