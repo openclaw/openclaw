@@ -684,6 +684,7 @@ const nodeVolumeContext =
     ? Object.freeze({
         revision: checkoutRevision,
         runtimePolicy: testRuntimeMode,
+        fullPlan: () => createFullNodeTestPlan(),
         environment: Object.freeze({ ...process.env }),
         eligibility: Object.freeze({
           changedPaths: Object.freeze([...changedPaths]),
@@ -947,6 +948,31 @@ const compactPlanMode = !isCanonicalRepository
       ? "push"
       : undefined;
 const nodeMatrixLimit = mainValidation ? 77 : compactPlanMode === "pull-request" ? 130 : 70;
+// Accounting and execution share the original unselected plan's inputs.
+function createFullNodeTestPlan(workerShardCount = 0) {
+  return createNodeTestPlan({
+    includeProofTests: runProofTier,
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards:
+      mainValidation || eventName === "workflow_dispatch" || !isCanonicalRepository,
+    includeReleaseOnlyRuntimeTests,
+    includePrExemptRuntimeTests,
+    ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
+    // Keep the legacy boolean for historical targets. Hourly main uses
+    // the complete compact inventory within its 77-row main-tier cap.
+    compact: compactPlanMode !== undefined,
+    compactMode: mainValidation
+      ? "pull-request"
+      : (compactPlanMode ??
+        (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
+    mainValidation,
+    compactNodeJobCap:
+      splitRuntimeJobs && testRuntimeMode !== "node"
+        ? undefined
+        : nodeMatrixLimit - workerShardCount,
+    runnerBackend: nodeRunnerBackend,
+  });
+}
 let changedNodeTestShards = null;
 /** @type {string | undefined} */
 let changedNodeTestFallbackReason;
@@ -1317,31 +1343,7 @@ const nodeWorkerE2eShards =
 const rawNodeTestShards = runNodeFull
   ? changedNodeTestShards
     ? changedNodeTestShards
-    : [
-        ...createNodeTestPlan({
-          includeProofTests: runProofTier,
-          includeReleaseOnlyPluginShards: false,
-          includeReleaseOnlyToolingShards:
-            mainValidation || eventName === "workflow_dispatch" || !isCanonicalRepository,
-          includeReleaseOnlyRuntimeTests,
-          includePrExemptRuntimeTests,
-          ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
-          // Keep the legacy boolean for historical targets. Hourly main uses
-          // the complete compact inventory within its 77-row main-tier cap.
-          compact: compactPlanMode !== undefined,
-          compactMode: mainValidation
-            ? "pull-request"
-            : (compactPlanMode ??
-              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
-          mainValidation,
-          compactNodeJobCap:
-            splitRuntimeJobs && testRuntimeMode !== "node"
-              ? undefined
-              : nodeMatrixLimit - nodeWorkerE2eShards.length,
-          runnerBackend: nodeRunnerBackend,
-        }),
-        ...nodeWorkerE2eShards,
-      ]
+    : [...createFullNodeTestPlan(nodeWorkerE2eShards.length), ...nodeWorkerE2eShards]
   : [];
 if (
   ciQualification &&

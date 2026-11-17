@@ -212,6 +212,32 @@ describe("upgradeStateDirectory external config", () => {
   });
 });
 
+describe("upgradeStateDirectory code roots", () => {
+  it("leaves Git release installations out of the private copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-code-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    const corpus = fileURLToPath(
+      new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
+    );
+    fs.cpSync(corpus, stateDir, { recursive: true });
+    const release = path.join(stateDir, "git-install", "releases", "r1", "package.json");
+    fs.mkdirSync(path.dirname(release), { recursive: true });
+    fs.writeFileSync(release, "{}");
+    const copied: boolean[] = [];
+    await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      log: { info: () => {}, warn: () => {} },
+      runChain: async (chain) => {
+        copied.push(fs.existsSync(path.join(chain.stateDir, "git-install")));
+        throw new ChainStepError("injected", "stop after the copy");
+      },
+    });
+    expect(copied).toEqual([false]);
+    expect(fs.readFileSync(release, "utf8")).toBe("{}");
+  });
+});
+
 describe("upgradeStateDirectory resume", () => {
   it("releases retained handles before finishing an interrupted plan", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-resume-"));
@@ -368,6 +394,8 @@ describe("startup copy ownership", () => {
       "openclaw.sqlite.pre-1",
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-release-blue",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",
@@ -375,13 +403,16 @@ describe("startup copy ownership", () => {
       fs.writeFileSync(path.join(root, name), "kept");
     }
     const reads = vi.spyOn(fs, "readdirSync");
-    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned]))).toEqual([
+    // A custom build ID names a generation as well as a version does.
+    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned])).toSorted()).toEqual([
       "openclaw.sqlite.pre-1",
+      "openclaw.sqlite.pre-release-blue",
     ]);
     expect(reads.mock.calls.map(([file]) => file)).toEqual([root]);
     for (const name of [
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",

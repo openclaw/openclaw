@@ -5970,6 +5970,7 @@ describe("ci workflow guards", () => {
       { name: "admin", permission: "admin", admitted: true },
       { name: "maintainer", permission: "maintain", admitted: true },
       { name: "writer", permission: "write", admitted: true },
+      { name: "default PR hybrid", requestedProfile: "hybrid", admitted: true },
       { name: "main hybrid", ciShape: "main", requestedProfile: "hybrid", admitted: true },
       {
         name: "main configured backend",
@@ -13534,6 +13535,16 @@ describe("ci workflow guards", () => {
     };
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
+      nodeTestShards: createNodeTestShardBundles({
+        changedPaths: targets,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: false,
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includeProofTests: false,
+        compactMode: "pull-request",
+        runnerBackend: "blacksmith",
+      }),
       historicalCompatibility: false,
       eventName: "pull_request",
       changedPaths: targets,

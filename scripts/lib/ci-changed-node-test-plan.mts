@@ -47,6 +47,7 @@ import {
   UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
+  prepareNodeTestVolumes,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
@@ -1300,6 +1301,9 @@ export function createChangedNodeTestShards(
     : [];
   if (canonicalShards === null) {
     return fallback("test targets lack canonical shard metadata");
+  }
+  if (!describeVolume && options.volumeContext && path.resolve(cwd) === process.cwd()) {
+    describeVolume = prepareNodeTestVolumes(options.volumeContext);
   }
   const artifactBoundaryOwned =
     changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
