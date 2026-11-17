@@ -1,5 +1,6 @@
 import {
   createMemo,
+  createSignal,
   createUniqueId,
   Errored,
   lazy,
@@ -317,7 +318,10 @@ export function ChatDashboardMenu(
   const id = createUniqueId();
   const controls = createMenuControls();
   const focus = createPanelMenuFocusHandoff();
-  let handlers: ChatPanelMenuHandlers | undefined;
+  const [handlers, setHandlers] = createSignal<ChatPanelMenuHandlers>();
+  // Render and activate the same registered content snapshot.
+  const items = (): readonly MenuEntry[] =>
+    handlers()?.items() ?? [{ id: "loading", label: t("common.loading"), disabled: true }];
   return (
     <Menu
       controls={controls}
@@ -340,27 +344,25 @@ export function ChatDashboardMenu(
           kind: "group",
           id: "dashboard-content",
           get items() {
-            return handlers?.items() ?? [];
+            return items();
           },
           render: (renderItems) => (
             <ChatPanelMenuBoundary
               controls={controls}
               focusReady={focus.focusReady}
-              fallback={renderItems(() => [
-                { id: "loading", label: t("common.loading"), disabled: true },
-              ])}
+              fallback={renderItems(items)}
             >
               <DashboardContent
                 menuProps={props}
                 controls={controls}
                 readMenu={focus.read}
                 onReady={(next) => {
-                  handlers = next;
+                  setHandlers(next);
                   if (next) {
                     onSettled(focus.focusReady);
                   }
                 }}
-                renderItems={renderItems}
+                renderItems={() => renderItems(items)}
               />
             </ChatPanelMenuBoundary>
           ),
@@ -369,7 +371,7 @@ export function ChatDashboardMenu(
       ref={focus.bind}
       onBeforeShow={focus.beforeShow}
       onOpenChange={focus.openChange}
-      onSelect={(item, event) => handlers?.select(item, event)}
+      onSelect={(item, event) => handlers()?.select(item, event)}
     />
   );
 }
@@ -408,7 +410,9 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const controls = createMenuControls();
   const focus = createPanelMenuFocusHandoff();
   const model = createMemo(() => chatPaneLayoutModel(props));
-  let handlers: ChatPanelMenuHandlers | undefined;
+  const [handlers, setHandlers] = createSignal<ChatPanelMenuHandlers>();
+  const items = (): readonly MenuEntry[] =>
+    handlers()?.items() ?? [{ id: "loading", label: t("common.loading"), disabled: true }];
 
   return (
     <Show
@@ -438,27 +442,25 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
             kind: "group",
             id: "layout-content",
             get items() {
-              return handlers?.items() ?? [];
+              return items();
             },
             render: (renderItems) => (
               <ChatPanelMenuBoundary
                 controls={controls}
                 focusReady={focus.focusReady}
-                fallback={renderItems(() => [
-                  { id: "loading", label: t("common.loading"), disabled: true },
-                ])}
+                fallback={renderItems(items)}
               >
                 <LayoutContent
                   menuProps={props}
                   controls={controls}
                   readMenu={focus.read}
                   onReady={(next) => {
-                    handlers = next;
+                    setHandlers(next);
                     if (next) {
                       onSettled(focus.focusReady);
                     }
                   }}
-                  renderItems={renderItems}
+                  renderItems={() => renderItems(items)}
                 />
               </ChatPanelMenuBoundary>
             ),
@@ -467,7 +469,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
         ref={focus.bind}
         onBeforeShow={focus.beforeShow}
         onOpenChange={focus.openChange}
-        onSelect={(item, event) => handlers?.select(item, event)}
+        onSelect={(item, event) => handlers()?.select(item, event)}
       />
     </Show>
   );
