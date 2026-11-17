@@ -61,15 +61,23 @@ it.each(["node", "bun-all", "dual-all"])(
 );
 
 it.each([false, true])(
-  "installs pinned Bun for Node capture subprocesses (split=%s)",
+  "installs pinned Bun for Node capture and retained-import subprocesses (split=%s)",
   (runtimeJobs) => {
     const capture = "test/scripts/bun-standalone-codegen.test.ts";
     const tooling = "test/vitest/vitest.tooling.config.ts";
+    const retained = "src/infra/update-retained-runtime-imports.process.test.ts";
+    const infra = "test/vitest/vitest.infra.config.ts";
     const selections = [
       { targets: [capture] },
       { groups: [{ configs: [tooling], includePatterns: [capture] }] },
       { configs: [tooling] },
       { targets: ["test/scripts/bun-standalone-imports.test.ts"] },
+      { targets: [retained] },
+      { groups: [{ configs: [infra], includePatterns: [retained] }] },
+      { configs: [infra] },
+      {
+        groups: [{ configs: [infra], includePatterns: ["src/infra/directory-durability.test.ts"] }],
+      },
     ];
     const outputs = manifest({
       eventName: "workflow_dispatch",
@@ -84,7 +92,7 @@ it.each([false, true])(
     });
     expect(
       nodeRows(outputs).map((row: { requires_bun?: boolean }) => Boolean(row.requires_bun)),
-    ).toEqual([true, true, true, false]);
+    ).toEqual([true, true, true, false, true, true, true, false]);
     expect(
       nodeRows(outputs).every(
         (row: { test_runtime_policy: string }) => row.test_runtime_policy === "node",

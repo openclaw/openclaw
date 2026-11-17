@@ -1333,11 +1333,19 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
-    // The capture test launches Bun even when Vitest itself runs on Node.
+    // These tests launch Bun even when Vitest itself runs on Node.
     const requiresBunSubprocess = shardRequiresTests(
       shard,
-      ["test/scripts/bun-standalone-codegen.test.ts"],
-      (plan) => plan.configs?.includes("test/vitest/vitest.tooling.config.ts") ?? false,
+      [
+        "test/scripts/bun-standalone-codegen.test.ts",
+        "src/infra/update-retained-runtime-imports.process.test.ts",
+      ],
+      (plan) =>
+        plan.configs?.some((config) =>
+          ["test/vitest/vitest.tooling.config.ts", "test/vitest/vitest.infra.config.ts"].includes(
+            config,
+          ),
+        ) ?? false,
     );
     const row = {
       check_name: shard.checkName,
