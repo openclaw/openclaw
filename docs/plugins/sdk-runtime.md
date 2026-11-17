@@ -180,6 +180,11 @@ turn's requester: the sender, owner flag, group and channel that the turn's
 stored user message recorded. Plugins cannot supply requester facts. CLI
 runtimes are not supported.
 
+Sandboxed managed-worktree forks prepare the same private workspace and selected
+working directory as an ordinary turn of the source session. The durable project
+workspace remains the transcript cwd. Host-executed forks retain their durable
+workspace behavior.
+
 #### Tool-free forks
 
 Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
