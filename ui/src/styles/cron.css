@@ -335,7 +335,7 @@
   padding: calc(var(--cron-prompt-radius) + 6px) 10px 8px 14px;
   border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
   corner-shape: var(--chat-composer-corner-shape);
-  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  background: color-mix(in srgb, var(--text) 4.5%, var(--bg-content, var(--bg)));
 }
 
 .cron-prompt__controls {
@@ -612,7 +612,7 @@
 }
 
 .cron-failure-details__toggle:hover {
-  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  background: color-mix(in srgb, var(--danger) 9%, var(--bg-content, var(--bg)));
 }
 
 .cron-failure-details__toggle svg {
@@ -631,7 +631,7 @@
   margin: 10px 0 0;
   padding: 11px 14px;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-content, var(--bg)));
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
   font-family: var(--mono);
   font-size: 12.5px;
@@ -1066,14 +1066,14 @@
   min-width: 0;
   padding: 11px 16px 12px;
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  background: color-mix(in srgb, var(--text) 4.5%, var(--bg-content, var(--bg)));
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .cron-run-entry:hover,
 .cron-run-entry:focus-within {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, var(--bg-content, var(--bg)));
 }
 
 .cron-run-entry--highlighted {
