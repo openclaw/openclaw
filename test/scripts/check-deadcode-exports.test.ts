@@ -258,6 +258,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
     ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyReleaseEvidenceChecksum",
+      "../../scripts/lib/stable-release-closeout.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyStablePublishRecovery",
+      "../../scripts/lib/stable-publish-recovery.mjs",
+    ],
   ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
     const source = fs.readFileSync(file, "utf8");
     const compile = knipConfig.compilers[kind];
@@ -266,7 +278,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     }
     expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
     const remaining = compile(
-      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      source.replace(new RegExp(`^\\s*(?:import|const) \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
       file,
     );
     expect(remaining).not.toContain(symbol);
@@ -822,7 +834,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
     expect(compiled).toMatch(
-      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0, materializeRuntimeProcessScriptFileAsync as __dynamic\d+_1 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
     );
     expect(compiled).toMatch(
       /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
@@ -840,7 +852,7 @@ function other(lineageCompletion: typeof lineageWriter) {
         [
           [
             "scripts/generate-runtime-script-assets.mjs",
-            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            'import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";',
             "",
           ],
           [

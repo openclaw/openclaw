@@ -74,7 +74,7 @@ import {
   resolveSessionCreateTrustedOwners,
   validateFreshSessionConstraints,
   validateSessionCreateTarget,
-  withInitialAssistantTranscript,
+  withInitialSessionTranscript,
 } from "./session-create-initial-assistant.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
@@ -958,12 +958,10 @@ async function createGatewaySessionInScope(
           entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
         }
         if (params.fork !== true) {
-          return withInitialAssistantTranscript(
-            patched,
-            entry,
-            params.initialAssistantMessage,
-            runtimeCwd,
-          );
+          return withInitialSessionTranscript(patched, entry, params, {
+            cwd: runtimeCwd,
+            isNew: createdNewEntry,
+          });
         }
         if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return unavailableSessionRequest("failed to resolve parent session for fork");

@@ -299,7 +299,7 @@ importers:
         version: 0.4.2
       '@openclaw/proxyline':
         specifier: 0.4.1
-        version: 0.4.1(undici@8.12.3)
+        version: 0.4.1(undici@8.12.4)
       '@opentelemetry/semantic-conventions':
         specifier: 1.44.0
         version: 1.44.0
@@ -401,7 +401,7 @@ importers:
         version: 12.2.1
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -442,8 +442,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       web-push:
         specifier: 3.6.7
         version: 3.6.7(supports-color@10.2.2)
@@ -723,7 +723,7 @@ importers:
     dependencies:
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -788,8 +788,8 @@ importers:
         specifier: 11.3.2
         version: 11.3.2(supports-color@10.2.2)
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -898,8 +898,8 @@ importers:
         specifier: 21.0.3
         version: 21.0.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
 
   extensions/buzz:
     dependencies:
@@ -1240,8 +1240,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -1787,7 +1787,7 @@ importers:
         version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       typebox:
         specifier: 1.4.3
         version: 1.4.3
@@ -2421,7 +2421,7 @@ importers:
     dependencies:
       '@slack/bolt':
         specifier: 5.1.0
-        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)
+        version: 5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)
       '@slack/types':
         specifier: 3.3.0
         version: 3.3.0
@@ -2435,8 +2435,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2545,8 +2545,8 @@ importers:
         specifier: 1.4.3
         version: 1.4.3
       undici:
-        specifier: 8.12.3
-        version: 8.12.3
+        specifier: 8.12.4
+        version: 8.12.4
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2941,7 +2941,7 @@ importers:
         version: 1.44.0
       openai:
         specifier: 7.47.0
-        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7)
+        version: 7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
@@ -10744,8 +10744,8 @@ packages:
     resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   unhomoglyph@1.0.6:
@@ -13453,9 +13453,9 @@ snapshots:
       '@openclaw/proc-safe-win32-arm64-msvc': 0.4.2
       '@openclaw/proc-safe-win32-x64-msvc': 0.4.2
 
-  '@openclaw/proxyline@0.4.1(undici@8.12.3)':
+  '@openclaw/proxyline@0.4.1(undici@8.12.4)':
     dependencies:
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@openclaw/uirouter@0.1.2': {}
 
@@ -14314,11 +14314,11 @@ snapshots:
 
   '@sindresorhus/transliterate@2.3.1': {}
 
-  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.3)':
+  '@slack/bolt@5.1.0(@types/express@5.0.6)(supports-color@10.2.2)(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/oauth': 4.0.0
-      '@slack/socket-mode': 3.1.0(undici@8.12.3)
+      '@slack/socket-mode': 3.1.0(undici@8.12.4)
       '@slack/types': 3.3.0
       '@slack/web-api': 8.3.0
       '@types/express': 5.0.6
@@ -14342,13 +14342,13 @@ snapshots:
       '@types/node': 26.6.6
       jsonwebtoken: 9.0.3
 
-  '@slack/socket-mode@3.1.0(undici@8.12.3)':
+  '@slack/socket-mode@3.1.0(undici@8.12.4)':
     dependencies:
       '@slack/logger': 5.0.0
       '@slack/web-api': 8.3.0
       '@types/node': 26.6.6
       eventemitter3: 5.0.4
-      undici: 8.12.3
+      undici: 8.12.4
 
   '@slack/types@3.3.0': {}
 
@@ -16839,7 +16839,7 @@ snapshots:
       parse5: 8.0.1
       saxes: 6.0.0
       tough-cookie: 6.0.2
-      undici: 8.12.3
+      undici: 8.12.4
       w3c-xmlserializer: 6.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -17871,13 +17871,13 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.3)(ws@8.22.0)(zod@4.6.7):
+  openai@7.47.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1(supports-color@10.2.2))(undici@8.12.4)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.92
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.4
       google-auth-library: 10.9.1(supports-color@10.2.2)
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.0
       zod: 4.6.7
 
@@ -19058,7 +19058,7 @@ snapshots:
 
   undici@8.11.2: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   unhomoglyph@1.0.6: {}
 

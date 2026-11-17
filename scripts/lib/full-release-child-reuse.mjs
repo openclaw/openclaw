@@ -150,7 +150,24 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
-    getJobLog: deps.getJobLog,
+    getJobLog:
+      deps.getJobLog ??
+      (async (id) => {
+        const args = ["api", `repos/${repository}/actions/jobs/${id}/logs`];
+        const read = (extra) =>
+          execGhReadAsync([...args, ...extra], {
+            timeout: Math.min(60_000, remaining("aggregate job log")),
+            maxBuffer: 32 * 1024 * 1024,
+          });
+        try {
+          return await read(["--allow-escape-sequences"]);
+        } catch (error) {
+          if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+            throw error;
+          }
+          return read([]);
+        }
+      }),
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
@@ -575,7 +592,7 @@ async function validateEvidence(selection, request, deps) {
       ),
     "receipt does not match the complete live composite workload",
   );
-  // Only authenticated recovery supplies a version. Ordinary reuse/discovery remains green-only.
+  // Callers supply the current admitted candidate version to apply trusted P policy.
   if (request.policyTargetVersion) {
     const child = {
       key: request.role,
@@ -586,12 +603,13 @@ async function validateEvidence(selection, request, deps) {
       jobs: composite.jobs,
     };
     requireEvidence(
-      terminalPolicyPass(child, request.policyTargetVersion),
+      terminalPolicyPass(child, request.policyTargetVersion, request.targetSha),
       "workload does not pass recovery release policy",
     );
     const policy = evaluateReleaseChildPolicy({
       child,
       targetVersion: request.policyTargetVersion,
+      targetSha: request.targetSha,
     });
     await validateReleaseWaiverAggregates({
       policy,
@@ -654,7 +672,11 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
     scanned += 1;
-    if (run.status !== "completed" || run.conclusion !== "success") {
+    if (
+      run.status !== "completed" ||
+      (run.conclusion !== "success" &&
+        !(normalized.policyTargetVersion && run.conclusion === "failure"))
+    ) {
       skip("not-green");
       continue;
     }

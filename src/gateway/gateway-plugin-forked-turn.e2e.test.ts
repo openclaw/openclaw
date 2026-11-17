@@ -302,16 +302,24 @@ async function withForkGateway(
               hold.started.resolve();
               await hold.release;
             }
-            // Each fork calls its tool once, then answers.
+            // Each fork calls its tool once, then answers. The fork sends the session's tool
+            // list, where the plugin's tool sits behind the tool catalog.
             if (!payload.input?.some((item) => item.type === "function_call_output")) {
-              toolCallResponse(response, `fork_${serial}`);
+              toolCallResponse(response, `fork_${serial}`, "dispatch_action", {
+                id: "fork_proof_note",
+                args: { note: "fork saw the turn" },
+              });
               return;
             }
           } else {
             foregroundRequests.push(payload);
             if (foreground.toolCalls > 0) {
               foreground.toolCalls -= 1;
-              toolCallResponse(response, `fg_${serial}`, "read", { path: "notes.txt" });
+              // Grow the transcript without exercising the identical-arguments repeat guard.
+              toolCallResponse(response, `fg_${serial}`, "read", {
+                path: "notes.txt",
+                limit: foreground.toolCalls + 1,
+              });
               return;
             }
           }
@@ -506,7 +514,7 @@ async function withForkGateway(
 
 describe("plugin forked turns through the real Gateway", () => {
   it(
-    "runs a hidden fork with only the plugin's own tool, settles inside admission, and refuses replaced sessions",
+    "runs a hidden fork that executes only the plugin's own tool, settles inside admission, and refuses replaced sessions",
     { timeout: 150_000 },
     async () => {
       await withForkGateway(
@@ -584,8 +592,8 @@ describe("plugin forked turns through the real Gateway", () => {
               senderIsOwner: true,
             },
           ]);
-          // The fork sees only the caller's tool, never core or other plugins' tools.
-          expect(forkRequests[0]?.tools?.map((tool) => tool.name)).toEqual(["fork_proof_note"]);
+          // The fork lists the session's own tools; only the caller's tool ran (above).
+          expect(forkRequests[0]?.tools).toEqual(fixture.foregroundRequests.at(-1)?.tools);
           // The fork runs on the model the anchored turn ran on.
           expect(forkRequests[0]?.model).toBe(fixture.foregroundRequests[0]?.model);
           // A hidden fork never writes the source transcript.
@@ -800,6 +808,10 @@ describe("plugin forked turns through the real Gateway", () => {
           fixture.modelHold.current = { started, release: release.promise };
           await fixture.client.request("forkproof.start", { sessionKey: turn.sessionKey, through });
           await started.promise;
+          // A turn in another session does not stop the held fork; it settles ok below.
+          await fixture.dashboardTurn(
+            `agent:main:dashboard:direct:fork-proof-other-${randomUUID()}`,
+          );
           const pending = fixture.proof.background;
           const forkProofRecord = () =>
             getActivePluginRegistry()?.plugins.find((plugin) => plugin.id === "fork-proof");
@@ -860,10 +872,8 @@ describe("plugin forked turns through the real Gateway", () => {
         async (fixture) => {
           const sessionKey = `agent:main:dashboard:direct:fork-proof-cache-${randomUUID()}`;
           const turn = await fixture.dashboardTurn(sessionKey);
-          const parentN = snapshotProviderPrefix(
-            "openai-responses",
-            fixture.foregroundRequests.at(-1),
-          );
+          const parentRequest = expectDefined(fixture.foregroundRequests.at(-1), "parent request");
+          const parentN = snapshotProviderPrefix("openai-responses", parentRequest);
           const transcript = () =>
             JSON.stringify(loadTranscriptEventsSync({ ...turn.scope, sessionId: turn.sessionId }));
           const before = transcript();
@@ -913,11 +923,16 @@ describe("plugin forked turns through the real Gateway", () => {
             historyLength: stableLength,
           });
 
-          // (d) After its own system message, the fork replays the parent's history bytes through
-          // the anchor. The system message differs by design (bounded background prompt).
-          expect(forkA.history.slice(1, anchoredLength)).toEqual(
-            parentNext.history.slice(1, anchoredLength),
-          );
+          // (d) The fork sends the parent's request: the same system prompt, tools, cache key
+          // and history through the parent's persisted prefix, and the same output limit and
+          // reasoning, with no background prompt, tool list or token clamps of its own.
+          assertStableProviderPrefix(parentN, forkA, {
+            label: "fork extends parent",
+            historyLength: stableLength,
+          });
+          const { input: _parentInput, ...parentFields } = parentRequest;
+          const { input: _forkInput, ...forkFields } = expectDefined(forkFirst[0], "fork request");
+          expect(forkFields).toEqual(parentFields);
         },
       );
     },
@@ -1057,6 +1072,11 @@ describe("plugin forked turns through the real Gateway", () => {
           await expect(fixture.fork(orphan, {})).resolves.toMatchObject({
             ok: false,
             message: expect.stringContaining("no longer holds the input"),
+          });
+          // A tool-free fork runs nothing, so it proceeds on the session's own facts.
+          await expect(fixture.fork(orphan, { tools: [] })).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
           });
         },
       );

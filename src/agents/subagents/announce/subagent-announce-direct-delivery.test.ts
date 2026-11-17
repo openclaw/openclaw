@@ -318,10 +318,11 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
   fixture.controller.abort();
-  await expect(fixture.startDelivery()).resolves.toEqual({
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    phases: [],
+    reason: "requester_aborted",
+    disposition: "retryable",
   });
   expectNoReplay(fixture, 0);
 });
@@ -462,7 +463,45 @@ it.each([
 });
 it.each([
   ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
-  ["explicit stop", { status: "error", stopReason: "rpc" }, { disposition: undefined }],
+  [
+    "cancelled requester turn",
+    { status: "timeout", stopReason: "rpc", replaySafe: true },
+    { disposition: "retryable", reason: "requester_aborted" },
+  ],
+  [
+    "cancelled requester with unknown effects",
+    { status: "timeout", stopReason: "rpc" },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
+  ],
+  [
+    "effectful tool before cancellation",
+    {
+      status: "timeout",
+      result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
+    },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
+  ],
+  [
+    "committed progress before cancellation",
+    {
+      status: "timeout",
+      result: {
+        payloads: [],
+        meta: { aborted: true },
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "Progress already sent",
+            sourceReplyFinal: false,
+          },
+        ],
+      },
+    },
+    { disposition: "permanent_failure", reason: "requester_aborted" },
+  ],
   [
     "saved-state conflict with intentional suppression",
     {

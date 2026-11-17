@@ -203,6 +203,9 @@ it.each([
         expect(submit).not.toHaveBeenCalled();
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
+        mode === "nondelegating" ? 0 : 1,
+      );
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );

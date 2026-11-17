@@ -65,11 +65,17 @@ const controlUiPerformanceBudgets = {
   // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
   // (+1,215 B over main 97dd78cc) plus 64 B headroom.
   // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
-  chatBootJsGzipBytes: 1_314_350,
+  // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured +10,341 B
+  // over its merge base plus 64 B headroom.
+  // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
+  // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
+  // over its merge base plus 64 B headroom.
+  chatBootJsGzipBytes: 1_325_580,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
-  newBootJsGzipBytes: 816_160,
+  // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
+  newBootJsGzipBytes: 816_632,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -92,8 +98,10 @@ const controlUiPerformanceBudgets = {
   // Measured on main a58dbe09: exact totals, with no added headroom.
   // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
   // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
-  totalCssGzipBytes: 336_943,
-  totalCssRawBytes: 1_737_754,
+  // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
+  // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
+  totalCssGzipBytes: 337_312,
+  totalCssRawBytes: 1_740_234,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

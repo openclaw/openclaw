@@ -18,6 +18,7 @@ export type ChatItemsFacts = ReplyAttributionFacts & {
   streamOnset?: Extract<ChatItem, { kind: "stream" }>;
   /** Display history after heartbeat/commentary filtering and composition. */
   history?: readonly unknown[];
+  completionIds?: ReadonlySet<string>;
   /** First history message owning each persisted canvas identity or inline view key. */
   firsts: Map<string, unknown>;
   /** History messages whose divider key includes their transcript index. */
@@ -27,19 +28,25 @@ export type ChatItemsFacts = ReplyAttributionFacts & {
   modelBefore?: string;
 };
 
-/** Messages the transcript displays, in display order. */
-export function displayChatHistory(
-  props: { messages: unknown[]; persistCommentary?: boolean },
+/** Hidden commentary still owns a boundary between neighboring activity batches. */
+export function isHiddenChatCommentary(
+  props: { persistCommentary?: boolean },
+  message: unknown,
   activeCommentaryRunId?: string,
-): unknown[] {
+): boolean {
+  return (
+    props.persistCommentary === false &&
+    isKeyedAssistantStreamFallbackMessage(message) &&
+    (activeCommentaryRunId === undefined || transcriptRunId(message) !== activeCommentaryRunId)
+  );
+}
+
+/** Keep commentary sources until grouping records their invisible boundaries. */
+export function displayChatHistory(props: {
+  messages: unknown[];
+  persistCommentary?: boolean;
+}): unknown[] {
   return composeTranscriptDisplay(
-    props.messages.filter(
-      (message) =>
-        !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false ||
-          !isKeyedAssistantStreamFallbackMessage(message) ||
-          (activeCommentaryRunId !== undefined &&
-            transcriptRunId(message) === activeCommentaryRunId)),
-    ),
+    props.messages.filter((message) => !isAssistantHeartbeatAckForDisplay(message)),
   );
 }

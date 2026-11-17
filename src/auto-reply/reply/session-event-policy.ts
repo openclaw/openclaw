@@ -45,6 +45,9 @@ export function narrowSessionEventSettings(
   };
 }
 
+/** Policy publications an accepted occurrence may outlive before it settles as failed. */
+const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
+
 /** One occurrence keeps its original policy while selected model consumers may change. */
 export function captureSessionEventConfigPolicy(
   config: OpenClawConfig,
@@ -56,10 +59,18 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
+  let started = false;
   let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
+    },
+    /** Config gates admission only: a started turn finishes under the config it started with. */
+    start() {
+      started = true;
+    },
+    canReadmit(attempt: number) {
+      return attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
     },
     selectModel(selection: PolicySelection) {
       if (job) {
@@ -71,7 +82,7 @@ export function captureSessionEventConfigPolicy(
     },
     assertCurrent(current: OpenClawConfig, routeChannels: Array<string | undefined>) {
       const currentPublication = getRuntimeConfigSnapshotMetadata();
-      if (current === checkedConfig && currentPublication === checkedPublication) {
+      if (started || (current === checkedConfig && currentPublication === checkedPublication)) {
         return;
       }
       if (!matches(current, routeChannels)) {
@@ -303,5 +314,37 @@ export function captureSessionEventConfigRelevance(
         getRuntimeConfigCapture(candidate)?.source ?? candidate,
       )
     );
+  };
+}
+
+/** Nested callers intersect ceilings; only an unrestricted same-session owner retains the exemption. */
+export function inheritSessionEventToolPolicy(
+  identity: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+  owner?: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+) {
+  return {
+    sessionEventToolsAllow:
+      identity.sessionEventToolsAllow && owner?.sessionEventToolsAllow
+        ? identity.sessionEventToolsAllow.filter((name) =>
+            owner.sessionEventToolsAllow!.includes(name),
+          )
+        : (identity.sessionEventToolsAllow ?? owner?.sessionEventToolsAllow),
+    sessionEventToolsAllowSessionScoped:
+      !owner ||
+      (owner.agentId === identity.agentId.trim() &&
+        owner.sessionKey === identity.sessionKey.trim() &&
+        (!owner.sessionEventToolsAllow || owner.sessionEventToolsAllowSessionScoped))
+        ? identity.sessionEventToolsAllowSessionScoped
+        : undefined,
   };
 }

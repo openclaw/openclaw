@@ -10,6 +10,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { recordedToolCall } from "./recorded-tool.test-support.ts";
@@ -217,6 +218,16 @@ async function capture(page: Page, scope: string, pane: Locator, targets: Locato
   console.log(`Screenshot: ${file}`);
 }
 
+async function childDetails(pane: Locator) {
+  const details = await openChatDetails(pane);
+  const group = details.locator('[data-details-group="subagents"]');
+  const summary = group.locator(":scope > summary");
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  return group.locator("button[data-subagent-session-key]");
+}
+
 const squash = (text: string | null) => text?.replace(/\s+/gu, " ").trim();
 
 suite.define(() => {
@@ -224,34 +235,32 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { pane, thread, prompt } = await openScenario(page, "one-waiting");
       const ack = thread.getByText(SHORT_ACK, { exact: true });
-      const wait = thread.locator(".chat-subagent-wait");
+      const wait = thread.locator(".chat-working-indicator__status");
       await ack.waitFor();
       await thread.locator(".chat-working-indicator").waitFor();
       await capture(page, "one-waiting", pane, [prompt, ack]);
       await thread.locator(".chat-group.assistant .chat-text").getByText(SHORT_ACK).waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
-      await expect
-        .poll(async () => squash(await wait.textContent()))
-        .toBe(`Waiting on ${FIRST} · 10m`);
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
       expect(await wait.locator("button[aria-expanded]").count()).toBe(0);
-      expect(await wait.locator("a").getAttribute("href")).toBe(
-        "/chat/main/subagent/dependency-update-1",
-      );
+      const rows = await childDetails(pane);
+      await rows.getByText(FIRST, { exact: true }).waitFor();
+      await closeChatDetails(pane);
       expect(await thread.textContent()).not.toContain(PRIVATE);
     });
   });
 
-  it("labels a yielded child with a running background job as working, not paused", async () => {
+  it("keeps the parent waiting while a yielded child has a background job", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { pane, thread, prompt } = await openScenario(page, "background-job");
       const ack = thread.getByText(SHORT_ACK, { exact: true });
-      const wait = thread.locator(".chat-subagent-wait");
+      const wait = thread.locator(".chat-working-indicator__status");
       await ack.waitFor();
       await wait.waitFor();
       await capture(page, "background-job", pane, [prompt, ack, wait]);
-      await expect
-        .poll(async () => squash(await wait.textContent()))
-        .toBe(`Waiting on ${FIRST} · Running in background · 10m`);
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
+      const rows = await childDetails(pane);
+      await rows.getByText(FIRST, { exact: true }).waitFor();
     });
   });
 
@@ -269,28 +278,14 @@ suite.define(() => {
         .filter({ hasText: "Something to know before landing" })
         .waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
-      const wait = thread.locator(".chat-subagent-wait");
-      const toggle = wait.locator("button[aria-expanded]");
-      await expect
-        .poll(async () => squash(await toggle.textContent()))
-        .toBe("Waiting on 3 sessions · 1 needs your input · 1 paused · 10m");
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-      const rows = wait.locator("li");
-      expect((await rows.allTextContents()).map(squash)).toEqual([
-        `${SECOND} Needs your input`,
-        `${THIRD} Paused`,
-        `${FIRST} Running`,
-      ]);
-      expect(
-        await rows.locator("a").evaluateAll((links) => links.map((a) => a.getAttribute("href"))),
-      ).toEqual([
-        "/chat/main/subagent/dependency-update-2",
-        "/chat/main/subagent/dependency-update-3",
-        "/chat/main/subagent/dependency-update-1",
-      ]);
-      await toggle.click();
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      expect(await rows.first().isVisible()).toBe(false);
+      const wait = thread.locator(".chat-working-indicator__status");
+      await wait.getByText("Wait for subagents", { exact: true }).waitFor();
+      const rows = await childDetails(pane);
+      for (const name of [FIRST, SECOND, THIRD]) {
+        await rows.getByText(name, { exact: true }).waitFor();
+      }
+      expect(await rows.count()).toBe(3);
+      await closeChatDetails(pane);
     });
   });
 
@@ -320,11 +315,8 @@ suite.define(() => {
         `${FIRST} Done`,
         `${SECOND} Done`,
       ]);
-      // Only a paused child is left: a quiet note below the answer, not a waiting line.
-      const note = thread.locator(".chat-group.assistant .chat-subagent-wait");
-      expect(squash(await note.textContent())).toBe(`${THIRD} is paused`);
-      expect(await note.locator("a").getAttribute("href")).toMatch(/dependency-update-3$/);
-      expect(await thread.textContent()).not.toContain("Waiting on");
+      // A remaining paused child does not keep an already resumed parent waiting.
+      expect(await thread.getByText("Wait for subagents", { exact: true }).count()).toBe(0);
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
       // A listed child opens its own session in place.

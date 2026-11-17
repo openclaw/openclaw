@@ -531,9 +531,13 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
+      for (const text of ["46k / 200k · 23%", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
       }
+      // A priced run shows its cost; its token counts move into the row tooltip.
+      expect(await popover.locator(".context-usage__latest").first().getAttribute("title")).toBe(
+        "In 757.3k · Out 42.3k",
+      );
       const costBreakdown = await popover
         .locator(".context-usage__stats > div[title]")
         .getAttribute("title");
