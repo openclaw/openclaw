@@ -8,6 +8,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
+import { SqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -432,6 +433,20 @@ it("admits a dangling Workshop index only for Doctor without mutating the source
 
 it.each([
   {
+    name: "snapshot storage exhaustion",
+    error: new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)"),
+    guidance: "Free snapshot disk space or quota, then retry the inspection.",
+    restore: false,
+  },
+  {
+    name: "worker-hydrated snapshot quota exhaustion",
+    error: Object.assign(new Error("snapshot storage unavailable (code=EDQUOT)"), {
+      name: "SqliteSnapshotCapacityError",
+    }),
+    guidance: "Free snapshot disk space or quota, then retry the inspection.",
+    restore: false,
+  },
+  {
     name: "retryable snapshot contention",
     error: new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize"),
     guidance: "Wait a moment for write activity to settle, then retry the inspection.",
@@ -462,10 +477,11 @@ it.each([
   },
 );
 
-it("keeps retry and restore guidance with their affected agent databases", async () => {
+it("keeps capacity, retry, and restore guidance with their affected agent databases", async () => {
   const fixture = databaseFixture(tempDirs.make("doctor-mixed-readiness-"));
   const busy = fixture.agent("busy");
   const corrupt = fixture.agent("corrupt");
+  const full = fixture.agent("full");
   closeDatabases();
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((source, options) => {
@@ -475,13 +491,16 @@ it("keeps retry and restore guidance with their affected agent databases", async
     if (source === corrupt.path) {
       throw new Error("database disk image is malformed");
     }
+    if (source === full.path) {
+      throw new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)");
+    }
     return prepare(source, options);
   });
 
   await expect(
     withArtifactPreservingStateReads(() => fixture.doctor(), { agentDatabases: true }),
   ).rejects.toThrow(
-    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.`,
+    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.\nagent ${full.path}: snapshot storage unavailable (code=ENOSPC) Free snapshot disk space or quota, then retry the inspection.`,
   );
 });
 

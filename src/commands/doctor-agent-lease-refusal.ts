@@ -122,7 +122,7 @@ export async function assertDoctorAgentLeaseAdmission(
       throw createDoctorAgentLeaseRefusal(env, { cause: error, ownerPids: error.ownerPids });
     }
     // Classify unreadable state under the held owners without opening a writer.
-    const { preflightOpenClawDatabaseSchemas } =
+    const { preflightOpenClawDatabaseSchemas, getOpenClawDatabaseReadinessFailure } =
       await import("../state/openclaw-database-preflight.js");
     const schemas = await preflightOpenClawDatabaseSchemas({
       env,
@@ -131,7 +131,9 @@ export async function assertDoctorAgentLeaseAdmission(
     });
     const unreadable = schemas.indeterminate.find((database) => database.kind === "state");
     if (unreadable) {
-      throw new DoctorUnreadableStateDatabaseError(unreadable.path, unreadable.reason);
+      throw new DoctorUnreadableStateDatabaseError(unreadable.path, unreadable.reason, {
+        cause: getOpenClawDatabaseReadinessFailure(unreadable),
+      });
     }
     throw error;
   }

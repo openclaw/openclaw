@@ -159,6 +159,7 @@ export async function prepareDoctorDatabasePreflight(
     throw new DoctorUnreadableStateDatabaseError(
       unreadableStateDatabase.path,
       unreadableStateDatabase.reason,
+      { cause: databasePreflight.getOpenClawDatabaseReadinessFailure(unreadableStateDatabase) },
     );
   }
   return {
