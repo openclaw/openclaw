@@ -340,12 +340,16 @@ function AppSidebarContent(
       narration()?.();
       narrationState();
       scroll.capture();
-      return props.activeRouteId ? `${props.activeRouteId}\n${props.activePluginTabId}\n${pluginSection()}` : "";
+      return props.activeRouteId
+        ? `${props.activeRouteId}\n${props.activePluginTabId}\n${pluginSection()}`
+        : "";
     },
     (page, previous) => {
       // The page decides the sidebar however it was reached: rail, link or history.
       const route = props.activeRouteId;
-      const view = route ? sidebarViewForPage(route, props.activePluginTabId, pluginSection()) : undefined;
+      const view = route
+        ? sidebarViewForPage(route, props.activePluginTabId, pluginSection())
+        : undefined;
       if (view && page !== previous && owner.navigationView !== view) {
         owner.navigationView = view;
         owner.invalidate();
