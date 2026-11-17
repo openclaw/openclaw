@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { ignoreMissingPath, isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { root as createRoot, type Root } from "./fs-safe.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
@@ -148,6 +150,26 @@ async function inspectScratchPayload(
   }
 }
 
+/**
+ * Snapshot and verification databases were admitted when opened; deletion alone keeps their
+ * bytes until exit. The staging token still has its control database open and retires it itself.
+ */
+async function retireBackupScratchDatabaseAdmissions(directory: string): Promise<void> {
+  // Payload removal below is unbounded too; a walk limit must not preserve the scratch.
+  const limit = Number.MAX_SAFE_INTEGER;
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(directory, {
+    maxDepth: limit,
+    maxEntries: limit,
+  })) {
+    if (
+      dirent.isFile() &&
+      !SQLITE_STAGING_TOKEN_FILES.some((control) => control === relativePath)
+    ) {
+      retireSqliteDatabaseAdmissionForPath(path.join(directory, relativePath));
+    }
+  }
+}
+
 async function removeBackupScratchPayload(boundary: Root): Promise<void> {
   for await (const entry of boundary.entries(".")) {
     if (!SQLITE_STAGING_TOKEN_FILES.some((control) => control === entry.name)) {
@@ -239,6 +261,7 @@ export async function finishBackupScratch(
   let retirementFailure: unknown;
   try {
     scratch.release = scratch.release.beginRetirement();
+    await retireBackupScratchDatabaseAdmissions(scratch.directory);
     // The exclusive token excludes readers while payload deletion makes space
     // for SQLite's retirement page/journal without a filesystem-specific reserve.
     await removeBackupScratchPayload(scratch.boundary);
