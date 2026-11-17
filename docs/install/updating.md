@@ -2082,8 +2082,8 @@ The updater refuses, keeps the recovery artifacts, and reports the reason when:
 - Another updater or its helper still holds the installation. Wait for it, or
   run `openclaw update repair` once it has exited.
 - `openclaw update repair` already holds a reclaimed handoff or cancelled-update
-  claim. That claim does not prove where the publication's updater went, so
-  repair reports the recovery command for the publication.
+  claim for the installation. Repair does not resume an interrupted publication
+  under that claim; it reports the publication's recovery command.
 - The update lease store is missing or was replaced, for example after a reboot
   cleared the temporary directory, and the publication had started moving files
   but had not installed its candidate. The recovery command refuses too.
