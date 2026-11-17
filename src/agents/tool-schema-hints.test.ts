@@ -71,7 +71,8 @@ describe("tool schema hints", () => {
     const input = inputHint(schema);
 
     expect(input).toContain("field_00: number /* integer, >= 0, <= 100, > 1, < 99 */");
-    expect(input).toContain("...");
+    // Every key is required, so overflow shortens types instead of dropping keys.
+    expect(input).toContain("field_11: number }");
     expect(input).not.toContain("Description stays deferred.");
     expect(input.length).toBeLessThanOrEqual(300);
     expect(outputHint(schema)).toContain("field_11: number");
@@ -99,11 +100,11 @@ describe("tool schema hints", () => {
 
     expect(expected.length).toBe(limit + delta);
     expect(render(schema)).toBe(
-      delta <= 0 ? expected : limit === 300 ? '{ a: string; "z😀": string; ... }' : undefined,
+      delta <= 0 ? expected : limit === 300 ? '{ a: string; "z😀": string }' : undefined,
     );
   });
 
-  it("names every required key before eliding an overflowing input hint", () => {
+  it("renders only required keys, at every level, once an input hint overflows", () => {
     const item = closedObject({
       text: Type.String(),
       kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
@@ -117,17 +118,40 @@ describe("tool schema hints", () => {
       items: Type.Array(item),
       note: Type.Optional(Type.String()),
     });
-    const input = inputHint(schema);
-
-    expect(input).toMatch(
-      /^\{ attribution: string; items: Array<\{ kind: "fact" \| "preference" \| "decision"; text: string; optional_0\?: string; .*; \.\.\. \}>; requestId: string; \.\.\. \}$/u,
+    expect(inputHint(schema)).toBe(
+      '{ attribution: string; items: Array<{ kind: "fact" | "preference" | "decision"; text: string; ... }>; requestId: string; ... }',
     );
-    expect(input).not.toContain("note");
-    expect(input.length).toBeLessThanOrEqual(300);
 
+    // Union variants keep their required keys instead of collapsing to unknown.
+    const destination = closedObject({
+      destination: Type.Union([
+        closedObject({ id: Type.String(), revision: Type.Optional(Type.Integer()) }),
+        closedObject({ title: Type.String() }),
+      ]),
+      ...Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`optional_${i}`, Type.Optional(Type.String())]),
+      ),
+    });
+    expect(inputHint(destination)).toBe(
+      "{ destination: { id: string; ... } | { title: string }; ... }",
+    );
+  });
+
+  it("shortens required types that still overflow and keeps the result bounded", () => {
+    const item = closedObject({
+      text: Type.String(),
+      kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
+      count: Type.Integer({ minimum: 0, maximum: 100 }),
+    });
     const wide = closedObject(
       Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`group_${i}`, Type.Array(item)])),
     );
+    const input = inputHint(wide);
+    expect(input).toMatch(
+      /^\{ group_0: Array<\{ count: number \/\* integer.*; group_7: Array<\{ \.\.\. \}> \}$/u,
+    );
+    expect(input.length).toBeLessThanOrEqual(300);
+
     // Short required types cost no more than their elided form.
     const manyRequired = closedObject({
       ...Object.fromEntries(
@@ -148,11 +172,6 @@ describe("tool schema hints", () => {
       { additionalProperties: true },
     );
     expect(inputHint(open)).toBe("{ a: string; z: string; ... }");
-
-    expect(inputHint(wide)).toMatch(
-      /^\{ group_0: Array<\{ kind: .*; group_7: Array<\.\.\.>; \.\.\. \}$/u,
-    );
-    expect(inputHint(wide).length).toBeLessThanOrEqual(300);
   });
 
   it("includes null in AJV-style nullable output hints", () => {
