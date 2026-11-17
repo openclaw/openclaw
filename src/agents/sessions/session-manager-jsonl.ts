@@ -11,7 +11,7 @@ export function parseSessionEntries(content: string): FileEntry[] {
       continue;
     }
     try {
-      entries.push(normalizeLoadedFileEntry(JSON.parse(line) as FileEntry));
+      entries.push(normalizeLoadedFileEntry(JSON.parse(line)));
     } catch {
       skipped += 1;
     }
