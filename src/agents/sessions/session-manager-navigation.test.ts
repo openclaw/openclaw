@@ -34,13 +34,13 @@ it.each(["compaction", "reset"] as const)(
     const bounded: SessionManagerBoundedContext = {
       activeLeafEntryId: "selected",
       version: { generation: "bounded", rawSeq: 5, updatedAt: 1 },
-      parents: [
+      parents: new Map([
         ["retained", null],
         ["boundary", "opaque"],
         ["selected", "boundary"],
-      ],
-      opaqueParents: [["opaque", "retained"]],
-      firstKeptRanges: [["boundary", { startIndex: 1, endIndex: 3 }]],
+      ]),
+      opaqueParents: new Map([["opaque", "retained"]]),
+      firstKeptRanges: new Map([["boundary", { startIndex: 1, endIndex: 3 }]]),
       boundaryCount: 1,
       persistedSuffixStartSeq: 1,
       transcriptMutationAt: 1,
