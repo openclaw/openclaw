@@ -441,6 +441,28 @@ function isCommandLikeNode(node: TreeSitterNode): boolean {
   );
 }
 
+// A standalone assignment adds no command step, but bash evaluates `$((name))`, `${name:expr}`,
+// `${arr[expr]}`, `${!name}`, `${name@P}` and `name[expr]=` recursively, and an array subscript
+// reached that way runs command substitutions. Command preludes and declaration arguments are
+// already covered by the prelude and dynamic-argument checks.
+function isDynamicStandaloneAssignment(node: TreeSitterNode): boolean {
+  if (node.type !== "variable_assignment") {
+    return false;
+  }
+  const parentType = node.parent?.type;
+  if (parentType === "command" || parentType === "declaration_command") {
+    return false;
+  }
+  // The parser flattens keyed compound entries, whose semantics depend on prior array state.
+  const value = node.childForFieldName("value");
+  return (
+    node.childForFieldName("name")?.type === "subscript" ||
+    (value?.type === "array" &&
+      value.namedChildren.some((entry) => /^\s*\[[\s\S]*\]\+?=/u.test(entry.text))) ||
+    node.descendantsOfType(["arithmetic_expansion", "expansion"]).length > 0
+  );
+}
+
 function recordShape(node: TreeSitterNode, output: MutableExplanation): void {
   if (
     (node.type === "program" || node.type === "list") &&
@@ -697,6 +719,8 @@ function visitNode(
     output.risks.push({ kind: "redirect", span });
   } else if (node.type === "ERROR") {
     output.risks.push({ kind: "syntax-error", span });
+  } else if (isDynamicStandaloneAssignment(node)) {
+    output.risks.push({ kind: "dynamic-assignment", span });
   }
 
   if (isCommandLikeNode(node)) {

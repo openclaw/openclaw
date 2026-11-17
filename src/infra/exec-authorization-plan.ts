@@ -94,6 +94,7 @@ const NON_REUSABLE_RISKS = new Set<CommandRisk["kind"]>(["inline-eval"]);
 const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
   "command-substitution",
   "dynamic-executable",
+  "dynamic-assignment",
   "line-continuation",
   "heredoc",
   "here-string",
@@ -300,7 +301,7 @@ function wrapperPrefixForStep(step: CommandStep): string {
 }
 
 function hasCommandPrelude(step: CommandStep): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=/u.test(wrapperPrefixForStep(step).trimStart());
+  return /^[A-Za-z_][A-Za-z0-9_]*\+?=/u.test(wrapperPrefixForStep(step).trimStart());
 }
 
 function positionalCarrierSteps(params: {

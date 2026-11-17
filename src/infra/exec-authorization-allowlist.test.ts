@@ -67,6 +67,27 @@ describe("authorization-backed exec allowlist", () => {
     ).toEqual({ kind: "one-shot", reasons: expect.arrayContaining(["no-reusable-pattern"]) });
   });
 
+  it.each(["NODE_OPTIONS=--x tool", "NODE_OPTIONS+=--x tool"])(
+    "keeps env-assignment preludes prompt-only for allowlisted executables: %s",
+    async (command) => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const dir = makeExecApprovalsTempDir();
+      const toolPath = makeExecutable(dir, "tool");
+      const result = await evaluate(command, {
+        allowlist: [{ pattern: toolPath }],
+        cwd: dir,
+        env: makePathEnv(dir),
+      });
+      expect(result).toMatchObject({ analysisOk: true, allowlistSatisfied: false });
+      expect(result.authorizationPlan?.groups[0]?.candidates[0]).toMatchObject({
+        trustMode: "prompt-only",
+        reasons: ["shell-env-assignment"],
+      });
+    },
+  );
+
   it.each([
     ["./sh -c 'git status'", ["git"], null, [["./sh", "-c", "git status"]]],
     [
@@ -80,6 +101,10 @@ describe("authorization-backed exec allowlist", () => {
     ],
     ["echo safe \\\nunsafe", ["echo"], "line-continuation", null],
     ["tr x\n\\id", ["tr"], "line-continuation", null],
+    ["y='a[$(id)]'; x=$((y)); :", [], "dynamic-assignment", null],
+    ["x[y]=1; true", [], "dynamic-assignment", null],
+    ["y='a[$(id)]'; x=([y]=1); true", [], "dynamic-assignment", null],
+    ["y='a[$(id)]'; x=([y]+=1); true", [], "dynamic-assignment", null],
   ] as const)(
     "requires approval for unsafe shell syntax: %s",
     async (command, bins, reason, argv) => {
