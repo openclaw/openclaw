@@ -2,7 +2,6 @@
 import { getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAutoReviewTool } from "../../extensions/autoreview/api.js";
 import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -10,9 +9,11 @@ import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
+import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
@@ -192,6 +193,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     "keeps quiet nested Auto Review alive within its %s parent allowance, then reaps a hang",
     async (parent) => {
       await import("./session-placement-admission.js");
+      const { createAutoReviewTool } = await loadBundledPluginFacade<{
+        createAutoReviewTool: (context: OpenClawPluginToolContext<2>) => AnyAgentTool | null;
+      }>({ pluginId: "autoreview", artifactBasename: "api.js" });
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       vi.setSystemTime(10);
       const harness = createHarness({ name: `review-${parent}`, timeoutMs: 2_000 });
