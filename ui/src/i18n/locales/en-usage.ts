@@ -156,7 +156,7 @@ const enUsage = {
       sessions: "Sessions",
       sessionsInRange: "of {count} in range",
       throughput: "Usage per session-minute",
-      throughputHint: "Tokens and cost per minute of summed session spans. Spans include idle time and count overlapping sessions separately.",
+      throughputHint: "Tokens and cost divided by summed time from first to last activity in each session. Includes idle time; overlapping spans count separately. Usage without a positive span is included in the totals.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Error rate",
