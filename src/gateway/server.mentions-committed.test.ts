@@ -179,38 +179,85 @@ it("delivers a committed human mention once through authenticated chat.send", as
   signal,
 }) => {
   await using cleanup = new AsyncDisposableStack();
+  const startedAt = performance.now();
+  const checkpoints: Array<{ phase: string; elapsedMs: number }> = [];
+  let titleRequests = 0;
+  let agentRequests = 0;
+  let bodyCompleted = false;
+  let reported = false;
+  const mark = (phase: string) => {
+    if (checkpoints.length < 24) {
+      checkpoints.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+    }
+  };
+  const report = () => {
+    if (reported || (bodyCompleted && !signal.aborted)) {
+      return;
+    }
+    reported = true;
+    process.stderr.write(
+      `[mentions-committed] ${JSON.stringify({ checkpoints, titleRequests, agentRequests })}\n`,
+    );
+  };
+  // A timed-out request may never unwind; capture its last phase from the test signal.
+  signal.addEventListener("abort", report, { once: true });
+  cleanup.defer(() => {
+    mark("cleanup-finished");
+    report();
+    signal.removeEventListener("abort", report);
+  });
+  mark("setup-started");
   const providerStarted = createDeferred();
   const releaseProvider = createDeferred();
   const committed = createDeferred<unknown>();
   const fixture = await startMentionGateway({
     label: "committed-mention",
     cleanup,
-    handleProvider: async (_body, reply) => {
+    handleProvider: async (body, reply) => {
+      if (body.includes("Generate a concise session title")) {
+        if (++titleRequests === 1) {
+          mark("title-request");
+        }
+      } else if (++agentRequests === 1) {
+        mark("agent-request");
+      }
       providerStarted.resolve();
       await releaseProvider.promise;
       reply("Acknowledged.");
     },
   });
+  mark("setup-ready");
   const { alice, bob, bobClient, sender, target, inboxChanged } = fixture;
   fixture.onSenderEvent((event) => {
     const payload = asOptionalRecord(event.payload);
     const message = asOptionalRecord(payload?.message);
     if (event.event === "session.message" && message?.idempotencyKey === "mention-original:user") {
+      mark("mention-committed");
       committed.resolve(payload?.messageSeq);
     }
   });
   await sender.request("sessions.messages.subscribe", { key: target });
-  cleanup.defer(() => releaseProvider.resolve());
+  mark("subscribed");
+  cleanup.defer(() => {
+    mark("cleanup-release");
+    releaseProvider.resolve();
+  });
+  cleanup.defer(() => mark("cleanup-started"));
+  mark("seed-send");
   await sender.request("chat.send", {
     sessionKey: target,
     message: "Start this conversation.",
     idempotencyKey: "mention-seed",
   });
+  mark("seed-ack");
   await withinTest(providerStarted.promise, signal);
+  mark("provider-started");
+  mark("mentionable-request");
   const lookup = await sender.request<{ users: { profileId: string }[] }>("users.mentionable", {
     sessionKey: target,
     query: "Bob",
   });
+  mark("mentionable-response");
   expect(lookup.users.map((profile) => profile.profileId)).toContain(bob.id);
   const request = {
     sessionKey: target,
@@ -220,11 +267,15 @@ it("delivers a committed human mention once through authenticated chat.send", as
     queueMode: "followup",
     mentions: [{ profileId: bob.id, start: 0, end: 4 }],
   };
+  mark("mention-send");
   const accepted = await sender.request<{ runId: string }>("chat.send", request);
+  mark("mention-ack");
   releaseProvider.resolve();
+  mark("provider-released");
   // An early ACK is not a transcript commit; wait for the original message's identity.
   expect(await withinTest(committed.promise, signal)).toBeGreaterThan(0);
   await withinTest(inboxChanged.promise, signal);
+  mark("inbox-changed");
   const inbox = await bobClient.request<{ items: unknown[] }>("mentions.list", {});
   expect(inbox.items).toHaveLength(1);
   expect(inbox.items[0]).toMatchObject({
@@ -232,11 +283,15 @@ it("delivers a committed human mention once through authenticated chat.send", as
     senderProfileId: alice.id,
     excerpt: request.message,
   });
+  mark("replay-send");
   const replay = await sender.request<{ runId: string }>("chat.send", request);
+  mark("replay-ack");
   expect(replay.runId).toBe(accepted.runId);
   expect((await bobClient.request<{ items: unknown[] }>("mentions.list", {})).items).toEqual(
     inbox.items,
   );
+  bodyCompleted = true;
+  mark("assertions-complete");
 });
 
 it("records a message addressed to people without an agent turn", async ({ signal }) => {
