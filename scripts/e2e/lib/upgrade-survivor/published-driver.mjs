@@ -10,11 +10,7 @@ import { fileURLToPath } from "node:url";
 import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
-import {
-  classifyReleaseTrain,
-  compareReleaseVersions,
-  parseReleaseVersion,
-} from "../../../lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { stampFixtureVersion } from "../update-first-hop-package-fixtures.mjs";
 import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
 import { provePublishedDriverScopedRestore } from "./published-driver-scoped-restore.mjs";
@@ -25,6 +21,10 @@ import {
   seedPublishedDriverLegacySqlite,
   seedPublishedDriverSessionSources,
 } from "./published-driver-sqlite.mjs";
+import {
+  publishedDriverFixtureVersion,
+  withPublishedDriverUpdate,
+} from "./published-driver-update.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
@@ -91,7 +91,7 @@ function writeJson(name, value) {
   fs.writeFileSync(path.join(artifacts, `${name}.json`), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function run(name, command, args, allowFailure = false) {
+async function run(name, command, args, allowFailure = false, commandEnv = env) {
   const started = Date.now();
   const diagnostic = name === "recorded-run" || name === "stop-service";
   const deadline = diagnostic ? cellDeadline - 5_000 : workDeadline;
@@ -111,7 +111,7 @@ async function run(name, command, args, allowFailure = false) {
       bin: command,
       args,
       cwd: root,
-      env,
+      env: commandEnv,
       stdio: ["ignore", out, err],
       signal: diagnostic ? undefined : commandSignal,
       timeoutMs,
@@ -243,13 +243,12 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     let build = output("candidate-build");
     let candidatePackage = candidate;
-    // Between a release and its forward-port, main lags npm latest. The cell proves
-    // the update mechanics, not the version label: relabel the candidate to the
-    // driver version so the future-version guard sees an upgrade, not a downgrade.
-    if (compareReleaseVersions(build.version, driverVersion) < 0) {
-      candidatePackage = await relabelCandidate(build.version, driverVersion);
-      // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
-      build = { ...build, version: driverVersion };
+    // Main can lag its published driver between a release and its forward-port.
+    // Relabel only this synthetic fixture, preserving an actual selector upgrade.
+    const fixtureVersion = publishedDriverFixtureVersion(build.version, driverVersion);
+    if (fixtureVersion !== build.version) {
+      candidatePackage = await relabelCandidate(build.version, fixtureVersion);
+      build = { ...build, version: fixtureVersion };
     }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))
@@ -419,12 +418,16 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       writeJson("sqlite-before-update", sqliteBefore);
     }
     try {
-      update = await run(
-        "update",
-        "openclaw",
-        ["update", "--tag", candidatePackage, "--yes", "--json"],
-        true,
-      );
+      update = await withPublishedDriverUpdate({
+        fromVersion: driverVersion,
+        toVersion: build.version,
+        tarball: candidatePackage,
+        env,
+        runtime,
+        signal: commandSignal,
+        timeoutMs: Math.max(1, workDeadline - Date.now()),
+        run: (args, updateEnv) => run("update", "openclaw", args, true, updateEnv),
+      });
       if (update.exitCode !== 0) {
         updateFailure = Object.assign(new Error("Published updater failed"), {
           command: "update",
