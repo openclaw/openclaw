@@ -316,49 +316,6 @@ function* resolvePathWithinSessionsDir(
   return path.resolve(realBase, normalized);
 }
 
-function* resolveSessionTranscriptPathInDirSteps(
-  sessionId: string,
-  sessionsDir: string,
-  topicId?: string | number,
-): SessionPathResolution<string> {
-  const safeSessionId = validateSessionId(sessionId);
-  const safeTopicId =
-    typeof topicId === "string"
-      ? encodeURIComponent(topicId)
-      : typeof topicId === "number"
-        ? String(topicId)
-        : undefined;
-  const fileName =
-    safeTopicId !== undefined
-      ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
-      : `${safeSessionId}.jsonl`;
-  if (Buffer.byteLength(fileName, "utf8") > 255) {
-    throw new Error(`Invalid session transcript filename: ${fileName}`);
-  }
-  return yield* resolvePathWithinSessionsDir(sessionsDir, fileName);
-}
-
-export function resolveSessionTranscriptPathInDir(
-  sessionId: string,
-  sessionsDir: string,
-  topicId?: string | number,
-): string {
-  return resolveSessionPathSync(
-    resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir, topicId),
-  );
-}
-
-export function resolveSessionTranscriptPath(
-  sessionId: string,
-  agentId: string,
-  topicId?: string | number,
-): string {
-  return resolveSessionTranscriptPathInDir(
-    sessionId,
-    resolveSessionTranscriptsDirForAgent(agentId),
-    topicId,
-  );
-}
 export function* resolveSessionFilePathCoreSteps(
   sessionId: string,
   entry?: object,
@@ -381,7 +338,7 @@ export function* resolveSessionFilePathCoreSteps(
       // Keep handlers alive when persisted metadata is stale/corrupt.
     }
   }
-  return yield* resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir);
+  return yield* resolvePathWithinSessionsDir(sessionsDir, `${validateSessionId(sessionId)}.jsonl`);
 }
 
 export function resolveSessionFilePathCore(

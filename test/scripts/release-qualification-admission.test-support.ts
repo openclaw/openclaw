@@ -62,6 +62,7 @@ export function fixture(
     inputs?: Record<string, string | number | boolean>;
     policy?: unknown;
     workflowSource?: string;
+    baselinePolicySource?: string;
     candidateSha?: string;
     qualificationSha?: string;
     transportRef?: string;
@@ -144,11 +145,13 @@ export function fixture(
       [sourceSha + ":package.json"]: JSON.stringify({
         version: options.candidateVersion ?? "2026.8.1",
       }),
-      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]: JSON.stringify({
-        oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
-          ? options.oldestSupportedBaseline
-          : "2026.6.34",
-      }),
+      [sourceSha + ":scripts/lib/upgrade-survivor-scenarios.json"]:
+        options.baselinePolicySource ??
+        JSON.stringify({
+          oldestSupportedBaseline: Object.hasOwn(options, "oldestSupportedBaseline")
+            ? options.oldestSupportedBaseline
+            : "2026.6.34",
+        }),
     }),
   );
   const metadata = {

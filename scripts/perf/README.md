@@ -693,9 +693,14 @@ absolute-delta rules before treating any percentile as a gate.
 ## Owned directory events
 
 `owned-directory-events-measure.ts` opens real shared directory subscriptions and
-replays fixed native callbacks. Setup checks a missing descendant's event filter;
-the measured pass delivers 65 direct-root events per batch, with a one-millisecond
-yield between batches. It measures observer work, not filesystem or Gateway throughput.
+replays fixed native callbacks through a synthetic in-process host adapter. Setup
+checks a missing descendant's event filter; the measured pass delivers 65 events
+per batch. `--missing` retains that descendant during measurement, exercising
+sibling filtering. `--batch-delay-ms` controls pacing (default 1; 0 yields with
+setImmediate). `--watch-dir` reuses an existing synthetic directory, allowing a
+large surrounding fixture without rebuilding it for each sample. Contents are
+not scanned. This measures observer delivery, not subprocess transport, filesystem,
+or Gateway throughput.
 
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
@@ -705,8 +710,8 @@ node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
 ```
 
 Use `--owner /absolute/path/to/owned-directory-observation.baseline.ts` to load a
-baseline saved beside the current owner. Add `--allocations` for a separate paired
-pass including collected objects. Reports include bytes per event, batch latency,
+baseline saved beside the current owner (or a frozen copy with absolute imports).
+Add `--allocations` for a separate paired pass including collected objects. Reports include bytes per event, batch latency,
 CPU, GC counts/tails/maxima, promotion, and event-loop tails with sample counts.
 Compare concurrent pairs under one quiet lock and the production guard, swapping
 interleaved CPU sets for the second pair. Apply the campaign's paired-delta,

@@ -1,18 +1,14 @@
 import path from "node:path";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
-  clearMcpOAuthCredentials,
   countMcpOAuthPrincipals,
   readMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
@@ -30,7 +26,7 @@ import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
-import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
+import { registerMcpOAuthCommands } from "./mcp-cli-oauth.js";
 import {
   formatMcpProbeIssues,
   probeMcpServers,
@@ -38,6 +34,13 @@ import {
   resolveMcpProbeIssue,
 } from "./mcp-cli-probe.js";
 import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
+import {
+  applyMcpHttpControls,
+  applyMcpServerControls,
+  parseCsvList,
+  setOptionalField,
+  type McpServerControlOptions,
+} from "./mcp-cli-server-controls.js";
 import {
   offlineMcpAction,
   setMcpServerOffline,
@@ -101,140 +104,6 @@ function selectMcpServers(
   return name ? { [name]: requireMcpServer(loaded, name, opts) } : loaded.mcpServers;
 }
 
-type McpServerControlOptions = {
-  auth?: string;
-  oauthScope?: string;
-  oauthRedirectUrl?: string;
-  oauthClientMetadataUrl?: string;
-  include?: string;
-  exclude?: string;
-  timeout?: string;
-  connectTimeout?: string;
-  parallel?: boolean;
-  approval?: string;
-  sslVerify?: string;
-  clientCert?: string;
-  clientKey?: string;
-  probe?: boolean;
-  clearTools?: boolean;
-  clearTimeouts?: boolean;
-  clearAuth?: boolean;
-  clearTls?: boolean;
-};
-
-function parseCsvList(value: string | undefined): string[] | undefined {
-  const entries = normalizeCsvOrLooseStringList(value);
-  return entries.length > 0 ? entries : undefined;
-}
-
-function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
-  if (value !== undefined) {
-    target[key] = value;
-  }
-}
-
-function applyMcpServerControls(
-  server: Record<string, unknown>,
-  opts: McpServerControlOptions,
-): void {
-  const include = parseCsvList(opts.include);
-  const exclude = parseCsvList(opts.exclude);
-  if (opts.clearTools) {
-    delete server.toolFilter;
-  } else if (include || exclude) {
-    server.toolFilter = {
-      ...asRecord(server.toolFilter),
-      ...(include ? { include } : {}),
-      ...(exclude ? { exclude } : {}),
-    };
-  }
-  if (opts.clearTimeouts) {
-    delete server.requestTimeoutMs;
-    delete server.connectionTimeoutMs;
-  }
-  for (const [option, field, label] of [
-    ["timeout", "requestTimeoutMs", "--timeout"],
-    ["connectTimeout", "connectionTimeoutMs", "--connect-timeout"],
-  ] as const) {
-    const value = opts[option];
-    if (value === undefined) {
-      continue;
-    }
-    const seconds = parseStrictFiniteNumber(value);
-    if (seconds === undefined || seconds <= 0) {
-      fail(`${label} must be a positive number.`);
-    }
-    server[field] = seconds * 1_000;
-  }
-  if (opts.parallel === true) {
-    server.supportsParallelToolCalls = true;
-  } else if (opts.parallel === false) {
-    delete server.supportsParallelToolCalls;
-    delete server.supports_parallel_tool_calls;
-  }
-  const approval = opts.approval;
-  if (approval !== undefined) {
-    const approvalMode = normalizeLowercaseStringOrEmpty(approval);
-    if (approvalMode !== "auto" && approvalMode !== "prompt" && approvalMode !== "approve") {
-      fail('--approval must be "auto", "prompt", or "approve".');
-    }
-    server.codex = { ...asRecord(server.codex), defaultToolsApprovalMode: approvalMode };
-  }
-}
-
-function applyMcpHttpControls(
-  server: Record<string, unknown>,
-  opts: McpServerControlOptions,
-): void {
-  if (opts.clearAuth) {
-    delete server.auth;
-    delete server.oauth;
-  }
-  const auth = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(opts.auth) ?? "");
-  if (auth && auth !== "oauth") {
-    fail('Invalid --auth value. Use "oauth".');
-  }
-  if (auth) {
-    server.auth = auth;
-  }
-  const oauth: Record<string, string> = {};
-  for (const [field, input] of [
-    ["scope", opts.oauthScope],
-    ["redirectUrl", opts.oauthRedirectUrl],
-    ["clientMetadataUrl", opts.oauthClientMetadataUrl],
-  ] as const) {
-    const value = input?.trim();
-    if (value) {
-      oauth[field] = value;
-    }
-  }
-  if (Object.keys(oauth).length > 0) {
-    server.oauth = { ...asRecord(server.oauth), ...oauth };
-  }
-  if (opts.clearTls) {
-    for (const field of [
-      "sslVerify",
-      "ssl_verify",
-      "clientCert",
-      "client_cert",
-      "clientKey",
-      "client_key",
-    ]) {
-      delete server[field];
-    }
-  }
-  if (opts.sslVerify !== undefined) {
-    const sslVerify = normalizeLowercaseStringOrEmpty(opts.sslVerify);
-    if (sslVerify !== "true" && sslVerify !== "false") {
-      fail("--ssl-verify must be true or false.");
-    }
-    server.sslVerify = sslVerify === "true";
-  }
-  setOptionalField(server, "clientCert", readNonBlankString(opts.clientCert));
-  setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
-}
-
-/** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
 type McpStatusAuthStatusJson = McpOAuthPrincipalStatus & {
   hasTokens: boolean;
   requiresAuthorization: boolean;
@@ -885,12 +754,12 @@ export function registerMcpCli(program: Command) {
               "headers",
               parseKeyValueEntries(opts.header, "--header", fail),
             );
-            applyMcpHttpControls(server, opts);
+            applyMcpHttpControls(server, opts, fail);
           }
           if (opts.disabled) {
             server.enabled = false;
           }
-          applyMcpServerControls(server, opts);
+          applyMcpServerControls(server, opts, fail);
 
           const loaded = await loadMcpConfig();
           const targetName = name.trim();
@@ -1012,8 +881,8 @@ export function registerMcpCli(program: Command) {
           if (opts.disable) {
             next.enabled = false;
           }
-          applyMcpServerControls(next, opts);
-          applyMcpHttpControls(next, opts);
+          applyMcpServerControls(next, opts, fail);
+          applyMcpHttpControls(next, opts, fail);
           if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
@@ -1046,36 +915,10 @@ export function registerMcpCli(program: Command) {
       ),
     );
 
-  registerMcpLoginCommand(
-    mcp,
-    offlineMcpAction("login", async (owner, name: string, opts: McpLoginOptions) => {
-      const loaded = await loadMcpConfig();
-      const server = requireMcpServer(loaded, name);
-      await loginMcpServer({ name, server, code: opts.code, issuer: opts.issuer, owner, fail });
-    }),
-  );
-
-  mcp
-    .command("logout")
-    .description("Clear stored OAuth credentials for an MCP server")
-    .argument("<name>", "MCP server name")
-    .action(
-      offlineMcpAction("logout", async (_owner, name: string) => {
-        const loaded = await loadMcpConfig();
-        const server = requireMcpServer(loaded, name);
-        if (asRecord(server.oauth)?.identity === "per-requester") {
-          fail(
-            `MCP server "${name}" uses per-requester OAuth. Remove or replace the server to clear requester credentials.`,
-          );
-        }
-        const resolved = resolveMcpTransportConfig(name, server);
-        if (!resolved || resolved.kind !== "http") {
-          fail(`MCP server "${name}" needs a valid HTTP transport for OAuth logout.`);
-        }
-        await clearMcpOAuthCredentials(operatorMcpOAuthIdentity(name, resolved.url));
-        defaultRuntime.log(terminalText`MCP OAuth credentials cleared for "${name}".`);
-      }),
-    );
+  registerMcpOAuthCommands(mcp, {
+    fail,
+    loadServer: async (name) => requireMcpServer(await loadMcpConfig(), name),
+  });
 
   mcp
     .command("reload")
