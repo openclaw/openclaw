@@ -53,6 +53,13 @@ backup.
 
 ## Update implementation contract
 
+While a live update run holds the installation lease, the running Gateway leaves
+replacement handling to that updater instead of restarting itself mid-update.
+A Gateway left on the old build checks again after the lease is released. Lease
+inspection failures retain the existing self-restart behavior. The running
+Gateway must contain this fix; a downloaded candidate cannot change an older
+Gateway's installation observer.
+
 Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
 recovery owner before converting them to automations, while holding offline
 maintenance custody. Live or unproved runtime ownership leaves the conversion and

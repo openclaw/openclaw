@@ -19,6 +19,7 @@ import {
   resolveOpenClawPackageRootSync,
 } from "../infra/openclaw-root.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import {
   getGatewaySuspendAdmissionPhase,
   onGatewaySuspendAdmissionChange,
@@ -67,6 +68,7 @@ export type GatewayInstallationReplacement = {
 type InstallationObserver = {
   root: string | null;
   installationRoot: string | null;
+  updateKey: string | null;
   running: InstallationIdentity;
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
@@ -82,11 +84,13 @@ const installationState = resolveGlobalSingleton<{ observer?: InstallationObserv
 export function registerGatewayInstallationReplacementHandler(
   onReplacement: InstallationObserver["onReplacement"],
 ): () => void {
+  const installationRoot = gatewayInstallRoot
+    ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
+    : null;
   const observer: InstallationObserver = {
     root: gatewayInstallRoot,
-    installationRoot: gatewayInstallRoot
-      ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
-      : null,
+    installationRoot,
+    updateKey: installationRoot ? resolveUpdateInstallRoot(installationRoot) : null,
     running: { version: VERSION, buildId: resolveRuntimeServiceBuildId() },
     onReplacement,
   };
@@ -151,7 +155,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   observer.check = tryReadJson(path.join(root, "dist", "build-info.json"), {
     maxBytes: 16 * 1024,
   })
-    .then((value) => {
+    .then(async (value) => {
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
@@ -159,7 +163,10 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       if (!version || version.length > 96 || !buildId || buildId.length > 96) {
         return;
       }
-      if (version !== observer.running.version || buildId !== observer.running.buildId) {
+      if (
+        (version !== observer.running.version || buildId !== observer.running.buildId) &&
+        !(observer.updateKey && (await isInstallationHeldByUpdateRun(observer.updateKey)))
+      ) {
         recordReplacement(observer, { version, buildId });
       }
     })
@@ -167,6 +174,40 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       observer.check = undefined;
     });
   return observer.check;
+}
+
+/** The updater owns restart until its live installation lease is released. */
+async function isInstallationHeldByUpdateRun(installRoot: string): Promise<boolean> {
+  try {
+    const [
+      { WorkerTaskPool },
+      { captureRuntimeWorkerSource },
+      { resolveRuntimeWorkerUrl },
+      { runtimeProcessEntrypoints },
+      { resolveServiceManagerEnv },
+    ] = await Promise.all([
+      import("../infra/worker-task-pool.js"),
+      import("../infra/runtime-worker-generation.js"),
+      import("../infra/runtime-worker-url.js"),
+      import("../infra/runtime-process-entrypoints.js"),
+      import("../daemon/service-process-env.js"),
+    ]);
+    const source = captureRuntimeWorkerSource(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.managedHandoffEngine),
+    );
+    const pool = new WorkerTaskPool<
+      { installRoot: string; serviceManagerEnv: NodeJS.ProcessEnv },
+      boolean
+    >({ workerUrl: source.moduleUrl, maxWorkers: 1 });
+    try {
+      return await pool.run({ installRoot, serviceManagerEnv: resolveServiceManagerEnv() }, {});
+    } finally {
+      await pool.close();
+    }
+  } catch {
+    // An unreadable lease preserves the existing self-restart behavior.
+    return false;
+  }
 }
 
 export function classifyGatewayStaleInstall(error: unknown): {

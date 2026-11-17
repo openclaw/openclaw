@@ -78,6 +78,7 @@ afterEach(() => {
   dispose = undefined;
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("running installation replacement", () => {
@@ -153,6 +154,27 @@ describe("running installation replacement", () => {
     await copiedModule.checkGatewayInstallationReplacement();
     expect(handoff).toHaveBeenCalledOnce();
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it("leaves a replaced installation to the update run that holds it", async () => {
+    // The handoff worker resolves the same coordination store from TMPDIR.
+    vi.stubEnv("TMPDIR", directories.make("openclaw-update-lease-"));
+    const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-lease.js"),
+      import("../infra/update-install-root.js"),
+    ]);
+    const store = createManagedHandoffLeaseStore();
+    const run = store.acquire(resolveUpdateInstallRoot(fixture.root), "run", { kind: "update" });
+    if (run.kind !== "acquired") {
+      throw new Error("fixture acquisition failed");
+    }
+    const handoff = registerReplacement();
+    await writeIdentity();
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    expect(store.release(run.lease)).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
   });
 
   it("leaves installation handoff with the suspension owner from preparation until rollback", async () => {
