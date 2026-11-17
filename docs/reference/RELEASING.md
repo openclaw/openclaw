@@ -104,6 +104,31 @@ validation even when first published to beta.
 See [Full release validation](/reference/full-release-validation) for profiles
 and evidence interpretation.
 
+### Select publication tooling
+
+Run **OpenClaw Release Prepare** from `main` with the qualified `publish_inputs`.
+Its `tooling_ref` input defaults to `main`; an exact main-history SHA or existing
+`release-publish/<sha12>-<epoch>` tag can select a specific tooling version.
+There is no checked-in SHA to update for each release.
+
+The main-branch launcher resolves the selection once, creates or reuses its
+protected tooling tag, and links the preparation run at that frozen cut. Follow
+that child run for the readiness artifact, then run **OpenClaw Release Button**
+from the recorded tag. Preparation, approval, publication, and recovery retain
+the same tooling identity even if `main` advances. Direct publisher dispatches
+continue to use that protected tag, not moving `main`.
+
+The launcher needs Actions write and permission to create protected tooling
+tags; it does not bypass tag rules or change publishing environments. An
+existing tag avoids creating a new one. Already-qualified evidence must still
+match the selected tooling; selecting newer main does not requalify old evidence.
+
+For recovery, the retained `preparation_request` selects its original tooling
+instead of resolving `main` again. If launcher dispatch is unconfirmed, inspect
+its `release-tooling-request-<run>-<attempt>` artifact and Actions before doing
+anything else. Continue the linked frozen child; do not rerun the launcher to
+create another preparation request.
+
 ### Operator capabilities
 
 Repository write, organization membership, branch-policy reads, CI bypass,

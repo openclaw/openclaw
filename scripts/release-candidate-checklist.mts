@@ -36,7 +36,6 @@ import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { gitIsAncestor, validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { evaluateReleasePublishGates } from "./lib/release-publish-gates.mts";
-import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { sleep as wait } from "./lib/sleep.mjs";
@@ -56,7 +55,11 @@ import {
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
-import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
+import {
+  ensureReleasePublishToolingTag,
+  runReleaseToolingGh,
+  verifyReleaseToolingIdentity,
+} from "./release-tooling-identity.mjs";
 import { formatShippedBaselineExclusions } from "./render-github-release-notes.mts";
 import {
   isShaPinnedReleaseValidationBranch,

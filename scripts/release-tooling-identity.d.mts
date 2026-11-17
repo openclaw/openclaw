@@ -31,6 +31,13 @@ export function validateReleaseToolingIdentity(
 
 export function runReleaseToolingGh(args: string[]): string;
 
+export function ensureReleasePublishToolingTag(input: {
+  runGh: (args: string[]) => string;
+  repo: string;
+  toolingSha: string;
+  now?: () => number;
+}): { tag: string; created: boolean };
+
 export function verifyReleaseWorkflowRun(input: {
   repository: string;
   workflowFullRef: string;

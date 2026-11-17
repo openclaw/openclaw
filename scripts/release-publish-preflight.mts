@@ -21,7 +21,6 @@ import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   createPublishPreflightEvidenceClient,
   createPublishPreflightGh,
-  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   preflightApi,
   requirePreflightRecord,
@@ -47,6 +46,7 @@ import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
+import { ensureReleasePublishToolingTag } from "./release-tooling-identity.mjs";
 import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {

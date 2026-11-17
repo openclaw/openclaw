@@ -16,6 +16,11 @@ on:
         description: Exact reviewed C/Q qualification request from full-release-validation-at-sha
         required: false
         type: string
+      tooling_ref:
+        description: Tooling source for a main-branch prepare launch (main, full main SHA, or protected tooling tag); recovery retains its recorded cut
+        required: false
+        default: main
+        type: string
       publish_inputs:
         description: Frozen publication inputs JSON from the release candidate checklist (required for prepare)
         required: false
@@ -34,9 +39,50 @@ env:
   RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
 
 jobs:
+  select_tooling:
+    name: Freeze tooling and launch preparation
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && inputs.operation == 'prepare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+      - name: Select one tooling commit for this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOOLING_REF: ${{ inputs.tooling_ref }}
+          PUBLISH_INPUTS: ${{ inputs.publish_inputs }}
+          PREPARATION_REQUEST: ${{ inputs.preparation_request }}
+        run: |
+          printf '%s\n' "$PUBLISH_INPUTS" > "$RUNNER_TEMP/publish-inputs.json"
+          args=(--tooling-ref "$TOOLING_REF" --inputs "$RUNNER_TEMP/publish-inputs.json" --output "$RUNNER_TEMP/release-tooling")
+          if [[ -n "$PREPARATION_REQUEST" ]]; then
+            printf '%s\n' "$PREPARATION_REQUEST" > "$RUNNER_TEMP/recovered-preparation.json"
+            args+=(--request "$RUNNER_TEMP/recovered-preparation.json")
+          fi
+          node scripts/openclaw-release-ready.mjs dispatch-tooling "${args[@]}"
+      - name: Retain frozen tooling dispatch
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-tooling-request-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-tooling/tooling-request.json
+          if-no-files-found: warn
+          retention-days: 30
+
   prepare:
     name: Start or recover exact npm and ClawHub preparation
-    if: github.repository == 'openclaw/openclaw' && inputs.operation == 'prepare'
+    if: github.repository == 'openclaw/openclaw' && github.ref != 'refs/heads/main' && inputs.operation == 'prepare'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

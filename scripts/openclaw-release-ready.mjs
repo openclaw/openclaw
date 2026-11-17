@@ -33,7 +33,11 @@ import {
   downloadPreparedNpmRelease,
   validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
-import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
+import {
+  ensureReleasePublishToolingTag,
+  runReleaseToolingGh,
+  verifyReleaseToolingIdentity,
+} from "./release-tooling-identity.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const PREPARE_WORKFLOW = ".github/workflows/openclaw-release-prepare.yml";
@@ -674,11 +678,90 @@ async function main() {
       output: { type: "string" },
       "openclaw-npm-resume-run-id": { type: "string" },
       "source-root": { type: "string", default: "." },
+      "tooling-ref": { type: "string", default: "main" },
     },
   });
   const [operation] = positionals;
   const directory = resolve(values.output ?? ".artifacts/release-ready");
   mkdirSync(directory, { recursive: true });
+  if (operation === "dispatch-tooling") {
+    requireValue(
+      process.env.GITHUB_REPOSITORY === REPOSITORY && process.env.GITHUB_REF === "refs/heads/main",
+      "Tooling selection requires a dispatch from the canonical main branch.",
+    );
+    requireValue(
+      values.request !== undefined || process.env.GITHUB_RUN_ATTEMPT === "1",
+      "Tooling preparation may already be dispatched. Inspect the retained tooling-request.json and resume its frozen child; do not select main again.",
+    );
+    const requestedInputs = readJson(values.inputs);
+    validateReleaseButtonInputs(requestedInputs);
+    let selected;
+    if (values.request !== undefined) {
+      const recovery = readJson(values.request);
+      requireValue(
+        recovery.repository === REPOSITORY && isRecord(recovery.tooling),
+        "Preparation recovery must retain its original tooling identity.",
+      );
+      selected = recovery.tooling;
+    } else {
+      const ref = values["tooling-ref"];
+      requireValue(
+        ref === "main" || SHA.test(ref) || /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u.test(ref),
+        "tooling_ref must be main, a full trusted-main SHA, or an existing protected release-publish tag.",
+      );
+      const sha = api(`commits/${encodeURIComponent(ref)}`, ["--jq", "{sha}"]).sha;
+      requireValue(SHA.test(sha), "Selected tooling does not resolve to a full commit SHA.");
+      const tag = ref.startsWith("release-publish/")
+        ? ref
+        : ensureReleasePublishToolingTag({
+            runGh: runReleaseToolingGh,
+            repo: REPOSITORY,
+            toolingSha: sha,
+          }).tag;
+      selected = { ref: tag, fullRef: `refs/tags/${tag}`, sha };
+    }
+    const verified = verifyReleaseToolingIdentity({
+      repository: REPOSITORY,
+      workflowRef: selected.ref,
+      workflowFullRef: selected.fullRef,
+      workflowSha: selected.sha,
+    });
+    requireValue(
+      verified.route === "protected-tag",
+      "Preparation requires frozen protected tooling.",
+    );
+    const tooling = { ref: verified.ref, fullRef: verified.fullRef, sha: verified.sha };
+    const requestPath = join(directory, "tooling-request.json");
+    const request = { tooling, runId: null };
+    writeJson(requestPath, request);
+    output("tooling_ref", tooling.ref);
+    output("tooling_sha", tooling.sha);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        `- Frozen tooling: \`${tooling.ref}\` at \`${tooling.sha}\`\n`,
+      );
+    }
+    const childInputs = {
+      operation: "prepare",
+      publish_inputs: JSON.stringify(requestedInputs),
+      ...(values.request !== undefined
+        ? { preparation_request: JSON.stringify(readJson(values.request)) }
+        : {}),
+    };
+    try {
+      const child = await dispatch("openclaw-release-prepare.yml", childInputs, tooling);
+      request.runId = child.workflow_run_id;
+      replaceJson(requestPath, request);
+      reportDispatch("openclaw-release-prepare.yml", request.runId);
+    } catch (error) {
+      console.error(
+        `Tooling dispatch is unconfirmed. Inspect Actions and ${requestPath}; do not redispatch or resolve main again.`,
+      );
+      throw error;
+    }
+    return;
+  }
   const tooling = toolingIdentity();
   const token = process.env.GH_TOKEN;
   if (operation === "dispatch-prepare") {
@@ -950,7 +1033,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "Expected dispatch-prepare, seal, dispatch-publish, verify, or validate-request.",
+    "Expected dispatch-tooling, dispatch-prepare, seal, dispatch-publish, verify, or validate-request.",
   );
 }
 

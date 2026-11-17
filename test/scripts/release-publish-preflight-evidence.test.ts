@@ -5,7 +5,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import corePackagePolicy from "../../scripts/lib/npm-core-release-packages.json" with { type: "json" };
 import {
   createPublishPreflightEvidenceClient,
-  ensureReleasePublishToolingTag,
   inspectPublishPreflightTelegramEvidence,
   readPublishPreflightRelease,
   validatePublishPreflightNpm,
@@ -13,6 +12,7 @@ import {
   type PublishPreflightGh,
 } from "../../scripts/lib/release-publish-preflight-evidence.mts";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { ensureReleasePublishToolingTag } from "../../scripts/release-tooling-identity.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";

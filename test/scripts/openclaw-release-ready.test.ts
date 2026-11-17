@@ -423,6 +423,7 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
     "release-tooling-identity.mjs",
     `
     import { trace } from './fixture-trace.mjs';
+    export { ensureReleasePublishToolingTag } from ${JSON.stringify(pathToFileURL(resolve("scripts/release-tooling-identity.mjs")).href)};
     export function verifyReleaseToolingIdentity() { return { route: 'protected-tag', ...${JSON.stringify(TOOLING)} }; }
     export function runReleaseToolingGh(args) {
       trace('gh', { args });
@@ -500,54 +501,183 @@ function bridgeFixture(releaseRunAttempt = 1, conclusion = "success") {
   };
 }
 
+describe("main release tooling selection", () => {
+  it.each(["main", TOOLING_SHA, TOOLING.ref, "recovery"])(
+    "freezes %s once and launches the unchanged publication inputs at that cut",
+    (selection) => {
+      const fixture = finalizationFixture();
+      const workflow = parse(
+        readFileSync(".github/workflows/openclaw-release-prepare.yml", "utf8"),
+      );
+      expect(
+        runInNewContext(workflow.jobs.select_tooling.if, {
+          github: { repository: REPOSITORY, ref: "refs/heads/main" },
+          inputs: { operation: "prepare" },
+        }),
+      ).toBe(true);
+      const step = workflow.jobs.select_tooling.steps.find((entry: { run?: string }) => entry.run);
+      const recovered = selection === "recovery" ? preparationRequest() : undefined;
+      const result = spawnSync(
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        ["-c", step.run],
+        {
+          cwd: dirname(fixture.scripts),
+          env: {
+            ...fixture.env,
+            GITHUB_REF: "refs/heads/main",
+            GITHUB_REF_NAME: "main",
+            TOOLING_REF:
+              selection === "main" || selection === "recovery"
+                ? workflow.on.workflow_dispatch.inputs.tooling_ref.default
+                : selection,
+            PUBLISH_INPUTS: JSON.stringify(inputs()),
+            PREPARATION_REQUEST: recovered ? JSON.stringify(recovered) : "",
+          },
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const dispatches = fixture.trace().filter((entry) => entry.event === "tooling-dispatch");
+      expect(dispatches).toEqual([
+        {
+          event: "tooling-dispatch",
+          fields: {
+            ref: TOOLING.ref,
+            "inputs[operation]": "prepare",
+            "inputs[publish_inputs]": JSON.stringify(inputs()),
+            ...(recovered ? { "inputs[preparation_request]": JSON.stringify(recovered) } : {}),
+          },
+          receipt: { tooling: TOOLING, runId: null },
+        },
+      ]);
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(fixture.env.RUNNER_TEMP, "release-tooling/tooling-request.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({ tooling: TOOLING, runId: 901 });
+      const mainResolutions = fixture
+        .trace()
+        .filter(
+          (entry) =>
+            entry.event === "gh" && entry.args?.includes(`repos/${REPOSITORY}/commits/main`),
+        );
+      expect(mainResolutions).toHaveLength(selection === "main" ? 1 : 0);
+      expect(fixture.state().writes).toBe(0);
+    },
+  );
+
+  it.each(["retry", "lost response"])(
+    "retains the original tooling without replay after %s",
+    (failure) => {
+      const fixture = finalizationFixture({
+        lostToolingDispatchResponse: failure === "lost response",
+      });
+      const inputPath = writeFixtureFile(
+        fixture.root,
+        "launcher-inputs.json",
+        JSON.stringify(inputs()),
+      );
+      const outputDir = join(fixture.env.RUNNER_TEMP, "release-tooling");
+      const run = (attempt: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            join(fixture.scripts, "openclaw-release-ready.mjs"),
+            "dispatch-tooling",
+            "--inputs",
+            inputPath,
+            "--output",
+            outputDir,
+          ],
+          {
+            cwd: fixture.root,
+            env: {
+              ...fixture.env,
+              GITHUB_REF: "refs/heads/main",
+              GITHUB_REF_NAME: "main",
+              GITHUB_RUN_ATTEMPT: attempt,
+            },
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        );
+      const result = run(failure === "retry" ? "2" : "1");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        failure === "retry" ? "may already be dispatched" : "unconfirmed",
+      );
+      expect(fixture.trace().filter((entry) => entry.event === "tooling-dispatch")).toHaveLength(
+        failure === "retry" ? 0 : 1,
+      );
+      if (failure === "lost response") {
+        expect(JSON.parse(readFileSync(join(outputDir, "tooling-request.json"), "utf8"))).toEqual({
+          tooling: TOOLING,
+          runId: null,
+        });
+        expect(run("2").status).toBe(1);
+        expect(fixture.trace().filter((entry) => entry.event === "tooling-dispatch")).toHaveLength(
+          1,
+        );
+      }
+    },
+  );
+});
+
 describe("release readiness executable handoff", () => {
   it.each([
     ["prepare", "prepare", "dispatch-prepare"],
     ["promote", "publish", "dispatch-publish"],
-  ] as const)("fails visibly on main before starting %s", (workflowName, jobName, operation) => {
-    const fixture = finalizationFixture();
-    const workflow = parse(
-      readFileSync(`.github/workflows/openclaw-release-${workflowName}.yml`, "utf8"),
-    );
-    expect(
-      runInNewContext(workflow.jobs[jobName].if, {
-        github: { repository: REPOSITORY, ref: "refs/heads/main" },
-        inputs: { operation: workflowName === "prepare" ? "prepare" : operation },
-        startsWith: (value: string, prefix: string) => value.startsWith(prefix),
-      }),
-    ).toBe(true);
-    const result = spawnSync(
-      process.execPath,
-      [
-        join(fixture.scripts, "openclaw-release-ready.mjs"),
-        operation,
-        "--output",
-        join(fixture.root, "wrong-ref"),
-      ],
-      {
-        cwd: fixture.root,
-        env: { ...fixture.env, GITHUB_REF_NAME: "main", GITHUB_REF: "refs/heads/main" },
-        encoding: "utf8",
-        timeout: 10_000,
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("frozen protected release-publish tag");
-    expect(fixture.trace()).toEqual([
-      {
-        event: "gh",
-        args: [
-          "api",
-          `repos/${REPOSITORY}/compare/${TOOLING_SHA}...main`,
-          "--method",
-          "GET",
-          "--jq",
-          "{status}",
+  ] as const)(
+    "keeps frozen %s work separate from the main launcher",
+    (workflowName, jobName, operation) => {
+      const fixture = finalizationFixture();
+      const workflow = parse(
+        readFileSync(`.github/workflows/openclaw-release-${workflowName}.yml`, "utf8"),
+      );
+      expect(
+        runInNewContext(workflow.jobs[jobName].if, {
+          github: { repository: REPOSITORY, ref: "refs/heads/main" },
+          inputs: { operation: workflowName === "prepare" ? "prepare" : operation },
+          startsWith: (value: string, prefix: string) => value.startsWith(prefix),
+        }),
+      ).toBe(workflowName !== "prepare");
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(fixture.scripts, "openclaw-release-ready.mjs"),
+          operation,
+          "--output",
+          join(fixture.root, "wrong-ref"),
         ],
-      },
-    ]);
-    expect(fixture.state().writes).toBe(0);
-  });
+        {
+          cwd: fixture.root,
+          env: { ...fixture.env, GITHUB_REF_NAME: "main", GITHUB_REF: "refs/heads/main" },
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("frozen protected release-publish tag");
+      expect(fixture.trace()).toEqual([
+        {
+          event: "gh",
+          args: [
+            "api",
+            `repos/${REPOSITORY}/compare/${TOOLING_SHA}...main`,
+            "--method",
+            "GET",
+            "--jq",
+            "{status}",
+          ],
+        },
+      ]);
+      expect(fixture.state().writes).toBe(0);
+    },
+  );
 
   it.each([
     ...(["core", "clawhub"] as const).flatMap((lane) =>
@@ -870,10 +1000,15 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
     } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.responses, endpoint)) {
       console.log(JSON.stringify(state.frv.responses[endpoint]));
     } else if (args[0] === 'api' && args[1].startsWith('repos/${REPOSITORY}/commits/')) {
-      const sha = decodeURIComponent(args[1]).includes('/release-publish/') ? state.toolingSha : state.sourceSha;
+      const ref = decodeURIComponent(args[1]).split('/commits/')[1];
+      const sha = ref === 'main' ? (state.mainSelected ? state.sourceSha : state.toolingSha)
+        : ref.startsWith('release-publish/') || ref === state.toolingSha ? state.toolingSha : state.sourceSha;
+      if (ref === 'main') { state.mainSelected = true; writeFileSync(process.env.FIXTURE_GITHUB_STATE, JSON.stringify(state)); }
       console.log(args[args.indexOf('--jq') + 1].startsWith('.sha') ? sha : JSON.stringify({ sha }));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/compare/${TOOLING_SHA}...main') {
-      console.log(JSON.stringify({ status: 'identical' }));
+      console.log(option('--jq') === '.status' ? 'ahead' : JSON.stringify({ status: 'ahead' }));
+    } else if (endpoint === 'git/matching-refs/tags/release-publish/${TOOLING_SHA.slice(0, 12)}-') {
+      console.log(JSON.stringify([{ ref: '${TOOLING.fullRef}', object: { type: 'commit', sha: '${TOOLING_SHA}' } }]));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/git/ref/tags/${TOOLING.ref}') {
       if (state.toolingMissing) process.exit(1);
       console.log(JSON.stringify({ ref: '${TOOLING.fullRef}', object: { type: 'commit', sha: state.toolingSha } }));
@@ -927,6 +1062,12 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         head_sha: '${TOOLING_SHA}',
         head_branch: process.env.GITHUB_REF_NAME, status: 'in_progress', conclusion: null,
         ...state.currentWriter }));
+    } else if (endpoint === 'actions/workflows/openclaw-release-prepare.yml/dispatches') {
+      const fields = Object.fromEntries(args.flatMap((arg, i) => arg === '-f' ? [args[i+1].split(/=(.*)/s).slice(0,2)] : []));
+      const receipt = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'release-tooling/tooling-request.json'), 'utf8'));
+      appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'tooling-dispatch', fields, receipt }) + '\\n');
+      if (state.lostToolingDispatchResponse) process.exit(1);
+      console.log(JSON.stringify({ workflow_run_id: 901 }));
     } else if (args[0] === 'api' && args[1] === 'repos/${REPOSITORY}/actions/workflows/openclaw-release-publish.yml/dispatches') {
       const receipt = join(process.env.RUNNER_TEMP, 'release-button/dispatch.json');
       appendFileSync(process.env.FIXTURE_TRACE, JSON.stringify({ event: 'publication-dispatch',

@@ -211,8 +211,10 @@ Enable only after [packaging beta support](https://github.com/openclaw/openclaw-
 and the [central publisher](https://github.com/openclaw/releases/pull/48) plus its
 administrative setup are ready. Configure central
 protection and exclusive Store federation and revoke the old repository's Store
-federation. Cut updated protected release tooling for both core release entry
-points; merging core alone does not update an existing frozen tooling cut.
+federation. Start **OpenClaw Release Prepare** from `main` with `tooling_ref=main`
+to freeze current tooling for both core release entry points without changing a
+SHA in code. An existing frozen cut does not change when core merges; recovery
+retains the cut recorded in its preparation request.
 
 A successful core request means the central publisher was dispatched, not that
 approval or flight/Production delivery succeeded. Follow the linked releases run
