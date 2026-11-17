@@ -1025,6 +1025,7 @@ const startupEnglish = {
     cron: "Automations",
     skills: "Skills",
     plugins: "Plugins",
+    customize: "Customize",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
     templates: "Templates",
