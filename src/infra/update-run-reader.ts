@@ -199,12 +199,13 @@ async function readUpdateRunStatusAsync(
 export async function listUpdateRunsAsync(
   input: UpdateRunListInput = {},
   options: OpenClawStateDatabaseOptions = {},
+  readOptions: Pick<OpenClawStateReadOptions, "current"> = {},
 ): Promise<UpdateRunRecord[]> {
   const reply = await withArtifactPreservingStateReads(() =>
     executeExistingOpenClawStateRead(
       options,
       { type: "updateRuns.list", input: { ...input } },
-      { preferIndependentWarmRead: true },
+      { ...readOptions, preferIndependentWarmRead: true },
     ),
   );
   if (!reply) {
