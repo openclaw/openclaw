@@ -97,7 +97,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
+  if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
+    // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
     return true;
   }
@@ -123,6 +124,9 @@ export function projectSubagentRunForMaintenance(
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,
+    requesterSettleWake: entry.requesterSettleWake
+      ? { status: entry.requesterSettleWake.status }
+      : undefined,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
     killReconciliation: entry.killReconciliation
