@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createSignal, onSettled, untrack } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -58,24 +58,6 @@ export function forgetSectionLocation(section: ListingSection): void {
     next.delete(section);
     return next;
   });
-}
-
-// The shell reports which section's sidebar stands open beside the page, from its own route and
-// layout, so a section's page knows before its first frame whether its sidebar lists the items.
-let shownSection: () => string | undefined = () => undefined;
-
-/** The shell's source for the shown section, for as long as the calling owner lives. */
-export function createSectionSidebarSource(read: () => string | undefined): void {
-  shownSection = read;
-  onCleanup(() => {
-    if (shownSection === read) {
-      shownSection = () => undefined;
-    }
-  });
-}
-
-export function sectionSidebarShown(section: ListingSection): boolean {
-  return shownSection() === section;
 }
 
 // Each listing section's sidebar reports whether its scope has anything to list, so the shell

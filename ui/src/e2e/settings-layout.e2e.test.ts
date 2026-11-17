@@ -4,17 +4,14 @@ import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
-import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronRuns } from "./cron-fixtures.test-support.ts";
 import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -125,59 +122,6 @@ const standaloneHeaderCases = [
   },
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
 
-function createCronLayoutMethodResponses() {
-  const jobs: CronJob[] = [
-    {
-      id: "healthy",
-      configRevision: "healthy-revision",
-      name: "Healthy automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "healthy" },
-      state: { lastRunStatus: "ok" },
-    },
-    {
-      id: "failing",
-      configRevision: "failing-revision",
-      name: "Failing automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "failing" },
-      state: { lastRunStatus: "error" },
-    },
-  ];
-  return {
-    "agents.list": {
-      agents: [
-        { id: "main", identity: { name: "Molty" }, name: "Molty" },
-        { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    },
-    "cron.list": cronListResponseFixture({
-      jobs,
-      snapshotRevision: "settings-layout",
-      total: jobs.length,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    }),
-    "cron.runs": cronRuns([]),
-    "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
-  };
-}
-
 suite.define(() => {
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
@@ -262,9 +206,7 @@ suite.define(() => {
   it("aligns settings-style workspace headers with their content columns", async () => {
     const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: createCronLayoutMethodResponses(),
-    });
+    await installMockGateway(page);
 
     try {
       for (const { route, subtitle } of standaloneHeaderCases) {

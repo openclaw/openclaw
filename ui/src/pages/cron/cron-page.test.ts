@@ -311,13 +311,10 @@ it("drops pending automation scratch when admin access is removed", async () => 
     sessionTarget: "main",
   });
   const scratch = createDeferred<object>();
-  const request = vi.fn(async (method: string) =>
-    method === "cron.list"
-      ? harness.cronListResponse([job])
-      : method === "cron.scratch.get"
-        ? scratch.promise
-        : {},
-  );
+  const request = cronRpc({
+    "cron.list": () => harness.cronListResponse([job]),
+    "cron.scratch.get": () => scratch.promise,
+  });
   const { page, gateway } = mountCronPage(request);
   await harness.openJob(page, job.id);
   await dom.waitForElement(page, "openclaw-cron-scratch-editor");
