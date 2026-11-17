@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
@@ -238,6 +239,15 @@ export function createSessionMcpRuntimeParts<T extends RuntimePart>(
       }
       // Disposal revokes the changed owner synchronously, before transport cleanup yields.
       await disposeParts(retired);
+      if (cleanupFailure) {
+        // Join the recorded cleanup outcome so a manager-level reload cannot
+        // report success while a retired transport's cleanup is unconfirmed
+        // (#164642). The hot-reload caller degrades this to a warning; RPC
+        // callers surface it.
+        throw new Error(
+          `session ${params.sessionId} MCP runtime cleanup unconfirmed after reload: ${formatErrorMessage(cleanupFailure.reason)}`,
+        );
+      }
     },
   });
   return runtime;
