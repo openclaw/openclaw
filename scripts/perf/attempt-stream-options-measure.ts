@@ -70,7 +70,7 @@ const agentSession = {
   builtinToolNames: new Set(),
   coreBuiltinToolNames: new Set(),
   replaySafeToolNames: new Set(),
-  codeModeExecToolNames: new Set(),
+  codeModeControlToolNames: new Set(),
   sourceReplyCapableToolNames: new Set(),
   sideEffectToolOwners: new Map(),
   trustedLocalMediaToolNames: new Set(),

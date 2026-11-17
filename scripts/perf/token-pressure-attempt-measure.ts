@@ -371,6 +371,7 @@ const streamGuards = installEmbeddedAttemptStreamGuards(input, {
     throw error;
   },
   diagnosticOwner: createDiagnosticEmbeddedRunOwner(attempt),
+  canCompactMidTurn: () => true,
 });
 const modelState = createEmbeddedModelState(
   { session, runId: attempt.runId, onModelUsage: streamGuards.onModelUsage },

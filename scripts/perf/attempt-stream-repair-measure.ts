@@ -137,6 +137,7 @@ async function run(turnCount: number) {
             throw error;
           },
           diagnosticOwner: createDiagnosticEmbeddedRunOwner(attempt),
+          canCompactMidTurn: () => true,
         });
         const stream = await activeSession.agent.streamFn(
           model,
