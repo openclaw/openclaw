@@ -266,3 +266,26 @@ describe("cron next_check action", () => {
     expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });
+
+it("keeps a session's granted Automations declaration on its ungranted turns", async () => {
+  const sessionKey = "agent:main:control-ui";
+  const grantedRunId = "declaration-granted-run";
+  const granted = await withCronManagementCaller(grantedRunId, async () =>
+    createCronTool({ runId: grantedRunId, agentSessionKey: sessionKey }),
+  );
+  const internal = createCronTool({
+    runId: "declaration-internal-run",
+    agentSessionKey: sessionKey,
+  });
+  expect(internal.parameters).toEqual(granted.parameters);
+  expect(internal.description).toBe(granted.description);
+  using gateway = vi.spyOn(gatewayModule, "callGatewayTool");
+  await expect(
+    internal.execute("internal-command-edit", {
+      action: "update",
+      jobId,
+      job: { payload: command },
+    }),
+  ).rejects.toThrow("automation command payloads cannot be created or edited");
+  expect(gateway).not.toHaveBeenCalled();
+});
