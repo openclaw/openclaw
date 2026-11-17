@@ -73,10 +73,11 @@ and the Gateway runs isolated from your Windows user account. Setup pairs the
 app with whichever Gateway you choose.
 
 Native support depends on a Windows capability, not only the Windows version.
-Windows Server is not supported. When the check fails, native stays disabled at
-the bottom of the list, WSL is marked **Recommended**, and setup explains how to
-get the capability through Windows Update. Native setup uses its own profile, so
-an existing WSL Gateway or default OpenClaw profile is not replaced.
+Windows Server is not supported. When native support is unavailable or cannot be
+verified, native stays disabled at the bottom of the list and WSL is marked
+**Recommended**. Setup shows guidance for the detected condition, including
+Windows Update when the required capability is unavailable. Native setup uses its
+own profile, so an existing WSL Gateway or default OpenClaw profile is not replaced.
 
 Choose **Remote, local MCP or set up later** below the choices, or open the
 Connections tab later, for other connection types. You can connect to:
