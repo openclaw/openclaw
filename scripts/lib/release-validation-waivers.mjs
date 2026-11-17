@@ -50,6 +50,18 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 const RELEASE_VALIDATION_WAIVERS = [
   {
     targetVersion: "2026.10.33",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly waived Telegram package recovery for 2026.10.33 " +
+      "on 2026-11-17 at 15:06 UTC after FRV 44090632483/1, job 134090325822. " +
+      "This accepts only the named terminal failed job across candidates and attempts; " +
+      "its underlying onboarding error remains undiagnosed, not fixed or proven flaky. " +
+      "Preserve execution and raw evidence. Other jobs, missing or cancelled evidence, " +
+      "artifact integrity, install/update gates and publication remain blocking.",
+  },
+  {
+    targetVersion: "2026.10.33",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",
     reason:
