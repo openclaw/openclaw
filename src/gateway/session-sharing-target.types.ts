@@ -40,6 +40,8 @@ export type SessionFactsRequest = {
   agentId: string;
   followLifecycle?: boolean;
   followTranscript?: boolean;
+  /** Include absence placeholders directly for an unresolved creation target. */
+  creationRead?: boolean;
   sessionAccessOnly?: boolean;
   preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void | { assertCurrent(): void }> | SessionEntryDatabasePreparationReceipt;

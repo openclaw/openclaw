@@ -131,6 +131,7 @@ export async function prepareSessionMutationFacts(
     invalidated = true;
   };
   const acquisition = createSessionSharingFactAcquisition({
+    creationRead: params.creationRead,
     followLifecycle: params.followLifecycle,
     followTranscript: params.followTranscript,
     storageReady: params.storageReady,

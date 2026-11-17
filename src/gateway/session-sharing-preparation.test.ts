@@ -105,8 +105,9 @@ function sharingHarness(
     sessionKey,
     storePath,
     scope,
-    prepare: () => prepareSessionMutationFacts(request),
-    prepareMissing: () => prepareSessionMutationFacts({ ...request, allowMissing: true }),
+    prepare: (creationRead = false) => prepareSessionMutationFacts({ ...request, creationRead }),
+    prepareMissing: (creationRead = false) =>
+      prepareSessionMutationFacts({ ...request, allowMissing: true, creationRead }),
     write: (entry: SessionEntry) => replaceSessionEntrySync(scope, entry),
     transaction,
     commit: (...entries: SessionEntry[]) =>
@@ -704,17 +705,19 @@ it("publishes durable sharing facts before observers", async ({ harness }) => {
 });
 
 it.for([
-  "worker-metadata",
-  "visibility",
-  "membership",
-  "lifecycle",
-  "replacement",
-  "retirement",
-  "unknown",
-  "rollback",
+  { change: "worker-metadata", creationRead: false },
+  { change: "visibility", creationRead: false },
+  { change: "membership", creationRead: false },
+  { change: "lifecycle", creationRead: false },
+  { change: "replacement", creationRead: false },
+  { change: "retirement", creationRead: false },
+  { change: "unknown", creationRead: false },
+  { change: "rollback", creationRead: false },
+  { change: "membership", creationRead: true },
+  { change: "replacement", creationRead: true },
 ] as const)(
-  "reconciles a stale sharing worker return across %s publication",
-  async (change, { harness }) => {
+  "reconciles a stale sharing worker return across $change publication (creation read: $creationRead)",
+  async ({ change, creationRead }, { harness }) => {
     const { cfg, sessionKey, storePath, scope } = harness;
     const entry = restrictedEntry("acquiring-session", "original");
     harness.write(entry);
@@ -771,7 +774,7 @@ it.for([
         return snapshot;
       },
     );
-    const pending = harness.prepare();
+    const pending = harness.prepare(creationRead);
     if (
       change === "lifecycle" ||
       change === "replacement" ||
@@ -803,36 +806,39 @@ it("rejects unavailable durable metadata", async ({ harness }) => {
   await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
 });
 
-it("requires an existing session before preparing sharing facts", async ({ harness }) => {
-  const { cfg, storePath } = harness;
-  await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
-  {
-    using missingDatabase = releasing(await harness.prepareMissing());
-    expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-    sessionChanges.emit({ all: true, scope: "catalog" });
-    expect(missingDatabase.readCurrent(cfg).target).toBeNull();
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:existing", storePath },
-      { sessionId: "existing", updatedAt: 1 },
-    );
-  }
-  await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
-  {
-    using missingEntry = releasing(await harness.prepareMissing());
-    sessionChanges.emit({ all: true, scope: "catalog" });
-    expect(missingEntry.readCurrent(cfg).target).toBeNull();
-    harness.write({
-      ...restrictedEntry("new-restricted-session", "new-restricted-generation"),
-      visibility: "draft",
-      createdActor: { type: "human", source: "profile", id: "other" },
-    });
-    expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
-  }
-  using prepared = releasing(await harness.prepare());
-  const facts = prepared.readCurrent(cfg);
-  expect(facts.target.entry.sessionId).toBe("new-restricted-session");
-  expect(harness.authorize(facts)?.message).toContain("session is draft");
-});
+it.for([false, true])(
+  "requires an existing session before preparing sharing facts (creation read: %s)",
+  async (creationRead, { harness }) => {
+    const { cfg, storePath } = harness;
+    await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
+    {
+      using missingDatabase = releasing(await harness.prepareMissing(creationRead));
+      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      expect(missingDatabase.readCurrent(cfg).target).toBeNull();
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "agent:main:existing", storePath },
+        { sessionId: "existing", updatedAt: 1 },
+      );
+    }
+    await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
+    {
+      using missingEntry = releasing(await harness.prepareMissing(creationRead));
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      expect(missingEntry.readCurrent(cfg).target).toBeNull();
+      harness.write({
+        ...restrictedEntry("new-restricted-session", "new-restricted-generation"),
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: "other" },
+      });
+      expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
+    }
+    using prepared = releasing(await harness.prepare());
+    const facts = prepared.readCurrent(cfg);
+    expect(facts.target.entry.sessionId).toBe("new-restricted-session");
+    expect(harness.authorize(facts)?.message).toContain("session is draft");
+  },
+);
 
 // Alias retargets apply to the next preparation; captured requests retain their physical store.
 it.for(["pending", "prepared"] as const)(

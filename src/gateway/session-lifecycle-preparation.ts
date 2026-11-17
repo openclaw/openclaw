@@ -158,6 +158,7 @@ export function prepareGatewaySessionLifecycleTargets(params: {
         sessionKey: selected.canonicalKey,
         agentId: selected.agentId,
         allowMissing: true,
+        creationRead: Boolean(selectOnEntry),
         storageReady: targetStorageReady ?? databaseReadiness,
       });
       let sessionId = originalIdentity.sessionId;

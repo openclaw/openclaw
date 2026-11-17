@@ -31,6 +31,7 @@ async function readSessionSharingFactsInWorker(
     sessionKeys: readonly string[];
   },
   prepareSource: SessionEntryReadSourcePreparation,
+  creationRead: boolean,
 ) {
   let physicalSource: { agentId: string; path: string } | undefined;
   const captureSource: SessionEntryReadSourcePreparation = (source, identity) => {
@@ -39,15 +40,15 @@ async function readSessionSharingFactsInWorker(
   };
   const request = {
     ...input,
-    projection: "full" as const,
+    projection: creationRead ? ("sharing" as const) : ("full" as const),
     snapshotFields: [],
     includeMembers: true,
     includeAuthorization: true,
     pointRead: true as const,
   };
-  // Match ordinary metadata reads so committed actor facts serve warmed admission.
+  // Creation needs absence placeholders; ordinary admission retains its warm metadata path.
   let loaded = await readSessionEntriesFromStoreInWorker(request, captureSource);
-  if (loaded.entries.length === 0) {
+  if (!creationRead && loaded.entries.length === 0) {
     // A cold absence also needs the durable placeholder used by creation receipts.
     loaded = await readSessionEntriesFromStoreInWorker(
       { ...request, projection: "sharing" },
@@ -88,7 +89,10 @@ async function readSessionSharingFactsInWorker(
 
 /** Keep the acquired publication facts with the read that initializes and reconciles them. */
 export function createSessionSharingFactAcquisition(
-  params: Pick<SessionFactsRequest, "followLifecycle" | "followTranscript" | "storageReady"> & {
+  params: Pick<
+    SessionFactsRequest,
+    "followLifecycle" | "followTranscript" | "storageReady" | "creationRead"
+  > & {
     scope: "sharing" | "session-access";
     inspection: boolean;
     releases: Array<() => void>;
@@ -175,12 +179,16 @@ export function createSessionSharingFactAcquisition(
     ) {
       params.assertActive();
       params.phases.mark("sessionFacts.rows");
-      const loaded = await readSessionSharingFactsInWorker(input, (source, identity) => {
-        params.assertActive();
-        if (capture(source.path, input.sessionKeys, identity)) {
-          paths.add(path.resolve(input.storePath));
-        }
-      });
+      const loaded = await readSessionSharingFactsInWorker(
+        input,
+        (source, identity) => {
+          params.assertActive();
+          if (capture(source.path, input.sessionKeys, identity)) {
+            paths.add(path.resolve(input.storePath));
+          }
+        },
+        params.creationRead === true,
+      );
       params.phases.mark("sessionFacts.selection");
       params.assertActive();
       const store = Object.fromEntries(

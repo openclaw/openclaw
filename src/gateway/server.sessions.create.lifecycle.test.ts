@@ -12,6 +12,7 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -255,6 +256,20 @@ test("sessions.create registers a category only after the session commit succeed
   expect(
     broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
   ).toHaveLength(1);
+});
+
+test("fresh keyed sessions.create acquires one sharing snapshot", async () => {
+  const key = "agent:main:dashboard:creation-sharing-read";
+  const reads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
+  try {
+    expectOk(await createSession({ key }));
+    const targetReads = reads.mock.calls.filter(
+      ([input]) => input.pointRead && input.sessionKeys?.includes(key),
+    );
+    expect(targetReads.map(([input]) => input.projection)).toEqual(["sharing"]);
+  } finally {
+    reads.mockRestore();
+  }
 });
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
