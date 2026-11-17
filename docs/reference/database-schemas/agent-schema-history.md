@@ -641,3 +641,12 @@ Membership and recorded contribution aggregates survive. Historical profile time
 The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
 
 Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
+
+### Same-version session deletion indexes
+
+Agent schema 38 also admits optional SQLite indexes on
+`session_input_completions(session_key)` and
+`conversation_deliveries(source_session_key, operation_id)`. They prevent session
+deletion from scanning unrelated rows. This does not advance the schema version
+or change stored data. Earlier historical schema contracts omit these indexes,
+and PostgreSQL schema-38 catalogs and DDL remain unchanged.
