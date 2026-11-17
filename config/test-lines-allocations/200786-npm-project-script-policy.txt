@@ -1,0 +1,2 @@
+# Real npm project install regression across inherited allow-scripts casings and global-policy control.
+36
