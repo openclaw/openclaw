@@ -2,10 +2,13 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -226,6 +229,44 @@ function run(command, args, options = {}) {
 
 function git(args) {
   return run("git", args).trimEnd();
+}
+
+function* gitLogRecords(args) {
+  // Release histories exceed the command buffer. Spool once, then decode complete
+  // records so UTF-8 characters spanning read boundaries remain intact.
+  const directory = mkdtempSync(path.join(tmpdir(), "openclaw-release-log-"));
+  const output = path.join(directory, "log");
+  let descriptor;
+  try {
+    git(["log", `--output=${output}`, ...args]);
+    descriptor = openSync(output, "r");
+    let parts = [];
+    for (;;) {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const length = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (!length) {
+        break;
+      }
+      const chunk = buffer.subarray(0, length);
+      let start = 0;
+      for (let end = chunk.indexOf(0x1e); end !== -1; end = chunk.indexOf(0x1e, start)) {
+        parts.push(chunk.subarray(start, end));
+        yield Buffer.concat(parts).toString("utf8");
+        parts = [];
+        start = end + 1;
+      }
+      parts.push(chunk.subarray(start));
+    }
+    const tail = Buffer.concat(parts).toString("utf8").trimEnd();
+    if (tail) {
+      yield tail;
+    }
+  } finally {
+    if (descriptor !== undefined) {
+      closeSync(descriptor);
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function gitIsAncestor(base, target) {
@@ -1153,15 +1194,14 @@ function canonicalMainCommits(base, mainRef, filters = []) {
   }
   const mainCommit = /** @type {string} */ (gitCommit(mainRef, true));
   const mainBase = git(["merge-base", base, mainCommit]);
-  const output = git([
-    "log",
+  const records = gitLogRecords([
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
     ...filters,
     `${mainBase}..${mainCommit}`,
   ]);
   const commits = [];
-  for (const record of output.split("\x1e")) {
+  for (const record of records) {
     if (!record) {
       continue;
     }
@@ -1191,8 +1231,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   if (!Number.isFinite(targetTimestamp)) {
     fail(`could not resolve timestamp for release target ${target}`);
   }
-  const output = git([
-    "log",
+  const records = gitLogRecords([
     // Merged side branches carry source PRs too; first-parent hides their credit.
     "--topo-order",
     "--reverse",
@@ -1212,7 +1251,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   };
   const commits = new Map();
   const revertsByTarget = new Map();
-  for (const record of output.split("\x1e")) {
+  for (const record of records) {
     if (!record) {
       continue;
     }

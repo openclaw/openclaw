@@ -1671,6 +1671,7 @@ console.log(JSON.stringify({ data }));
     "reachable-body",
     "explicit-seed",
     "canonical-carrier",
+    "large-history-carrier",
     "backport-carrier",
     "provenance-carrier",
     "unresolved-body",
@@ -1695,6 +1696,11 @@ console.log(JSON.stringify({ data }));
       2,
     );
     git(cwd, ["checkout", "-qb", "later-main"]);
+    if (mode === "large-history-carrier") {
+      const message = join(cwd, ".git", "large-message");
+      writeFileSync(message, "chore: unrelated history\n\n" + "é".repeat(33 * 1024 * 1024));
+      git(cwd, ["commit", "--allow-empty", "-q", "-F", message]);
+    }
     writeFileSync(join(cwd, "performance.txt"), "performance implementation\n");
     const future = commitAt("chore: performance work (#22)", 3);
     git(cwd, ["checkout", "-q", "release"]);
@@ -1705,7 +1711,7 @@ console.log(JSON.stringify({ data }));
     } else if (mode.endsWith("-carrier")) {
       main = future;
       commitAt("chore: release preparation", 4);
-      if (mode === "canonical-carrier") {
+      if (mode === "canonical-carrier" || mode === "large-history-carrier") {
         git(cwd, ["cherry-pick", "-x", future], { GIT_COMMITTER_DATE: "2026-07-05T12:00:00Z" });
         carrier = git(cwd, ["rev-parse", "HEAD"]);
       } else {
