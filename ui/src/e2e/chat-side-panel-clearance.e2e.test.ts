@@ -334,7 +334,7 @@ suite.define(() => {
         const expandedCenter = await rowCenter();
         expect(expandedCenter).toBeGreaterThan(24);
 
-        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+        await page.locator(".sidebar-session-toolbar__collapse").click();
         await polledAttribute(shell, "class").toContain("shell--nav-collapsed");
         await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
         const controls = page.locator(".sidebar-rail [data-navigation-view]");
@@ -385,7 +385,7 @@ suite.define(() => {
             deviceLess ? "rtl" : "ltr",
           );
           if (navCollapsed) {
-            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+            await page.locator(".sidebar-session-toolbar__collapse").click();
             await polledAttribute(page.locator(".shell"), "class").toContain(
               "shell--nav-collapsed",
             );
