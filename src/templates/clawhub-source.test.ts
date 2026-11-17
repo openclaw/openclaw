@@ -236,7 +236,6 @@ beforeEach(async () => {
   await fs.writeFile(archivePath, archiveBytes);
   const contentsManifest = {
     ...emptyManifest,
-    agent: { ...emptyManifest.agent, recommendedPrompts: ["Brief me on recent changes"] },
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
       files: [{ source: "USER.md", path: "USER.md" }],
@@ -427,7 +426,6 @@ describe("public ClawHub Template catalog", () => {
       version,
       agentId: "research-briefing",
       agentName: "Research Briefing",
-      recommendedPrompts: ["Brief me on recent changes"],
       channel: "community",
       official: false,
       ownerHandle: "alice",

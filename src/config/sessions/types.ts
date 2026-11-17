@@ -303,8 +303,6 @@ type SessionEntryCore = SessionEntryProvenance &
     templateSetup?: {
       source: { packageName: string; version?: string };
       report: import("../../templates/conversation.js").TemplateSetupReport;
-      /** Retained with setup so Retry uses the original selected task. */
-      initialPrompt?: string;
       /** Workspace is ready; dependency installation can overlap the first conversation turn. */
       dependenciesPending?: true;
       /** Avoid replaying the greeting when Retry only needs to report dependency results. */

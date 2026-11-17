@@ -214,7 +214,7 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
 
 it("routes to chat-based creation only on its explicit mode", async () => {
   applyAdd.mockResolvedValue(complete);
-  const chat = { mode: "chat", source, agentId, initialPrompt: "Set up a repository" };
+  const chat = { mode: "chat", source, agentId };
   await callAdd("apply");
   await callAdd("apply", () => enabled, { applyParams: chat });
   // The reviewed request keeps its installer hand-off: opening at agent-ready, install events.

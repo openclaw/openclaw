@@ -348,7 +348,7 @@ export async function readClawHubTemplateDetail(
     const categories = Array.isArray(pkg.categories)
       ? pkg.categories.filter((category) => typeof category === "string" && category.length > 0)
       : [];
-    const { contents, recommendedPrompts } = await readClawHubTemplateContents(
+    const { contents } = await readClawHubTemplateContents(
       {
         ...params,
         packageName: pkg.name,
@@ -366,7 +366,6 @@ export async function readClawHubTemplateDetail(
       agentId: summary.id,
       ...(summary.name ? { agentName: summary.name } : {}),
       ...(summary.description ? { agentDescription: summary.description } : {}),
-      ...(recommendedPrompts?.length ? { recommendedPrompts } : {}),
       workspaceFiles: contents.instructions.length,
       skills: contents.skills.length,
       plugins: contents.integrations.filter((item) => item.kind === "plugin").length,
@@ -431,7 +430,6 @@ async function readClawHubTemplateContents(
   },
 ): Promise<{
   contents: ClawHubTemplateCatalogDetail["contents"];
-  recommendedPrompts?: string[];
   preview?: ClawHubTemplateCatalogPreview;
 }> {
   const artifactResponse =
@@ -533,7 +531,6 @@ async function readClawHubTemplateContents(
         return {
           ok: true as const,
           value: {
-            recommendedPrompts: manifest.agent.recommendedPrompts,
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,

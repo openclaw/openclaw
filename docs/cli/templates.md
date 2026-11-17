@@ -314,46 +314,32 @@ review them for secrets before building or publishing.
 
 ### Welcome description and conversation starters
 
-Templates can reuse the optional `agent.description` metadata and define
-`agent.recommendedPrompts` directly in `CLAW.md` frontmatter.
-
-**Compatibility:** `agent.recommendedPrompts` requires a development build after
-OpenClaw 2026.11.4, or the first stable release containing this feature. OpenClaw
-2026.11.4 and older reject this field because Template agent schemas are strict.
-Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
-
-For builds that support conversation starters:
+A Template may set optional `agent.description` and `agent.recommendedPrompts`
+metadata for the installed agent’s main/new-chat welcome page:
 
 ```yaml
 agent:
   id: project-briefing
-  name: Project briefing
-  description: Follows your repositories and briefs you on meaningful changes, proposals, and decisions.
+  description: Follows your repositories and briefs you on meaningful changes.
   recommendedPrompts:
     - Set up a repository
     - Brief me on recent changes
     - Show my tracked projects
 ```
 
-Add copies these fields into the ordinary agent's configuration. The Control UI
-shows the description on its new-chat welcome screen and uses the recommended
-prompts as clickable user messages. Opening the screen sends nothing.
+When no recent chats are available, a nonempty list replaces the default welcome
+prompts. An unset or empty list keeps the defaults. Recent chats, incognito,
+phone layout, and model setup keep their existing display rules. The Template
+page, Add flow, and bootstrap instructions are unchanged.
 
-The Template detail page and install preview also show these prompts. Selecting
-one starts chat-based Add, including the ClawHub warning confirmation when needed.
-The existing setup turn instructs the agent to complete `BOOTSTRAP.md` first,
-asking questions and waiting for answers as needed, then address the selected
-prompt in that same conversation. No separate follow-up queue is created;
-sequencing is part of the agent's setup instructions, not a runtime guarantee.
-Plain Add without a selected prompt keeps its existing opening behavior.
+Prompts use the shared metadata limits: at most three nonempty strings, each at
+most 128 Unicode code points after whitespace normalization. Declare them in
+`CLAW.md`, not in `profiles/openclaw.yml`.
 
-Both fields are optional. An unset or empty prompt list keeps the existing welcome
-defaults and adds no install-page choices. Like plugin `recommendedPrompts`, a list
-has at most three nonempty strings, each at most 128 Unicode code points after
-whitespace normalization. Metadata is declared in `CLAW.md`, not in
-`profiles/openclaw.yml`.
-See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome)
-for the display variants.
+**Compatibility:** this field requires a build with agent welcome prompt support.
+OpenClaw 2026.11.4 and older reject it because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome).
 
 <a id="inspect-and-preview"></a>
 

@@ -117,20 +117,3 @@ it("sends a greeting before setup reads without sweeping the workspace", () => {
   expect(prompt).toContain("Do not read every workspace file");
   expect(prompt).not.toContain("Sending: do the tool work first");
 });
-
-it("defers a selected task until bootstrap finishes, including questions across replies", () => {
-  const prompt = buildTemplateOpeningMessage(report, agent, false, "Set up a repository");
-  expect(prompt).toContain('Selected initial prompt: "Set up a repository"');
-  expect(prompt).toContain("First complete BOOTSTRAP.md");
-  expect(prompt).toContain("wait for the user's answers");
-  expect(prompt).toContain("continue bootstrap across replies as needed");
-  expect(prompt).toContain(
-    "Begin conversational setup now; interactive bootstrap may continue across replies.",
-  );
-  expect(prompt).not.toContain("Finish conversational setup now, in this one turn");
-  expect(prompt).toContain("If bootstrap is already complete or absent, address it now");
-  expect(prompt).not.toContain("end by inviting the user to begin");
-  const withoutTask = buildTemplateOpeningMessage(report, agent);
-  expect(withoutTask).not.toContain("Selected initial prompt:");
-  expect(withoutTask).toContain("Finish conversational setup now, in this one turn");
-});

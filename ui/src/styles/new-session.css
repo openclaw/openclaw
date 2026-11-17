@@ -1028,8 +1028,7 @@ span.new-session-page__select {
     font-size: 34px;
   }
 
-  .new-session-page .agent-chat__welcome-secondary:not(.agent-chat__welcome-secondary--custom),
-  .new-session-page .agent-chat__recents {
+  .new-session-page .agent-chat__welcome-secondary {
     display: none;
   }
 

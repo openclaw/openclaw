@@ -111,7 +111,6 @@ export async function applyTemplateAdd(
   options: {
     agentId: string;
     resume?: true;
-    initialPrompt?: string;
     acknowledgeClawHubRisk?: boolean;
     onSent?: (requestId: string) => void;
   },
@@ -120,7 +119,6 @@ export async function applyTemplateAdd(
     "templates.add.apply",
     {
       mode: "chat",
-      ...(options.initialPrompt ? { initialPrompt: options.initialPrompt } : {}),
       source,
       agentId: options.agentId,
       ...(options.resume ? { resume: true } : {}),

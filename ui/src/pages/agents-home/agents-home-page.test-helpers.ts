@@ -49,7 +49,6 @@ type PageOptions = {
   templatesEnabled?: boolean;
   pathname?: string;
   templateIconUrl?: string;
-  recommendedPrompts?: string[];
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
   clawHubTrustWarning?: string;
@@ -135,7 +134,6 @@ export function createPage(options: PageOptions = {}) {
       return {
         detail: {
           ...workflowOperator,
-          recommendedPrompts: options.recommendedPrompts,
           iconUrl: options.templateIconUrl,
           version: "1.2.0",
           agentId: "workflow-operator",

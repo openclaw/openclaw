@@ -129,18 +129,19 @@ plain-text prompts in author order. Clicking one submits that text through the
 normal user-message flow. Opening a welcome screen sends nothing and creates no
 assistant greeting.
 
-Both fields are optional and independent. Unset descriptions add no copy;
-unset or empty starters retain the existing permission-aware defaults and
-recent-chat behavior. Nonempty custom starters remain available beside recent
-chats and on phones. Incognito shows custom starters without exposing recent
-chats. Model setup still takes precedence, and terminal targets keep their own
-welcome guidance rather than borrowing an agent's metadata.
+Both fields are optional and independent. With recent chats, the welcome shows
+those chats rather than suggestions. Without recent chats, a nonempty custom
+list replaces the permission-aware defaults; an unset or empty list keeps the
+defaults, including “What can you do?”. Custom prompts follow the same existing
+incognito and phone visibility rules as the defaults. Model setup still takes
+precedence, and terminal targets keep their own welcome guidance rather than
+borrowing an agent's metadata.
 
 [Templates](/cli/templates#welcome-description-and-conversation-starters) declare
 the same fields under `agent` in `CLAW.md`, not in a profile file. Recommended
 prompts share plugin metadata limits: at most three strings, each at most 128
-Unicode code points; whitespace is normalized. The Template install page also
-allows choosing a prompt to address after bootstrap completes.
+Unicode code points; whitespace is normalized. This metadata only customizes
+the installed agent's welcome; the Template page and bootstrap flow are unchanged.
 
 ## Multi-agent routing
 

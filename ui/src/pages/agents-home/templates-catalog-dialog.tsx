@@ -52,7 +52,6 @@ class TemplatesCatalogModel {
   /** ClawHub's audit of the selected release, awaiting the user's decision. */
   consentWarning: string | null = null;
   private riskAcknowledged = false;
-  private initialPrompt: string | undefined;
   gateway!: ReturnType<typeof useGatewayPage>;
   disposed = false;
 
@@ -81,7 +80,6 @@ class TemplatesCatalogModel {
     this.applying = false;
     this.consentWarning = null;
     this.riskAcknowledged = false;
-    this.initialPrompt = undefined;
   }
 
   dispose() {
@@ -169,7 +167,6 @@ class TemplatesCatalogModel {
     this.addFailure = null;
     this.consentWarning = null;
     this.riskAcknowledged = false;
-    this.initialPrompt = undefined;
   }
 
   refresh() {
@@ -193,7 +190,6 @@ class TemplatesCatalogModel {
     if (!viewing) {
       this.resetSelection(failure.entry);
     }
-    this.initialPrompt = failure.initialPrompt;
     if (failure.trustWarning) {
       // Ask before acknowledging: the audit and its decision appear with the Template.
       this.consentWarning = failure.trustWarning;
@@ -256,7 +252,6 @@ class TemplatesCatalogModel {
         {
           entry,
           source,
-          ...(this.initialPrompt ? { initialPrompt: this.initialPrompt } : {}),
           agentId: detail?.agentId ?? entry.packageName.split("/").at(-1) ?? "template",
           ...(detail?.agentName ? { agentName: detail.agentName } : {}),
           ...(!detail ? { resolveAgent: () => readTemplateDetail(scope.client, source) } : {}),
@@ -334,12 +329,6 @@ class TemplatesCatalogModel {
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
         this.riskAcknowledged = false;
-        this.initialPrompt = undefined;
-        return this.add();
-      },
-      onSelectPrompt: (prompt) => {
-        this.initialPrompt = prompt;
-        this.riskAcknowledged = false;
         return this.add();
       },
       onConfirmConsent: () => {
@@ -350,7 +339,6 @@ class TemplatesCatalogModel {
       onCancelConsent: () => {
         this.consentWarning = null;
         this.riskAcknowledged = false;
-        this.initialPrompt = undefined;
       },
     };
   }
@@ -448,10 +436,6 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       detailRequest={detailRequest()}
       applying={applying() && view().applying}
       onConfirm={() => mutate(view().onConfirm)}
-      onSelectPrompt={(prompt) => {
-        const selectPrompt = view().onSelectPrompt;
-        mutate(() => selectPrompt(prompt));
-      }}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}
     />
   );

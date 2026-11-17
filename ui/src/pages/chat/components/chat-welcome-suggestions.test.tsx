@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import type { WelcomeRecentSession } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
 
 type OperatorAuth = { role?: string; scopes?: readonly string[] } | null;
@@ -62,10 +63,11 @@ describe("chat welcome starter prompts", () => {
   });
 });
 
-it("uses selected-agent copy and keeps custom starters beside recents without sending on mount", () => {
+it("uses selected-agent starters only without recents and sends only a clicked starter", () => {
   const onDraftChange = vi.fn();
   const onSend = vi.fn();
   const [agentId, selectAgent] = createSignal("briefing");
+  const [recents, setRecents] = createSignal<WelcomeRecentSession[]>([]);
   const agents = [
     {
       id: "briefing",
@@ -86,21 +88,14 @@ it("uses selected-agent copy and keeps custom starters beside recents without se
       assistantName="Assistant"
       assistantAvatar={null}
       hint="Choose where to work."
-      preparedRecents={[
-        {
-          key: "agent:briefing:dashboard:recent",
-          name: "Recent work",
-          subtitle: undefined,
-          updatedAt: 0,
-        },
-      ]}
+      preparedRecents={recents()}
       onDraftChange={onDraftChange}
       onSend={onSend}
     />
   ));
   expect(view.container.textContent).toContain("Follows your repositories.");
   expect(view.container.textContent).toContain("Choose where to work.");
-  expect(view.container.textContent).toContain("Recent work");
+  expect(view.container.textContent).not.toContain("Recent work");
   const suggestions = () => [
     ...view.container.querySelectorAll<HTMLButtonElement>(".agent-chat__suggestion"),
   ];
@@ -112,6 +107,19 @@ it("uses selected-agent copy and keeps custom starters beside recents without se
   suggestions()[1]!.click();
   expect(onDraftChange).toHaveBeenCalledWith("Show my tracked projects");
   expect(onSend).toHaveBeenCalledOnce();
+  setRecents([
+    {
+      key: "agent:briefing:dashboard:recent",
+      name: "Recent work",
+      subtitle: undefined,
+      updatedAt: 0,
+    },
+  ]);
+  flush();
+  expect(view.container.textContent).toContain("Recent work");
+  expect(suggestions()).toHaveLength(0);
+  setRecents([]);
+  flush();
   selectAgent("research");
   flush();
   expect(view.container.textContent).not.toContain("Follows your repositories.");
@@ -119,7 +127,7 @@ it("uses selected-agent copy and keeps custom starters beside recents without se
   selectAgent("plain");
   flush();
   expect(view.container.textContent).not.toContain("Researches questions.");
-  expect(suggestions()).toHaveLength(0);
+  expect(suggestions()).toHaveLength(4);
 });
 
 it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata", (variant) => {
@@ -140,9 +148,7 @@ it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata
     />
   ));
   expect(view.container.textContent).not.toContain("Private recent chat");
-  expect(view.container.querySelectorAll(".agent-chat__suggestion")).toHaveLength(
-    variant === "incognito" ? 1 : 0,
-  );
+  expect(view.container.querySelectorAll(".agent-chat__suggestion")).toHaveLength(0);
   expect(view.container.textContent?.includes("Tracks repositories.")).toBe(
     variant === "incognito",
   );

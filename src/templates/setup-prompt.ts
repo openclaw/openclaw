@@ -24,7 +24,6 @@ export function buildTemplateOpeningMessage(
   report: TemplateSetupReport,
   agent: { agentId: string; sessionKey: string },
   dependenciesPending = false,
-  initialPrompt?: string,
 ): string {
   const declarationKey = `template:${agent.agentId}:<entry id>`;
   const addAutomation = JSON.stringify({
@@ -71,16 +70,10 @@ export function buildTemplateOpeningMessage(
           )}. Tell the user each one by name with its reason.`,
         ]
       : []),
-    "Author's opening. If your workspace has a `BOOTSTRAP.md` (it may already be in your context as pending), it is the author's first-run script. For this trusted Template setup turn, the steps above come first and it comes last. End with what it asks of a first message, keeping the two rules. " +
-      (initialPrompt
-        ? "Then follow the selected-task instructions below."
-        : "If there is none, end by inviting the user to begin."),
+    "Author's opening. If your workspace has a `BOOTSTRAP.md` (it may already be in your context as pending), it is the author's first-run script. For this trusted Template setup turn, the steps above come first and it comes last. End with what it asks of a first message, keeping the two rules. If there is none, end by inviting the user to begin.",
   ];
   return [
-    "Template setup (Gateway internal_system, sourceTool=template_add_setup). You were just created from a Template. The Gateway sent this message; the user cannot see it. Your workspace files and active agent configuration are ready. " +
-      (initialPrompt
-        ? "Begin conversational setup now; interactive bootstrap may continue across replies. Use your ordinary tools."
-        : "Finish conversational setup now, in this one turn, with your ordinary tools."),
+    "Template setup (Gateway internal_system, sourceTool=template_add_setup). You were just created from a Template. The Gateway sent this message; the user cannot see it. Your workspace files and active agent configuration are ready. Finish conversational setup now, in this one turn, with your ordinary tools.",
     ...(dependenciesPending
       ? [
           "The Gateway is still installing declared skills, bundled plugins and MCP servers alongside this turn. Do not wait for, inspect, install, or report those pending dependencies. Do not claim they are ready. Installation results that need attention will arrive in a separate internal message after this turn; a newly installed skill may become available on the next turn.",
@@ -95,13 +88,6 @@ export function buildTemplateOpeningMessage(
     ...steps.map((step, index) => `${index + 1}. ${step}`),
     "Report nothing else about setup: skills and files that were created need no mention. Present plugin cards directly, without announcing or narrating the card/tool operation (for example, ‘I’ll try to show its review card’). Do not repeat a card’s name or installation status as surrounding prose. Keep useful status for plugins that have no card, such as installed-but-disabled plugins, and report an actual card lookup failure honestly.",
     'Sending: send the greeting first, before any setup work. A card appears in the chat the moment you call `message`. So when you show any card, send any unsent status for the earlier steps with `message` ({"action":"send","final":false,"message":"..."}), then the cards, and put the later steps in your final reply. When there is no card, put the remaining status and author’s opening in your final reply. Every intermediate message call, including cards, must use final:false or it finishes the source turn. Never repeat text you already sent, and always end with a final reply.',
-    ...(initialPrompt
-      ? [
-          "Selected task. After the setup steps above: First complete BOOTSTRAP.md, if present. Ask any required setup questions and wait for the user's answers; continue bootstrap across replies as needed. Do not skip setup to carry out the selected task, or try to finish an interactive bootstrap in this one turn.",
-          "Once bootstrap is complete, address the initial prompt the user selected below in this same conversation. If bootstrap is already complete or absent, address it now. This is the user's deferred task, not a replacement for bootstrap. Normal tool permissions and approvals still apply.",
-          "Selected initial prompt: " + JSON.stringify(initialPrompt),
-        ]
-      : []),
   ].join("\n\n");
 }
 

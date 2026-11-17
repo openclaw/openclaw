@@ -168,7 +168,7 @@ export async function continueTemplateSetup(
             setup.openingComplete
               ? Promise.resolve()
               : (async () => {
-                  await input.onAgentCreated?.(agent, setup.report, true, setup.initialPrompt);
+                  await input.onAgentCreated?.(agent, setup.report, true);
                   await save((current) => ({ ...current, openingComplete: true }));
                 })(),
             (async () => {
@@ -189,7 +189,7 @@ export async function continueTemplateSetup(
         assertCurrent();
         if (!setup.openingComplete) {
           // A failed first turn retries with the settled report, without reinstalling anything.
-          await input.onAgentCreated?.(agent, setup.report, undefined, setup.initialPrompt);
+          await input.onAgentCreated?.(agent, setup.report);
           await save((current) => ({ ...current, openingComplete: true }));
         }
         if (

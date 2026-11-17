@@ -13,8 +13,6 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
   source: ClawHubCoordinate;
   /** Retry the admitted agent; never allocate another identity. */
   resume?: true;
-  /** User-selected task, deferred until the author's bootstrap is complete. */
-  initialPrompt?: string;
   acknowledgeClawHubRisk?: boolean;
   getPlanningContext: () => Promise<GatewayTemplateAddPlanningContext>;
   assertCurrent: () => void;
@@ -33,7 +31,6 @@ export type ChatTemplateAddInput = ClawHubFetchOptions & {
     agent: { agentId: string; sessionKey: string },
     report: TemplateSetupReport,
     dependenciesPending?: true,
-    initialPrompt?: string,
   ) => Promise<void>;
   /** A separate hidden turn reports results after the opening, never concurrently with it. */
   onDependenciesSettled?: (

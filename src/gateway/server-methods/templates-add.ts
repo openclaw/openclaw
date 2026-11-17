@@ -208,11 +208,10 @@ export async function applyTemplateAddForRequest(
         ...("mode" in params
           ? {
               mode: params.mode,
-              ...(params.initialPrompt ? { initialPrompt: params.initialPrompt } : {}),
               ...(params.resume ? { resume: true as const } : {}),
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
-              onAgentCreated: async (agent, report, dependenciesPending, initialPrompt) => {
+              onAgentCreated: async (agent, report, dependenciesPending) => {
                 assertCurrent();
                 await measureTemplateAddStage(
                   "opening.total",
@@ -222,12 +221,7 @@ export async function applyTemplateAddForRequest(
                       agent.agentId,
                       agent.sessionKey,
                       "template",
-                      buildTemplateOpeningMessage(
-                        report,
-                        agent,
-                        dependenciesPending,
-                        initialPrompt,
-                      ),
+                      buildTemplateOpeningMessage(report, agent, dependenciesPending),
                       () => {
                         assertCurrent();
                         publishProgress("agent-ready", agent);

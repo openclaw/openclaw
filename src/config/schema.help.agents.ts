@@ -68,7 +68,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.description":
     "Optional agent purpose shown on the Control UI chat welcome screen.",
   "agents.entries.*.recommendedPrompts":
-    "Optional plain-text prompts shown on the chat welcome and Template install screens. Up to three entries, each at most 128 Unicode code points after whitespace normalization. Clicking a welcome prompt submits it; omitted or empty uses defaults.",
+    "Optional plain-text prompts on the agent chat welcome when no recent chats are available. Up to three entries, each at most 128 Unicode code points after whitespace normalization. Clicking a prompt submits it; omitted or empty uses defaults.",
   "agents.entries.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
   "agents.entries.*.nativeRuntimeConsent":

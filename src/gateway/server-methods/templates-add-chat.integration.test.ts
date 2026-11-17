@@ -725,7 +725,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
   await withGateway(async (gateway) => {
     deliver(await writeTemplate(gateway.root));
     greeting.mockRejectedValueOnce(new Error("Fixture first turn failed"));
-    const [ok, first] = await gateway.add({ ...chatAdd, initialPrompt: "Set up a repository" });
+    const [ok, first] = await gateway.add(chatAdd);
     expect(ok).toBe(true);
     expect(first).toMatchObject({
       agentId: "travel-copilot",
@@ -738,19 +738,9 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     const installs = skills.install.mock.calls.length;
     const sourceReads = resolveSource.mock.calls.length;
     const firstPrompt = greeting.mock.calls[0]![4];
-    expect(firstPrompt).toContain('Selected initial prompt: "Set up a repository"');
-    expect(firstPrompt).toContain("wait for the user's answers");
-    expect(
-      (await readSessionEntryReadOnlyInWorker({ agentId: "travel-copilot", sessionKey }))
-        ?.templateSetup?.initialPrompt,
-    ).toBe("Set up a repository");
     const release = Promise.withResolvers<void>();
     greeting.mockImplementationOnce(() => release.promise);
-    const retry = gateway.add({
-      ...chatAdd,
-      resume: true,
-      initialPrompt: "Do not replace my task",
-    });
+    const retry = gateway.add({ ...chatAdd, resume: true });
     await vi.waitFor(() => expect(greeting).toHaveBeenCalledTimes(2));
     const concurrent = gateway.add({ ...chatAdd, resume: true });
     release.resolve();
@@ -774,8 +764,6 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(greeting).toHaveBeenCalledTimes(2);
     expect(firstPrompt).toContain("still installing declared");
     expect(greeting.mock.calls[1]![4]).not.toContain("still installing declared");
-    expect(greeting.mock.calls[1]![4]).toContain('Selected initial prompt: "Set up a repository"');
-    expect(greeting.mock.calls[1]![4]).not.toContain("Do not replace my task");
     expect(greeting.mock.calls[1]![4]).toContain('The Gateway added these servers: ["docs"]');
 
     // The client can miss completion and retain its Retry action after the

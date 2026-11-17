@@ -12,7 +12,6 @@ import {
   renderPluginCapabilitySection,
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
-import { PluginRecommendedPrompts } from "../plugins/recommended-prompts.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
@@ -240,18 +239,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                       </Errored>
                     )}
                   </For>
-                }
-                recommendations={
-                  <PluginRecommendedPrompts
-                    id={selected().packageName}
-                    name={detail()?.agentName ?? selected().displayName}
-                    iconUrl={detail()?.iconUrl}
-                    prompts={detail()?.recommendedPrompts}
-                    fallbackIcon="blobster"
-                    disabled={!canAdd()}
-                    busy={view().applying}
-                    onSelect={(prompt) => void view().onSelectPrompt(prompt)}
-                  />
                 }
                 panel={
                   <>

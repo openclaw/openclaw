@@ -294,7 +294,6 @@ export async function createTemplateAgentFromChat(
                 await admitted.chat.complete?.({
                   source: input.source,
                   report,
-                  ...(input.initialPrompt ? { initialPrompt: input.initialPrompt } : {}),
                   dependenciesPending: true,
                 }),
             );

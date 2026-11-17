@@ -26,7 +26,6 @@ export type TemplatesCatalogViewProps = {
   onBack: () => void;
   onRetryDetail: () => void;
   onConfirm: () => void | Promise<void>;
-  onSelectPrompt: (prompt: string) => void | Promise<void>;
   onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
 };

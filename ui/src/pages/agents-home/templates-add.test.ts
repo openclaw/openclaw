@@ -270,31 +270,6 @@ describe("Template Add", () => {
     },
   );
 
-  it.each(["detail", "modal"] as const)(
-    "carries a selected task through %s Add and ClawHub confirmation",
-    async (surface) => {
-      const { find, request } = createAddSurface(surface, {
-        templatesEnabled: true,
-        riskConsentRequired: true,
-        recommendedPrompts: ["Set up a repository"],
-      });
-      const prompt = () => find(".plugin-recommended-prompts button");
-      await waitForSolid(() => expect(prompt()).toHaveProperty("disabled", false));
-      expect(prompt()!.querySelectorAll(".plugin-prompt-mention__icon svg circle")).toHaveLength(2);
-      prompt()!.click();
-      await waitForSolid(() => expect(find(".templates-trust-warning")).not.toBeNull());
-      const selected = { ...chatAdd, initialPrompt: "Set up a repository" };
-      expect(calls(request, "templates.add.apply")[0]![1]).toEqual(selected);
-      find(".templates-add-consent__actions .btn.primary")!.click();
-      await waitForSolid(() => expect(calls(request, "templates.add.apply")).toHaveLength(2));
-      expect(calls(request, "templates.add.apply")[1]![1]).toEqual({
-        ...selected,
-        acknowledgeClawHubRisk: true,
-      });
-      expect(calls(request, "templates.add.plan")).toHaveLength(0);
-    },
-  );
-
   it("isolates a successor pending chat from a disconnected Add's late result", async () => {
     const { find, request, navigate, context, setPhase } = createDetail({ templatesEnabled: true });
     await waitForSolid(() =>

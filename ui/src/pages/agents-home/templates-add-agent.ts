@@ -32,7 +32,6 @@ export type TemplateAddFailure = {
   message: string;
   /** ClawHub flagged this release; adding it needs the user's acknowledgement. */
   trustWarning?: string;
-  initialPrompt?: string;
 };
 
 // The catalog page that started an Add is gone once its chat opens. A failure
@@ -72,7 +71,6 @@ export async function addTemplateAgent(
     /** The declared id, or a presentation-only id while resolveAgent reads the release. */
     agentId: string;
     agentName?: string;
-    initialPrompt?: string;
     resolveAgent?: () => Promise<{ agentId: string }>;
   },
   acknowledgeClawHubRisk: boolean,
@@ -280,7 +278,6 @@ export async function addTemplateAgent(
       requestStarted = true;
       const result = await applyTemplateAdd(client, source, {
         agentId: requestAgentId,
-        ...(template.initialPrompt ? { initialPrompt: template.initialPrompt } : {}),
         ...(retry ? { resume: true as const } : {}),
         acknowledgeClawHubRisk,
         onSent: (id) => {
@@ -326,7 +323,6 @@ export async function addTemplateAgent(
         const failure: TemplateAddFailure = {
           entry: template.entry,
           message: formatUiError(error),
-          ...(template.initialPrompt ? { initialPrompt: template.initialPrompt } : {}),
           ...(trustWarning ? { trustWarning } : {}),
         };
         if (foreground) {

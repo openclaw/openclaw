@@ -3,7 +3,6 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
-import { RecommendedPromptsSchema, RecommendedPromptSchema } from "./recommended-prompts.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 const TemplatePackageName = Type.String({
@@ -117,7 +116,6 @@ export const TemplatesCatalogDetailSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
-  recommendedPrompts: Type.Optional(RecommendedPromptsSchema),
   workspaceFiles: Type.Integer({ minimum: 0 }),
   skills: Type.Integer({ minimum: 0 }),
   plugins: Type.Integer({ minimum: 0 }),
@@ -312,7 +310,6 @@ export const TemplatesAddApplyParamsSchema = Type.Union([
   // Gateway answers with the unused id it chose.
   closedObject({
     mode: Type.Literal("chat"),
-    initialPrompt: Type.Optional(RecommendedPromptSchema),
     source: TemplateCatalogCoordinateSchema,
     agentId: NonEmptyString,
     // Retry targets this admitted agent, even if the setup receipt was consumed.
