@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import {
   commandResult,
+  createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
@@ -19,6 +20,7 @@ import {
   createRealPublicationWorkspace,
   publicationPullRequestResponse,
 } from "./github-publication-git.test-support.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   createRequesterPolicyFixture,
   capturePublicationGuest,
@@ -229,6 +231,57 @@ it("recovers independent worktrees while preserving each worktree's publication 
   const calls = mocks.runCommand.mock.calls.length;
   await first.restart().resumeSessionRequests();
   expect(mocks.runCommand.mock.calls.slice(calls).filter(([argv]) => argv[0] === "gh")).toEqual([]);
+});
+
+it("selected recovery preserves original request order and another request’s native cooldown", async () => {
+  const f = await fixture("local");
+  const claim = await holdWorkerTurn(f);
+  const first = await f.coordinator.requestForSessionV2(f.request("earlier-request", f.guest));
+  const selected = await f.coordinator.requestForSessionV2(f.request("selected-request", f.guest));
+  expect([first.status, selected.status]).toEqual(["requested", "requested"]);
+  await f.placements.releaseTurn(claim);
+  const shared = createGitHubPublicationRecoveryBackoff();
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: f.placements,
+    recovery: { shared, repository: createGitHubPublicationRecoveryBackoff() },
+  });
+  // Establish a real owner-managed cooldown against an accepted receipt. No
+  // publication row, completion receipt, or backoff state is seeded by the test.
+  await expect(
+    shared.run(
+      f.readReceipt(first.requestId)!,
+      async () => {
+        throw new Error("Transient recovery unavailable");
+      },
+      async (result) => result,
+    ),
+  ).rejects.toThrow("Transient recovery unavailable");
+  const before = mocks.runCommand.mock.calls.length;
+  await coordinator.resumeSessionRequests(undefined, undefined, selected.requestId);
+  await coordinator.resumeSessionRequests(undefined, undefined, first.requestId);
+  expect(mocks.runCommand.mock.calls).toHaveLength(before);
+  expect([
+    f.readReceipt(first.requestId)?.status,
+    f.readReceipt(selected.requestId)?.status,
+  ]).toEqual(["requested", "requested"]);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now + 61_000);
+  try {
+    await coordinator.resumeSessionRequests(undefined, undefined, first.requestId);
+    expect(await coordinator.readAsync(first.requestId)).toMatchObject({
+      requestId: first.requestId,
+      status: "published",
+    });
+    expect(f.readReceipt(selected.requestId)?.status).toBe("requested");
+    await coordinator.resumeSessionRequests(undefined, undefined, selected.requestId);
+    expect(await coordinator.readAsync(selected.requestId)).toMatchObject({
+      requestId: selected.requestId,
+      status: "published",
+    });
+    expect(f.publishedTitles).toEqual(["earlier-request"]);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it.each(["local", "repository"] as const)(

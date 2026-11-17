@@ -11,6 +11,7 @@ import type {
   SessionActorHotState,
   SessionActorPendingFinalDelivery,
 } from "./session-actor-contract.js";
+import { restoreSessionActorCommittedOutcome } from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
@@ -287,7 +288,16 @@ it("installs native commits before reply, retains known commits after reply fail
     });
     expect(f.receipt()).toMatchObject({
       kind: "native-commit",
-      committed: { facts: { kind: "committed", receipt: committed.receipt } },
+      committed: {
+        facts: {
+          kind: "committed",
+          receipt: {
+            entryReference: initial.writeToken,
+            entryDelta: { values: [["updatedAt", 10]], removed: [] },
+            postimage: { entry: undefined },
+          },
+        },
+      },
     });
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.afterTransaction;
@@ -486,7 +496,10 @@ it.each([
           ? { type: "session.actor.acceptInput", input }
           : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
       await f.prepare(command);
-      const committed = expectCommitted(f.mutate(command));
+      const committed = restoreSessionActorCommittedOutcome(
+        expectCommitted(f.mutate(command)),
+        before,
+      );
       expect(committed.receipt.postimage).toEqual(f.read(target));
       expect(committed.receipt.postimage).toMatchObject({
         entry: { sessionId, startedAt: 2 },

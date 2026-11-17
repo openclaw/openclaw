@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
@@ -95,6 +96,45 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves delivered replies when consumption bookkeeping fails", async () => {
+    setChildren();
+    const failure = new Error("consumption registry write failed");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await expect(input.onTranscriptCommitted!("requester-continuation")).rejects.toBe(failure);
+      expect(input.custody.failure).toBe(failure);
+      return { delivered: true, path: "direct" };
+    });
+    await expectWake({
+      recordRequesterDelivery: async () => {
+        throw failure;
+      },
+    });
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
+    setChildren();
+    const failure = new Error("Requester wake batch changed before its outcome was recorded");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      throw new Error("unreachable");
+    });
+    await expect(
+      wake({
+        transitionBatch: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect([...sessionControllerMailboxes()].flatMap((mailbox) => mailbox.entries)).toEqual([]);
+  });
+
   it("preserves route notices from compacted completed siblings in the requester message", async () => {
     const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
     const { buildRequesterSettleWakeMessage } =
@@ -417,37 +457,104 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       requesterTurnRunId,
     ]);
   });
-  it("records a transcript turn assertion as one permanent completion failure", async () => {
+  it.each([undefined, "ambiguous", "retryable"] as const)(
+    "keeps a result the failed turn never committed owed: %s",
+    async (disposition) => {
+      const children = setChildren();
+      deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct", disposition });
+      expect(await wake()).toBe(false);
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+      expect(children[0]?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+        lastError: "undelivered",
+      });
+      // No attempt limit or delay: the next wake runs the same owed batch again.
+      expect(await wake()).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
+      expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
+    },
+  );
+  it.each([
+    ["a permanent refusal", { delivered: false, path: "direct", disposition: "permanent_failure" }],
+    ["a closed-turn transcript rejection", "throw"],
+  ] as const)("withholds a result after %s, without dispatching it again", async (_, outcome) => {
     setChildren();
     const error = "Session transcript keyed user is outside the current turn: old-input";
     deliverSpy.mockImplementationOnce(async (params) => {
       await prepareDispatch(params);
-      throw new Error(error);
+      if (outcome === "throw") {
+        throw new Error(error);
+      }
+      return { ...outcome };
     });
     expect(await wake()).toBe(false);
-    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy.mock.calls[0]?.[2]).toMatchObject({
       delivered: false,
-      path: "none",
       disposition: "permanent_failure",
-      error,
     });
     expect(await wake()).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy).toHaveBeenCalledOnce();
   });
-  it.each([undefined, "ambiguous", "permanent_failure"] as const)(
-    "does not retry an unknown or terminal delivery failure: %s",
-    async (disposition) => {
-      setChildren();
-      const failure = { delivered: false, path: "direct", disposition } as const;
-      deliverSpy.mockResolvedValueOnce({ ...failure });
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledTimes(1);
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, failure);
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledOnce();
-    },
-  );
+  it("delivers a result that a failed turn already committed to the transcript", async () => {
+    const children = setChildren();
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await input.onTranscriptCommitted!("requester-continuation");
+      return { delivered: false, path: "direct", disposition: "permanent_failure", error: "529" };
+    });
+    expect(
+      await wake({
+        recordRequesterDelivery: async (batch, fact) => {
+          for (const entry of batch) {
+            entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+          }
+        },
+      }),
+    ).toBe(true);
+    expect(children.every((child) => child.delivery?.requesterDelivery?.state === "consumed")).toBe(
+      true,
+    );
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+  it("keeps an answer that missed its channel failed, without replaying the committed result", async () => {
+    setChildren();
+    const failure = {
+      delivered: false,
+      path: "direct",
+      error: "channel send failed",
+      finalAssistantVisibleText: "parent answer",
+    } as const;
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await input.onTranscriptCommitted!("requester-continuation");
+      return { ...failure };
+    });
+    const recordRequesterDelivery: NonNullable<
+      NonNullable<Parameters<typeof wake>[0]>["recordRequesterDelivery"]
+    > = async (batch, fact) => {
+      for (const entry of batch) {
+        entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+      }
+    };
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b"],
+      undefined,
+      failure,
+    );
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+  });
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({

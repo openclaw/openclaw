@@ -482,9 +482,11 @@ jobs:
             throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
           }
           NODE
+          publish_workflow_path="$(gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq .path)"
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion,headSha,jobs \
-            > "$RUNNER_TEMP/release-publish-run.json"
+            --json event,status,conclusion,headSha,jobs | \
+            jq --arg path "$publish_workflow_path" '. + {path: $path}' \
+              > "$RUNNER_TEMP/release-publish-run.json"
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -525,7 +527,7 @@ jobs:
           import { basename } from "node:path";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
-            ["workflowName", "OpenClaw Release Publish"],
+            ["path", ".github/workflows/openclaw-release-publish.yml"],
             ["event", "workflow_dispatch"],
             ["status", "completed"],
           ]) {

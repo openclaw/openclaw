@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "socket": {},
+  "defaults": {},
+  "agents": {
+    "main": {
+      "allowlist": [
+        {
+          "pattern": "/usr/bin/git",
+          "lastUsedAt": 1794580482145,
+          "id": "aeb453c9-2af2-4d4b-9581-49737ec5ef16"
+        }
+      ]
+    },
+    "ops": {
+      "allowlist": [
+        {
+          "pattern": "/usr/bin/rg",
+          "lastUsedAt": 1794580496435
+        }
+      ]
+    }
+  }
+}

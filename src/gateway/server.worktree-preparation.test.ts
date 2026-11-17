@@ -33,6 +33,7 @@ import {
 import * as writerQueue from "../shared/store-writer-queue.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -235,7 +236,11 @@ it("shares source waiting through preparation and final binding without charging
     let waiting: { elapsedMs: number; advanced: boolean; release: () => Promise<void> } | undefined;
     const holdSource = async (elapsedMs: number) => {
       const gate = createRequestGate();
-      const settled = withProjectCheckoutLifecycle(project.repoRoot, {}, gate.pause);
+      const settled = withProjectCheckoutLifecycle(
+        project.repoRoot,
+        { context: captureOpenClawStateWorkerContext() },
+        gate.pause,
+      );
       holders.push({ release: gate.release, settled });
       await withinTest(
         awaitGateBeforeSettlement(gate.entered, settled, "Source holder did not acquire custody"),
@@ -498,7 +503,11 @@ it.for([false, true])(
           fixture.caller.abort(new Error("Cancelled after binding committed"));
         }
         await expect(
-          withProjectCheckoutLifecycle(state.workspaceDir, { waitMs: 0 }, async () => {}),
+          withProjectCheckoutLifecycle(
+            state.workspaceDir,
+            { context: captureOpenClawStateWorkerContext(), waitMs: 0 },
+            async () => {},
+          ),
         ).rejects.toBeInstanceOf(ProjectCheckoutBusyError);
         expect(settled).toBe(false);
       } finally {

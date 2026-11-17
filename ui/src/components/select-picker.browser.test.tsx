@@ -91,7 +91,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
     await expect.poll(first).not.toBeNull();
     const original = first();
-    picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
     await expect.poll(() => picker.querySelector(".picker-select__search")).not.toBeNull();
     const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
     await page.elementLocator(search).fill("Model");
@@ -333,19 +332,21 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       for (const picker of pickers) {
         const trigger = picker.querySelector<HTMLButtonElement>("button")!;
         await page.elementLocator(trigger).click();
-        await expect.poll(() => picker.querySelector(".header-search__toggle")).not.toBeNull();
-        picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
         await expect.poll(() => picker.querySelector('input[role="combobox"]')).not.toBeNull();
         const search = picker.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+        if (width === 390) {
+          // A phone sheet leaves its field unfocused until it is tapped.
+          await page.elementLocator(search).click();
+        }
         await expect.element(search).toHaveFocus();
         expect(getComputedStyle(search).direction).toBe(direction);
         expect(getComputedStyle(search).textAlign).toBe("start");
         await page.elementLocator(search).fill("one");
         expect(getComputedStyle(search).textAlign).toBe("start");
+        // Escape clears the query and stays in the field; a second Escape closes.
         await userEvent.keyboard("{Escape}");
-        await expect
-          .element(picker.querySelector<HTMLButtonElement>(".header-search__toggle")!)
-          .toHaveFocus();
+        expect(search.value).toBe("");
+        await expect.element(search).toHaveFocus();
         await userEvent.keyboard("{Escape}");
         await expect.element(trigger).toHaveFocus();
       }
@@ -477,7 +478,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         if (width === 1280) {
           expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);
         }
-        picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
         await expect.poll(() => picker.querySelector(".picker-select__search")).not.toBeNull();
         const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
         await page.elementLocator(search).fill("long provider");
@@ -518,7 +518,6 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     const utility = role("button", "Utility Model: retired/not-offered");
     await expect.element(utility).toBeVisible();
     await utility.click();
-    await role("button", "Search").click();
     await role("combobox", "Search").fill("retired/not-offered");
     await userEvent.keyboard("{Enter}");
     expect(utilityChange).not.toHaveBeenCalled();
@@ -541,13 +540,14 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       );
       const trigger = role("button", "Model: anchor");
       await trigger.click();
-      await expect.element(role("listbox", "Model")).toHaveFocus();
+      // The anchored menu opens in its search field.
+      await expect.element(role("combobox", "Search")).toHaveFocus();
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
       await page.viewport(390, 844);
       expect(scrollX).toBe(0);
       await trigger.click();
-      await expect.element(role("listbox", "Model")).toHaveFocus();
+      await expect.element(role("combobox", "Search")).toHaveFocus();
       const bounds = picker.querySelector("button")!.getBoundingClientRect();
       expect(scrollX).toBe(0);
       expect(bounds.left).toBeGreaterThanOrEqual(0);
@@ -582,7 +582,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       );
       let trigger = role("button", "Decision model: Alpha decision model");
       await trigger.click();
-      await expect.element(role("button", "Search")).toBeVisible();
+      await expect.element(role("combobox", "Search")).toHaveFocus();
       const alpha = role("button", "Alpha 1");
       await userEvent.keyboard("{Tab}");
       await expect.element(alpha).toHaveFocus();

@@ -292,7 +292,6 @@ export async function proveAggregateWorkspaceRecovery({
       "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
-  await fs.writeFile(path.join(projection, ".gitignore"), ".env.local\n**/bin/\n**/obj/\n");
   for (const relative of artifacts) {
     const file = path.join(projection, relative);
     await fs.mkdir(path.dirname(file), { recursive: true });

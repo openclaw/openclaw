@@ -62,7 +62,7 @@ async function readCompletionProfile(
   const filePath = await fs.realpath(profilePath);
   const { buffer, stat, exactIdentity } = await readRegularFile({ filePath });
   let encoding: CompletionProfileEncoding = "utf8";
-  if (shell === "powershell" && process.platform === "win32") {
+  if (shell === "powershell") {
     const [first, second, third] = buffer;
     if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
       encoding = first === 0xff ? "utf16le" : "utf16be";
@@ -433,9 +433,8 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
     );
   }
   return appendCompletionProfilePath(
-    home,
+    env.XDG_CONFIG_HOME || appendCompletionProfilePath(home, pathApi, ".config"),
     pathApi,
-    ".config",
     "powershell",
     "Microsoft.PowerShell_profile.ps1",
   );

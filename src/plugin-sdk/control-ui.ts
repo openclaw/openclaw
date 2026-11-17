@@ -113,6 +113,12 @@ export type ControlUiSurfaceProps = {
     stream: string | null;
     loading: boolean;
   };
+  /** Only the feedback action/receipt beside a terminal run failure, not its details or recovery. */
+  "run-failure-feedback": BoardGetParams & {
+    /** The exact displayed failure, including when adjacent failures are grouped. */
+    runId: string;
+    repeatCount: number;
+  };
   "tool-result": BoardGetParams & {
     toolName: string;
     toolCallId: string;
@@ -190,6 +196,8 @@ type ControlUiInlineView = {
 export type ControlUiPanel = {
   id: string;
   label: string;
+  /** Fixed host icon-registry name; unknown/omitted names fall back to plug. Manifest SVG artwork takes precedence. */
+  icon?: string;
   mount: ControlUiView<BoardGetParams>;
 };
 

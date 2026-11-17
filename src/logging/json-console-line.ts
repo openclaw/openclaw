@@ -29,6 +29,10 @@ export function formatConsoleDiagnosticLine(params: { level: LogLevel; message: 
   return style === "json" ? formatJsonConsoleLine(params) : params.message;
 }
 
+export function writeConsoleDiagnosticWarning(message: string): void {
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+}
+
 /** Preserves human diagnostic blocks while serializing the whole block as one JSONL record. */
 export function formatConsoleDiagnosticBlock(params: { message: string }): string {
   const override = loggingState.overrideSettings as { consoleStyle?: unknown } | null;

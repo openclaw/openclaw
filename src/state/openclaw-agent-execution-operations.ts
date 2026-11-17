@@ -14,6 +14,7 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { readTrajectoryRuntimeRetentionLease } from "../trajectory/runtime-retention.contract.js";
 import type { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
+import { loadAgentToolUsageOperations } from "./openclaw-agent-execution-tool-usage.worker.js";
 import {
   initializeReplacementTranscript,
   loadAgentTranscriptOperations,
@@ -31,14 +32,21 @@ import type {
 type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
 
 async function loadAgentReplacementOperations() {
-  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers, predicates] =
-    await Promise.all([
-      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-      import("../config/sessions/session-entry-publication-source.js"),
-      import("../config/sessions/session-native-binding.worker.js"),
-      import("../config/sessions/session-entry-patch.worker.js"),
-      import("../config/sessions/session-source-predicate.worker.js"),
-    ]);
+  const [
+    kernel,
+    publications,
+    { sealSessionEntryPublicationSource },
+    nativeBindings,
+    transfers,
+    predicates,
+  ] = await Promise.all([
+    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+    import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
+    import("../config/sessions/session-entry-publication-source.js"),
+    import("../config/sessions/session-native-binding.worker.js"),
+    import("../config/sessions/session-entry-patch.worker.js"),
+    import("../config/sessions/session-source-predicate.worker.js"),
+  ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
@@ -69,15 +77,19 @@ async function loadAgentReplacementOperations() {
           undefined,
           postimages,
         );
-        const publication = kernel.prepareSessionEntryReplacementPublication(result, current, {
-          captureFullFacts: true,
-          postimages,
-        });
+        const publication = publications.prepareSessionEntryReplacementPublication(
+          result,
+          current,
+          {
+            captureFullFacts: true,
+            postimages,
+          },
+        );
         const candidate = { maintenancePlans: result.maintenancePlans, publication };
         if (publication.source && publication.fullEntries?.size) {
           sealSessionEntryPublicationSource(publication.source);
         }
-        kernel.boundSessionEntryReplacementPublication(publication, candidate);
+        publications.boundSessionEntryReplacementPublication(publication, candidate);
         return candidate;
       };
       if (input.nativeBindings) {
@@ -191,7 +203,10 @@ async function loadAgentMaintenanceFinalizationOperations() {
 
 async function loadAgentMessageCutOperations() {
   const kernel = await import("../config/sessions/session-message-cut.worker.js");
-  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+  return {
+    "session.messageCut.commit": kernel.commitSessionMessageCut,
+    "session.messageCut.preflight": kernel.preflightSessionMessageCut,
+  } satisfies Handlers;
 }
 
 async function loadAgentNativeBindingOperations() {
@@ -504,6 +519,7 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
+    "session.messageCut.preflight": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "trajectory.retention.begin": loadAgentTrajectoryOperations,
     "trajectory.retention.delete": loadAgentTrajectoryOperations,
@@ -513,6 +529,7 @@ export function createAgentWorkerOperationLoaders(
     "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
     "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
     "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.replayGroups.read": loadAgentTranscriptReadOperations,
     "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
     "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
     "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
@@ -533,6 +550,10 @@ export function createAgentWorkerOperationLoaders(
     "session.archivePruning.reclaimPages": loadAgentArchivePruningOperations,
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
+    "toolUsage.prune": loadAgentToolUsageOperations,
+    "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.reset": loadAgentToolUsageOperations,
+    "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,

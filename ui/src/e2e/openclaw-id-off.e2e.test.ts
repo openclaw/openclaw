@@ -6,6 +6,7 @@ import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-u
 import type { OpenClawIdSignedIn } from "../lib/openclaw-id/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -67,37 +68,52 @@ async function seedStaleAccount(page: Page) {
 
 suite.define(() => {
   it("hands off an enabled anonymous callback without private bootstrap or Gateway startup", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      // Mirror the HTTP-proven public attributes in the document before parsing starts.
-      await page.route("**/openclaw-id/callback?*", async (route) => {
-        const response = await page.request.get(suite.server.baseUrl);
-        const body = (await response.text()).replace(
-          /<html\b/i,
-          '<html data-openclaw-id-enabled="true" data-openclaw-control-ui-base-path=""',
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
+      async ({ page }) => {
+        await page.addInitScript((gatewayUrl) => {
+          localStorage.setItem(
+            `openclaw.control.settings.v1:${gatewayUrl}`,
+            JSON.stringify({ gatewayUrl, theme: "absolutely", themeMode: "system" }),
+          );
+        }, controlUiBundledGatewayUrl(suite.server.baseUrl));
+        // Mirror the HTTP-proven public attributes in the document before parsing starts.
+        await page.route("**/openclaw-id/callback?*", async (route) => {
+          const response = await page.request.get(suite.server.baseUrl);
+          const body = (await response.text()).replace(
+            /<html\b/i,
+            '<html data-openclaw-id-enabled="true" data-openclaw-control-ui-base-path=""',
+          );
+          await route.fulfill({ response, body });
+        });
+        const sockets: string[] = [];
+        page.on("websocket", (socket) => sockets.push(socket.url()));
+        await page.goto(
+          `${suite.server.baseUrl}openclaw-id/callback?state=synthetic-callback&code=synthetic-code`,
         );
-        await route.fulfill({ response, body });
-      });
-      const sockets: string[] = [];
-      page.on("websocket", (socket) => sockets.push(socket.url()));
-      await page.goto(
-        `${suite.server.baseUrl}openclaw-id/callback?state=synthetic-callback&code=synthetic-code`,
-      );
-      await page.getByText("Signed in. You can close this window.", { exact: true }).waitFor();
-      expect(
-        await page.evaluate(() =>
-          document.documentElement.hasAttribute("data-openclaw-bootstrap-config"),
-        ),
-      ).toBe(false);
-      expect(
-        await page.evaluate(() =>
-          JSON.parse(
-            localStorage.getItem("openclaw.openclawId.callback.synthetic-callback") ?? "null",
+        await page.getByText("Signed in. You can close this window.", { exact: true }).waitFor();
+        expect(
+          await page.evaluate(() =>
+            document.documentElement.hasAttribute("data-openclaw-bootstrap-config"),
           ),
-        ),
-      ).toEqual({ state: "synthetic-callback", code: "synthetic-code", error: null });
-      expect(new URL(page.url()).search).toBe("");
-      expect(sockets).toEqual([]);
-    });
+        ).toBe(false);
+        expect(
+          await page.evaluate(() =>
+            JSON.parse(
+              localStorage.getItem("openclaw.openclawId.callback.synthetic-callback") ?? "null",
+            ),
+          ),
+        ).toEqual({ state: "synthetic-callback", code: "synthetic-code", error: null });
+        expect(await page.locator("html").getAttribute("data-theme")).toBe("absolutely");
+        await page.waitForFunction(() =>
+          [...document.fonts].some(
+            (font) => font.family === "Space Grotesk" && font.status === "loaded",
+          ),
+        );
+        expect(new URL(page.url()).search).toBe("");
+        expect(sockets).toEqual([]);
+      },
+    );
   });
   it.each(["absent", "false"] as const)(
     "keeps ordinary surfaces and traffic unchanged with gateway.openclawId.enabled %s",

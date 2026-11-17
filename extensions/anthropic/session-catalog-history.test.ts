@@ -83,7 +83,7 @@ it("keeps parsed timestamps and offsets invalid ones in import order", async () 
 
 it.each([
   ["reasoning", []],
-  ["toolCall", [[{ type: "text", text: "Tool call\n\n[Unsupported Claude transcript item]" }]]],
+  ["toolCall", [[{ type: "text", text: "Tool call\n\n[Unsupported Claude chat history item]" }]]],
 ] as const)("projects empty %s records", async (type, content) => {
   await importItems([{ type }]);
   expect(appended.map((message) => message.content)).toEqual(content);

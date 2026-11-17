@@ -90,7 +90,7 @@ const plannerCalls = await coverage.post("Profiler.takePreciseCoverage").then(sa
       const execution = (provider: string) =>
         plannerObservation +
         `
-require("node:v8").queryObjects(WeakRef);
+require(${JSON.stringify(path.resolve(import.meta.dirname, "../test-utils/retention.ts"))}).forceFullGc();
 const retainedPayloads = globalThis[Symbol.for("catalog.reuse.payloads")];
 const activePayload = retainedPayloads.at(-1);
 const currentPayload = activePayload.ref.deref();

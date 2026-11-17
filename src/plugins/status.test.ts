@@ -33,6 +33,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.config,
   loadConfig: mocks.config,
 }));
+vi.mock("../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: mocks.config,
+}));
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginMetadataSnapshot: mocks.metadataSnapshot,
 }));

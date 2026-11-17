@@ -12,11 +12,9 @@ export type ChatClawHubCardProps = {
   agentId?: string;
 };
 
-const CardBody = lazy(() =>
-  import("./chat-clawhub-card-body.tsx").then(({ ChatClawHubCardBody }) => ({
-    default: ChatClawHubCardBody,
-  })),
-);
+const CardBody = lazy(() => import("./chat-clawhub-card-body.tsx"), {
+  export: "ChatClawHubCardBody",
+});
 
 export function ChatClawHubCard(props: ChatClawHubCardProps) {
   const context = useApplication();
@@ -50,28 +48,30 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                   type="button"
                   onClick={() => openListing()}
                 >
-                  <span class="chat-clawhub-card__icon skeleton" aria-hidden="true" />
+                  <span class="chat-clawhub-card__icon muted skeleton" aria-hidden="true" />
                   <span class="chat-clawhub-card__identity">
                     <span class="card-title chat-clawhub-card__name">
                       <span>{card().name}</span>{" "}
-                      <span
-                        class="plugin-official-badge"
-                        role="img"
-                        aria-label={t("pluginsPage.official")}
-                        title={t("pluginsPage.official")}
-                      >
-                        <Icon name="badgeCheck" />
+                      <Show when={card().official}>
+                        <span
+                          class="plugin-official-badge"
+                          role="img"
+                          aria-label={t("pluginsPage.official")}
+                          title={t("pluginsPage.official")}
+                        >
+                          <Icon name="badgeCheck" />
+                        </span>
+                      </Show>
+                    </span>
+                    <span class="chat-clawhub-card__status muted" aria-live="polite">
+                      <span class="chat-clawhub-card__status-skeleton">
+                        <span class="btn__spinner" aria-hidden="true" />
+                        <span>{t("common.loading")}</span>
                       </span>
                     </span>
-                    <Show when={card().description}>
-                      {(description) => <span class="card-sub">{description()}</span>}
-                    </Show>
                   </span>
                 </button>
-                <div class="chat-clawhub-card__actions" aria-live="polite">
-                  <span class="skeleton chat-clawhub-card__status-skeleton" aria-hidden="true" />
-                  <span class="sr-only">{t("common.loading")}</span>
-                </div>
+                <div class="chat-clawhub-card__actions" style={{ "min-width": "170px" }} />
               </div>
             )}
           </Show>

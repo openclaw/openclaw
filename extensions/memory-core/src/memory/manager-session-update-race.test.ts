@@ -25,6 +25,7 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -593,6 +594,7 @@ describe("memory session update sync", () => {
   });
 
   it("purges a stale agent index after a sibling already removed their shared memory entry", async () => {
+    keepPublishedCacheDuplicates();
     const cfg = batchConfig();
     cfg.agents = {
       ...cfg.agents,

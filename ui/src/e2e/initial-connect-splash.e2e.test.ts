@@ -77,8 +77,15 @@ async function expectNoHorizontalOverflow(page: Page) {
 }
 
 async function proofContentPainted(page: Page, proof: Buffer, content: Locator): Promise<boolean> {
-  const contentBounds = await content.boundingBox();
-  expect(contentBounds).not.toBeNull();
+  const contentBounds = await content.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      x: bounds.left + element.clientLeft,
+      y: bounds.top + element.clientTop,
+      width: element.clientWidth,
+      height: element.clientHeight,
+    };
+  });
   return page.evaluate(
     async ({ png, bounds }) => {
       const image = new Image();
@@ -95,7 +102,7 @@ async function proofContentPainted(page: Page, proof: Buffer, content: Locator):
         (value, index) => index % 4 !== 3 && Math.abs(value - pixels[index % 4]!) > 10,
       );
     },
-    { png: proof.toString("base64"), bounds: contentBounds! },
+    { png: proof.toString("base64"), bounds: contentBounds },
   );
 }
 
@@ -125,6 +132,8 @@ async function traceLoginGateMounts(page: Page) {
 suite.define(() => {
   it("keeps the themed connection shell instead of the login gate while a configured token connects", async () => {
     const page = await createPage();
+    await page.clock.install();
+    await pauseVirtualClock(page);
     await page.addInitScript(() => {
       localStorage.setItem(
         `openclaw.control.settings.v1:ws://${location.hostname}:18789`,
@@ -138,8 +147,20 @@ suite.define(() => {
         loginModuleRequests.push(request.url());
       }
     });
-    const gateway = await connect(page, "#token=e2e-shared-token");
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    await page.goto(suite.server.baseUrl + "#token=e2e-shared-token", {
+      waitUntil: "domcontentloaded",
+    });
     const connection = page.locator('.gateway-connection-view[data-connection-state="connecting"]');
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return {
+          attempts: (await gateway.getRequests("connect")).length,
+          visible: await connection.isVisible(),
+        };
+      })
+      .toEqual({ attempts: 1, visible: true });
     await connection.waitFor();
     await connection
       .getByRole("heading", { name: "Connecting to OpenClaw", exact: true })
@@ -166,6 +187,12 @@ suite.define(() => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.locator(".topbar--navigation-locked").waitFor();
+    expect(
+      await page
+        .locator(".topbar-connection-brand svg")
+        .filter({ visible: true })
+        .evaluate((element) => (element as SVGSVGElement).getBBox().width),
+    ).toBeGreaterThan(0);
     const navigation = page.locator(".shell-nav");
     expect(await navigation.getAttribute("aria-hidden")).toBe("true");
     expect(
@@ -189,6 +216,7 @@ suite.define(() => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
+    await page.clock.resume();
     await resolveConnect(page, gateway);
     expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
     expect(await page.locator(".connect-splash").count()).toBe(0);
@@ -220,9 +248,9 @@ suite.define(() => {
     const artifactDir = createControlUiE2eArtifactDir("boot-placeholder-parity");
     const placeholderFrame = async (root: Locator, phase: string) => {
       const skeleton = root.locator(".loading-skeleton");
-      const label = root.locator(".connect-splash__status");
-      expect(await label.textContent()).toBe("Loading…");
-      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton, label]);
+      // The skeleton alone signals loading; no generic label sits above the composer.
+      expect(await root.locator(".connect-splash__status").count()).toBe(0);
+      const png = await takeControlUiElementScreenshot(page, skeleton, [skeleton]);
       await writeFile(path.join(artifactDir, `${phase}.png`), png);
       // The live composer remains part of the frame without placeholder decoration.
       const geometry = await skeleton.evaluate((element) =>
@@ -233,7 +261,7 @@ suite.define(() => {
           },
         ),
       );
-      return { png: decodeProofPng(png), geometry, label: await label.boundingBox() };
+      return { png: decodeProofPng(png), geometry };
     };
 
     try {
@@ -255,7 +283,7 @@ suite.define(() => {
       await loadingState.waitFor();
       expect(await loadingState.getAttribute("role")).toBe("status");
       expect(await loadingState.getAttribute("aria-label")).toBe("Loading…");
-      expect((await loadingState.textContent())?.trim()).toBe("Loading…");
+      expect((await loadingState.textContent())?.trim()).toBe("");
       expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
 
       const skeleton = loadingState.locator(".loading-skeleton");
@@ -265,7 +293,6 @@ suite.define(() => {
       const routeLoading = await placeholderFrame(loadingState, "route");
       expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
       expect(routeLoading.geometry).toEqual(initial.geometry);
-      expect(routeLoading.label).toEqual(initial.label);
       expect(
         Buffer.from(routeLoading.png.data).equals(Buffer.from(initial.png.data)),
         "route loading preserves the document placeholder pixels",

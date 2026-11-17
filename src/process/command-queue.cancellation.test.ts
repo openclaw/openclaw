@@ -25,6 +25,7 @@ vi.mock("../logging/diagnostic-runtime.js", () => ({
 
 function makeEntry(sequence: number): QueueEntry {
   return {
+    lane: "fixture",
     task: async () => sequence,
     resolve: () => {},
     reject: () => {},

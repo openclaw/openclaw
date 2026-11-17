@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -24,6 +25,35 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 describe("shared-state disposal ownership", () => {
+  it("retires without waiting for a peer snapshot and leaves its WAL unsealed", () => {
+    const root = tempDirs.make("openclaw-state-pinned-close-");
+    const owner = openOpenClawStateDatabase({ path: path.join(root, "state.sqlite") });
+    owner.db.exec(
+      "INSERT INTO state_leases(scope, lease_key, owner, created_at, updated_at) VALUES ('close', 'fixture', 'before', 1, 1)",
+    );
+    using reader = openNodeSqliteDatabase(owner.path, { readOnly: true });
+    reader.exec("BEGIN");
+    const read = () => reader.prepare("SELECT owner FROM state_leases WHERE scope='close'").get();
+    expect(read()).toEqual({ owner: "before" });
+    owner.db.exec("UPDATE state_leases SET owner='after' WHERE scope='close'");
+
+    const started = performance.now();
+    cache.closeOpenClawStateDatabaseByPath(owner.path);
+    const elapsed = performance.now() - started;
+    expect(owner.db.isOpen).toBe(false);
+    expect(read()).toEqual({ owner: "before" });
+    expect(fs.statSync(`${owner.path}-wal`).size).toBeGreaterThan(0);
+    expect(readSqliteDatabaseCleanClose(owner.path)).toBe(false);
+    reader.close();
+    const reopened = openOpenClawStateDatabase({ path: owner.path });
+    expect(reopened.db.prepare("SELECT owner FROM state_leases WHERE scope='close'").get()).toEqual(
+      { owner: "after" },
+    );
+    cache.closeOpenClawStateDatabaseByPath(owner.path);
+    // The live reader must not consume the normal five-second write busy timeout.
+    expect(elapsed).toBeLessThan(1_000);
+  });
+
   it("disposes a revoked owner's exact handle without changing a successor SQLite family", async () => {
     await using cleanup = new AsyncDisposableStack();
     const root = tempDirs.make("openclaw-state-revoked-disposal-");

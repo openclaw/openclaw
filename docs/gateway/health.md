@@ -184,6 +184,14 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
+A direct loopback `GET /startupz` with the header `X-OpenClaw-Startup-Boot-Id: 1`
+can read `gatewayBootId` after startup settles. This is the Gateway boot ID in
+WebSocket hello and can correlate observations from one Gateway lifetime. Use the
+loopback listener and a loopback Host without credentials or an Origin header.
+Requests from an address already listed in `gateway.trustedProxies` omit the ID,
+including local probes from that address. A same-host reverse proxy should
+preserve forwarding evidence on relayed requests.
+
 Startup admits one resume input for each eligible session marked at graceful
 shutdown or retaining a persisted unfinished run from the immediately preceding
 Gateway lifetime with no live owner. Older orphaned runs are settled without
@@ -220,6 +228,8 @@ failed and ask you to restart the Gateway. The diagnosis is logged once and
 further worker launches fail immediately; ordinary worker crashes do not mark
 the runtime unavailable. A health or readiness check that finds the executable
 missing publishes the same diagnosis, even when resident workers still serve reads.
+Clients without `operator.admin` see `[redacted]` in `childRuntime.execPath` while
+the availability flag remains visible.
 
 For a service-managed Gateway, the lifecycle owner checks the effective service
 command's Node with a bounded `--version` probe. On macOS, the loaded launchd
@@ -253,6 +263,18 @@ for ordinary service start and traffic admission.
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 
 Unexpected channel exits use automatic restart backoff. Intentional stops cancel a pending retry; failed restart waits leave a stopped account with `restartPending: false` and the failure recorded in `lastError`.
+
+A previously connected channel can recover its transport without failing the
+whole Gateway. During the existing two-minute reconnect grace, `/readyz` stays
+`200` when all other readiness checks pass, and detailed responses include
+`degraded: ["discord"]` (or the affected channel IDs). Channel status retains
+`connected: false`, `lifecycle: "recovering"`, `healthState: "reconnect-grace"`,
+and the disconnect timestamp; transport logs record the reconnect attempts.
+The window starts at the first disconnect and retries do not renew it. Recovery
+clears degradation. An unrecovered channel fails readiness after the window,
+including while an agent run is active. Blocked or terminal failures bypass
+reconnect grace. Initial connection still uses the existing startup readiness
+rules; an account that has never connected is not a reconnecting account.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
@@ -333,12 +355,12 @@ The optional `cpuBreakdown` separates independent native counters:
   measured main and tracked worker CPU, clamped at zero. It includes untracked
   workers and native threads, not a measured worker category.
 
-Thread values use the same core-equivalent unit as `cpuCoreRatio`. Worker reads
-are asynchronous and must complete within 100 ms of each sampling boundary;
-these are not atomic cross-thread measurements. The residual can vary with
-measurement skew. A timed-out request never delays the event-loop sample, and
-at most one native request is outstanding per tracked worker, even across
-monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
+Thread values use the same core-equivalent unit as `cpuCoreRatio`. Linux host
+reads and worker reads are asynchronous and must complete within 100 ms of each
+sampling boundary; these are not atomic measurements. The residual can vary
+with measurement skew. A timed-out request never delays the event-loop sample.
+At most one host filesystem sample per monitor and one native request per
+tracked worker remain outstanding, even across monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
 resets, and collection failures require fresh baselines before publishing the
 affected rates. Missing fields mean unavailable, not zero.
 
@@ -384,12 +406,27 @@ appears as `[async task:...]`, distinct from a sampled call frame. Unnamed work
 remains unattributed. Lower-ranked entries are dropped first to keep each report within 2 KiB;
 `reportTruncated=true` identifies this log-size trimming.
 
-The recorder skips Bun, Node 24 (which lacks the bounded coarse-sampling API),
-and processes already started with conflicting profiling, tracing, or debugger
-options. Callback labels still work on those runtimes. Native blocking work can
+On Node 24, the observer instead captures up to three interrupted JavaScript
+stacks, 250 ms apart, after 500 ms without a heartbeat. It opens no debugger
+listener and starts no CPU profiler. Each stack contains at most 16 frames,
+with bounded symbol/location lengths; at most three stack payloads can wait
+for the main thread. Reports use `sampleMode=interrupt`, `truncated=true`, and
+`null` self times: these are point observations, not sampled CPU durations.
+Source maps and user-defined stack formatting hooks are not invoked. Native
+calls may defer inspector interrupts until unrelated JavaScript resumes;
+captures dispatched more than 100 ms late are discarded. Such calls can still
+produce kernel-only evidence.
+
+The recorder skips Bun and processes already started with conflicting
+profiling, tracing, or debugger options. Callback labels still work on those
+runtimes. Native blocking work can
 remain unsymbolized, and an unusually long stall can exhaust the sample cap;
 `truncated=true` identifies incomplete evidence. Recorder failures are logged
 once and disable recording for that monitor's lifetime.
+
+Linux kernel observations remain available when CPU recording is unsupported,
+conflicting, or fails. These reports use `cpuProfile=unavailable` instead of CPU
+sample counts and intervals; they retain the stall bounds and `kernel` evidence.
 
 `samples=0` means neither retained profile contains a timestamped sample in that
 stall interval. It does not prove the entire process stopped or identify the

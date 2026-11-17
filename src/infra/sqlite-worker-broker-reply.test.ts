@@ -50,7 +50,7 @@ it("attributes synchronous reply decoding without creating an async task context
       { id: 1, ok: true, value: serialize({ count: 42 }) },
       { fail: unexpected, finish, dispatch() {} },
     );
-    expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, { count: 42 });
+    expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, { count: 42 }, undefined);
     expect(monitor.drain().stalls).toEqual([
       expect.objectContaining({ task: "worker:sqlite:reply-decode", elapsedMs: 300 }),
     ]);
@@ -72,7 +72,7 @@ it("settles ordinary replies without an additional wrapper crossing the decode b
         { id: 1, ok: true, value: serialize(value) },
         { fail: unexpected, finish, dispatch() {} },
       );
-      expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value);
+      expect(finish).toHaveBeenCalledExactlyOnceWith(job, undefined, value, undefined);
       // Completion may return nothing or the decoded value itself, without an additional wrapper.
       const observed = decode.mock.results.at(-1)?.value;
       const delivered = finish.mock.calls[0]?.[2];
@@ -165,7 +165,7 @@ it.each(["framed", "close"])("publishes receipts before settling: %s", async (ki
       receive("committed");
       expect(postMessage).not.toHaveBeenCalled();
     }
-    expect(finish).toHaveBeenCalledWith(job, undefined, "committed");
+    expect(finish).toHaveBeenCalledWith(job, undefined, "committed", undefined);
     expect(nativeQueries).not.toHaveBeenCalled();
   } finally {
     vi.restoreAllMocks();

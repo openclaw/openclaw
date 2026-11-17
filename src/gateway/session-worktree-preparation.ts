@@ -1,4 +1,5 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,6 +10,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../agents/workspace-state-guard.js";
 import {
   withWorktreeSourceWait,
   WORKTREE_CREATE_LEASE_WAIT_MS,
@@ -37,10 +42,16 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasInternalHookListeners } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveProjectRegistry } from "../projects/project-registry.js";
+import { listWorkspaceProjects } from "../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
+import {
+  canRequesterUseRepositoryUrl,
+  hasFullProjectAccess,
+  type ProjectRequester,
+  resolveRequesterProject,
+} from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type {
   PrepareGatewaySessionLifecycle,
@@ -62,13 +73,17 @@ import {
 import type { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import { forkSessionRepositoryWorkspace } from "./worker-environments/session-repository-checkpoints.js";
 
-/** Resolve registered sources identically for dashboard and native child sessions. */
+/**
+ * Resolve registered sources identically for dashboard and native child sessions.
+ * This hands out source, so restricted requesters get a fresh visibility answer.
+ */
 export async function resolveSessionProjectRoot(
   cfg: OpenClawConfig,
   projectId: string,
   worktree: boolean,
+  requester: ProjectRequester,
 ): Promise<Result<string, ErrorShape>> {
-  const project = await resolveProjectRegistry(cfg, projectId);
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
   if (!project) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
@@ -153,24 +168,18 @@ export async function prepareSessionWorktree(params: {
       const source = await readRegistryWorktree(context, params.acceptedSource.id);
       const assertSourceCurrent = accept(source);
       commitGuard?.();
-      const root = fs.realpathSync(workspace);
+      const filesystem = await captureWorkspaceFilesystemEvidence(workspace);
+      const root = filesystem.canonical;
       if (!source || source.ownerKind !== "session" || source.repoRoot !== root) {
         throw new SessionWorktreeSourceChangedError(
           "Accepted managed source is no longer available",
         );
       }
-      const assertHostCurrent = () => {
-        commitGuard?.();
-        if (fs.realpathSync(workspace) !== root) {
-          throw new SessionWorktreeSourceChangedError(
-            "Accepted managed source changed during preparation",
-          );
-        }
-      };
-      const assertCurrent = () => {
-        assertHostCurrent();
-        assertSourceCurrent();
-      };
+      const assertHostCurrent = composeSessionSourceAssertion([
+        commitGuard,
+        createWorkspaceFilesystemSource(filesystem, () => {}),
+      ]);
+      const assertCurrent = composeSessionSourceAssertion([assertHostCurrent, assertSourceCurrent]);
       // An archived parent retains this registry/snapshot owner. Its session is
       // no longer the child's authority once the locked creation accepted intent.
       withSource = async (run) => {
@@ -180,6 +189,7 @@ export async function prepareSessionWorktree(params: {
           signal: params.signal,
           workerAuthority: {
             assertCurrent: assertHostCurrent,
+            workspaceEvidence: [filesystem],
             predicates: [
               {
                 kind: "source-record",
@@ -194,6 +204,8 @@ export async function prepareSessionWorktree(params: {
       };
     }
     // Registry custody authorizes source-only preparation, not direct host access.
+    // Requester visibility (project-access.ts) is enforced when the session, spawn
+    // or inherited child is created; this admitted turn only materializes that choice.
     // The resulting session is executed through its private sandbox projection.
     if (sandboxRequired && workspace && !withSource) {
       const projectId =
@@ -202,31 +214,41 @@ export async function prepareSessionWorktree(params: {
         (params.acceptedSource?.kind === "project" ? params.acceptedSource.id : undefined);
       const selected = await selectSessionWorktreeProjectSource(projectId, params.signal);
       if (selected) {
-        const expectedRoot = fs.realpathSync(workspace);
+        const filesystem = await captureWorkspaceFilesystemEvidence(workspace);
+        const expectedRoot = filesystem.canonical;
         withSource = async (run, acquisition) =>
           await selected.withCurrent((current) => {
-            const assertCurrent = () => {
-              commitGuard?.();
-              current.assertCurrent();
-              if (
-                !current.project ||
-                current.project.repoRoot !== expectedRoot ||
-                fs.realpathSync(workspace) !== expectedRoot
-              ) {
-                throw new SessionWorktreeSourceChangedError(
-                  "Selected project changed during guest workspace preparation",
-                );
-              }
-            };
+            const assertCurrent = composeSessionSourceAssertion(
+              [
+                commitGuard,
+                current.assertCurrent,
+                createWorkspaceFilesystemSource(filesystem, () => {}),
+              ],
+              (assertSources) => {
+                assertSources();
+                if (!current.project || current.project.repoRoot !== expectedRoot) {
+                  throw new SessionWorktreeSourceChangedError(
+                    "Selected project changed during guest workspace preparation",
+                  );
+                }
+              },
+            );
             assertCurrent();
-            return run({ ...current, assertCurrent });
+            return run({
+              ...current,
+              assertCurrent,
+              workerAuthority: {
+                assertCurrent,
+                workspaceEvidence: [filesystem],
+              },
+            });
           }, acquisition);
         withRollback = selected.withRollback;
       }
     }
     // Raw paths and workspace aliases retain the selected-agent boundary.
     if (sandboxRequired && workspace && !withSource) {
-      const root = prepareSessionCreateFilesystemRoot({
+      const root = await prepareSessionCreateFilesystemRoot({
         cfg: params.cfg,
         enforceSandboxContainment: true,
         sandboxRequired: true,
@@ -235,6 +257,7 @@ export async function prepareSessionWorktree(params: {
         sessionKey: target.key,
         targetAgentId: target.agentId,
       });
+      commitGuard?.();
       if (!root.ok) {
         return root;
       }
@@ -256,7 +279,7 @@ export async function prepareSessionWorktree(params: {
     let existingDirectory = false;
     if (existing) {
       try {
-        existingDirectory = fs.lstatSync(existing.path).isDirectory();
+        existingDirectory = (await fs.lstat(existing.path)).isDirectory();
       } catch {
         // Missing registry targets are replaced by create() under its owner lease.
       }
@@ -327,14 +350,18 @@ export async function prepareSessionWorktree(params: {
     const rollback = materialized
       ? async () => await worktrees.rollbackPreparation(worktree, withRollback)
       : undefined;
-    const accept = (
+    const accept = async (
       assertSourceCurrent?: () => void,
-    ): Result<PreparedGatewaySessionLifecycle, ErrorShape> => {
+    ): Promise<Result<PreparedGatewaySessionLifecycle, ErrorShape>> => {
+      commitGuard?.();
+      assertSourceCurrent?.();
+      const spawnedCwd = await prepareSessionWorktreeCwd(worktree.path, sourceRoot, workspace);
+      const sessionRoot = await fs.realpath(worktree.path);
       commitGuard?.();
       assertSourceCurrent?.();
       return ok({
-        spawnedCwd: prepareSessionWorktreeCwd(worktree.path, sourceRoot, workspace),
-        sessionRoot: fs.realpathSync(worktree.path),
+        spawnedCwd,
+        sessionRoot,
         worktree: createSessionWorktreeBinding(
           worktree,
           workspace ?? worktree.repoRoot,
@@ -358,7 +385,7 @@ export async function prepareSessionWorktree(params: {
         ? await withWorktreeSourceWait(withSource, waitBudget, (current) =>
             accept(current.assertCurrent),
           )
-        : accept();
+        : await accept();
     } catch (error) {
       const failures = [error];
       try {
@@ -396,12 +423,39 @@ export async function prepareSessionWorktree(params: {
   }
 }
 
+async function canRequesterInheritParentSource(
+  cfg: OpenClawConfig,
+  source: NonNullable<Awaited<ReturnType<typeof resolveSpawnParentWorktreeSource>>>,
+  requester: ProjectRequester,
+): Promise<boolean> {
+  if (hasFullProjectAccess(requester)) {
+    return true;
+  }
+  if (source.kind === "repository") {
+    return await canRequesterUseRepositoryUrl(cfg, source.repository.url, requester, {
+      fresh: true,
+    });
+  }
+  if (source.projectId) {
+    return (
+      (await resolveRequesterProject(cfg, source.projectId, requester, { fresh: true })) !==
+      undefined
+    );
+  }
+  // A cwd-based worktree has no registry identity; only an agent workspace (a
+  // workspace pseudo-project, governed by roles.agents) is allowed.
+  const root = path.resolve(source.workspace);
+  return listWorkspaceProjects(cfg).some((project) => path.resolve(project.repoRoot) === root);
+}
+
 /** Select and prepare worktree intent while the existing session lifecycle owns the target. */
 export async function prepareSessionWorktreeCreation(params: {
   cfg: OpenClawConfig;
   target: Parameters<PrepareGatewaySessionLifecycle>[0];
   workspace?: string | { kind: "empty" };
   inheritParentKey?: string;
+  /** Inherited children receive the parent's source, so the child's requester must reach it. */
+  projectRequester: ProjectRequester;
   repositoryMutations?: Pick<ReturnType<typeof createRepositoryWorkspaceMutationService>, "fork">;
   projectGitUrl?: string;
   name?: string;
@@ -446,6 +500,14 @@ export async function prepareSessionWorktreeCreation(params: {
           signal,
         })
       : undefined;
+  if (
+    parentSource &&
+    !(await canRequesterInheritParentSource(cfg, parentSource, params.projectRequester))
+  ) {
+    return invalidSessionRequest(
+      "The parent session's project is not available to this requester.",
+    );
+  }
   commitGuard();
   if (parentSource?.kind === "repository") {
     if (name || baseRef) {
@@ -543,7 +605,11 @@ export async function prepareSessionWorktreeCreation(params: {
     });
   }
   // Git discovery permits subdirectory workspaces with an ancestor .git entry.
-  if (typeof workspace === "string" && !params.projectGitUrl && !insideGitCheckout(workspace)) {
+  if (
+    typeof workspace === "string" &&
+    !params.projectGitUrl &&
+    !(await insideGitCheckout(workspace))
+  ) {
     return invalidSessionRequest(nonGitWorktreeSourceMessage(params.workspace));
   }
   // Reuse validates the binding, not a selected ref that may have since disappeared.

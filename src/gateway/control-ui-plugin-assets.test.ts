@@ -17,6 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerPluginCompilerLifecycleTests } from "./control-ui-plugin-assets.compiler.suite.js";
 import {
   handleControlUiPluginAssetRequest,
   listControlUiPluginCatalog,
@@ -221,6 +222,8 @@ beforeAll(async () => {
   // Compile the real Control UI owner during setup, before the HTTP request deadline starts.
   await import("./control-ui.js");
 });
+
+registerPluginCompilerLifecycleTests(activateFixture);
 
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();

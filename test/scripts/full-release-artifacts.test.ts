@@ -150,7 +150,8 @@ const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
 calls[args[1]] = (calls[args[1]] ?? 0) + 1;
-const failure = response.fixtureErrorOnce ?? response.fixtureError;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureErrorOnce ?? response.fixtureError : undefined;
 delete response.fixtureErrorOnce;
 writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
 if (failure) { process.stderr.write(failure); process.exit(1); }
@@ -164,12 +165,25 @@ process.stdout.write(response.fixtureOutput ?? JSON.stringify(response));
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
 if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
+} else if (process.env.FIXTURE_ADVANCE_RETRY_CLOCK === "true") {
+  let now = Date.now();
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => { now += delay; queueMicrotask(callback); };
 }
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
   appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  const statuses = responses[endpoint]?.fixtureHttpStatuses;
+  const status = statuses?.shift();
+  if (status && status !== 200) {
+    if (process.env.FIXTURE_EXPIRE_ON_HTTP_ERROR === "true") {
+      const expired = Date.now() + 350 * 60_000 + 1;
+      Date.now = () => expired;
+    }
+    return new Response("fixture unavailable", { status });
+  }
   if (Object.hasOwn(downloads, endpoint)) {
     if (process.env.FIXTURE_RERUN_DURING_DOWNLOAD === "true") {
       const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
@@ -193,7 +207,7 @@ globalThis.fetch = async (input) => {
     api(`actions/runs/${path}`, workflowRun(overrides));
   const jobsApi = (attempt: number, jobs: unknown[]) =>
     list(`actions/runs/81/attempts/${attempt}/jobs?per_page=100&page=1`, "jobs", jobs);
-  const run = (command: string, env: NodeJS.ProcessEnv = {}) => {
+  const run = (command: string, env: NodeJS.ProcessEnv = {}, script = SCRIPT) => {
     const directory = join(root, `invocation-${++invocation}`);
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
@@ -201,7 +215,7 @@ globalThis.fetch = async (input) => {
     writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
       process.execPath,
-      ["--import", pathToFileURL(preloadPath).href, SCRIPT, command],
+      ["--import", pathToFileURL(preloadPath).href, script, command],
       {
         cwd: root,
         encoding: "utf8",
@@ -246,15 +260,14 @@ globalThis.fetch = async (input) => {
     const apiCalls = readJson(responsesPath).calls as Record<string, number>;
     return { ...result, outputs, calls, apiCalls };
   };
-  const artifact = (
+  const artifactFiles = (
     name: string,
-    fileName: string,
-    value: unknown,
+    files: Record<string, string | Buffer>,
     repositoryListing = false,
     runId = 81,
+    id = ++artifactId,
   ) => {
-    const bytes = makeStoredZip({ [fileName]: JSON.stringify(value) });
-    const id = ++artifactId;
+    const bytes = makeStoredZip(files);
     const archivePath = join(root, `artifact-${id}.zip`);
     writeFileSync(archivePath, bytes);
     const metadata = {
@@ -270,6 +283,13 @@ globalThis.fetch = async (input) => {
     downloads[`repos/${REPOSITORY}/actions/artifacts/${id}/zip`] = archivePath;
     return { bytes, archivePath, metadata };
   };
+  const artifact = (
+    name: string,
+    fileName: string,
+    value: unknown,
+    repositoryListing = false,
+    runId = 81,
+  ) => artifactFiles(name, { [fileName]: JSON.stringify(value) }, repositoryListing, runId);
   const npm = npmBundles(sourceSha, workflowRef);
   runApi("51", { id: 51, path: ".github/workflows/full-release-validation.yml" });
   runApi("81", {});
@@ -313,6 +333,7 @@ globalThis.fetch = async (input) => {
     wait,
     collect,
     artifact,
+    artifactFiles,
     rawArtifact,
     seal,
     receiptArtifact,
@@ -320,9 +341,9 @@ globalThis.fetch = async (input) => {
   };
 }
 
-function publicationReuseFixture(changedReceipt = false) {
+function publicationReuseFixture(changedReceipt = false, withPlugin = false) {
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
-  const test = fixture(TOOLING_SHA, workflowRef);
+  const test = fixture(SOURCE_SHA, workflowRef);
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
   const fullRef = `refs/heads/${workflowRef}`;
   const npmRun = {
@@ -332,14 +353,45 @@ function publicationReuseFixture(changedReceipt = false) {
   };
   test.runApi("81", npmRun);
   test.runApi("81/attempts/1", npmRun);
-  for (const descriptor of [test.raw, test.qualified]) {
-    const { id, name, digest } = descriptor.artifact;
-    test.api(`actions/artifacts/${id}`, artifactMetadata(Number(id), name, `sha256:${digest}`));
-  }
+  const packageBytes = Buffer.from("retained original npm package");
+  test.raw.package.sha256 = sha256(packageBytes);
+  const packageManifest = JSON.stringify({
+    schema: "openclaw.npm-package-bundle/v1",
+    packageName: test.raw.package.name,
+    packageVersion: test.raw.package.version,
+    releaseSha: SOURCE_SHA,
+    tarballName: test.raw.package.fileName,
+    tarballSha256: test.raw.package.sha256,
+    producer: test.raw.producer,
+    corePackageTarballs: [],
+    dependencyTarballs: [],
+  });
+  test.raw.manifestSha256 = sha256(Buffer.from(packageManifest));
+  const rawArchive = test.artifactFiles(
+    test.raw.artifact.name,
+    { "package-bundle.json": packageManifest, [test.raw.package.fileName]: packageBytes },
+    false,
+    81,
+    401,
+  );
+  test.raw.artifact.digest = rawArchive.metadata.digest.slice("sha256:".length);
+  const qualifiedManifest = JSON.stringify({ sourceSha: SOURCE_SHA });
+  test.qualified.manifestSha256 = sha256(Buffer.from(qualifiedManifest));
+  const qualifiedArchive = test.artifactFiles(
+    test.qualified.artifact.name,
+    {
+      "preflight-manifest.json": qualifiedManifest,
+      [test.raw.package.fileName]: packageBytes,
+    },
+    false,
+    81,
+    402,
+  );
+  test.qualified.artifact.digest = qualifiedArchive.metadata.digest.slice("sha256:".length);
   const receipt = (stage: string, runId: string, outputs: Record<string, string>) => ({
     schema: "openclaw.full-release-artifact-receipt/v1",
     ...artifactRequest(),
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     workflowRef,
     stage,
     dispatchId: `full-release-validation-51-1-artifacts-${stage}`,
@@ -356,11 +408,11 @@ function publicationReuseFixture(changedReceipt = false) {
     "artifact-receipt.json",
     receipt("npm", "81", bundleOutputs(test.raw, qualifiedReceipt)),
   );
-  const artifactName = `docker-release-${TOOLING_SHA}-1`;
+  const artifactName = `docker-release-${SOURCE_SHA}-1`;
   const dockerManifest = {
     schemaVersion: 1,
     repository: REPOSITORY,
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     toolingSha: TOOLING_SHA,
     tag: "v2026.8.1",
     version: "2026.8.1",
@@ -397,6 +449,17 @@ function publicationReuseFixture(changedReceipt = false) {
       ],
     })),
   };
+  const architectureArchives = dockerManifest.architectures.map((entry, index) => {
+    const archive = test.artifactFiles(
+      entry.artifact.name,
+      { "image.tar": `image-${entry.architecture}` },
+      false,
+      91,
+      601 + index,
+    );
+    entry.artifact.digest = archive.metadata.digest;
+    return archive;
+  });
   const docker = {
     preparedRunId: "91",
     preparedRunAttempt: "1",
@@ -427,11 +490,7 @@ function publicationReuseFixture(changedReceipt = false) {
     head_sha: TOOLING_SHA,
     ...completed,
   });
-  const payloads = dockerManifest.architectures.map(({ artifact }) => {
-    const metadata = artifactMetadata(Number(artifact.id), artifact.name, artifact.digest, 91);
-    test.api(`actions/artifacts/${artifact.id}`, metadata);
-    return metadata;
-  });
+  const payloads = architectureArchives.map(({ metadata }) => metadata);
   test.artifact(
     "full-release-artifact-receipt-91-1",
     "artifact-receipt.json",
@@ -445,27 +504,61 @@ function publicationReuseFixture(changedReceipt = false) {
     91,
   );
   test.artifact(artifactName, "manifest.json", dockerManifest, false, 91);
-  const sdk = test.artifact(
+  const sdkArchive = test.artifact(
     "plugin-sdk-api-release-diff-81-1",
     "plugin-sdk-api-release-evidence.json",
     {},
-  ).metadata;
+  );
+  const sdk = sdkArchive.metadata;
+  const pluginArchive = withPlugin
+    ? test.artifactFiles(
+        `plugin-npm-prepared-${SOURCE_SHA}-101-1`,
+        { "prepared.json": "{}" },
+        false,
+        101,
+      )
+    : null;
+  const plugin = pluginArchive
+    ? {
+        repository: REPOSITORY,
+        workflowPath: ".github/workflows/plugin-npm-release.yml",
+        workflowSha: TOOLING_SHA,
+        workflowHeadBranch: workflowRef,
+        workflowEvent: "workflow_dispatch",
+        runId: 101,
+        runAttempt: 1,
+        artifactId: pluginArchive.metadata.id,
+        artifactName: pluginArchive.metadata.name,
+        artifactDigest: pluginArchive.metadata.digest,
+        artifactSizeBytes: pluginArchive.metadata.size_in_bytes,
+      }
+    : null;
+  if (plugin) {
+    for (const suffix of ["101", "101/attempts/1"]) {
+      test.runApi(suffix, {
+        id: 101,
+        ...completed,
+        head_branch: workflowRef,
+        path: plugin.workflowPath,
+      });
+    }
+  }
   const evidence = {
     schema: "openclaw.release-validation-evidence/v4",
     valid: true,
     directRoot: true,
     current: { conclusion: "success" },
-    root: { runId: "51", targetSha: TOOLING_SHA },
+    root: { runId: "51", targetSha: SOURCE_SHA },
     manifest: {
       workflowName: "Full Release Validation",
       runId: "51",
       runAttempt: "1",
       sourceParentRunAttempt: 1,
       workflowSha: TOOLING_SHA,
-      targetSha: TOOLING_SHA,
+      targetSha: SOURCE_SHA,
       workflowRef,
       workflowFullRef: fullRef,
-      publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: null },
+      publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: plugin },
     },
   };
   const validator = join(test.root, "validate-evidence.mjs");
@@ -475,7 +568,7 @@ function publicationReuseFixture(changedReceipt = false) {
 import assert from "node:assert/strict";
 const value = (key) => process.argv[process.argv.indexOf(key) + 1];
 const qualification = JSON.parse(value("--qualification-reuse-json"));
-assert.equal(qualification.candidateSha, "${TOOLING_SHA}");
+assert.equal(qualification.candidateSha, "${SOURCE_SHA}");
 assert.equal(qualification.workflowRef, "${currentRef}");
 assert.equal(value("--verifier-source-sha"), "${"f".repeat(40)}");
 process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
@@ -486,12 +579,13 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
     docker,
     sdk,
     payloads,
+    plugin,
     env: {
       EVIDENCE_REUSE: "true",
       EVIDENCE_POLICY: "exact-target-full-validation-v1",
-      EVIDENCE_SHA: TOOLING_SHA,
+      EVIDENCE_SHA: SOURCE_SHA,
       EVIDENCE_ROOT_RUN_ID: "51",
-      TARGET_SHA: TOOLING_SHA,
+      TARGET_SHA: SOURCE_SHA,
       GITHUB_REF_NAME: currentRef,
       GITHUB_RUN_ID: "52",
       QUALIFICATION_INPUTS_JSON: "{}",
@@ -520,9 +614,90 @@ function expectRejected(result: Result, message: string) {
 
 describe.skipIf(process.platform === "win32")("immutable release artifact CLI", () => {
   it.each([
+    { label: "brief visibility lag", output: "raw", statuses: [404, 200], reads: 2, ok: true },
+    {
+      label: "persistent missing metadata",
+      output: "raw",
+      statuses: [404, 404, 404, 200],
+      reads: 3,
+    },
+    { label: "missing archive", output: "raw", statuses: [404, 200], reads: 1, archive: true },
+    { label: "unauthorized metadata", output: "raw", statuses: [401, 200], reads: 1 },
+    { label: "forbidden metadata", output: "raw", statuses: [403, 200], reads: 1 },
+    { label: "missing sealed receipt", output: "receipt", statuses: [404, 200], reads: 1 },
+    {
+      label: "changed immutable ID",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 2,
+      changedId: true,
+    },
+    {
+      label: "expired acquisition deadline",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 1,
+      expire: true,
+    },
+  ])("bounds fresh artifact metadata recovery: $label", (scenario) => {
+    const test = fixture();
+    if (scenario.output === "receipt") {
+      test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "success" }),
+      );
+    }
+    const archive = test.artifact(
+      scenario.output === "raw"
+        ? "openclaw-npm-package-descriptor-81-1"
+        : "full-release-artifact-receipt-81-1",
+      scenario.output === "raw" ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+      test.raw,
+    );
+    const endpoint = "actions/artifacts/" + archive.metadata.id + (scenario.archive ? "/zip" : "");
+    test.api(endpoint, {
+      ...archive.metadata,
+      ...(scenario.changedId ? { id: archive.metadata.id + 1 } : {}),
+      fixtureHttpStatuses: scenario.statuses,
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: scenario.output,
+      FIXTURE_ADVANCE_RETRY_CLOCK: "true",
+      FIXTURE_EXPIRE_ON_HTTP_ERROR: String(scenario.expire === true),
+    });
+    if (scenario.ok) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.outputs).toEqual({});
+    }
+    if (!scenario.ok) {
+      expect(result.stderr).toContain(
+        scenario.changedId
+          ? "metadata does not match"
+          : scenario.expire
+            ? "deadline exceeded"
+            : "HTTP " + scenario.statuses[0],
+      );
+    }
+    expect(
+      result.calls.filter(
+        ([kind, path]) => kind === "fetch" && path === "repos/" + REPOSITORY + "/" + endpoint,
+      ),
+    ).toHaveLength(scenario.reads);
+    expect(
+      Object.entries(result.apiCalls).filter(([path]) => path.includes("/artifacts?name=")),
+    ).toHaveLength(1);
+  });
+
+  it.each([
     ["retained", {}, {}, "", ""],
+    ["retained plugin", {}, {}, "", ""],
     ["expired payload", { expired: true }, {}, "", ""],
     ["deleted archive", {}, {}, "npm", ""],
+    ["retained metadata 404", {}, {}, "", ""],
     ["expired SDK archive", {}, { expired: true }, "", ""],
     ["missing SDK archive", {}, {}, "sdk", ""],
     ["wrong SDK attempt", {}, { name: "plugin-sdk-api-release-diff-81-2" }, "", ""],
@@ -537,9 +712,15 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   ] as const)(
     "reuses publication artifacts without dispatch for %s",
     (scenario, payloadChanges, sdkChanges, missing, error) => {
-      const test = publicationReuseFixture(scenario === "changed receipt");
+      const test = publicationReuseFixture(
+        scenario === "changed receipt",
+        scenario === "retained plugin",
+      );
       Object.assign(test.payloads[0]!, payloadChanges);
       Object.assign(test.sdk, sdkChanges);
+      if (scenario === "retained metadata 404") {
+        test.api("actions/artifacts/501", { fixtureHttpStatuses: [404, 200] });
+      }
       if (missing === "npm") {
         test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
       }
@@ -551,11 +732,22 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         );
       }
       const result = test.run("reuse", test.env);
+      if (scenario === "retained metadata 404") {
+        expect(
+          result.calls.filter(
+            ([kind, endpoint]) =>
+              kind === "fetch" && endpoint === `repos/${REPOSITORY}/actions/artifacts/501`,
+          ),
+        ).toHaveLength(1);
+        expect(
+          result.calls.some(([kind, endpoint]) => kind === "fetch" && endpoint?.endsWith("/zip")),
+        ).toBe(false);
+      }
       if (error) {
         expectRejected(result, error);
       } else {
         expectSuccess(result);
-        if (scenario === "retained") {
+        if (scenario === "retained" || scenario === "retained plugin") {
           expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
           expect(JSON.parse(result.outputs.qualified_preflight_bundle_json!)).toEqual(
             test.qualified,
@@ -567,6 +759,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             prepared_run_id: "91",
             prepared_run_attempt: "1",
             prepared_manifest_sha256: test.docker.preparedManifestSha256,
+            descriptor_json: test.plugin ? JSON.stringify(test.plugin) : "",
           });
         } else {
           expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
@@ -852,6 +1045,21 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       );
     },
   );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
+  });
 
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],

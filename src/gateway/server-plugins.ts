@@ -37,7 +37,9 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
@@ -137,13 +139,11 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
         ) {
           throw new Error("Requester session changed during delivery");
         }
-        return {
+        return chatRef({
           agentId: record.agentId,
           storePath: record.storeTarget.storePath,
           sessionKey: record.key,
-          sessionId: record.entry.sessionId,
-          lifecycleRevision: record.entry.lifecycleRevision ?? null,
-        };
+        });
       },
     );
     requestParams = bindInProcessSessionDeliveryGeneration(params, generation);
@@ -439,6 +439,7 @@ export async function loadGatewayPlugins(params: {
     autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,
+    environmentKey: captureEnvironmentKey(params.env),
     logger,
     preferBuiltPluginArtifacts: true,
     expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,

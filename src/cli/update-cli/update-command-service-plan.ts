@@ -1,4 +1,3 @@
-// Read-only managed Gateway ownership and runtime selection for update planning.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
@@ -21,6 +20,7 @@ import {
 } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
+  canPreserveGatewayServiceDefinitionOverrides,
   hasGatewayServiceDefinitionOverrides,
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -35,6 +35,8 @@ import {
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
+// Read-only managed Gateway ownership and runtime selection for update planning.
+import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
@@ -317,7 +319,10 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         kind: "owned",
         root,
         fingerprint,
-        refreshDefinition: (state.definitionMutationCapability?.kind ?? "writable") === "writable",
+        // A unit that names the Git release launcher is written once; switches never change it.
+        refreshDefinition:
+          (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
+          !command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER),
       }
     : { kind: "unresolved", root, fingerprint };
 }
@@ -487,7 +492,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       !serviceBun &&
       params.rebind !== false &&
       process.platform !== "win32" &&
-      !hasGatewayServiceDefinitionOverrides(command) &&
+      canPreserveGatewayServiceDefinitionOverrides(command) &&
       inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;

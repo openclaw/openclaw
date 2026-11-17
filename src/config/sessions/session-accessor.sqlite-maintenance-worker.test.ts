@@ -24,6 +24,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -160,6 +161,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
         capture: () => (scenario === "warm-cap" ? [protectedEntry.sessionKey] : []),
         dispose() {},
       }));
+      using filesystem = observeMainThreadFs();
       let result: Awaited<typeof completed>;
       try {
         await patchSessionEntryCore(active, () => ({ label: "updated" }), {
@@ -212,6 +214,23 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (remove) {
         expect(loadSessionEntry(stale)).toBeUndefined();
       }
+      // Attribute the first source owner, not asynchronous ancestor frames or fixture reads.
+      const maintenanceFilesystemCalls = filesystem.stacks().filter(({ stack }) => {
+        const owner = stack
+          .replaceAll("\\", "/")
+          .split("\n")
+          .find(
+            (frame) =>
+              frame.includes("/src/") &&
+              !/\/(?:sqlite-worker-identity|main-thread-fs-spies\.test-support)\.[cm]?[jt]s:/u.test(
+                frame,
+              ),
+          );
+        return /\/session-accessor\.sqlite-(?:maintenance-kick|reclamation-run)\.[cm]?[jt]s:/u.test(
+          owner ?? "",
+        );
+      });
+      expect(maintenanceFilesystemCalls).toEqual([]);
     });
   },
 );

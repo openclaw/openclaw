@@ -58,6 +58,7 @@ type CiManifestFixtureOptions = {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  runtimeJobs?: boolean;
   nativeBunInspection?: {
     report: {
       staleEntries: string[];
@@ -178,11 +179,15 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       selectedTargetFiles.delete(missing);
     }
     writeFixtures(selectedTargetFiles);
+    writeFixture(
+      "scripts/ci-changed-scope.mjs",
+      reexport("hasMlxNativeProofInputs", "scripts/ci-changed-scope.mjs"),
+    );
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(
         "ci-test-runtime.mts",
-        `export { resolveCiTestRuntimePolicy } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
+        `export { resolveCiTestRuntimePolicy${options.runtimeJobs ? ", ciTestShardRuntimes" : ""} } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};
         ${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
         export const ciTestShardRequiresBun = (shard, policy) =>
           policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
@@ -315,6 +320,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     if (options.changedCoreTestSupport) {
       copyFixtures([
         "scripts/changed-lanes.mts",
+        "scripts/lib/windows-test-targets.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
         "scripts/lib/arg-utils.mts",
@@ -354,7 +360,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       if (!options.changedCoreTestSupport) {
         writeFixture(
           "scripts/changed-lanes.mts",
-          reexport("detectChangedLanes", "scripts/changed-lanes.mts"),
+          reexport("detectChangedLanes, detectChangedLanesForPaths", "scripts/changed-lanes.mts"),
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -424,7 +430,9 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
           export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
           export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
-            console.log("changed-node-plan-options:" + JSON.stringify(options));
+            console.log("changed-node-plan-options:" + JSON.stringify({ ...options,
+              volumeContext: options.volumeContext && { ...options.volumeContext, environment: undefined },
+            }));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
               options.onFallback("stub owner selection");
             }
@@ -505,6 +513,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
     }
     if (options.bundledPlanner) {
       writeScript(
+        "vitest-runtime-selection.mts",
+        reexport("resolveCiVitestWorkerPreset", "scripts/lib/vitest-runtime-selection.mts"),
+      );
+      writeScript(
         "ci-docker-seed-plan.mts",
         options.dockerSeedPlannerSource ??
           reexport(
@@ -583,7 +595,10 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "release-version.mjs",
       "ci-ios-smoke-plan.mjs",
       "ci-blacksmith-capacity.mjs",
+      "ci-node-test-capacity.mts",
+      "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
+      "ci-test-observations.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);

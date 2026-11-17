@@ -226,7 +226,6 @@ struct OpenClawChatAttachmentsStrip: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
-                        .help("Remove attachment")
                         .accessibilityLabel(String(
                             format: String(localized: "Remove attachment: %@"), attachment.fileName))
                     }
@@ -463,6 +462,6 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     private var helpText: Text {
         if self.control.phase == .listening { return Text("Finish dictation") }
         if self.isPending || self.control.isActive { return Text("Cancel dictation") }
-        return Text("Transcribe speech into the message")
+        return Text("Dictate")
     }
 }
