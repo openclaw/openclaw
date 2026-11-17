@@ -510,6 +510,12 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
+
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
