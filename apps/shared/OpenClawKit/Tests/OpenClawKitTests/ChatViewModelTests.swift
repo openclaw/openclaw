@@ -13303,6 +13303,7 @@ struct ChatViewModelTests {
 
     @Test func `sessions refresh waits for failing thinking patch before applying authoritative level`() async throws {
         FileHandle.standardError.write(Data("[thinking-refresh] entry\n".utf8))
+        defer { FileHandle.standardError.write(Data("[thinking-refresh] body exit\n".utf8)) }
         let patchGate = AsyncGate()
         let patchStarted = AsyncGate()
         let initialSessions = sessionsResponse(
@@ -13338,8 +13339,18 @@ struct ChatViewModelTests {
         await refresh.value
         FileHandle.standardError.write(Data("[thinking-refresh] refresh settled\n".utf8))
 
-        #expect(await MainActor.run { vm.thinkingLevel } == "high")
-        #expect(await MainActor.run { vm.sessions.first?.thinkingLevel } == "high")
+        #expect(await MainActor.run {
+            FileHandle.standardError.write(Data("[thinking-refresh] level actor entry\n".utf8))
+            defer { FileHandle.standardError.write(Data("[thinking-refresh] level actor exit\n".utf8)) }
+            return vm.thinkingLevel
+        } == "high")
+        FileHandle.standardError.write(Data("[thinking-refresh] level assertion complete\n".utf8))
+        #expect(await MainActor.run {
+            FileHandle.standardError.write(Data("[thinking-refresh] sessions actor entry\n".utf8))
+            defer { FileHandle.standardError.write(Data("[thinking-refresh] sessions actor exit\n".utf8)) }
+            return vm.sessions.first?.thinkingLevel
+        } == "high")
+        FileHandle.standardError.write(Data("[thinking-refresh] sessions assertion complete\n".utf8))
     }
 
     @Test func `failed thinking overlap does not restore an older successful model`() async throws {
