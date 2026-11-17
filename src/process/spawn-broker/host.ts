@@ -472,6 +472,8 @@ export class SpawnBrokerHost {
           request.result?.reject(error);
           request.child.fail(error);
         }
+        // Retained error stacks can keep this callback context alive after settlement.
+        requests.clear();
         // A failed transport is not a writer-close receipt. Join its native owner and
         // retained child cleanup before callers can remove or reuse output paths.
         if (outputRequests.length) {
@@ -483,6 +485,7 @@ export class SpawnBrokerHost {
               request.output?.reject(error);
               request.child.settleFileOutput();
             }
+            outputRequests.length = 0;
           });
         }
         if (
