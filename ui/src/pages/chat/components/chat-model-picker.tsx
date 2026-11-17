@@ -7,13 +7,13 @@ import {
   Show,
   type Element as SolidElement,
 } from "solid-js";
+import type { ModelAuthStatusResult } from "../../../api/types.ts";
 import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
-import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatContextWindowControlParams } from "./chat-context-window-control.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
@@ -37,7 +37,8 @@ const ChatModelPickerPanel = lazy(() => import("./chat-model-picker-panel.tsx"),
 });
 
 export type ChatModelPickerParams = {
-  providerAuth?: ReadonlyMap<string, ModelProviderAuthLabel>;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  authProfileId?: string;
   accountSection?: ChatModelAccountSection;
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;

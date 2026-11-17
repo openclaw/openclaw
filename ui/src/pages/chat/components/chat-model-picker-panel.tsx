@@ -5,7 +5,7 @@ import { providerDisplayLabel as defaultProviderLabel } from "../../../component
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
@@ -44,7 +44,10 @@ import {
 } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
-import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
+import {
+  ChatModelProviderHeading,
+  prepareChatModelProviderAuth,
+} from "./chat-model-provider-heading.tsx";
 import { ChatModelProviderRail } from "./chat-model-provider-rail.tsx";
 import {
   ChatModelSettings,
@@ -62,6 +65,13 @@ type ChatModelPickerPanelProps = {
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
+  const modelAuthStatus = createMemo(() => panel.params.modelAuthStatusResult);
+  const authProfileId = createMemo(() => panel.params.authProfileId);
+  // Account headings are only needed inside the lazily mounted picker, not at Chat boot.
+  const providerAuth = createMemo(() => {
+    i18nRevision();
+    return prepareChatModelProviderAuth(modelAuthStatus(), authProfileId());
+  });
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const favorites = createChatModelFavorites(owner);
   const search = useContext(ChatModelSearchContext);
@@ -406,7 +416,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         "claudeCli"
           ? "claude-cli"
           : props.provider;
-      return panel.params.providerAuth?.get(authProvider);
+      return providerAuth().get(authProvider);
     });
     return (
       <section

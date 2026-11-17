@@ -245,6 +245,51 @@ it("updates model selection against a retained and replaced catalog", async () =
   expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
 });
 
+it("prepares account headings only when the model picker opens", async () => {
+  let profileReads = 0;
+  installModelPickerLayout();
+  const props: Props = {
+    activeRunId: null,
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    modelSwitching: false,
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    sending: false,
+    stream: null,
+    sessionKey: "main",
+    modelCatalog: [{ id: "primary", name: "Primary", provider: "example" }],
+    sessionsResult: createSessionsListResult({ model: "primary", modelProvider: "example" }),
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "example",
+          displayName: "Example",
+          status: "ok",
+          get profiles() {
+            profileReads += 1;
+            return [{ profileId: "example:oauth", type: "oauth" as const, status: "ok" as const }];
+          },
+        },
+      ],
+    },
+  };
+  const [open, setOpen] = createSignal(false);
+  const view = mountSolid(() => <ChatModelControls {...props} modelPickerOpen={open()} />);
+  flush();
+  expect(profileReads).toBe(0);
+  setOpen(true);
+  await waitForSolid(() =>
+    expect(
+      view.container.querySelector(
+        '[data-chat-model-provider-group="example"] .chat-controls__auth-meta-label',
+      )?.textContent,
+    ).toBe("Subscription"),
+  );
+  expect(profileReads).toBeGreaterThan(0);
+});
+
 it("refreshes provider account labels when the locale changes without new props", async () => {
   const restoreI18n = captureI18nStateForTesting();
   onTestFinished(restoreI18n);
