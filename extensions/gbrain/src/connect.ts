@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 /**
  * Connects OpenClaw to the brain that GBrain itself runs.
@@ -102,8 +103,37 @@ function isManaged(entry: GbrainMcpServerEntry | undefined, hosts: string[]): bo
   if (url.protocol !== "http:" || url.pathname !== "/mcp" || !hosts.includes(url.hostname)) {
     return false;
   }
-  const auth = entry.headers?.Authorization;
-  return auth === undefined || bearer(entry) !== undefined;
+  // HTTP header names are case-insensitive: any other spelling of Authorization is the user's.
+  const authKeys = Object.keys(entry.headers ?? {}).filter((key) => /^authorization$/i.test(key));
+  return (
+    authKeys.length === 0 ||
+    (authKeys.length === 1 && authKeys[0] === "Authorization" && bearer(entry) !== undefined)
+  );
+}
+
+/**
+ * The `mcp.servers.gbrain` entry as written in the root config file. The plugin writes only
+ * there; an entry that an `$include` supplies or changes is the user's ("foreign").
+ * `resolved` is the same entry with includes and `${ENV}` resolved.
+ */
+export function authoredGbrainEntry(
+  parsed: unknown,
+  resolved: unknown,
+): GbrainMcpServerEntry | "foreign" | undefined {
+  let node = parsed;
+  let included = false;
+  for (const key of ["mcp", "servers", GBRAIN_SERVER_NAME]) {
+    const record = node && typeof node === "object" ? (node as Record<string, unknown>) : undefined;
+    included ||= record !== undefined && "$include" in record;
+    node = record?.[key];
+  }
+  if (!node || typeof node !== "object") {
+    return resolved ? "foreign" : undefined;
+  }
+  if ("$include" in node || (included && !isDeepStrictEqual(node, resolved))) {
+    return "foreign";
+  }
+  return node as GbrainMcpServerEntry;
 }
 
 /** The plugin owns only the URL, transport and bearer; the user's other settings on the entry stay. */

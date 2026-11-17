@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  authoredGbrainEntry,
   connectGbrain,
   withGbrainConnection,
   type CommandResult,
@@ -188,6 +189,7 @@ describe("connectGbrain", () => {
     const entries: GbrainMcpServerEntry[] = [
       { url: "https://brain.example.com/mcp", transport: "streamable-http" },
       { url: MCP_URL, headers: { Authorization: "Bearer ${GBRAIN_MCP_TOKEN}" } },
+      { url: MCP_URL, headers: { authorization: "Bearer ${GBRAIN_MCP_TOKEN}" } },
     ];
     for (const server of entries) {
       const host = fakeHost({
@@ -199,6 +201,28 @@ describe("connectGbrain", () => {
       expect((await connectGbrain(host.deps, { allowSetup: true })).state).toBe("external");
       expect(host.server).toBe(server);
     }
+  });
+
+  it("treats only an entry written in the root config file, unchanged by includes, as its own", () => {
+    const own = { url: MCP_URL, headers: { Authorization: "Bearer gbrain_a" } };
+    const fromInclude = { url: MCP_URL, headers: { Authorization: "Bearer gbrain_b" } };
+    expect(authoredGbrainEntry({ mcp: { servers: { gbrain: own } } }, own)).toEqual(own);
+    expect(authoredGbrainEntry({}, undefined)).toBeUndefined();
+    // Root `$include` plus a partial `mcp` in the root: the entry comes from the include.
+    expect(
+      authoredGbrainEntry({ $include: "brain.json5", mcp: { servers: {} } }, fromInclude),
+    ).toBe("foreign");
+    // Root entry that an include overrides.
+    expect(
+      authoredGbrainEntry(
+        { $include: "brain.json5", mcp: { servers: { gbrain: own } } },
+        fromInclude,
+      ),
+    ).toBe("foreign");
+    // Root entry next to an unrelated include stays the plugin's.
+    expect(
+      authoredGbrainEntry({ $include: "agents.json5", mcp: { servers: { gbrain: own } } }, own),
+    ).toEqual(own);
   });
 
   it("reports what blocks the connection with the next step, and changes nothing", async () => {
