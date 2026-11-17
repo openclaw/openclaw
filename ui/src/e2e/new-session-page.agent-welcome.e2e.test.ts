@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -23,7 +24,10 @@ suite.define(() => {
   it.each(["custom", "recent", "default"] as const)(
     "uses the original welcome layout for %s recommendations",
     async (scenario) => {
-      const page = await openPage({ viewport: { width: 1280, height: 900 } });
+      const page = await openPage({
+        viewport: { width: 1280, height: 900 },
+        reducedMotion: "reduce",
+      });
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "agents.list": {
@@ -74,8 +78,44 @@ suite.define(() => {
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [welcome], {
           animations: "disabled",
+          elements: [
+            scenario === "recent"
+              ? page.locator(".agent-chat__recents")
+              : page.locator(".agent-chat__suggestions"),
+          ],
         });
         await writeFile(path.join(suite.artifactDir, `welcome-${scenario}.png`), frame.png);
+        const rect = frame.elements[0]!.bounds;
+        const annotationFrame = {
+          viewport: page.viewportSize()!,
+          scale: await page.evaluate(() => window.devicePixelRatio),
+          annotations: [
+            {
+              kind: "outline" as const,
+              rect,
+              color: "#536A85",
+              text:
+                scenario === "recent"
+                  ? "Recent chats"
+                  : process.env.OPENCLAW_PROOF_STAGE === "before" || scenario === "default"
+                    ? "Default starters"
+                    : "Agent starters",
+              labelAt: { x: rect.x + 10, y: rect.y + rect.height + 24 },
+            },
+          ],
+        };
+        await writeFile(
+          path.join(suite.artifactDir, `welcome-${scenario}-annotations.json`),
+          JSON.stringify(annotationFrame, null, 2),
+        );
+        const annotated = await rasterizeProofAnnotations(suite.browser, {
+          ...annotationFrame,
+          image: frame.png,
+        });
+        await writeFile(
+          path.join(suite.artifactDir, `welcome-${scenario}-annotated.png`),
+          annotated,
+        );
       }
       expect(await welcome.textContent()).toContain(description);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
