@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -55,7 +55,7 @@ const retainedScopes = resolveGlobalSingleton<ReadOnlyScopes>(
   () => ({ paths: new Map(), active: new Set() }),
 );
 
-/** One retained connection, revoked by its caller, database lifecycle, or idle expiry. */
+/** One logical reader, revoked by its caller, database lifecycle, or idle expiry. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
   private retainedValidation?: OpenClawAgentDatabaseReadValidation;
@@ -224,6 +224,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       return;
     }
     this.borrowers--;
+    if (this.borrowers === 0 && isPostgresSqlConnection(database.db)) {
+      database.db.releaseIdleTransport();
+    }
     if (
       this.cached &&
       this.borrowers === 0 &&

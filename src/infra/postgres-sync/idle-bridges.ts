@@ -5,7 +5,7 @@ const idleBridges = new Map<
   string,
   { bridge: PostgresBridge; timeout: ReturnType<typeof setTimeout> }
 >();
-const maxIdleBridges = 4;
+const maxIdleBridges = 2;
 const idleBridgeTimeoutMs = 3 * 60_000;
 
 function closeBridge(bridge: PostgresBridge): void {
