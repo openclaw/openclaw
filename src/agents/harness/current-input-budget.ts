@@ -1,89 +1,68 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { MediaFact } from "../../media/media-facts.js";
-import { saveMediaBuffer } from "../../media/store.js";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
-import type { AgentHarness } from "./types.js";
 
 const log = createSubsystemLogger("agent/input");
 
+// Conservative: natural English measured ~3.9 chars per token, dense text less.
+const ATTACH_CHARS_PER_TOKEN = 3;
 // Spill only what would not fit: a request that fits inline answers more reliably
 // than one the model must read back from a file (gpt-5.4-mini found a middle-only
 // fact 1/3 times from the attachment, gpt-5.4 3/3). History compaction owns the rest.
-const CURRENT_INPUT_CONTEXT_SHARE = 0.9;
-// Conservative: natural English measured ~3.9 chars per token, dense text less.
-const CHARS_PER_TOKEN_ESTIMATE = 3;
+const ATTACH_CONTEXT_SHARE = 0.9;
+// Without an attachment, cut only a request that would certainly overflow the window.
+const CUT_CHARS_PER_TOKEN = 3.5;
 const CURRENT_INPUT_FILE_NAME = "current-request.txt";
 // Room for the attachment path note the host prepares.
 const CURRENT_INPUT_NOTE_MAX_CHARS = 4_096;
 
-/** Fits the current request for one harness attempt; the transcript keeps the original. */
-export async function fitCurrentInputForHarness<
-  T extends Pick<
-    EmbeddedRunAttemptParams,
-    "prompt" | "transcriptPrompt" | "contextTokenBudget" | "model" | "hostCapabilities"
-  >,
->(params: T, harness: Pick<AgentHarness, "maxInputTextChars">): Promise<T> {
-  const maxChars = resolveCurrentInputMaxChars({
-    runtimeMaxChars: harness.maxInputTextChars,
-    contextTokens: params.contextTokenBudget ?? params.model?.contextWindow,
-  });
-  if (maxChars === undefined || params.prompt.length <= maxChars) {
-    return params;
-  }
-  const prepareInputAttachments = params.hostCapabilities?.prepareInputAttachments;
-  const prompt = await fitOversizedCurrentInput({
-    prompt: params.prompt,
-    maxChars,
-    ...(prepareInputAttachments
-      ? {
-          stageAttachment: (media: MediaFact[]) =>
-            prepareInputAttachments({
-              placement: "local-host",
-              maxChars: CURRENT_INPUT_NOTE_MAX_CHARS,
-              turn: { media },
-              assertCurrent: () => {},
-            }),
-        }
-      : {}),
-  });
-  return { ...params, prompt, transcriptPrompt: params.transcriptPrompt ?? params.prompt };
-}
+export type CurrentInputBudget = { attachMaxChars: number; cutMaxChars: number };
+/** Returns the host note with the staged path, bounded by noteMaxChars, or undefined. */
+export type StageCurrentInputAttachment = (
+  noteMaxChars: number,
+  media: MediaFact[],
+) => Promise<string | undefined>;
 
-/** Largest current request sent inline: the runtime cap or most of the model window, whichever is smaller. */
-export function resolveCurrentInputMaxChars(params: {
+/** Inline limits for the current request from the runtime cap and the model window. */
+export function resolveCurrentInputBudget(params: {
   runtimeMaxChars?: number;
   contextTokens?: number;
-}): number | undefined {
-  const contextChars =
-    params.contextTokens && params.contextTokens > 0
-      ? Math.floor(params.contextTokens * CURRENT_INPUT_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE)
-      : undefined;
-  const limits = [params.runtimeMaxChars, contextChars].filter(
-    (value): value is number => value !== undefined && value > 0,
+}): CurrentInputBudget | undefined {
+  const cap =
+    params.runtimeMaxChars && params.runtimeMaxChars > 0 ? params.runtimeMaxChars : Infinity;
+  const tokens =
+    params.contextTokens && params.contextTokens > 0 ? params.contextTokens : undefined;
+  const attachMaxChars = Math.min(
+    cap,
+    tokens ? Math.floor(tokens * ATTACH_CONTEXT_SHARE * ATTACH_CHARS_PER_TOKEN) : Infinity,
   );
-  return limits.length ? Math.min(...limits) : undefined;
+  const cutMaxChars = Math.min(cap, tokens ? Math.floor(tokens * CUT_CHARS_PER_TOKEN) : Infinity);
+  return Number.isFinite(attachMaxChars) && Number.isFinite(cutMaxChars)
+    ? { attachMaxChars, cutMaxChars }
+    : undefined;
 }
 
 /**
- * Fit an oversized current request. The full text is staged as a readable
- * attachment when this run may read files; the model sees its head and tail,
- * which carry the instruction and both untrusted-content markers. Without a
- * readable attachment only the middle is cut. Callers keep the original as the
- * transcript prompt.
+ * Fit an oversized current request. When the caller can stage a readable
+ * attachment, the full text is saved and the model sees its head, tail and the
+ * attachment path. Otherwise only a request that cannot fit loses its middle.
+ * The head and tail carry the instruction and both untrusted-content markers.
+ * Callers keep the original as the transcript prompt.
  */
 export async function fitOversizedCurrentInput(params: {
   prompt: string;
-  maxChars: number;
-  stageAttachment?: (media: MediaFact[]) => Promise<string | undefined>;
+  budget: CurrentInputBudget;
+  /** Placement-aware staging owned by the harness; undefined when the run cannot read it. */
+  stageAttachment?: StageCurrentInputAttachment;
 }): Promise<string> {
-  const { prompt, maxChars } = params;
-  if (prompt.length <= maxChars) {
+  const { prompt, budget } = params;
+  if (prompt.length <= budget.attachMaxChars) {
     return prompt;
   }
   let note: string | undefined;
   if (params.stageAttachment) {
     try {
+      const { saveMediaBuffer } = await import("../../media/store.js");
       const saved = await saveMediaBuffer(
         Buffer.from(prompt, "utf8"),
         "text/plain",
@@ -91,7 +70,7 @@ export async function fitOversizedCurrentInput(params: {
         undefined,
         CURRENT_INPUT_FILE_NAME,
       );
-      note = await params.stageAttachment([
+      note = await params.stageAttachment(CURRENT_INPUT_NOTE_MAX_CHARS, [
         {
           path: `media://inbound/${saved.id}`,
           contentType: "text/plain",
@@ -100,10 +79,14 @@ export async function fitOversizedCurrentInput(params: {
         },
       ]);
     } catch (error) {
-      log.warn("current input attachment unavailable; cutting its middle instead", {
+      log.warn("current input attachment unavailable; keeping it inline", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+  const maxChars = note ? budget.attachMaxChars : budget.cutMaxChars;
+  if (!note && prompt.length <= maxChars) {
+    return prompt;
   }
   const omittedMarker = (chars: number) =>
     note
@@ -123,4 +106,25 @@ export async function fitOversizedCurrentInput(params: {
     action,
   });
   return `${head}${omittedMarker(omitted)}${tail}${suffix}`;
+}
+
+/** Applies {@link fitOversizedCurrentInput} to attempt params; the transcript keeps the original. */
+export async function fitCurrentInputPrompt<
+  T extends { prompt: string; transcriptPrompt?: string },
+>(
+  params: T,
+  budget: CurrentInputBudget | undefined,
+  stageAttachment?: StageCurrentInputAttachment,
+): Promise<T> {
+  if (!budget || params.prompt.length <= budget.attachMaxChars) {
+    return params;
+  }
+  const prompt = await fitOversizedCurrentInput({
+    prompt: params.prompt,
+    budget,
+    ...(stageAttachment ? { stageAttachment } : {}),
+  });
+  return prompt === params.prompt
+    ? params
+    : { ...params, prompt, transcriptPrompt: params.transcriptPrompt ?? params.prompt };
 }
