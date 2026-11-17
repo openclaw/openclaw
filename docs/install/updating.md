@@ -2062,10 +2062,18 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 `openclaw update` and `openclaw update repair` settle a leftover operation before
 they continue, so a killed publication no longer needs its printed recovery
-command. A killed update usually also leaves its update run unreconciled, which
-is a separate check: `openclaw update` then stops with `Update <id> has
-unfinished recovery` until one `openclaw update repair` reconciles the run.
-Repair settles the publication in the same pass:
+command. A killed update usually also leaves the plugin recovery it reserved,
+which is a separate check. The next `openclaw update` settles that as well when
+`openclaw update repair` would have nothing left to finish: on a package
+install, the killed update was a command-line `openclaw update` whose process
+has exited, the update lease
+store still holds its lease, it did not leave the Gateway stopped, and either
+the previous version is still installed or the Gateway was verified on the new
+one. It reports an `interrupted-update-recovery` warning and continues.
+Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
+can settle it, the reason and the command to run; see
+[how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).
+Both commands settle a leftover publication:
 
 - **Untouched preparation.** It is retired after the original package and
   launchers are verified.

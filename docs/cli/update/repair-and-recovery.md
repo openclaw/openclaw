@@ -327,6 +327,15 @@ while a surviving Doctor process finishes; retry when that process exits. Run
 `openclaw update status`, then `openclaw update repair` for any recovery that
 remains pending.
 
+The next `openclaw update` settles the plugin recovery a killed command-line
+update reserved, and continues without a repair, when the previous version is
+still installed or the Gateway was already verified on the new one. Otherwise
+it refuses and names the command to run, in most cases `openclaw update repair`:
+for example when the installed version was not confirmed finished, the Gateway
+is still stopped, the Gateway started that update, an update may still be
+running, or the update lease store no longer holds that update's lease. See
+[how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
