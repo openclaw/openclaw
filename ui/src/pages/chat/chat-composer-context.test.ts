@@ -456,20 +456,25 @@ describe("renderChatComposer context usage", () => {
     }
   });
 
-  it("hides the run cache rate when any call did not report its cache split", () => {
-    const run = (cacheTelemetry: { state: string }) =>
-      renderComposer({
-        session: { estimatedCostUsd: 0.01 },
-        messages: [
-          { role: "user", content: "hi" },
-          assistant({ usage: { input: 10, cacheRead: 990, cacheWrite: 0 } }),
-          // A provider that reports prompt tokens without a cache split.
-          assistant({ usage: { input: 1_000, cacheRead: 0, cacheWrite: 0, cacheTelemetry } }),
-        ],
-        sessions: defaultSessions() as never,
+  it("leaves calls without a cache split out of the run cache rate", () => {
+    // A provider that reports prompt tokens without a cache split.
+    const unmeasured = (state: string) =>
+      assistant({
+        usage: { input: 1_000, cacheRead: 0, cacheWrite: 0, cacheTelemetry: { state } },
       });
-    expect(part(run({ state: "available" }), "stats")?.textContent).toContain("Cache49.50%");
-    expect(part(run({ state: "unavailable" }), "stats")?.textContent).not.toContain("Cache");
+    const run = (...calls: unknown[]) =>
+      part(
+        renderComposer({
+          session: { estimatedCostUsd: 0.01 },
+          messages: [{ role: "user", content: "hi" }, ...calls],
+          sessions: defaultSessions() as never,
+        }),
+        "stats",
+      )?.textContent;
+    const measured = assistant({ usage: { input: 10, cacheRead: 990, cacheWrite: 0 } });
+    expect(run(measured, unmeasured("available"))).toContain("Cache49.50%");
+    expect(run(measured, unmeasured("unavailable"))).toContain("Cache99.00%");
+    expect(run(unmeasured("unavailable"))).not.toContain("Cache");
   });
 
   it("omits the cost tooltip when every recorded cost is zero", () => {

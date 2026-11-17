@@ -85,8 +85,8 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
   return null;
 }
 
-/** Prompt cache share across every model call since the latest user message; null when
- *  any call did not report its usage or cache split, so an unknown is never shown as a miss. */
+/** Prompt cache share across the model calls since the latest user message that reported
+ *  a cache split; a call with unknown usage or cache use is left out, never counted as a miss. */
 function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
   const totals = { input: 0, cacheRead: 0, cacheWrite: 0 };
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
@@ -102,7 +102,7 @@ function latestRunCacheHitRate(messages: unknown[] | undefined): number | null {
       readCostRecord(usage?.usageReport)?.state === "unavailable" ||
       readCostRecord(usage?.cacheTelemetry)?.state === "unavailable"
     ) {
-      return null;
+      continue;
     }
     for (const key of ["input", "cacheRead", "cacheWrite"] as const) {
       totals[key] += asNonNegativeFiniteNumber(usage?.[key]) ?? 0;

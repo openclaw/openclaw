@@ -379,10 +379,18 @@ it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced
   );
   expect(asNullableObjectRecord(request.mock.calls[0]?.[1])).not.toHaveProperty("startDate");
   expect(await read({ usage: usage(4, 2) })).toMatchObject({ usd: 4, partial: true });
-  expect(await read({ usage: usage(4), computing: true })).toMatchObject({ partial: true });
+  // Incomplete counters bound the cost but give no meaningful ratio.
+  expect(await read({ usage: usage(4), computing: true })).toMatchObject({
+    partial: true,
+    cacheHitRate: null,
+  });
   expect(await read({ usage: usage(4) }, { reason: "time-budget", message: "slow" })).toMatchObject(
-    { partial: true },
+    { partial: true, cacheHitRate: null },
   );
+  // Input from calls without a cache split is left out, not counted as a miss.
+  expect(
+    await read({ usage: { ...usage(4), input: 2_000, cacheUnmeasuredInput: 1_000 } }),
+  ).toMatchObject({ cacheHitRate: 0.75 });
   expect(await read({ usage: usage(0, 3) })).toMatchObject({ unpriced: true });
   // A rotated instance's total belongs to that instance, not this chat.
   expect(await read({ sessionId: "previous", usage: usage(12) })).toBeNull();

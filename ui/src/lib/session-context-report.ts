@@ -146,7 +146,8 @@ function createSessionContextReports(gateway: ApplicationGateway) {
                 usd: usage.totalCost,
                 partial: Boolean(response.partial || row?.computing || usage.missingCostEntries),
                 unpriced: usage.totalCost === 0 && usage.missingCostEntries > 0,
-                cacheHitRate: promptCacheHitRate(usage),
+                // Unlike cost, a ratio of incomplete counters is no bound: withhold it.
+                cacheHitRate: response.partial || row?.computing ? null : promptCacheHitRate(usage),
               }
             : null,
           loading: false,
