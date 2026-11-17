@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../../config/types.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
@@ -608,38 +609,58 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     },
   );
 
-  it("keeps runtime-only context hidden when orphan repair merges an empty transcript", async () => {
-    hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
-    const { seen, sessionPrompt } = capturePrompt();
-    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
-      id: "orphan-leaf",
-      parentId: "parent-leaf",
-      type: "message",
-      message: { role: "user", content: "orphaned ask", timestamp: 1 },
-    });
+  it.each(["internal", "external"] as const)(
+    "keeps runtime-only context hidden during %s orphan recovery",
+    async (kind) => {
+      hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
+      const { seen, sessionPrompt } = capturePrompt();
+      const orphan: PersistedUserTurnMessage = {
+        role: "user",
+        content: "orphaned ask",
+        timestamp: 1,
+        provenance:
+          kind === "internal"
+            ? { kind: "internal_system", sourceTool: "heartbeat" }
+            : { kind: "external_user" },
+      };
+      hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+        id: "orphan-leaf",
+        parentId: "parent-leaf",
+        type: "message",
+        message: orphan,
+      });
 
-    const result = await runAttempt({
-      trajectory: true,
-      attemptOverrides: {
-        prompt: "internal heartbeat event",
-        runtimeContextFragments: [
-          { kind: "runtime-instruction", text: "internal heartbeat event" },
-        ],
-        transcriptPrompt: "",
-      },
-      sessionPrompt,
-    });
+      const result = await runAttempt({
+        trajectory: true,
+        sessionMessages: kind === "external" ? [orphan] : [],
+        attemptOverrides: {
+          prompt: "internal heartbeat event",
+          runtimeContextFragments: [
+            { kind: "runtime-instruction", text: "internal heartbeat event" },
+          ],
+          transcriptPrompt: "",
+        },
+        sessionPrompt,
+      });
 
-    expect(seen.prompt).toContain("orphaned ask");
-    expect(seen.prompt).not.toContain("internal heartbeat event");
-    expect(result.finalPromptText).toBe(seen.prompt);
-    const contextCompiled = trajectoryEvent("context.compiled");
-    const runtimeContext = runtimeContextMessage(seen.messages);
-    expect(runtimeContext.content).toContain("internal heartbeat event");
-    expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
-    expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
-  });
+      if (kind === "internal") {
+        expect(seen.prompt).toContain("orphaned ask");
+        expect(hoisted.sessionManager.branchAsync).toHaveBeenCalledWith("parent-leaf");
+      } else {
+        expect(seen.prompt).not.toContain("orphaned ask");
+        expect(seen.messages).toContainEqual(orphan);
+        expect(result.messagesSnapshot).toContainEqual(orphan);
+        expect(hoisted.sessionManager.branchAsync).not.toHaveBeenCalled();
+      }
+      expect(seen.prompt).not.toContain("internal heartbeat event");
+      expect(result.finalPromptText).toBe(seen.prompt);
+      const contextCompiled = trajectoryEvent("context.compiled");
+      const runtimeContext = runtimeContextMessage(seen.messages);
+      expect(runtimeContext.content).toContain("internal heartbeat event");
+      expect(contextCompiled?.data?.systemPrompt).not.toContain("internal heartbeat event");
+      expect(JSON.stringify(result.messagesSnapshot)).not.toContain("internal heartbeat event");
+    },
+  );
 
   it.each(["blank", "blocked"])("does not submit a %s prompt", async (mode) => {
     const sessionPrompt = vi.fn(async () => {

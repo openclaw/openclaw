@@ -17,3 +17,18 @@ export type EmbeddedAttemptSessionPreparationInput = {
   sessionTarget: SessionTranscriptRuntimeTarget;
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
+
+export type SessionBoundaryAttempt = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "inputProvenance"
+  | "onUserMessagePersistenceInvalidated"
+  | "operation"
+  | "prompt"
+  | "promptCacheKey"
+  | "sessionId"
+  | "sessionKey"
+  | "skipPreparedUserTurnMessage"
+  | "suppressNextUserMessagePersistence"
+  | "userTurnTranscriptRecorder"
+>;

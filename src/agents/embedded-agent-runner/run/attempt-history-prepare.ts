@@ -13,6 +13,7 @@ import {
 } from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
+import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -115,7 +116,11 @@ export async function prepareEmbeddedAttemptHistory(
     });
     input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
-    const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    const validated = await validateReplayTurns({
+      ...replayContext(),
+      messages: prior,
+      preserveUserTurns: true,
+    });
     input.setup.prepStages.mark("history-validation");
 
     if (
@@ -214,6 +219,11 @@ export async function prepareEmbeddedAttemptHistory(
             peerId: attempt.conversationRoutePeerId,
             chatType: attempt.chatType,
           }),
+          {
+            groupConsecutiveUserTurns:
+              transcriptPolicy.validateAnthropicTurns &&
+              shouldMergeConsecutiveTurns(transcriptPolicy, attempt.model.api),
+          },
         ),
         attempt.model,
         {

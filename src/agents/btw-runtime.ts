@@ -7,6 +7,7 @@ import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ImageContent, Message, Model, TextContent } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { omitRecordedModelPrompt } from "../sessions/user-turn-transcript.message.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -150,10 +151,11 @@ async function sanitizeBtwUserMessage(params: {
   message: Extract<Message, { role: "user" }>;
   imageLimits: ImageSanitizationLimits;
 }): Promise<Extract<Message, { role: "user" }> | undefined> {
-  if (typeof params.message.content === "string") {
-    return params.message;
+  const message = omitRecordedModelPrompt(params.message);
+  if (typeof message.content === "string") {
+    return message;
   }
-  const blocks = normalizeBtwContentBlocks(params.message.content);
+  const blocks = normalizeBtwContentBlocks(message.content);
   if (!blocks) {
     return undefined;
   }
@@ -178,7 +180,7 @@ async function sanitizeBtwUserMessage(params: {
     return undefined;
   }
   return {
-    ...params.message,
+    ...message,
     content,
   };
 }
