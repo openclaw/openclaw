@@ -23,7 +23,10 @@ import {
   buildSyntheticContext,
   promptContextBoundaryOptions,
 } from "./bot-handlers.message-context.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  TelegramMediaRuntime,
+  TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
@@ -287,9 +290,8 @@ export function createTelegramInboundPipeline({
 
       const nativeMedia = resolveTelegramPrimaryMedia(normalizedMsg);
       const hydrateMedia = async (
-        abortSignals: readonly AbortSignal[],
+        mediaRuntime: TelegramMediaRuntime,
       ): Promise<TelegramInboundMediaHydration> => {
-        const mediaRuntime = resolveMediaRuntime(...abortSignals);
         let media: Awaited<ReturnType<typeof resolveMedia>> = null;
         let unavailable: TelegramMediaRef["unavailable"];
         try {
@@ -399,7 +401,7 @@ export function createTelegramInboundPipeline({
         // Downloading here would spend the forward quiet window and split the burst.
         debounceEntry.hydrateMedia = hydrateMedia;
       } else {
-        const hydration = await hydrateMedia([]);
+        const hydration = await hydrateMedia(resolveMediaRuntime());
         if (hydration.kind === "retry") {
           recordTelegramMessageProcessingResult({
             kind: "failed-retryable",

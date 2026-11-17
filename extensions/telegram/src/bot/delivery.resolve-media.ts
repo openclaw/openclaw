@@ -22,12 +22,6 @@ import type { TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
-// One budget for getFile, its retries and the download. Inbound media is fetched before
-// the update is adopted, so the budget must end well inside the ingress adoption stall
-// watchdog (5 min): a fetch the watchdog aborts is retried and holds every later message
-// in the chat. Out of budget, the caller delivers the message without the attachment.
-// A watchdog configured below this budget still retries; that is an operator choice.
-const TELEGRAM_MEDIA_FETCH_DEADLINE_MS = 2 * 60_000;
 
 type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
   message: NonNullable<Parameters<typeof resolveTelegramPrimaryMedia>[0]>;
@@ -232,7 +226,10 @@ export async function resolveMedia(params: {
   apiRoot?: string;
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
+  /** The caller's owner left (shutdown, lost claim). */
   abortSignal?: AbortSignal;
+  /** Time left for every fetch in the caller's batch; covers getFile, its retries and the download. */
+  budget: AbortSignal;
 }): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
   const { ctx, ...downloadOptions } = params;
   const msg = ctx.message;
@@ -247,18 +244,9 @@ export async function resolveMedia(params: {
   if (!metadata.fileRef?.file_id) {
     return null;
   }
-  const deadline = new AbortController();
-  const deadlineTimer = setTimeout(
-    () =>
-      deadline.abort(
-        new Error(`Telegram media fetch exceeded ${TELEGRAM_MEDIA_FETCH_DEADLINE_MS / 1000}s`),
-      ),
-    TELEGRAM_MEDIA_FETCH_DEADLINE_MS,
-  );
-  deadlineTimer.unref?.();
   const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, deadline.signal])
-    : deadline.signal;
+    ? AbortSignal.any([params.abortSignal, params.budget])
+    : params.budget;
   const telegramFileName = metadata.fileName;
   const mimeType = metadata.mimeType;
   const saved = await (async (): Promise<Awaited<ReturnType<typeof saveRemoteMedia>>> => {
@@ -338,7 +326,7 @@ export async function resolveMedia(params: {
       fallbackContentType: mimeType,
       originalFilename: telegramFileName,
     });
-  })().finally(() => clearTimeout(deadlineTimer));
+  })();
   let stickerMetadata: TelegramResolvedMedia["stickerMetadata"];
   if (sticker) {
     const cached = sticker.file_unique_id ? await getCachedSticker(sticker.file_unique_id) : null;
