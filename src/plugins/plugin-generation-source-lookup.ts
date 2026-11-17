@@ -245,7 +245,7 @@ function copyRecoverySource({
     const directory = recovery.directory;
     const relocate = (filename: string) =>
       path.join(directory, path.relative(boundaryRoot, filename));
-    const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
+    const fileReferenceTargets = new Map<string, PluginNativeArtifactFact>();
     // Keep dependency links within the new capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
@@ -273,15 +273,15 @@ function copyRecoverySource({
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-        if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
-          hardlinkedTargets.set(to, retained);
+        if (linkPluginNativeReference(fact.capturedPath, to, retained) !== "symlink") {
+          fileReferenceTargets.set(to, retained);
         }
         native!.references.set(from, retained);
         return false;
       },
     });
     const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
-    for (const [target, fact] of hardlinkedTargets) {
+    for (const [target, fact] of fileReferenceTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
     const copiedSources = new Map(
