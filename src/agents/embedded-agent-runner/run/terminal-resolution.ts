@@ -608,9 +608,7 @@ async function completeEmbeddedRun(
                   ),
                 ]
               : input.payloadsForTerminalPath
-            : input.attempt.yieldDetected &&
-                !input.attempt.yieldAcknowledgment?.trim() &&
-                !hasYieldContinuationEvidence(input.attempt)
+            : input.attempt.yieldDetected && !hasYieldContinuationEvidence(input.attempt)
               ? [setReplyPayloadMetadata({ text: YIELD_DIAGNOSTIC_TEXT }, { hostNotice: true })]
               : input.payloadsForTerminalPath;
   const sourceFinal = input.attempt.messagingToolSourceReplyPayloads?.findLast(
