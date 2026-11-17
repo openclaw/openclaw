@@ -821,21 +821,11 @@ jobs:
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
           import os
 
-          from ci_git_owner import git_output, run_git
+          from ci_git_owner import fetch, git_output
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           source_sha = os.environ["SOURCE_SHA"]
-          run_git(
-              workspace,
-              "fetch",
-              "--no-tags",
-              "--depth=1",
-              "--filter=blob:none",
-              "origin",
-              source_sha,
-              timeout=120,
-              reclaim_locks=True,
-          )
+          fetch(workspace, source_sha, blobless=True)
           # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
@@ -1576,21 +1566,11 @@ jobs:
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
           import os
 
-          from ci_git_owner import git_output, run_git
+          from ci_git_owner import fetch, git_output
 
           workspace = os.environ["GITHUB_WORKSPACE"]
           target_sha = os.environ["TARGET_SHA"]
-          run_git(
-              workspace,
-              "fetch",
-              "--no-tags",
-              "--depth=1",
-              "--filter=blob:none",
-              "origin",
-              target_sha,
-              timeout=120,
-              reclaim_locks=True,
-          )
+          fetch(workspace, target_sha, blobless=True)
           # The partial fetch leaves this one manifest blob for git show to hydrate.
           package_json = git_output(
               workspace,
