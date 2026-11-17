@@ -39,14 +39,18 @@ delivery notice. The child result remains available in its session and the
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
 
-An interrupted requester completion turn is not a quiet settlement. Typed cancellation,
-worker timeout, preparation invalidation, and saved-state or transcript conflicts
-retain the existing bounded retry schedule when replay is safe: three attempts,
-with 30-second and two-minute delays. Cancellation before dispatch also uses that
-schedule. Every retryable settle outcome keeps its wake; exhausting the budget
-records a permanent failure and the existing blocked-delivery notice. Runs with
-committed or unknown effects remain failed for explicit recovery instead of
-repeating their work.
+A requester completion turn commits the child results to the requester transcript
+before it calls the model. A committed result is never dispatched again. If the turn
+then fails before it answers (for example the provider is unavailable), the result
+is delivered: the turn shows its own error in the chat, and the next turn reads the
+results from the transcript. If the turn answered but the answer did not reach the
+channel, or the turn ended for a recorded reason, that outcome is kept.
+
+Results that no turn committed stay owed. Cancellation before dispatch, worker
+timeout, preparation invalidation and other retryable refusals keep the wake pending
+with its last error, and the sweeper wakes it again. There is no attempt limit,
+retry ladder or expiry. A permanent refusal withholds the result with that error;
+it stays readable in the child session and is not dispatched again.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
