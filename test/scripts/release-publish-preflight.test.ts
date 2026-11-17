@@ -1,24 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createPublicationSourceFact,
-  publicationDispatchEnvelope,
-  publicationIntentInputs,
-  publicationSourceRequest,
-  type PublicationSelection,
-} from "../../scripts/full-release-publication-contract.mjs";
-import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import type { PublishablePluginPackage } from "../../scripts/lib/plugin-publication-collector.ts";
 import {
   formatReleasePublishPreflight,
   parsePublishPreflightArgs,
 } from "../../scripts/lib/release-publish-preflight-interface.mts";
 import * as publicationState from "../../scripts/lib/release-publish-state.mts";
-import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 const version = "2026.11.5-beta.1";
 const [targetSha, toolingSha] = ["a".repeat(40), "b".repeat(40)];
 const workflowRef = "release-publish/bbbbbbbbbbbb-1";
-let evidenceFixture: ReturnType<typeof extendedStableEvidence> | undefined;
+let evidenceFixture: ReturnType<typeof candidatePublicationFixture> | undefined;
 let npmPlugins: PublishablePluginPackage[] = [];
 const resumeRun = vi.fn(async () => ({ runId: "41760000001" }));
 
@@ -32,7 +24,7 @@ vi.mock("../../scripts/lib/release-publish-preflight-evidence.mts", async (impor
   createPublishPreflightEvidenceClient: () =>
     evidenceFixture?.client ?? { loadManifest: () => null },
   preflightApi: () =>
-    evidenceFixture?.parentRun ?? { status: "completed", conclusion: "success", run_attempt: 1 },
+    evidenceFixture?.parent ?? { status: "completed", conclusion: "success", run_attempt: 1 },
   resolvePreflightTag: (_gh: unknown, _repo: string, tag: string) =>
     tag.startsWith("release-publish/") ? toolingSha : targetSha,
   verifyPublishSourceLineage: () => undefined,
@@ -58,7 +50,7 @@ vi.mock("../../scripts/lib/release-publish-closeout-preflight.mts", () => ({
 // mock-isolation: package inventory and GitHub run observation read live state.
 vi.mock("../../scripts/lib/release-publish-state.mts", () => ({
   readReleasePublicationPackages: () => ({
-    version: evidenceFixture ? "2026.9.37" : version,
+    version: evidenceFixture ? "2026.9.38" : version,
     corePackages: [],
     npmPlugins,
   }),
@@ -156,118 +148,24 @@ describe("release publish preflight core npm resume", () => {
   });
 });
 
-// Replay retained source-admission evidence through the real strict authenticator;
-// only GitHub/registry I/O is fixed, never the selection or provenance decision.
-function extendedStableEvidence(mismatchedSelection = false) {
-  const f = trustedMainNpmFixture("stable");
-  const branch = "release-ci/" + toolingSha.slice(0, 12) + "-123";
-  const mapped = <T>(value: T): T =>
-    JSON.parse(
-      JSON.stringify(value)
-        .replaceAll("2026.8.28", "2026.9.37")
-        .replaceAll(f.targetSha, targetSha)
-        .replaceAll(f.workflowSha, toolingSha)
-        .replaceAll('"main"', JSON.stringify(branch))
-        .replaceAll("refs/heads/main", "refs/heads/" + branch),
-    );
-  const selection: PublicationSelection = {
-    route: mismatchedSelection ? "normal" : "extended-stable",
-    npmDistTag: mismatchedSelection ? "latest" : "extended-stable",
-    publishOpenclawNpm: true,
-    pluginPublishScope: "all-publishable",
-    plugins: [],
-  };
-  const source = createPublicationSourceFact(
-    publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: targetSha,
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: selection,
-        }),
-        release_profile: "stable",
-        rerun_group: "all",
-        run_release_soak: "true",
-      }),
-      PUBLICATION_TARGET_CONTEXT: "extended-stable/2026.9.33",
-      PUBLICATION_TOOLING_JSON: JSON.stringify({
-        fullRef: "refs/heads/" + branch,
-        sha: toolingSha,
-      }),
-      PUBLICATION_TARGET_SHA: targetSha,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/" + branch,
-      GITHUB_SHA: toolingSha,
-      GITHUB_RUN_ID: f.runId,
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
-    { packages: [], platforms: [] },
-    {
-      version: "2026.9.37",
-      packages: [{ name: "openclaw", version: "2026.9.37", targets: ["npm"] }],
-      platforms: [],
-    },
-  );
-  const manifest = mapped(f.manifest);
-  const plan = mapped(f.executionPlan);
-  // This archived source-admission producer predates reduced npm coverage.
-  delete plan.coveragePolicy;
-  Object.assign(manifest, {
-    sourceAdmissionContract: "1",
-    sourceAdmission: source,
-    targetRef: targetSha,
-    trustedWorkflow: { fullRef: "refs/heads/" + branch, ref: branch, sha: toolingSha },
-  });
-  Object.assign(
-    manifest.validationInputs,
-    Object.fromEntries(
-      Object.entries(source.coverage).map(([key, value]) => [
-        key.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase()),
-        value,
-      ]),
-    ),
-  );
-  delete manifest.validationInputs.coveragePolicy;
-  Object.assign(manifest.validationInputs, publicationIntentInputs(source), {
-    targetContextRef: source.targetContextRef,
-  });
-  Object.assign(plan, { sourceAdmissionContract: "1", sourceAdmission: source });
-  plan.sha256 = releaseExecutionPlanSha256(plan);
-  manifest.executionPlanSha256 = plan.sha256;
-  return {
-    parentRun: { ...mapped(f.parentRun), name: "Full Release Validation" },
-    manifest,
-    client: {
-      ...f.client,
-      getWorkflowSource: () => 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n',
-      getRef: (ref: string) => ({ ref, object: { sha: toolingSha } }),
-      getRun: (id: string) => ({
-        ...mapped(f.client.getRun(id)),
-        ...(id === f.runId ? { name: "Full Release Validation" } : {}),
-      }),
-      getRunView: (id: string) => mapped(f.client.getRunView(id)),
-      getParentJobs: (id: string) => mapped(f.client.getParentJobs(id)),
-      getRunAttemptJobs: (id: string) => mapped(f.client.getRunAttemptJobs(id)),
-      getJobLog: (id: number) =>
-        f.client
-          .getJobLog(id)
-          .replaceAll(f.targetSha, targetSha)
-          .replaceAll("CI_RELEASE_SCOPE: npm-stable", "CI_RELEASE_SCOPE: full"),
-      loadManifest: () => ({ artifact: mapped(f.artifact), manifest }),
-      loadExecutionPlan: () => plan,
-    },
-  };
-}
-
 describe("extended-stable publication preflight", () => {
   it.each(["exact", "prepared", "mismatched seal"] as const)(
     "authenticates extended-stable selection: %s",
     async (scenario) => {
       const publicationRoute = scenario === "prepared" ? "prepared" : undefined;
       vi.spyOn(console, "error").mockImplementation(() => {});
-      evidenceFixture = extendedStableEvidence(scenario === "mismatched seal");
+      // Use a synthetic extended-stable version without a release-specific exemption.
+      evidenceFixture = candidatePublicationFixture({
+        candidateVersion: "2026.9.38",
+        targetContextRef: "extended-stable/2026.9.33",
+        qualificationBaselines: {
+          upgradeBaseline: "openclaw@2026.9.36",
+          upgradeSurvivorBaselines: ["openclaw@2026.9.33", "openclaw@2026.9.36"],
+        },
+        publicationRoute: scenario === "mismatched seal" ? "normal" : "extended-stable",
+      });
       vi.stubGlobal("fetch", async (url: string) =>
-        url.endsWith("/2026.9.37")
+        url.endsWith("/2026.9.38")
           ? new Response("{}", { status: 404 })
           : Response.json({
               name: "openclaw",
@@ -278,11 +176,11 @@ describe("extended-stable publication preflight", () => {
       try {
         const report = await runReleasePublishPreflight({
           repo: "openclaw/openclaw",
-          tag: "v2026.9.37",
+          tag: "v2026.9.38",
           npmDistTag: "extended-stable",
           pluginPublishScope: "all-publishable",
           workflowRef,
-          fullReleaseValidationRunId: String(evidenceFixture.parentRun.id),
+          fullReleaseValidationRunId: evidenceFixture.runId,
           fullReleaseValidationRunAttempt: "1",
           publicationRoute,
         });
