@@ -79,7 +79,6 @@ it("keeps the host while replacing only the status/source canvas lifetime", asyn
     const second = expectDefined(renderer.create.mock.results[1], "second renderer").value;
     expect(second.setLevel).toHaveBeenLastCalledWith(0.8);
     expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
-    expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
 
     const replacement = new RealtimeTalkLevelSignal();
     replacement.set(0.35);
