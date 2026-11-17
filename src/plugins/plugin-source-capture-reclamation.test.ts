@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,6 +10,7 @@ import * as command from "../process/exec-runner.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   isPluginSourceCaptureRetained,
+  retainPluginSourceCaptureInstance,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 import {
@@ -53,6 +55,114 @@ function orphan(name: string, keepCreator = false) {
   age(root);
   return { root, file, release };
 }
+
+it("commits final capture retirement away from the host before removing payload", async () => {
+  const instance = retainPluginSourceCaptureInstance(stateDir);
+  const capture = instance.createDirectory();
+  const root = path.dirname(path.dirname(capture));
+  fs.writeFileSync(path.join(capture, "index.cjs"), "source bytes");
+  const pending = instance.createNativeDirectory();
+  fs.writeFileSync(path.join(pending.directory, "pending.node"), "unpublished bytes");
+  const committed = instance.createNativeDirectory();
+  const native = path.join(committed.directory, "committed.node");
+  fs.writeFileSync(native, "committed native bytes");
+  committed.commit();
+  const releaseNative = retainPluginNativeCapturePath(native);
+  const marker = interceptPluginCaptureReclamation(`
+    import promises from 'node:fs/promises';
+    import { DatabaseSync } from 'node:sqlite';
+    const remove = promises.rm.bind(promises);
+    promises.rm = async (target, options) => {
+      if (target === ${JSON.stringify(path.join(root, "captures"))}) {
+        const db = new DatabaseSync(${JSON.stringify(path.join(root, "owner.sqlite"))}, { readOnly: true });
+        try {
+          if (db.prepare('PRAGMA user_version').get().user_version !== 1) {
+            throw new Error('Payload deletion preceded committed retirement');
+          }
+        } finally { db.close(); }
+      }
+      return remove(target, options);
+    };
+  `);
+  using nativeSql = vi.spyOn(DatabaseSync.prototype, "exec");
+  try {
+    await Promise.all([instance.releaseAsync(), instance.releaseAsync()]);
+    expect(
+      nativeSql.mock.calls.filter(
+        ([statement]) => statement === "PRAGMA user_version=1" || statement === "COMMIT",
+      ),
+    ).toEqual([]);
+    expect(fs.existsSync(capture)).toBe(false);
+    expect(fs.existsSync(pending.directory)).toBe(false);
+    expect(fs.readFileSync(native, "utf8")).toBe("committed native bytes");
+    expect(() => acquireSqliteStagingToken(root, "read")).toThrow("SQLite snapshot parent retired");
+    await instance.releaseAsync();
+  } finally {
+    nativeSql.mockRestore();
+    marker.mockRestore();
+    releaseNative();
+    await instance.releaseAsync();
+  }
+});
+
+it.skipIf(process.platform === "win32").each(["directory", "token"] as const)(
+  "refuses a replaced %s after handing off native custody",
+  async (replaced) => {
+    const instance = retainPluginSourceCaptureInstance(stateDir);
+    const capture = instance.createDirectory();
+    const root = path.dirname(path.dirname(capture));
+    const target = replaced === "directory" ? root : path.join(root, "owner.sqlite");
+    const parked = path.join(stateDir, "original");
+    const sentinel = replaced === "directory" ? path.join(target, "sentinel") : target;
+    const run = command.runCommandBuffersWithTimeout;
+    let changed = false;
+    const restore = () => {
+      if (changed) {
+        fs.rmSync(target, { recursive: true, force: true });
+        fs.renameSync(parked, target);
+        changed = false;
+      }
+    };
+    const launch = vi
+      .spyOn(command, "runCommandBuffersWithTimeout")
+      .mockImplementation((argv, options) => {
+        if (
+          typeof options === "number" ||
+          typeof options.input !== "string" ||
+          !options.input.includes('"retire-plugin-capture"')
+        ) {
+          return run(argv, options);
+        }
+        return run(argv, {
+          ...options,
+          beforeInput: (...args) => {
+            options.beforeInput?.(...args);
+            fs.renameSync(target, parked);
+            changed = true;
+            if (replaced === "directory") {
+              fs.mkdirSync(target);
+            }
+            fs.writeFileSync(sentinel, "replacement bytes");
+          },
+        });
+      });
+    try {
+      await expect(instance.releaseAsync()).rejects.toThrow(
+        /identity changed|changed before retirement/,
+      );
+      expect(changed).toBe(true);
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("replacement bytes");
+      launch.mockRestore();
+      restore();
+      await instance.releaseAsync();
+      expect(fs.existsSync(root)).toBe(false);
+    } finally {
+      launch.mockRestore();
+      restore();
+      await instance.releaseAsync();
+    }
+  },
+);
 
 it("reclaims a batch off main without disturbing a live host creator lock or native bytes", async () => {
   const spawned = vi.spyOn(command, "runCommandBuffersWithTimeout");

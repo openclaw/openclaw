@@ -305,6 +305,13 @@ if (parentPort) {
         };
         break;
       }
+      case "retire-plugin-capture": {
+        const { retirePluginCapture } =
+          await import("../plugins/plugin-source-capture-native-loads.js");
+        await retirePluginCapture(command.retirement);
+        reply = { type: "capture-retired" };
+        break;
+      }
       case "remove":
         // Node's synchronous remover walks natively, outside the Gateway's JS heap.
         try {

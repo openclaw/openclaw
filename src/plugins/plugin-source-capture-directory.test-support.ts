@@ -24,7 +24,8 @@ export function interceptPluginCaptureReclamation(preload: string, onReply?: () 
     if (
       typeof options === "number" ||
       typeof options.input !== "string" ||
-      !options.input.includes('"reclaim-plugin-captures"')
+      (!options.input.includes('"reclaim-plugin-captures"') &&
+        !options.input.includes('"retire-plugin-capture"'))
     ) {
       return original(argv, options);
     }

@@ -11,6 +11,7 @@ import type {
 } from "../agents/workspace-filesystem.types.js";
 import type { WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
 import type { ScratchTreeResult } from "./scratch-cleanup-tree.js";
+import type { SqliteStagingRetirementIdentity } from "./sqlite-staging-token.js";
 import type { NativeWorkerFailure } from "./worker-native-error.js";
 export type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
 
@@ -25,8 +26,16 @@ export type PluginCaptureReclaimCandidate = {
   kind: "managed" | "legacy";
 };
 
+/** Final release of one captured producer, not a best-effort orphan sweep. */
+export type PluginCaptureRetirement = {
+  directory: string;
+  identity: SqliteStagingRetirementIdentity;
+  pendingNative: readonly string[];
+};
+
 export type FsSafeCopyWrite =
   | { type: "reclaim-plugin-captures"; candidates: readonly PluginCaptureReclaimCandidate[] }
+  | { type: "retire-plugin-capture"; retirement: PluginCaptureRetirement }
   | { type: "create"; destination: string }
   | { type: "remove"; destination: string }
   | { type: "copy"; source: string; destination: string };
@@ -77,6 +86,7 @@ export type ProvisionCopyDetails = {
 
 export type FsSafeCopyReply =
   | ScratchTreeResult
+  | { type: "capture-retired" }
   | { type: "captures-reclaimed"; failures: number; firstFailure?: string }
   | WorkspaceFilesystemReply
   | WorkspaceFilesystemReadReply

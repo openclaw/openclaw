@@ -28,6 +28,99 @@ it("keeps read custody after creator release and rejects late readers after reti
   acquireSqliteStagingToken(directory, "reclaim")(true);
 });
 
+it("hands off captured identities without retiring or blocking late staging admission", () => {
+  const directory = tempDirs.make("sqlite-staging-token-handoff-");
+  const location = path.join(directory, "owner.sqlite");
+  using close = vi.spyOn(DatabaseSync.prototype, "close");
+  const creator = acquireSqliteStagingToken(directory, "create", { exclusiveCreate: true });
+  close.mockClear();
+  const directoryIdentity = fs.lstatSync(directory, { bigint: true });
+  const tokenIdentity = fs.lstatSync(location, { bigint: true });
+  const tokenBytes = fs.readFileSync(location);
+  try {
+    {
+      using exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const identity = creator.releaseForRetirement();
+      expect(identity).toEqual({
+        directory: { dev: directoryIdentity.dev.toString(), ino: directoryIdentity.ino.toString() },
+        token: {
+          key: `file:${tokenIdentity.dev}:${tokenIdentity.ino}`,
+          birthtime: readDatabaseIdentityBirthtime(tokenIdentity),
+        },
+      });
+      expect(exec.mock.calls).toEqual([["ROLLBACK"]]);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledTimes(1);
+      using lstat = vi.spyOn(fs, "lstatSync");
+      expect(creator.releaseForRetirement()).toBe(identity);
+      expect(lstat).not.toHaveBeenCalled();
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledTimes(1);
+    }
+    expect(fs.readFileSync(location)).toEqual(tokenBytes);
+    acquireSqliteStagingToken(directory, "read")();
+    acquireSqliteStagingToken(directory, "create")();
+    acquireSqliteStagingToken(directory, "reclaim")(true);
+    expect(() => acquireSqliteStagingToken(directory, "read")).toThrow(SqliteStagingRetiredError);
+    expect(() => acquireSqliteStagingToken(directory, "create")).toThrow(SqliteStagingRetiredError);
+  } finally {
+    creator();
+  }
+});
+
+it("retries a failed native close before returning the retirement identity", () => {
+  const directory = tempDirs.make("sqlite-staging-token-handoff-close-");
+  const failure = new Error("Fixture native close failed");
+  using close = vi.spyOn(DatabaseSync.prototype, "close").mockImplementationOnce(() => {
+    throw failure;
+  });
+  const creator = acquireSqliteStagingToken(directory, "create", { exclusiveCreate: true });
+  using exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  try {
+    expect(() => creator.releaseForRetirement()).toThrow(failure);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(creator.releaseForRetirement().token.key).toMatch(/^file:/u);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(exec.mock.calls).toEqual([["ROLLBACK"]]);
+    creator.releaseForRetirement();
+    expect(close).toHaveBeenCalledTimes(2);
+  } finally {
+    creator();
+  }
+});
+
+// Windows prevents this replacement while the original descriptor remains retained.
+it.skipIf(process.platform === "win32").each(["directory", "token"] as const)(
+  "refuses a replacement %s before releasing retirement custody",
+  (replaced) => {
+    const root = tempDirs.make("sqlite-staging-token-handoff-replacement-");
+    const directory = path.join(root, "stage");
+    const location = path.join(directory, "owner.sqlite");
+    fs.mkdirSync(directory);
+    using close = vi.spyOn(DatabaseSync.prototype, "close");
+    const creator = acquireSqliteStagingToken(directory, "create");
+    close.mockClear();
+    fs.renameSync(replaced === "directory" ? directory : location, path.join(root, "original"));
+    if (replaced === "directory") {
+      fs.mkdirSync(directory);
+    }
+    fs.writeFileSync(location, "replacement bytes");
+    try {
+      using exec = vi.spyOn(DatabaseSync.prototype, "exec");
+      expect(() => creator.releaseForRetirement()).toThrow(
+        "SQLite staging ownership changed before retirement",
+      );
+      expect(exec).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(fs.readFileSync(location, "utf8")).toBe("replacement bytes");
+    } finally {
+      creator();
+    }
+  },
+);
+
 it("refuses an existing WAL token even when acquired by a creator", () => {
   const directory = tempDirs.make("sqlite-staging-token-wal-");
   const database = openNodeSqliteDatabase(path.join(directory, "owner.sqlite"));

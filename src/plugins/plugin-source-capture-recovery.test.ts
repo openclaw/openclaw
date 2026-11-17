@@ -364,6 +364,20 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
     interruptRemoval(target);
     await remove(target, options);
   });
+  if (mode === "async") {
+    // Retirement now deletes in the standalone owner, so inject the same physical
+    // sharing failure there rather than only intercepting unrelated host calls.
+    interceptPluginCaptureReclamation(`
+      import promises from 'node:fs/promises';
+      const remove = promises.rm.bind(promises);
+      promises.rm = async (target, options) => {
+        if (target === ${JSON.stringify(path.join(root, "captures"))}) {
+          throw Object.assign(new Error('Fixture Windows sharing violation'), { code: 'EPERM' });
+        }
+        return remove(target, options);
+      };
+    `);
+  }
   await using resources = cleanupStack([
     () => vi.restoreAllMocks(),
     () => instance?.release(),
@@ -372,7 +386,7 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   if (instance) {
     expect(() => instance.release()).toThrow(locked);
   } else {
-    await worker!.release();
+    await expect(worker!.release()).rejects.toThrow("Fixture Windows sharing violation");
   }
   expectBytes(payload, "export default 1");
   const tokenless = fs

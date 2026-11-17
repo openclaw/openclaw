@@ -293,6 +293,7 @@ it("preserves a symlink target when scratch is replaced after transaction retire
         release.beginRetirement();
         return scratch.release;
       },
+      releaseForRetirement: () => release.releaseForRetirement(),
     },
   );
   await expect(finishScratch(scratch, () => {})).resolves.toContain(scratch.directory);
