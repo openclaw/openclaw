@@ -166,6 +166,14 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
     ]
       .filter(Boolean)
       .join(" · ");
+  const showProviderIcon = () => {
+    const model = triggerModel();
+    return Boolean(
+      !params.triggerStatusLabel &&
+      model &&
+      (model.presentation || hasProviderBrandIcon(model.provider)),
+    );
+  };
   const closeModelPickerAfterSelection = (event: MouseEvent) => {
     // Option buttons live inside the picker overlay; its summary lives outside it.
     if (event.currentTarget instanceof Element) {
@@ -206,15 +214,13 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
         >
-          {!params.triggerStatusLabel &&
-          triggerModel() &&
-          (triggerModel()!.presentation || hasProviderBrandIcon(triggerModel()!.provider)) ? (
+          <Show when={showProviderIcon()}>
             <ProviderBrandIcon
               provider={triggerModel()!.provider}
               presentation={triggerModel()!.presentation}
               class="chat-controls__trigger-provider-icon"
             />
-          ) : undefined}
+          </Show>
           <span class="chat-controls__inline-select-label">
             {params.triggerStatusLabel ?? params.triggerModelLabel}
           </span>

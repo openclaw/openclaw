@@ -326,21 +326,27 @@ it("keeps search live while targets load, then ranks model, target, and account 
 it("uses the displayed model for trigger metadata and distinguishes an unset override from an empty one", () => {
   const params = pickerProps({
     modelOptions: [
-      option("fixture", "default", { isDefault: true, supportsTools: false }),
+      option("openai", "default", { isDefault: true, supportsTools: false }),
       option("fixture", "other", { supportsTools: true }),
     ],
     selectedModelValue: "",
   });
   const { container, update } = mountPicker(params);
   const trigger = control(container, "select")!;
+  const icon = () => trigger.querySelector(".chat-controls__trigger-provider-icon");
   expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+  expect(icon()).not.toBeNull();
   update({ ...params, triggerModelValue: "fixture/other" });
   expect(control(container, "select")).toBe(trigger);
   expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
+  expect(icon()).toBeNull();
   update({ ...params, triggerModelValue: "" });
   expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current");
   update(params);
   expect(trigger.getAttribute("aria-label")).toBe("Chat model: Current · No tools");
+  expect(icon()).not.toBeNull();
+  update({ ...params, triggerStatusLabel: "Loading" });
+  expect(icon()).toBeNull();
 });
 
 it("shows a context badge only for a known non-default selection", () => {
