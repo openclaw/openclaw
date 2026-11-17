@@ -69,17 +69,20 @@ type SubagentForkedTurnOutcome = {
 export type SubagentForkedTurnParams<T> = {
   sessionKey: string;
   /**
-   * The completed transcript entry the fork reads through. Refused when the session was
-   * replaced (`sessionId` no longer current) or the entry is no longer on its active transcript.
-   * A reset that keeps the session id is reported through `outcome.source.lifecycleRevision`.
+   * The completed transcript entry the fork reads through; the session's latest message when
+   * omitted. Refused when the session was replaced (`sessionId` no longer current) or the entry
+   * is no longer on its active transcript. A reset that keeps the session id is reported through
+   * `outcome.source.lifecycleRevision`.
    */
-  through: { sessionId: string; entryId: string };
+  through?: { sessionId: string; entryId: string };
   prompt: string;
   /**
-   * Tools the calling plugin registered that the fork may run. Every tool the session lists
-   * stays visible to the model so the provider serves the session's cached prefix; only these
-   * run. Core tools and tools another plugin registered are refused; the session's tool policy
-   * must also allow each one, or the run is not admitted.
+   * Tools the fork may run: tools the calling plugin registered, plus `read`, `ls` and `exec`.
+   * Every tool the session lists stays visible to the model so the provider serves the
+   * session's cached prefix; only these run. The session's tool policy must allow each one, or
+   * the run is not admitted; `read`, `ls` and `exec` are never added to it. `exec` runs only on
+   * the owner's turns and never asks for approval: a command that needs approval is denied.
+   * Other core tools and tools another plugin registered are refused.
    */
   tools: readonly string[];
   /** Full provider/model override; requires the same trust as `subagent.run` overrides. */
