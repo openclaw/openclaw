@@ -49,7 +49,6 @@ vi.mock("../../infra/update-git-runtime.js", () => ({ readBuiltGatewayBuildId: a
 vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease: () => undefined }));
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_LEASE_TTL_MS: 300_000,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 10_000,
   hasActiveStartupMigrationLease: () => false,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
