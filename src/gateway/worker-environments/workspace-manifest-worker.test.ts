@@ -14,6 +14,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
+import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
@@ -463,6 +464,40 @@ it("rejects source integration that replaces a saved-only path", async () => {
   ).rejects.toThrow(
     "The selected base conflicts with saved workspace data at saved.txt; move that saved file before retrying prepare_pr.",
   );
+});
+
+it("does not charge excluded Git subtrees to the refreshed manifest entry budget", async () => {
+  const root = tempDirs.make("workspace-refresh-excluded-");
+  await requireGit(root, ["init", "--quiet"]);
+  const blob = await requireGit(root, ["hash-object", "-w", "--stdin"], { input: "kept" });
+  const beforeTree = await requireGit(root, ["mktree"], {
+    input: `100644 blob ${blob}\tmain.txt\n`,
+  });
+  const excludedTree = await requireGit(root, ["mktree"], {
+    input: Array.from(
+      { length: MAX_WORKSPACE_INVENTORY_ENTRIES },
+      (_, index) => `100644 blob ${blob}\tfile-${index}\n`,
+    ).join(""),
+  });
+  const afterTree = await requireGit(root, ["mktree"], {
+    input: `100644 blob ${blob}\tmain.txt\n040000 tree ${excludedTree}\tnode_modules\n`,
+  });
+  const baseline = encode([workspaceFile("main.txt", "kept")], "a".repeat(40));
+  const expected = encode([workspaceFile("main.txt", "kept")], "b".repeat(40));
+  const refreshed = await prepareWorkspaceBaseRefresh({
+    root,
+    beforeTree,
+    afterTree,
+    temporaryRoot: tempDirs.make("workspace-refresh-excluded-result-"),
+    baseCommit: "b".repeat(40),
+    baseRaw: baseline.raw,
+    baseRef: baseline.ref,
+    buildCacheInputs: [],
+    action: "refresh_base",
+  });
+  expect(refreshed.rawManifest).toBe(expected.raw);
+  expect(refreshed.manifestRef).toBe(expected.ref);
+  expect(refreshed.buildCacheInputs).toEqual(["main.txt"]);
 });
 
 it.each(["content", "symlink"])(

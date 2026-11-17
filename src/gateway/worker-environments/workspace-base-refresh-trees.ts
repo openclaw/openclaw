@@ -65,9 +65,6 @@ export async function readWorkspaceBaseRefreshTrees(
   for (const tree of [input.beforeTree, input.afterTree]) {
     const listed = await git(metadata, ["ls-tree", "-r", "-t", "-z", "--full-tree", tree]);
     const records = listed.split("\0").filter(Boolean);
-    if (records.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw new Error("Gateway workspace manifest has too many entries");
-    }
     // Recursive ls-tree already places parents before their children.
     inventories.push(
       records.map((record) => {
@@ -126,6 +123,9 @@ export async function readWorkspaceBaseRefreshTrees(
       }
     }
     const eligible = projectWorkspaceEntries(inventory, (file) => retained.has(file));
+    if (eligible.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw new Error("Gateway workspace manifest has too many entries");
+    }
     const reused = [];
     const materialize = [];
     for (const entry of eligible) {
