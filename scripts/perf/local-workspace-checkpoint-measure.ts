@@ -1137,6 +1137,14 @@ registerHooks({
         "serializedBytes = serialized.byteLength; globalThis.__mutationObserver.serialized(serialized.byteLength);",
       );
     }
+    if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-broker-reply.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      assert(code.includes("slot.worker.postMessage("));
+      code = code.replaceAll(
+        "slot.worker.postMessage(",
+        "globalThis.__mutationObserver.postMessage(slot.worker, ",
+      );
+    }
     if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-client.ts") {
       code = fs.readFileSync(path.join(root, relative), "utf8");
       const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
@@ -3151,6 +3159,10 @@ measurement: try {
   };
   if (mutationObserver && reconcileRandomBytes * reconcileChangedFiles >= 1024 * 1024) {
     assert(mutationObserver.samples.length > 0, "Expected a measured oversized journal mutation");
+    assert(
+      mutationObserver.samples.every((sample) => sample.transferredBytes + sample.clonedBytes > 0),
+      "Expected worker transport byte accounting",
+    );
   }
   const report = {
     mode: values.mode,

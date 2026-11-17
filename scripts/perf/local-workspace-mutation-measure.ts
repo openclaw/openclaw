@@ -1,5 +1,6 @@
 import { getHeapStatistics } from "node:v8";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
+import type { SqliteWorkerRequest } from "../../src/infra/sqlite-worker-contract.js";
 
 type Sample = {
   packBytes: number;
@@ -16,26 +17,30 @@ type Sample = {
 export function observeLocalWorkspaceMutations() {
   const samples: Sample[] = [];
   let current: Sample | undefined;
-  // Saved for restoration; every invocation below supplies the original Worker receiver.
-  // oxlint-disable-next-line typescript/unbound-method
-  const post = Worker.prototype.postMessage;
-  Worker.prototype.postMessage = function (message, transfers) {
-    if (current && message && typeof message === "object") {
-      const buffers = [message.input, ...Object.values(message.transferredInput ?? {})];
-      for (const value of buffers) {
-        if (value instanceof Uint8Array) {
-          if (Array.isArray(transfers) && transfers.includes(value.buffer)) {
-            current.transferredBytes += value.byteLength;
-          } else {
-            current.clonedBytes += value.byteLength;
+  return {
+    samples,
+    postMessage(
+      worker: Worker,
+      message: SqliteWorkerRequest,
+      transfers: Parameters<Worker["postMessage"]>[1],
+    ) {
+      if (current) {
+        const buffers = [
+          "input" in message ? message.input : undefined,
+          ...Object.values(message.transferredInput ?? {}),
+        ];
+        for (const value of buffers) {
+          if (value instanceof Uint8Array) {
+            if (transfers?.includes(value.buffer)) {
+              current.transferredBytes += value.byteLength;
+            } else {
+              current.clonedBytes += value.byteLength;
+            }
           }
         }
       }
-    }
-    return post.call(this, message, transfers);
-  };
-  return {
-    samples,
+      worker.postMessage(message, transfers);
+    },
     serialized(bytes: number) {
       if (current) {
         current.serializedBytes += bytes;
@@ -84,9 +89,6 @@ export function observeLocalWorkspaceMutations() {
         samples.push(sample);
         current = undefined;
       }
-    },
-    close() {
-      Worker.prototype.postMessage = post;
     },
   };
 }
