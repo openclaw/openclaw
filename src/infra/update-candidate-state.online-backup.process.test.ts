@@ -205,6 +205,9 @@ it.for(["snapshot", "discover"] as const)(
         candidateRoot,
         additionalPaths: [supplemental],
         config: {},
+        // Current launchers' reply shape publishes supplemental schema rows.
+        includeLocalStoreVersions: true,
+        includeClientCredentialStoreVersion: true,
         env: {
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },

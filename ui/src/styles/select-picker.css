@@ -413,7 +413,8 @@ openclaw-select-picker {
   overscroll-behavior: contain;
 }
 
-.picker-select--sheet .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
+:is(.picker-select--sheet, .picker-select__menu--phone-sheet)
+  .picker-select__options:has(+ .picker-select__empty:not([hidden])) {
   flex: none;
 }
 
@@ -551,20 +552,11 @@ openclaw-select-picker {
   height: 16px;
 }
 
-/* The title keeps clear of the close button, and the search toggle sits beside it. */
-.picker-select__menu--phone-sheet > :is(.picker-select__page-header, .header-search) {
+/* The title keeps clear of the close button. */
+.picker-select__menu--phone-sheet > .picker-select__page-header {
   min-height: 44px;
   padding-inline-end: 36px;
   font-weight: var(--control-ui-font-weight-semibold);
-}
-
-.picker-select__menu--phone-sheet > .header-search {
-  padding-inline-start: 0;
-  border-block-end: 0;
-}
-
-.picker-select__menu--phone-sheet > .header-search[data-searching] {
-  padding-inline-end: 0;
 }
 
 /* Filtering shouldn't resize the sheet under the keyboard. */
@@ -609,8 +601,4 @@ openclaw-select-picker {
   position: absolute;
   inset-inline: 0;
   top: 0;
-}
-
-.picker-select__menu > .header-search:has(> .picker-select__back) {
-  padding-inline-start: 0;
 }

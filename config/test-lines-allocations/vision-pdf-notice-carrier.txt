@@ -1,2 +1,0 @@
-# Preserve ordered per-document notices through the real PDF tool result.
-24

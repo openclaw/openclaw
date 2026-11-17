@@ -67,6 +67,11 @@ import {
 import { agentTranscriptSearchSchema } from "./openclaw-agent-search-schema.js";
 import { AGENT_TEXT_SEARCH_POSTGRES_SQL } from "./openclaw-agent-text-search-migration.js";
 import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  agentToolUsagePostgresMigration,
+  withoutAgentPostgresToolUsage,
+} from "./openclaw-agent-tool-usage-schema.js";
+import {
   AGENT_TRAJECTORY_STORAGE_POSTGRES_MIGRATION_SQL,
   withLegacyAgentPostgresTrajectoryStorage,
 } from "./openclaw-agent-trajectory-storage-migration.js";
@@ -116,7 +121,8 @@ export function admitAgentEngineSearchExtensions(
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
 function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresSql);
+  const agentPostgresV41Sql = withoutAgentPostgresToolUsage(agentPostgresSql);
+  const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresV41Sql);
   const agentPostgresV39Sql = withoutAgentPostgresCreationOperations(agentPostgresV40Sql);
   const agentPostgresV38Sql = withoutAgentPostgresColdNavigation(agentPostgresV39Sql);
   const agentPostgresV36Sql = withoutAgentPostgresColdArchiveChunks(agentPostgresV38Sql);
@@ -349,14 +355,35 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
         postgresTextSearchVersion: 2,
       },
       schema: {
+        postgres: agentPostgresV41Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${agentActiveEventFactsPostgresMigration(agentPostgresV41Sql)}
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_TOOL_USAGE_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV41Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
         postgres: agentPostgresSql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
       },
-      sql: `${agentActiveEventFactsPostgresMigration(agentPostgresSql)}
+      sql: `${agentToolUsagePostgresMigration(agentPostgresSql)}
         UPDATE schema_meta
-        SET schema_version = ${AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION},
+        SET schema_version = ${AGENT_TOOL_USAGE_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

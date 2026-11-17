@@ -147,6 +147,20 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Independent full-check stages
+
+`pnpm check --stage <name>` selects from the existing `preflight`, `typecheck`,
+`lint`, and `policy` stages. Repeat the option to select several stages; execution
+keeps canonical order and runs each selected stage once. Omitting the option
+retains the complete check. `--base`, `--include-test-types`, and
+`--include-architecture` keep their usual meaning.
+
+The npm source preflight runs `preflight`, `typecheck`, and `policy` in one
+worker and `lint` (including formatting) in another. The aggregate source receipt
+requires both workers to succeed. Frozen sources whose successful help output
+does not advertise `--stage` run the original complete check once instead; they
+do not gain stage parallelism. Capability-probe failures remain failures.
+
 ### Delegating changed compilers in CI
 
 `check:changed --delegate-compilers` retains the selected formatting, lint, guards,
@@ -331,39 +345,32 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
+`pnpm check:session-identity-ratchet` rejects growth in identity comparisons and
+pins outside the session-store owner. Direct `null`/`undefined` presence checks
+do not compare identities and are excluded; adjacent comparisons between IDs
+and explicit pin names still count. Its per-file allowlist may only shrink.
+After removing counted sites, run the checker with `--prune` and verify again
+without pruning.
+
 <a id="test-line-budget" />
 
-`pnpm check:test-lines-ratchet` compares total tracked test lines with the
-fixed integer in `config/test-lines-baseline.txt` plus the sum of tracked
-`config/test-lines-allocations/*.txt` records. Each record contains one
-non-negative integer, with optional `#` comments. For justified net regression
-growth, use a unique record and explain its necessity in the PR. Independent
-changes use separate records instead of editing the shared scalar.
+`pnpm check:test-lines-ratchet` measures this change's net test-line delta
+between its comparison base and head. Other changes' growth never counts. A
+change may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+explain its necessity in the PR. Each record contains one non-negative integer,
+with optional `#` comments. Only records that this change adds or raises give
+credit; merged records have no further effect and can be deleted at any time.
+On failure, the checker prints the net count, the allowance, the credit and the
+lines to remove or allocate.
 
 The checker counts literal newline bytes, like `wc -l`, in
 `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
-`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
-over-ceiling tree fails only when this change's net test-line delta against the
-comparison base is positive; non-growing changes pass with an over-ceiling notice,
-while runs without a base retain the absolute ceiling check.
-
-When allocation keys or values change, positive effective-ceiling growth must
-not exceed net test-line growth plus the comparison base's existing overage,
-floored at zero. An explicitly approved exact grant can reconcile that debt
-without creating extra headroom. This includes scalar changes in the same diff
-and prevents overlapping grants from counting the same growth twice. Debt still
-fails the ceiling check unless a grant covers it.
-Comments do not change credit. Untracked records are ignored; `--staged` reads
-the index exactly. Scalar-only raises retain the explicit review-owned warning
-route. Raises beyond this change's net regression growth need approval under the
-[testing policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#baseline-and-expected-failure-exceptions).
-
-`pnpm check:test-lines-ratchet --prune` folds the measured total into the scalar
-and removes tracked allocation records, even at zero slack. The effective ceiling
-never increases; the scalar can rise when it absorbs existing allocations.
-Commit the scalar and record deletions together. Pruning refuses an over-budget
-tree or `--staged`, and preserves untracked files. A branch based before pruning
-can add credit only for its new test growth, not reuse the folded allocations.
+`*test-helpers*`, and `**/test-support/**`. Locally it compares against the
+merge base with `origin/main`; `--staged` compares the index with `HEAD`. Pull
+request CI compares the merge tree with its first parent; a `main` push compares
+with the previous tip, so one push of several squash commits counts their sum.
+Release branches skip the check.
 
 The max-lines suppression inventory and the environment-variable count budget
 must describe the tree, and that check blocks in GitHub Actions as well as
@@ -483,10 +490,11 @@ environment allowlist still applies. Explicit Blacksmith Testbox workflows
 hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.2 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
-before provider discovery or lease work. The original binary stays untouched.
+Testboxes alive, and verified Boat cleanup when stopping a VM deletes it. Missing
+or older binaries use a verified managed 0.83.2 release before provider discovery
+or lease work. The original binary stays untouched.
 
 For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
 binary's runtime pack before allocating a lease. Use a complete matching Crabbox
@@ -503,15 +511,12 @@ Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
-`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+Standard dispatched check leases request `blacksmith-4vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a default 60-minute total GitHub job deadline including
 hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
-`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+`blacksmith-8vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
 gates. Select it only for a justified memory need, not merely for more time; see
 [Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
-A native capacity check measured eight CPUs and 30.95 GiB of memory on the
-32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
-isolated runtime validation without increasing the number of jobs or workers.
 Workloads still admit work from observed resources; the runner label is not a
 capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
 
@@ -784,7 +789,7 @@ Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-cl
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.83.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 

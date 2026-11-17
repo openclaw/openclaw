@@ -11,6 +11,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -60,6 +61,7 @@ function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
       harness.executeTool({
         tool: target,
         toolName: target.name,
+        toolId: `openclaw:${overrides.sourceName ?? "core"}:${target.name}`,
         source: "openclaw",
         toolCallId,
         input: {},
@@ -448,10 +450,17 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         started.resolve();
         return await new Promise<never>(() => {});
       });
-      owner.add(stalled);
+      const watchdogAttempt = owner.replyOperation.watchdog.attachAttempt({ assertCurrent() {} });
+      owner.add(wrapToolWithBeforeToolCallHook(stalled, { watchdogAttempt, runId: owner.runId }));
       try {
         const execution = owner.run("return await stalled({});", undefined, "deadline-exec");
         await started.promise;
+        expect(owner.replyOperation.watchdog.snapshot().tools).toMatchObject([
+          {
+            toolName: "stalled",
+            toolCallId: expect.stringMatching(/^tool_call:deadline-exec:[^:]+:stalled:1$/),
+          },
+        ]);
         await vi.advanceTimersByTimeAsync(1_500);
         const parked = await execution;
         expect(parked.status).toBe("waiting");

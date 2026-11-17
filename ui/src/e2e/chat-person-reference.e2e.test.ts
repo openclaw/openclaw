@@ -239,15 +239,16 @@ async function sharePersonActivity(page: Page) {
         user,
         deviceFamily: "iPad",
         platform: "iPadOS",
-        timeZone: "Europe/Paris",
+        timeZone: "Pacific/Chatham",
         onlineSince: person.onlineSince,
         lastActivityAt: now,
         watchedSessions: [watched],
       },
     ],
   });
-  await expect.poll(() => card.textContent()).toContain("Europe/Paris");
-  expect(await card.textContent()).not.toContain("Europe/London");
+  await expect
+    .poll(() => card.locator(".person-activity-card__clock").getAttribute("title"))
+    .toBe("Pacific/Chatham");
   await card.getByRole("link", { name: /Release checklist/ }).focus();
   await gateway.emitGatewayEvent("presence", { presence: [] });
   await expect.poll(() => card.textContent()).toContain("Offline");

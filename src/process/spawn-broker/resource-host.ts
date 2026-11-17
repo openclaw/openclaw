@@ -74,12 +74,15 @@ export class BrokerResourceClaims {
   get hasOpenClaims() {
     return [...this.claims.values()].some((claim) => !claim.closed);
   }
+  get admissionClosed() {
+    return this.failure !== undefined || this.sealed;
+  }
 
   capture(
     attachment: BrokerResourceAttachment,
     callbacks: BrokerNativeResourceCallbacks,
   ): BrokerNativeResourceLease {
-    if (this.failure || this.sealed) {
+    if (this.admissionClosed) {
       throw this.failure ?? new SpawnBrokerError("Native resource source is sealed");
     }
     // Validate and copy before admission; caller mutation cannot alter the captured factory input.

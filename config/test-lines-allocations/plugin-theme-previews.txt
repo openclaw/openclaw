@@ -1,2 +1,0 @@
-# Plugin/personal theme palette previews and the inactive custom-import fallback.
-14

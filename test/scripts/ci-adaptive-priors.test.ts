@@ -38,6 +38,7 @@ function bareRepository() {
 function fixture(
   options: {
     artifacts?: number;
+    auditCli?: boolean;
     compact?: boolean;
     consumerFork?: boolean;
     wrongConsumer?: boolean;
@@ -101,6 +102,14 @@ function fixture(
     digest: `sha256:${options.digestMismatch ? "0".repeat(64) : sha256(archive)}`,
     workflow_run: { id: run.id, head_sha: revision },
   }));
+  if (options.auditCli) {
+    artifacts.push({
+      ...artifacts[0]!,
+      id: 999,
+      name: "ci-test-observations-audit-cli-20-1-0",
+      created_at: new Date(Date.parse(cutoff) - 1_000).toISOString(),
+    });
+  }
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -294,7 +303,7 @@ describe("adaptive CI prior restore", () => {
   });
 
   it.each([false, true])("restores bounded source-bound archives (compact=%s)", async (compact) => {
-    const f = fixture({ artifacts: 3, compact });
+    const f = fixture({ artifacts: 3, compact, auditCli: true });
     const bundle = await restoreCiAdaptivePriors({ env, fetchImpl: f.fetchImpl });
     expect(bundle.consumer).toEqual({
       runId: "30",
@@ -306,6 +315,7 @@ describe("adaptive CI prior restore", () => {
     expect(bundle.candidates).toHaveLength(4);
     expect(bundle.fallbackReasons).toEqual([]);
     expect(f.requests.filter((request) => request.endsWith("/zip"))).toHaveLength(2);
+    expect(f.requests.some((request) => request.includes("/artifacts/999/"))).toBe(false);
     expect(f.requests.filter((request) => request.includes("/compare/"))).toHaveLength(1);
     expect(bundle.candidates[0]).toEqual({
       artifactId: 102,
@@ -389,6 +399,37 @@ describe("adaptive CI prior restore", () => {
     });
     expect(failed.candidates).toEqual([]);
     expect(failed.fallbackReasons).toEqual(["restore-unavailable"]);
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "metadata-unavailable",
+      status: 503,
+    });
     expect(calls).toBe(1);
+  });
+
+  it("distinguishes invalid consumer metadata from transport failure without retaining error text", async () => {
+    const invalid = fixture({ wrongConsumer: true });
+    const rejected = await restoreCiAdaptivePriors({ env, fetchImpl: invalid.fetchImpl });
+    expect(rejected.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "consumer-run-unavailable",
+      status: null,
+    });
+    const failed = await restoreCiAdaptivePriors({
+      env,
+      fetchImpl: async () => {
+        throw new Error(`transport error with ${env.GITHUB_TOKEN}`);
+      },
+    });
+    expect(failed.restoreFailure).toEqual({
+      stage: "consumer-run",
+      reason: "request-failed",
+      status: null,
+    });
+    for (const bundle of [rejected, failed]) {
+      expect(bundle.cutoffAt).toBeNull();
+      expect(bundle.candidates).toEqual([]);
+      expect(JSON.stringify(bundle)).not.toContain(env.GITHUB_TOKEN);
+    }
   });
 });

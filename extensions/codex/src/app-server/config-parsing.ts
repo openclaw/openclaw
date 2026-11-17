@@ -175,7 +175,6 @@ const codexPluginConfigSchema = z.strictObject({
         })
         .optional(),
       codeModeOnly: z.boolean().optional(),
-      loopDetectionPreToolUseRelay: z.boolean().optional(),
       requestTimeoutMs: z.number().positive().optional(),
       approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
       sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional(),

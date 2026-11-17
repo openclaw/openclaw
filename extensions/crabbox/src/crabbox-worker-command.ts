@@ -191,14 +191,13 @@ export async function runCrabboxCommandWithCoordinatorRetry(
   let coordinatorDetail: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     const result = await runCrabboxCommand({ ...params, timeoutMs });
-    // Fixed-claim resolution precedes script execution; profile setup is safe to repeat.
+    // This exact native conflict precedes execution of the fixed-lease command.
     const transient =
       isCoordinatorTransportFailure(result) ||
-      (params.action === "profile setup" &&
-        result.termination === "exit" &&
+      (result.termination === "exit" &&
         result.code === 4 &&
         result.stdout.trim() === "" &&
-        /^lease_id_conflict:[^\r\n]*$/u.test(result.stderr.trim()));
+        result.stderr.trim() === "lease_id_conflict: fixed claim changed during resolution; retry");
     if (transient) {
       coordinatorDetail = crabboxCommandDetail(result);
     }

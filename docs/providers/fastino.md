@@ -46,7 +46,7 @@ usage, not request bytes or question count, for accounting.
 The adapter always sends **`store: false`**. Fastino documents that this disables
 input/output retention while preserving billing metadata. It uses the documented
 Bearer authentication alternative, with normal prepared provider headers,
-proxy/TLS settings, deadline, cancellation, and dispatch-time authority checks.
+proxy/TLS settings, deadline, cancellation, and the request-start authority check.
 There is no automatic retry, chat fallback, web grounding, or remote-image fetch.
 Image state, sorting, tags, bounding boxes, and reasoning controls are not exposed
 by this initial adapter, even where the vendor API supports additional inputs.

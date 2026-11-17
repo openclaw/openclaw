@@ -1,8 +1,13 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
-import { isExecutableFile, resolveExecutableFromPathEnv } from "../infra/executable-path.js";
+import {
+  isExecutableFile,
+  isExecutableFileAsync,
+  resolveExecutableFromPathEnv,
+} from "../infra/executable-path.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getBinDir } from "./config.js";
 
@@ -20,23 +25,30 @@ function createArgvShellConfig(shell: string, args: string[]): ShellConfig {
   return { shell, args, commandTransport: "argv" };
 }
 
-function resolvePowerShellPath(): string {
+function shellPathExists(candidate: string): Promise<boolean> {
+  return fsp.access(candidate).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function resolvePowerShellPath(): Promise<string> {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
   const programFiles = process.env.ProgramFiles || process.env.PROGRAMFILES || "C:\\Program Files";
   const pwsh7 = path.join(programFiles, "PowerShell", "7", "pwsh.exe");
-  if (fs.existsSync(pwsh7)) {
+  if (await shellPathExists(pwsh7)) {
     return pwsh7;
   }
 
   const programW6432 = process.env.ProgramW6432;
   if (programW6432 && programW6432 !== programFiles) {
     const pwsh7Alt = path.join(programW6432, "PowerShell", "7", "pwsh.exe");
-    if (fs.existsSync(pwsh7Alt)) {
+    if (await shellPathExists(pwsh7Alt)) {
       return pwsh7Alt;
     }
   }
 
-  const pwshInPath = resolveShellFromPath("pwsh");
+  const pwshInPath = await resolveShellFromPathAsync("pwsh");
   if (pwshInPath) {
     return pwshInPath;
   }
@@ -50,7 +62,7 @@ function resolvePowerShellPath(): string {
       "v1.0",
       "powershell.exe",
     );
-    if (fs.existsSync(candidate)) {
+    if (await shellPathExists(candidate)) {
       return candidate;
     }
   }
@@ -174,14 +186,14 @@ export function buildShellCommandInvocation(
   return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
 }
 
-export function getShellConfig(): ShellConfig {
+export async function getShellConfig(): Promise<ShellConfig> {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return createArgvShellConfig(resolvePowerShellPath(), [
+    return createArgvShellConfig(await resolvePowerShellPath(), [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
@@ -192,11 +204,13 @@ export function getShellConfig(): ShellConfig {
   let shell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shell && path.basename(shell) === "fish") {
-    shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh") ?? shell;
+    shell =
+      (await resolveShellFromPathAsync("bash")) ?? (await resolveShellFromPathAsync("sh")) ?? shell;
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
-  shell ??= resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  shell ??=
+    (await resolveShellFromPathAsync("sh")) ?? (await resolveShellFromPathAsync("bash")) ?? "sh";
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
@@ -228,25 +242,42 @@ export function getBashShellConfig(): ShellConfig {
   return resolveBashCommandConfig(shell ?? resolveShellFromPath("sh") ?? "sh");
 }
 
-function resolveShellFromPath(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
+function* shellExecutableCandidates(name: string, env: NodeJS.ProcessEnv): Generator<string> {
   const envPath = env.PATH ?? "";
   if (!envPath) {
-    return undefined;
+    return;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
   const executableNames =
     process.platform === "win32" && !path.extname(name) ? [`${name}.exe`, name] : [name];
   for (const executableName of executableNames) {
     for (const entry of entries) {
-      const candidate = path.join(entry, executableName);
-      // App-execution aliases can pass access(X_OK) but fail to launch across
-      // Windows logon sessions. Require a regular executable file instead.
-      if (isExecutableFile(candidate, { env })) {
-        return candidate;
-      }
+      yield path.join(entry, executableName);
+    }
+  }
+}
+
+function resolveShellFromPath(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  for (const candidate of shellExecutableCandidates(name, env)) {
+    // App-execution aliases can pass access(X_OK) but fail to launch across
+    // Windows logon sessions. Require a regular executable file instead.
+    if (isExecutableFile(candidate, { env })) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+async function resolveShellFromPathAsync(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  for (const candidate of shellExecutableCandidates(name, env)) {
+    if (await isExecutableFileAsync(candidate, { env })) {
+      return candidate;
     }
   }
   return undefined;

@@ -108,7 +108,7 @@ export function SystemsBackups(props: { controller: Systems; onDetails?: () => v
   const initial = () =>
     !status() ? (
       <p class="systems-backups__hint" role="status">
-        {t(props.controller.connected() ? "systems.backups.loading" : "systems.offlineGateway")}
+        {t("systems.backups.loading")}
       </p>
     ) : null;
   const failedCount = () => status()?.targets.filter(targetFailed).length ?? 0;

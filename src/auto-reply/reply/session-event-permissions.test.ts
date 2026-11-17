@@ -168,6 +168,7 @@ async function enqueueGuardedCliWatchdog(params: {
       }),
     }),
     cancel: () => {},
+    release: async () => undefined,
     cancelScope: () => {},
   });
   try {
@@ -250,6 +251,7 @@ it.for([
   "retained-config-downgrade",
   "retained-channel-config-downgrade",
   "unrelated-agent-config",
+  "unrelated-session-maintenance",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -263,10 +265,11 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
-      const channelDowngrade = change === "retained-channel-config-downgrade";
+      // Config edits apply to the next turn; session settings still bound a started one.
+      const configDowngrade = change.endsWith("config-downgrade");
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
-        ...(channelDowngrade
+        ...(change === "retained-channel-config-downgrade"
           ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
           : {}),
       });
@@ -291,7 +294,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
-      const unrelatedConfig = change === "unrelated-agent-config";
+      const unrelatedConfig = change.startsWith("unrelated-");
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -339,7 +342,19 @@ it.for([
             if (unrelatedConfig) {
               setRuntimeConfigSnapshot({
                 ...config,
-                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+                ...(change === "unrelated-session-maintenance"
+                  ? {
+                      session: {
+                        ...config.session,
+                        maintenance: { coldStorage: { enabled: true } },
+                      },
+                    }
+                  : {
+                      agents: {
+                        ...config.agents,
+                        entries: { ...config.agents?.entries, other: {} },
+                      },
+                    }),
               });
             }
             const write = tools.find((tool) => tool.name === "write");
@@ -370,7 +385,7 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
-              } else if (channelDowngrade) {
+              } else if (change === "retained-channel-config-downgrade") {
                 setRuntimeConfigSnapshot({
                   ...config,
                   channels: { discord: { enabled: true, actions: { stickers: false } } },
@@ -523,7 +538,7 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly || unrelatedConfig
+        change === "new-session" || remapped || toolOnly || unrelatedConfig || configDowngrade
           ? "completed\n"
           : "original\n",
       );
@@ -542,7 +557,7 @@ it.for([
       expect(attempted, evidence).toBe(
         change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
-      expect(retainedWriteRejected).toBe(retainedDowngrade);
+      expect(retainedWriteRejected).toBe(retainedDowngrade && !configDowngrade);
       if (change === "new-session") {
         expect(loadSessionEntry(scope)?.sessionId).toBe(target.sessionId);
       } else {
@@ -929,6 +944,85 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
           ?.requester?.senderId,
         scheduled: scheduled.mock.calls.length,
       }).toEqual(ownerRequesterOutcomes[requester]);
+    });
+  },
+);
+
+it.for([
+  { change: "same-session", writes: true },
+  { change: "restricted-sender", writes: false },
+  { change: "cross-session", writes: false },
+  { change: "revoked-before-write", writes: false },
+] as const)(
+  "bounds a same-session background completion's final effects: $change",
+  async ({ change, writes }, { signal, onTestFinished }) => {
+    await runEventFixture("session-event-scoped-effects", onTestFinished, async (state) => {
+      const config = await configureEventState(state, {
+        tools: { profile: "coding", codeMode: false, toolSearch: false },
+      });
+      await fs.mkdir(state.workspaceDir, { recursive: true });
+      const filePath = path.join(state.workspaceDir, "completion.txt");
+      await fs.writeFile(filePath, "original\n");
+      const scope = { agentId: "main", sessionKey: "agent:main:scoped-effects" };
+      const setMode = async (permissionMode: SessionEntry["permissionMode"]) =>
+        replaceSessionEntry(scope, {
+          sessionId: "scoped-effects",
+          lifecycleRevision: "same-generation",
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+          permissionMode,
+        });
+      await setMode("full");
+      // The producer's captured ceiling lists only read; the follow-up may drop it only when the
+      // caller marked it as this session's own policy.
+      const target = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: change === "cross-session" ? "agent:main:other-owner" : scope.sessionKey,
+          sessionEventToolsAllow: ["read"],
+          ...(change === "restricted-sender" ? {} : { sessionEventToolsAllowSessionScoped: true }),
+          receiptAuthority: () => true,
+        },
+        () => captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+      );
+      let writeOffered = false;
+      let writeRejected = false;
+      runEmbeddedAgentMock
+        .mockReset()
+        .mockImplementation(async (params: RunEmbeddedAgentParams) => {
+          const { tools, close } = await openEventToolHost(params, "ordinary reply admission");
+          try {
+            const write = tools.find((tool) => tool.name === "write");
+            writeOffered = write !== undefined;
+            if (change === "revoked-before-write") {
+              await setMode("read-only");
+            }
+            if (write) {
+              await write.execute("write-completion", { path: filePath, content: "completed\n" });
+            }
+          } catch (error) {
+            expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
+            writeRejected = true;
+          } finally {
+            close();
+          }
+          return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
+        });
+      const receipt = enqueueSessionEventForHost("Process the event; record the result.", {
+        ...scope,
+        source: "exec",
+        abortSignal: signal,
+        expectedTarget: target,
+        deliver: false,
+      });
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      await receipt.settled;
+      expect(config.tools?.profile).toBe("coding");
+      expect({ writeOffered, writeRejected }).toEqual({
+        writeOffered: change === "revoked-before-write" || writes,
+        writeRejected: change === "revoked-before-write",
+      });
+      expect(await fs.readFile(filePath, "utf8")).toBe(writes ? "completed\n" : "original\n");
     });
   },
 );

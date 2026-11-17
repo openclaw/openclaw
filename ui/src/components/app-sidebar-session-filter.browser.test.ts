@@ -219,8 +219,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
       await expect.element(role("combobox", "Search")).toHaveFocus();
+      // Escape clears the query and keeps the field; the next Escape closes.
       await userEvent.keyboard("{Escape}");
-      expect(query(".picker-select__search")).toBeNull();
+      await expect.element(role("combobox", "Search")).toHaveValue("");
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       // Focus returns before the closing frame releases native occlusion.
       const ownersHidden = new Promise<void>((resolve) => {

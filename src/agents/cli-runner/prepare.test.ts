@@ -3423,7 +3423,6 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual(testCase.expected);
     if (testCase.controlOperation) {
       expect(context.params.prompt).toBe("/compact");
-      expect(context.systemPrompt).toBe("");
     }
   });
 

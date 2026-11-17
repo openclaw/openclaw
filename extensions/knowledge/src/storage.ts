@@ -14,7 +14,6 @@ import { connections } from "./connections.js";
 import { EvidenceReadInput } from "./evidence-read-contract.js";
 import { VerifyInput, type VerifyOutput } from "./ingestion-contract.js";
 import { buildGateEntries, buildMemoryIndex } from "./memory-index.js";
-import { approvedRecall } from "./model.js";
 import { GateCandidatesInput } from "./recall-gate.js";
 import { keywordCandidates } from "./recall-keyword.js";
 import { recentActivity } from "./recent-activity.js";
@@ -182,7 +181,7 @@ export class KnowledgeStorage extends StorageIngestion {
         )
         .filter((record) => record.lifecycle === "active")
         .flatMap((record) => {
-          const recall = approvedRecall(record.metadata.recall);
+          const recall = data.recall.get(record.id);
           if (
             !recall ||
             (input.kind === "trigger" ? !recall.triggers?.length : !recall.projects?.length)

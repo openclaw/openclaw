@@ -16,6 +16,17 @@ including carry-forward and sibling-release evidence; sync new findings and
 decisions back. Empty/incomplete records do not replace the pinned inventory
 or P0/P1 discovery below. Use local evidence when access is unavailable.
 
+## Select by release track
+
+- **Extended-stable:** generally take only P0 and P1 hotfixes.
+- **Stable:** also consider significant P2 fixes that are easy to port.
+- **Beta:** allow a broader P2 set when fixes are reasonably small, portable,
+  and low risk.
+
+Assess actual impact, dependency closure, and maintenance risk, not just labels.
+These are selection defaults, not permission to expand frozen intake, bypass
+approval, or weaken validation. Record exceptions and rationale in the ledger.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.
@@ -149,7 +160,8 @@ pnpm release:backport-companions -- \
 ```
 
 Disposition every reported later same-path commit, later mention of the
-selected PR number, existing neighbor test, selected-file reference/registry,
+selected PR number or commit SHA (whole 7–40-character tokens, case-insensitive),
+existing neighbor test, selected-file reference/registry,
 candidate file-set difference, and candidate content difference. A whole-file
 difference is inspection evidence, not a failure: a release adaptation or the
 final selected companion sequence can differ legitimately. This scan is
@@ -243,7 +255,10 @@ Every porting brief contains these steps for each pick, in order:
 2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
    before porting.
 3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
-   `Release adaptation:` in the commit body.
+   `Release adaptation:` in the commit body. Immediately update the shared
+   [hotfix assessment](hotfix-ledger-management.md) after every adaptation;
+   record newly discovered validation errors and subsequent repairs as they
+   occur, not only when the pick or batch is finished.
 4. Run targeted tests and typechecks for the touched owners only. Wrap every
    local command in `timeout`; full local gates are not a worker's job.
 5. Commit, then append the pick's result to the lane report before the next

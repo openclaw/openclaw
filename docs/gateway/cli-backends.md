@@ -15,9 +15,11 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Images pass through if the CLI accepts image paths.
 
 With Claude CLI, a successful `sessions_yield` closes the current subprocess after
-its tool result is consumed and suppresses later reply text. The next child-completion
-turn resumes the same saved Claude session in a new subprocess. This avoids recording
-the yield as a user interruption; it adds process startup time after a yield.
+its tool result is consumed and suppresses later reply text. A confirmed final
+`message` reply to the current conversation ends the turn the same way, so the chat
+shows that reply without a second native conclusion. The next turn resumes the same
+saved Claude session in a new subprocess. This avoids recording the yield or final
+reply as a user interruption; it adds process startup time to the next turn.
 An intentional yield is not a failed completion and does not trigger model fallback,
 even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
@@ -678,18 +680,18 @@ Images come from the current turn's attachments and explicit image references, i
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
 
-Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Pure tool-result records
-hand payloads to consumers without retaining them, so those payloads do not count
-toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
-records and cumulative snapshots still count. Forwarded subagent assistant
+Claude streaming limits count what the parser keeps: text, thinking, and
+tool-input payloads, assistant content blocks, block headers, and tool ids. Frames
+whose content the parser discards (tool-result payloads, message and request
+metadata, block and message stops, thinking signatures and progress ticks) pay a
+fixed allowance each, so the 8 MiB output limit also bounds how many frames a turn
+can stream. Mixed user records still count in full. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
 allowance for their parent progress id. Child attribution alone does not earn
 that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Discarded stream control frames (thinking signatures and progress
-ticks, block and message stops, message deltas) are charged a fixed allowance,
-and progress ticks and stops also skip the frame count like partial-message
-envelopes. Single-line limits and bounded frame counts remain active.
+output limit. The 20,000-frame limit counts only frames that leave more than
+1 KiB of their raw line uncharged, such as large tool results. Single-line limits
+remain active.
 
 Input modes:
 
@@ -710,20 +712,20 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                   | Value                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | `claude`                                                                                                                                                                                                      |
-| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`              | `jsonl`                                                                                                                                                                                                       |
-| `input`               | `stdin`                                                                                                                                                                                                       |
-| `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`         | `always`                                                                                                                                                                                                      |
-| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                       |
-| `imageArg`            | `@`                                                                                                                                                                                                           |
-| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| Key                   | Value                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | `claude`                                                                                                                                                                                                               |
+| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor` |
+| `output`              | `jsonl`                                                                                                                                                                                                                |
+| `input`               | `stdin`                                                                                                                                                                                                                |
+| `modelArg`            | `--model`                                                                                                                                                                                                              |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                                      |
+| `sessionMode`         | `always`                                                                                                                                                                                                               |
+| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                                |
+| `imageArg`            | `@`                                                                                                                                                                                                                    |
+| `imagePathScope`      | `workspace`                                                                                                                                                                                                            |
+| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                          |
+| `systemPromptMode`    | `append`                                                                                                                                                                                                               |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
 `--exclude-dynamic-system-prompt-sections` after a bounded version check on the
@@ -934,8 +936,9 @@ that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for clean
 triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
-exceeds its deadline, OpenClaw refuses replacement, including from a later run.
-Check the cleanup error and the backend's remaining processes before retrying.
+exceeds its deadline, the run waiting for it fails with the cleanup error. The
+next run starts a new process; check `openclaw logs` and the backend's remaining
+processes if the error repeats.
 Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process reads and refreshes its own native

@@ -2168,7 +2168,8 @@ div.shell.shell--onboarding {
   font-size: var(--control-ui-text-sm);
 }
 
-.sidebar-recent-session__name {
+.sidebar-recent-session__name,
+.sidebar-recent-session__title-row > .sidebar-recent-session__rename-input {
   display: block;
   width: 100%;
   line-height: var(--sidebar-title-line-height);
@@ -2184,6 +2185,20 @@ div.shell.shell--onboarding {
   transition: opacity var(--duration-normal) ease-out;
 }
 
+/* Reuse the title geometry, not the taller header editor or its accent chrome. */
+.sidebar-recent-session__title-row > .sidebar-recent-session__rename-input {
+  flex: 1 1 0;
+  field-sizing: fixed;
+  max-width: none;
+  height: var(--sidebar-title-line-height);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: inherit;
+  outline: none;
+}
+
 .sidebar-recent-sessions
   .sidebar-recent-session--child
   .sidebar-recent-session__link
@@ -2195,7 +2210,8 @@ div.shell.shell--onboarding {
   --sidebar-session-link-padding-block: 5px;
 }
 
-.sidebar-recent-session--child .sidebar-recent-session__name {
+.sidebar-recent-session--child .sidebar-recent-session__name,
+.sidebar-recent-session--child .sidebar-recent-session__rename-input {
   font-size: var(--control-ui-text-sm);
 }
 
@@ -2215,7 +2231,9 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name,
-.sidebar-recent-session--selected .sidebar-recent-session__name {
+.sidebar-recent-session--selected .sidebar-recent-session__name,
+.sidebar-recent-session--active .sidebar-recent-session__rename-input,
+.sidebar-recent-session--selected .sidebar-recent-session__rename-input {
   color: var(--text-strong);
 }
 
@@ -3593,8 +3611,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
-   checkout off main. Sits on its own row above the icon bar so the full branch
-   name stays readable without crowding the footer controls. */
+   checkout off main. Keep it on one line; the tooltip exposes the full name. */
 .sidebar-footer-branch {
   display: flex;
   align-items: center;
@@ -3612,6 +3629,13 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .sidebar-footer-branch__icon {
   display: inline-flex;
   flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-footer-branch__icon svg {

@@ -245,7 +245,7 @@ function applySessionControllerStop(
       : params.source === "supersede"
         ? createAgentRunSupersededAbortError()
         : params.source === "channel-user"
-          ? createAgentRunDirectAbortError()
+          ? createAgentRunDirectAbortError(true)
           : undefined);
   const once = (
     effect: () => boolean,

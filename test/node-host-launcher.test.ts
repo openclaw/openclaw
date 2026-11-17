@@ -306,7 +306,6 @@ async function windowsSelectorFixture(root: string, current: string, failure: st
     preload,
     `
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
 const current = process.env.TEST_CURRENT;
 const previous = current + '.previous';
 const rename = fs.renameSync;
@@ -326,7 +325,6 @@ fs.renameSync = (source, destination) => {
   }
   return result;
 };
-syncBuiltinESMExports();
 `,
   );
   return {

@@ -11,6 +11,7 @@ import {
 } from "./app/stale-chunk-reload.ts";
 import { refreshControlUiServiceWorker } from "./app/sw-refresh.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
+import { isIosBrowserPlatform } from "./lib/browser-platform.ts";
 import { installKeyboardHints } from "./lib/keyboard-hints.ts";
 import { listen } from "./lib/reactive/listener.ts";
 import kbdStyles from "./components/kbd.css?inline";
@@ -38,6 +39,10 @@ export async function startControlUi(
     }
     bootStyles.media = "all";
   }
+  document.documentElement.toggleAttribute(
+    "data-ipad-browser",
+    isIosBrowserPlatform() && !/iPhone|iPod/u.test(navigator.userAgent),
+  );
   installKeyboardHints();
   const root = document.getElementsByTagName("openclaw-app").item(0);
   if (root instanceof HTMLElement) {
