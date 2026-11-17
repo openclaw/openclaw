@@ -177,17 +177,13 @@ export async function continueSessionQueuedInputs(
     } catch (error) {
       assertCurrent();
       // Before dispatch, an unclassified failure means the stored source cannot be restored.
-      const endCause = resolvePendingInputEndCause(
-        undefined,
-        error,
-        dispatchAttempted ? "failed" : "restart-unrecoverable",
-      );
-      if (endCause === undefined) {
-        context.logGateway.warn(
-          `Queued input ${row.run_id} is waiting for restart authority: ${String(error)}`,
-        );
-        return false;
-      }
+      // The restart marker is already cleared; no later pass can rediscover this row.
+      const endCause =
+        resolvePendingInputEndCause(
+          undefined,
+          error,
+          dispatchAttempted ? "failed" : "restart-unrecoverable",
+        ) ?? "restart-unrecoverable";
       context.logGateway.warn(
         `Queued input ${row.run_id} was not sent after restart: ${String(error)}`,
       );
@@ -195,24 +191,20 @@ export async function continueSessionQueuedInputs(
     } finally {
       admitted?.release();
     }
-    return true;
   };
   // History pages are bounded newest-first; admit the older page before this one.
-  const continuePage = async (before?: number): Promise<boolean> => {
+  const continuePage = async (before?: number): Promise<void> => {
     assertCurrent();
     const page = await readSessionQueuedInputPage(target, {
       before,
       queuedInputIds: options.queuedInputIds,
     });
-    if (page.nextBefore !== undefined && !(await continuePage(page.nextBefore))) {
-      return false;
+    if (page.nextBefore !== undefined) {
+      await continuePage(page.nextBefore);
     }
     for (const row of page.rows.toReversed()) {
-      if (!(await admit(row))) {
-        return false;
-      }
+      await admit(row);
     }
-    return true;
   };
   await continuePage();
 }

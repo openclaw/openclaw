@@ -29,7 +29,12 @@ function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
         eb("input_id", "in", [...query.queuedInputIds]),
         ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
       ])
-    : eb("state", "in", ["cancelled", "queued"]);
+    : eb.or([
+        eb("state", "=", "cancelled"),
+        ...(query.liveInputIds?.length
+          ? [eb.and([eb("state", "=", "queued"), eb("input_id", "in", [...query.liveInputIds])])]
+          : []),
+      ]);
 }
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */

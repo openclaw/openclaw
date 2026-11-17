@@ -388,16 +388,24 @@ async function stagePreparedPendingInput(
         );
       }
     };
-    const legacyCancellation = existing?.state === "cancelled" && existing.end_cause == null;
+    // Pre-end_cause rows encoded intentional retirement only in their message.
+    const old =
+      existing?.state === "cancelled" && existing.end_cause == null
+        ? asOptionalRecord(parseSessionPendingInputMessage(existing.message_json))
+        : undefined;
+    const legacyOk = old && old.pendingInputCancelledByUser !== true && old.display !== false;
     const reclaimsCancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&
-      legacyCancellation &&
+      existing?.state === "cancelled" &&
+      (legacyOk ||
+        existing.end_cause === "failed" ||
+        existing.end_cause === "restart-unrecoverable") &&
       existing.consumed_event_id == null &&
       existing.request_hash === requestHash;
     const reopensCancelled =
       (options.retryCancelled === true &&
-        (legacyCancellation ||
+        (legacyOk ||
           (previous && existing?.state === "cancelled" && existing.end_cause === "failed"))) ||
       reclaimsCancelledSourceTurn;
     if (existing) {

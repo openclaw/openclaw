@@ -344,7 +344,7 @@ it("rolls transcript promotion and custody consumption back together", async () 
   expect(await readPending(receipt.inputId)).toBeUndefined();
 });
 
-it("never lets a channel redelivery reopen a recorded failed attempt", async () => {
+it("lets a channel redelivery reopen its own cancelled attempt under a fresh run", async () => {
   const acceptedMessage: PersistedUserTurnMessage = {
     role: "user",
     content: "fix it please",
@@ -361,16 +361,57 @@ it("never lets a channel redelivery reopen a recorded failed attempt", async () 
   await expect(
     stage("ingress-attempt-1", { message: acceptedMessage, retryCancelled: true }),
   ).rejects.toThrow("ownership ended");
+  await expect(stage("ingress-attempt-2", { message: acceptedMessage })).rejects.toThrow(
+    "idempotency key conflicts",
+  );
   await expect(
-    stage("ingress-attempt-2", { message: acceptedMessage, reclaimCancelledSourceTurn: true }),
+    stage("ingress-attempt-2", {
+      message: { ...acceptedMessage, content: "different bytes" },
+      reclaimCancelledSourceTurn: true,
+    }),
   ).rejects.toThrow("idempotency key conflicts");
-  expect(await readPending(first.inputId)).toMatchObject({
-    state: "cancelled",
-    endCause: "failed",
+  const renewed = await stage("ingress-attempt-2", {
     message: acceptedMessage,
+    reclaimCancelledSourceTurn: true,
   });
+  expect(renewed.inputId).toBe(first.inputId);
+  expect(await readPending(first.inputId)).toMatchObject({ state: "queued" });
+  await expect(
+    stage("ingress-attempt-3", { message: acceptedMessage, reclaimCancelledSourceTurn: true }),
+  ).rejects.toThrow("idempotency key conflicts");
   expect(await readTranscript()).toEqual(before);
+  await promote(renewed);
+  expect(await readPending(first.inputId)).toBeUndefined();
 });
+
+it.each([{ pendingInputCancelledByUser: true }, { display: false }])(
+  "seals pre-end_cause retirement markers: %j",
+  async (marker) => {
+    const sourceTurn: PersistedUserTurnMessage = {
+      role: "user",
+      content: "legacy retired input",
+      timestamp: 100,
+      idempotencyKey: "channel-user:v1:legacy-retired",
+    };
+    const first = await stage("legacy-attempt-1", { message: sourceTurn });
+    first.finish("cancelled", "failed");
+    await first.settled?.();
+    await withWriteAdmission(databaseOptions(), () => {
+      database()
+        .db.prepare(
+          "UPDATE session_pending_inputs SET end_cause = NULL, message_json = ? WHERE input_id = ?",
+        )
+        .run(JSON.stringify({ ...sourceTurn, ...marker }), first.inputId);
+    });
+    await expect(
+      stage("legacy-attempt-2", { message: sourceTurn, reclaimCancelledSourceTurn: true }),
+    ).rejects.toThrow("idempotency key conflicts");
+    await expect(
+      stage("legacy-attempt-1", { message: sourceTurn, retryCancelled: true }),
+    ).rejects.toThrow("ownership ended");
+    expect(await readPending(first.inputId)).toMatchObject({ state: "cancelled" });
+  },
+);
 
 it.each(["stopped", "dismissed"] as const)(
   "never reopens a source turn the user %s",

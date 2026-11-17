@@ -161,7 +161,7 @@ it.each([
   new GatewayOperatorAccessUnavailableError(),
   new GatewayDispatchUnavailableError("chat.send", true),
 ])(
-  "keeps accepted FIFO rows queued when restart admission is temporarily unavailable: %s",
+  "records unrecoverable cancellation when restart admission is temporarily unavailable: %s",
   async (error) => {
     const created = await createFixture();
     await using fixture = created.fixture;
@@ -174,7 +174,7 @@ it.each([
       await continueSessionQueuedInputs(fixture.context, retained.target, retained);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
-        { id: retained.queuedInputIds[0], state: "queued" },
+        { id: retained.queuedInputIds[0], state: "cancelled", endCause: "restart-unrecoverable" },
       ]);
     } finally {
       restore.mockRestore();
