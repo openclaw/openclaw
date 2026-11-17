@@ -2284,28 +2284,32 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__permission-menu {
   --chat-permission-panel-padding: var(--menu-padding);
 
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Safari stretches auto grid rows inside position-area (WebKit bug 328749).
+     Keep the shared menu flex layout, wrapping the full-width options below the heading. */
+  flex-flow: row wrap;
   column-gap: 8px;
   align-items: start;
   /* Keep the content-sized menu against its trigger above the composer. */
   align-self: end;
   width: min(440px, calc(100vw - 24px));
-  /* Anchor-positioned grids must size to their content, not the available block. */
-  height: max-content;
   padding: var(--chat-permission-panel-padding);
   overflow: hidden;
 }
 
-/* The heading and its Learn more link share the first grid row; the link is a
+.chat-controls__permission-menu > .oc-menu-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The heading and its Learn more link share the first flex line; the link is a
    menu row for keyboard order, drawn as the heading's trailing action. */
 .chat-controls__permission-learn-more {
   align-self: center;
+  width: auto;
   margin-inline-end: calc(var(--oc-menu-item-padding-inline, 8px) - 6px);
 }
 
 .chat-controls__permission-option {
-  grid-column: 1 / -1;
   gap: 8px;
   padding: 8px;
 }

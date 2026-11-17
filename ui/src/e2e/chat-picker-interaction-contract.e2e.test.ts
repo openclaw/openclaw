@@ -10,6 +10,7 @@ import {
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const reducedMotionOptions = {
@@ -18,9 +19,9 @@ const reducedMotionOptions = {
 } as const;
 
 suite.define(() => {
-  it("keeps permissions content-sized in an empty Main session without models", () =>
+  it.each([1240, 390])("keeps empty Main permissions compact at %i px", (width) =>
     suite.withPage(
-      { ...reducedMotionOptions, viewport: { width: 1240, height: 794 } },
+      { ...reducedMotionOptions, viewport: { width, height: 794 } },
       async ({ page }) => {
         const session = {
           key: "agent:main:main",
@@ -35,7 +36,13 @@ suite.define(() => {
           sessionKey: session.key,
           historyMessages: [],
         });
+        if (width === 1240) {
+          await installNativeWebChrome(page);
+        }
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        if (width === 390) {
+          await page.locator(".agent-chat__input textarea").click();
+        }
         const trigger = page.locator('[data-chat-permission-select="true"]');
         await trigger.click();
         const menu = page.locator(".chat-controls__permission-menu:visible");
@@ -47,6 +54,15 @@ suite.define(() => {
         expect(bounds.height).toBeLessThan(420);
         expect(bounds.y).toBeGreaterThanOrEqual(0);
         expect(bounds.y + bounds.height).toBeLessThanOrEqual(button.y);
+        const heading = expectDefined(
+          await menu.locator(".oc-menu-heading").boundingBox(),
+          "permissions heading bounds",
+        );
+        const learnMore = menu.getByRole("menuitem", { name: "Learn more" });
+        const link = expectDefined(await learnMore.boundingBox(), "Learn more bounds");
+        expect(link.y).toBeGreaterThanOrEqual(heading.y);
+        expect(link.y + link.height).toBeLessThanOrEqual(heading.y + heading.height);
+        expect(link.x).toBeGreaterThanOrEqual(heading.x + heading.width);
         const heights = await options.evaluateAll((rows) =>
           rows.map((row) => row.getBoundingClientRect().height),
         );
@@ -59,17 +75,26 @@ suite.define(() => {
             animations: "disabled",
             elements: [menu],
           });
-          await writeFile(`${suite.artifactDir}/permissions-empty-main.png`, frame.png);
+          await writeFile(`${suite.artifactDir}/permissions-empty-main-${width}.png`, frame.png);
           await writeFile(
-            `${suite.artifactDir}/permissions-empty-main.json`,
+            `${suite.artifactDir}/permissions-empty-main-${width}.json`,
             JSON.stringify({ bounds, button, heights }),
           );
         }
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("Home");
+        await browserExpect(learnMore).toBeFocused();
+        await page.keyboard.press("ArrowDown");
+        await browserExpect(options.first()).toBeFocused();
+        await page.keyboard.press("5");
+        await browserExpect(menu).toBeHidden();
+        await trigger.click();
         await page.keyboard.press("Escape");
         await browserExpect(menu).toBeHidden();
         await browserExpect(trigger).toBeFocused();
       },
-    ));
+    ),
+  );
 
   it("distinguishes the selected permission and honors reduced motion", () =>
     suite.withPage(reducedMotionOptions, async ({ page }) => {
