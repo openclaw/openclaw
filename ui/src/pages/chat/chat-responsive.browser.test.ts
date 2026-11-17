@@ -352,7 +352,6 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                     </div>`
                       : ""
                   }
-                  <div class="agent-chat__composer-status-stack"> </div>
                   </div>
                   <div class="agent-chat__composer-input-row">
                     <div class="agent-chat__composer-combobox">

@@ -127,6 +127,11 @@ suite.define(() => {
         sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("talk.config")).toHaveLength(0);
+      const composerHeight = () =>
+        page
+          .locator(".agent-chat__composer-shell")
+          .evaluate((shell) => shell.getBoundingClientRect().height);
+      const idleHeight = await composerHeight();
       await button(page, "Start voice input", true).hover();
       await page.mouse.down();
       await gateway.waitForRequest("talk.session.create");
@@ -134,6 +139,9 @@ suite.define(() => {
       await admit();
       await emit("Guest dictation stays in this draft.");
       await expectDraft(textarea, "Guest dictation stays in this draft.");
+      // The listening status shares the button row, so the draft does not move.
+      await page.locator(".agent-chat__dictation-phase--listening").waitFor();
+      expect(await composerHeight()).toBe(idleHeight);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await button(page, "Stop and keep text", true).click();
       await gateway.waitForRequest("talk.session.close");

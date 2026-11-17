@@ -602,7 +602,6 @@ export function NewSessionComposer(props: {
         </Show>
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
-        <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
             <Show when={frame().skillMenuVisible}>
@@ -672,6 +671,7 @@ export function NewSessionComposer(props: {
                 </div>
               </Show>
             </div>
+            {options().dictationStatus}
             <div
               class="agent-chat__composer-actions"
               ref={(element) => {

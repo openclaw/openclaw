@@ -192,6 +192,29 @@
   justify-self: end;
 }
 
+/* The one-line phone composer has no free cell: the draft cell shows the
+   transcript. Dictation status gets its own row between the lede (replies,
+   attachments) and the draft, so this case still grows by one row. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
+  .agent-chat__input--dictating {
+  --chat-composer-action-row: 3;
+
+  grid-template-rows: max-content max-content 36px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
+  .agent-chat__input--dictating
+  .agent-chat__composer-input-row {
+  grid-row: 3;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
+  .agent-chat__dictation-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding-block-end: 4px;
+}
+
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-context,
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]

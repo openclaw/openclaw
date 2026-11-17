@@ -195,41 +195,6 @@
   text-overflow: ellipsis;
 }
 
-.agent-chat__composer-status-stack {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px 0;
-}
-
-.agent-chat__composer-status-stack:not(
-  :has(.compaction-indicator, .agent-chat__goal, .agent-chat__dictation-status)
-) {
-  display: none;
-}
-
-.agent-chat__composer-status-stack .compaction-indicator,
-.agent-chat__composer-status-stack .agent-chat__goal {
-  margin: 0;
-}
-
-/* The dictation row eases in instead of pushing the draft down in one frame. Clipping
-   drops the flex minimum height so the row can start from 0. */
-.agent-chat__input--dictating .agent-chat__composer-status-stack {
-  interpolate-size: allow-keywords;
-  overflow: hidden;
-  padding: 12px 14px 0;
-  transition: 0.18s;
-}
-
-@starting-style {
-  .agent-chat__composer-status-stack {
-    block-size: 0;
-    opacity: 0;
-  }
-}
-
 /* Capture mode pares the footer back to the two decisions that matter: stop
    recording or accept the transcript. Draft content and attachments remain in
    place so entering the mode never discards operator context. */
@@ -686,11 +651,15 @@
   }
 }
 
+/* Dictation status takes the footer space the hidden pickers leave beside Stop
+   and Send, so starting dictation adds no row above the draft. */
 .agent-chat__dictation-status {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  min-width: 0;
+  padding-inline-start: 8px;
   color: var(--accent);
   font-size: 12px;
 }
