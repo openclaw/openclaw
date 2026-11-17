@@ -14,8 +14,10 @@ type PendingContextEngineTurn = Readonly<{
   session_id: string;
 }>;
 
-/** Persist only resolved model facts, never live capabilities or credential-bearing config. */
+/** Persist only resolved turn facts, never live capabilities or credential-bearing config. */
 export type ContextEngineTurnRuntimeContext = Readonly<{
+  /** Verified sender of this durable turn; retries must not derive it from the session. */
+  senderId?: string;
   provider?: string;
   modelId?: string;
   modelContextWindow?: number;

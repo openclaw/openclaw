@@ -310,6 +310,13 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
   /**
+   * Verified sender of the current turn.
+   *
+   * This is a per-turn identity, not a session property: group session keys and
+   * stored session metadata cannot substitute for it.
+   */
+  senderId?: string;
+  /**
    * True when the host has explicitly opted this maintenance run into
    * consuming deferred compaction debt.
    */

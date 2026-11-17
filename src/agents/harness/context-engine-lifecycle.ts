@@ -492,6 +492,9 @@ export async function finalizeHarnessContextEngineTurn(
           aborted: params.aborted,
           yieldAborted: params.yieldAborted,
           runtimeContext: {
+            ...(params.runtimeContext?.senderId?.trim()
+              ? { senderId: params.runtimeContext.senderId.trim() }
+              : {}),
             provider: params.providerId ?? undefined,
             modelId: params.modelId ?? undefined,
             modelContextWindow: params.modelContextWindow,

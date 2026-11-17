@@ -4,7 +4,12 @@ import { createAttemptResult } from "./lifecycle.test-support.js";
 
 it("records the attempt's last-call prompt usage for durable turn commits", () => {
   const promptCache = { lastCallUsage: { input: 900, cacheRead: 270_000, total: 270_900 } };
-  const params = { provider: "codex", modelId: "gpt-5.4", sessionKey: "session-key" };
+  const params = {
+    provider: "codex",
+    modelId: "gpt-5.4",
+    sessionKey: "session-key",
+    senderId: "ou_sender",
+  };
   const hostOwned = { ...createAttemptResult(), promptCache };
   const nativeSelected = {
     ...hostOwned,
@@ -15,6 +20,7 @@ it("records the attempt's last-call prompt usage for durable turn commits", () =
     [nativeSelected, true],
   ] as const) {
     const context = resolveContextEngineCompletionRuntimeContext(params, result, native, undefined);
+    expect(context.senderId).toBe("ou_sender");
     expect(context.promptCache).toEqual(promptCache);
   }
 });

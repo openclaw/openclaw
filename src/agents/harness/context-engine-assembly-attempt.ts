@@ -69,6 +69,7 @@ export function resolveContextEngineCompletionRuntimeContext(
     | "contextTokenBudget"
     | "modelContextWindow"
     | "authoredContextTokenCap"
+    | "senderId"
   >,
   result: EmbeddedRunAttemptResult,
   nativeSession: boolean,
@@ -88,6 +89,8 @@ export function resolveContextEngineCompletionRuntimeContext(
     assembly ?? null,
   );
   const promptCache = result.promptCache ? { promptCache: result.promptCache } : {};
+  const senderId = params.senderId?.trim();
+  const senderContext = senderId ? { senderId } : {};
   // A startup estimate may describe the thread's previous model.
   const reportedContextTokens =
     result.contextTokensSource === "runtime" || result.contextTokensSource === "runtime-configured"
@@ -101,6 +104,7 @@ export function resolveContextEngineCompletionRuntimeContext(
   ) {
     // Native identity alone does not attest the host's window or context cap.
     return {
+      ...senderContext,
       provider: acceptedModel.provider,
       modelId: acceptedModel.model,
       ...(reportedContextTokens === undefined ? {} : { modelContextWindow: reportedContextTokens }),
@@ -111,6 +115,7 @@ export function resolveContextEngineCompletionRuntimeContext(
     };
   }
   return {
+    ...senderContext,
     provider: params.provider,
     modelId: params.modelId,
     modelContextWindow:
