@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
@@ -561,9 +562,9 @@ describe("runReplyAgent runtime config", () => {
         runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
           revoked = revokeDuring === "preflight" || revokeDuring === "refusal";
           if (revokeDuring === "stop") {
-            params.replyOperation.abortByUser();
+            expectDefined(params.replyOperation, "preflight reply operation").abortByUser();
           } else if (revokeDuring === "superseded") {
-            params.replyOperation.supersede();
+            expectDefined(params.replyOperation, "preflight reply operation").supersede();
           }
           if (
             revokeDuring === "preflight" ||
