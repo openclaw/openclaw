@@ -222,6 +222,10 @@ export function buildSessionEventContext(params: {
     Provider: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     OriginatingChannel: deliveryContext?.channel,
     OriginatingTo: deliveryContext?.to,
+    // Session-event turns ride the same same-conversation authority projection
+    // as inbound messages; without the provider-native chat id that projection
+    // cannot match the conversation and human steering is rejected (#199701).
+    ChatId: deliveryContext?.to,
     AccountId: deliveryContext?.accountId,
     MessageThreadId: deliveryContext?.threadId,
     // Inbound dedupe retains an adopted attempt's id; a policy re-admission is a new dispatch.

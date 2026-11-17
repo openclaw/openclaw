@@ -4,6 +4,42 @@ import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-
 import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
+it("carries the provider-native chat id into hook identity context", () => {
+  const ctx = buildSessionEventContext({
+    cfg: {},
+    agentId: "main",
+    sessionKey: "agent:main:cron:proof-job",
+    text: "background completion turn",
+    options: { source: "restart" },
+    occurrenceId: "chatid-occurrence",
+    deliveryContext: {
+      channel: "discord",
+      to: "123456789012345678",
+      accountId: "acct-1",
+    },
+    target: { sessionId: "existing", generation: "current" },
+    assertCurrent() {},
+  });
+  // Session-event turns run through the same same-conversation authority
+  // projection as inbound messages; without ChatId the projection cannot
+  // match the conversation and human steering is rejected.
+  expect(ctx.ChatId).toBe("123456789012345678");
+});
+
+it("leaves the chat id absent when no delivery context exists", () => {
+  const ctx = buildSessionEventContext({
+    cfg: {},
+    agentId: "main",
+    sessionKey: "agent:main:cron:proof-job",
+    text: "background completion turn",
+    options: { source: "restart" },
+    occurrenceId: "chatid-occurrence-absent",
+    target: { sessionId: "existing", generation: "current" },
+    assertCurrent() {},
+  });
+  expect(ctx.ChatId).toBeUndefined();
+});
+
 it("keeps restart recovery intact for the agent and out of chat display", () => {
   const text =
     "The Gateway restarted while you were working. Resume your work: inspect saved child work before repeating effects. Workspace and publication ownership do not transfer.";
