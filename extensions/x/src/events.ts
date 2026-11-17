@@ -151,6 +151,18 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
     await options.setCursor({ sinceId });
     paginationToken = undefined;
   }
+  if (batchDeferred && paginationToken && !pageError) {
+    // Defer admission until pagination reaches the oldest pages so healthy backfills
+    // always admit mentions in chronological (oldest-first) order.
+    await options.setCursor({
+      sinceId,
+      backfill: { sinceId, paginationToken, newestId },
+    });
+    options.onStatus?.({
+      message: `mentions backfill deferred (${posts.length} mentions scanned across ${pages} pages); continuing on next poll`,
+    });
+    return;
+  }
   posts.sort((a, b) =>
     BigInt(a.post.id) < BigInt(b.post.id) ? -1 : BigInt(a.post.id) > BigInt(b.post.id) ? 1 : 0,
   );
@@ -169,17 +181,6 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
       });
     }
     throw pageError;
-  }
-  if (batchDeferred && paginationToken) {
-    // Persist the continuation checkpoint and defer remaining pages to keep polling bounded.
-    await options.setCursor({
-      sinceId,
-      backfill: { sinceId, paginationToken, newestId },
-    });
-    options.onStatus?.({
-      message: `mentions backfill deferred (${posts.length} mentions queued across ${pages} pages); continuing on next poll`,
-    });
-    return;
   }
   if (backfill || newestId !== sinceId) {
     // Commit the high-water mark and remove its completed continuation together.

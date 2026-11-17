@@ -669,25 +669,25 @@ describe("X event transport", () => {
     },
   );
 
-  it("bounds polling pages when admission is held and resumes from durable backfill checkpoints", async () => {
+  it("bounds polling pages and preserves chronological admission across deferred backfill checkpoints", async () => {
     vi.useFakeTimers();
-    const held = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
     const deferred = Promise.withResolvers<void>();
     const completed = Promise.withResolvers<void>();
-    const totalPages = 25;
+    const maxId = 35;
     let cursor: XCursorState = { sinceId: "10" };
     let getMentionsCalls = 0;
     const admitted: string[] = [];
     const api = budgetApi(createXTestSpend(), (url) => {
       getMentionsCalls += 1;
+      const sinceId = Number(url.searchParams.get("since_id") ?? "10");
       const token = url.searchParams.get("pagination_token");
       const pageIndex = token ? Number(token.replace("page-", "")) : 0;
-      const id = String(10 + totalPages - pageIndex);
+      const idNum = maxId - pageIndex;
       const nextIndex = pageIndex + 1;
+      const hasMore = maxId - nextIndex > sinceId;
       return Response.json({
-        data: [post(id)],
-        meta: nextIndex < totalPages ? { next_token: `page-${nextIndex}` } : {},
+        data: idNum > sinceId ? [post(String(idNum))] : [],
+        meta: hasMore ? { next_token: `page-${nextIndex}` } : {},
       });
     });
     const test = streamFixture({
@@ -698,10 +698,6 @@ describe("X event transport", () => {
         cursor = next;
       },
       onPost: async ({ post: mention }) => {
-        if (!admitted.length) {
-          held.resolve();
-          await release.promise;
-        }
         admitted.push(mention.id);
       },
       onStatus: (value) => {
@@ -714,44 +710,38 @@ describe("X event transport", () => {
       },
     });
     void test.run.catch((error: unknown) => {
-      held.reject(error);
       deferred.reject(error);
       completed.reject(error);
     });
     try {
-      await held.promise;
-      await vi.advanceTimersByTimeAsync(0);
+      await deferred.promise;
       expect(getMentionsCalls).toBe(10);
       expect(admitted).toEqual([]);
-      expect(cursor).toEqual({ sinceId: "10" });
-
-      release.resolve();
-      await deferred.promise;
-      expect(admitted).toEqual(Array.from({ length: 10 }, (_, idx) => String(26 + idx)));
       expect(cursor).toEqual({
         sinceId: "10",
-        backfill: { sinceId: "10", paginationToken: "page-10", newestId: "35" },
+        backfill: { sinceId: "10", paginationToken: "page-10", newestId: "10" },
       });
 
       await vi.advanceTimersByTimeAsync(60_000);
       expect(getMentionsCalls).toBe(20);
-      expect(admitted).toHaveLength(20);
+      expect(admitted).toEqual([]);
       expect(cursor).toEqual({
         sinceId: "10",
-        backfill: { sinceId: "10", paginationToken: "page-20", newestId: "35" },
+        backfill: { sinceId: "10", paginationToken: "page-20", newestId: "10" },
       });
 
       await vi.advanceTimersByTimeAsync(60_000);
-      await completed.promise;
       expect(getMentionsCalls).toBe(25);
-      expect(admitted).toEqual([
-        ...Array.from({ length: 10 }, (_, idx) => String(26 + idx)),
-        ...Array.from({ length: 10 }, (_, idx) => String(16 + idx)),
-        ...Array.from({ length: 5 }, (_, idx) => String(11 + idx)),
-      ]);
+      expect(admitted).toEqual(Array.from({ length: 5 }, (_, idx) => String(11 + idx)));
+      expect(cursor).toEqual({ sinceId: "15" });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await completed.promise;
+      expect(admitted).toEqual(Array.from({ length: 25 }, (_, idx) => String(11 + idx)));
       expect(cursor).toEqual({ sinceId: "35" });
     } finally {
-      release.resolve();
       await test.stop();
     }
   });
@@ -818,12 +808,14 @@ describe("X event transport", () => {
     const largeText = "x".repeat(600_000);
     const api = budgetApi(createXTestSpend(), (url) => {
       getMentionsCalls += 1;
+      const sinceId = Number(url.searchParams.get("since_id") ?? "10");
       const token = url.searchParams.get("pagination_token");
       const pageIndex = token ? Number(token.replace("large-", "")) : 0;
-      const id = String(14 - pageIndex);
+      const idNum = 14 - pageIndex;
+      const nextIndex = pageIndex + 1;
       return Response.json({
-        data: [{ ...post(id), text: largeText }],
-        meta: pageIndex < 3 ? { next_token: `large-${pageIndex + 1}` } : {},
+        data: idNum > sinceId ? [{ ...post(String(idNum)), text: largeText }] : [],
+        meta: 14 - nextIndex > sinceId ? { next_token: `large-${nextIndex}` } : {},
       });
     });
     const test = streamFixture({
@@ -845,16 +837,19 @@ describe("X event transport", () => {
     try {
       await deferred.promise;
       expect(getMentionsCalls).toBe(2);
-      expect(test.admitted.map((item) => item.post.id)).toEqual(["13", "14"]);
+      expect(test.admitted).toEqual([]);
       expect(cursor).toEqual({
         sinceId: "10",
-        backfill: { sinceId: "10", paginationToken: "large-2", newestId: "14" },
+        backfill: { sinceId: "10", paginationToken: "large-2", newestId: "10" },
       });
 
       await vi.advanceTimersByTimeAsync(60_000);
+      expect(test.admitted.map((item) => item.post.id)).toEqual(["11", "12"]);
+      expect(cursor).toEqual({ sinceId: "12" });
+
+      await vi.advanceTimersByTimeAsync(60_000);
       await completed.promise;
-      expect(getMentionsCalls).toBe(4);
-      expect(test.admitted.map((item) => item.post.id)).toEqual(["13", "14", "11", "12"]);
+      expect(test.admitted.map((item) => item.post.id)).toEqual(["11", "12", "13", "14"]);
       expect(cursor).toEqual({ sinceId: "14" });
     } finally {
       await test.stop();
