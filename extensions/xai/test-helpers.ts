@@ -39,7 +39,7 @@ export function captureXaiRequest(
         },
       ],
     },
-    wrap = (ctx) => wrapXaiProviderStream(ctx, { clientVersion: "2026.7.2" }),
+    wrap = (ctx) => wrapXaiProviderStream(ctx),
   }: {
     extraParams?: Record<string, unknown>;
     headers?: ModelRequestHeaders;

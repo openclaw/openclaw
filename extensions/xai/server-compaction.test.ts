@@ -34,15 +34,12 @@ const model = xaiModel({
 function prepareRequests(
   context: Context,
   targetModel: Model<"openai-responses"> = model,
-  wrapper: { fastMode?: boolean; clientVersion?: string } = {},
+  wrapper: { fastMode?: boolean } = {},
 ) {
-  const streamFn = wrapXaiProviderStream(
-    {
-      streamFn: createOpenAIResponsesTransportStreamFn(),
-      extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
-    } as never,
-    wrapper,
-  );
+  const streamFn = wrapXaiProviderStream({
+    streamFn: createOpenAIResponsesTransportStreamFn(),
+    extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
+  } as never);
   if (!streamFn) {
     throw new Error("expected xAI stream wrapper");
   }
@@ -129,7 +126,7 @@ it("uses the same OAuth proxy headers as a normal turn", async () => {
     baseUrl: "https://cli-chat-proxy.grok.com/v1",
   });
   const contract = {
-    "x-grok-client-version": "2026.7.2",
+    "x-grok-client-version": "1.0.13",
     "x-grok-model-override": target.id,
     "X-XAI-Token-Auth": "xai-grok-cli",
   };
@@ -142,7 +139,6 @@ it("uses the same OAuth proxy headers as a normal turn", async () => {
   const requests = prepareRequests(
     { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
     target,
-    { clientVersion: "2026.7.2" },
   );
   await requests.compact();
   await requests.replay();

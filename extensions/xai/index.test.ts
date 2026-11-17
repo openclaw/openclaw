@@ -21,7 +21,7 @@ import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
-import { captureXaiRequest } from "./test-helpers.js";
+import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
 type XaiAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -502,6 +502,30 @@ describe("xai provider plugin", () => {
     ).toEqual([false, false]);
   });
 
+  it.each([
+    ["https://cli-chat-proxy.grok.com/v1", true],
+    ["https://api.x.ai/v1", false],
+    ["https://cli-chat-proxy.grok.com.example/v1", false],
+  ])("routes simple-completion OAuth headers only to %s", (baseUrl, oauth) => {
+    const captured = captureXaiRequest(xaiModel({ id: "grok-4.7", baseUrl }), {
+      headers: { "X-Existing": "kept", "x-delete": null },
+      payload: { input: "utility request" },
+      wrap: (ctx) => registeredProvider.wrapSimpleCompletionStreamFn?.(ctx) ?? ctx.streamFn,
+    });
+    expect(captured.payload).toEqual({ input: "utility request" });
+    expect(captured.headers).toEqual({
+      "X-Existing": "kept",
+      "x-delete": null,
+      ...(oauth
+        ? {
+            "x-grok-client-version": "1.0.13",
+            "x-grok-model-override": "grok-4.7",
+            "X-XAI-Token-Auth": "xai-grok-cli",
+          }
+        : {}),
+    });
+  });
+
   async function fetchUsage(payload: unknown, status = 200) {
     assert(registeredProvider.fetchUsageSnapshot, "xAI usage provider is registered");
     const snapshot = await registeredProvider.fetchUsageSnapshot({
@@ -516,7 +540,7 @@ describe("xai provider plugin", () => {
           Authorization: "Bearer oauth-token",
           Accept: "application/json",
           "x-grok-client-mode": "cli",
-          "x-grok-client-version": "1.0.4",
+          "x-grok-client-version": "1.0.13",
         });
         return makeResponse(status, payload);
       }),
