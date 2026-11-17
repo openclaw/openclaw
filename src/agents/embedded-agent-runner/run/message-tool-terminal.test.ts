@@ -343,7 +343,7 @@ describe("already-pending yield after a delivered reply", () => {
     }
     return {
       completion,
-      invoke(input: CallInput) {
+      invoke: (input: CallInput) => {
         const context = createAfterToolCallContext(input);
         captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
         return f.agent.afterToolCall?.(context);

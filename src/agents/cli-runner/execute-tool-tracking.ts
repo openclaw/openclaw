@@ -681,7 +681,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     async waitForTurnInterrupt(this: void) {
       await turnInterrupt.wait();
     },
-    onInputSubmitted: yieldTurnEnd.beginInput,
+    onInputSubmitted: () => yieldTurnEnd.beginInput(),
     shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
     setOnActiveLoopbackAskUserDeadlineChange: askUserDeadlines.setOnChange,
