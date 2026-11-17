@@ -80,7 +80,13 @@ describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
     const unavailable = error as GatewaySecretRefUnavailableError;
     expect(unavailable.cause).toBe(failure);
     expect(unavailable.message).toContain(
-      "Provider error: SECRET_PROVIDER_UNAVAILABLE: Secret store database is unavailable",
+      "Provider error: SECRET_PROVIDER_UNAVAILABLE (source store, provider default)",
+    );
+    // A provider failure replaces the credential-override advice with provider
+    // recovery guidance.
+    expect(unavailable.message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(unavailable.message).toContain(
+      "restore access to the secret provider and retry",
     );
   });
   it("reads store refs from the configured engine when the process has none selected", async () => {

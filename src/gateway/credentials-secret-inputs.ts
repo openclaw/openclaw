@@ -57,12 +57,16 @@ async function resolveConfiguredGatewaySecretInput(params: {
           throw error;
         }
         // The provider failure is the real cause (for example a read-only
-        // sandbox failing the store's cleanup write); surface it instead of
-        // pointing operators at credential overrides.
+        // sandbox failing the store's cleanup write); surface its config-derived
+        // identity instead of pointing operators at credential overrides. Never
+        // interpolate the error message: resolution failures can quote
+        // payload-derived text such as a malformed secret file's contents.
         throw new GatewaySecretRefUnavailableError(params.path, {
           cause: error,
           ...(isSecretResolutionError(error)
-            ? { providerDiagnostic: `${error.code}: ${error.message}` }
+            ? {
+                providerDiagnostic: `${error.code} (source ${error.source}, provider ${error.provider})`,
+              }
             : {}),
         });
       },

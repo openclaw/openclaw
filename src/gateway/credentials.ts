@@ -40,7 +40,11 @@ export class GatewaySecretRefUnavailableError extends Error {
     options?: {
       /** Underlying provider failure, preserved for callers that log causes. */
       cause?: unknown;
-      /** Operator-facing line for the real failure, shown before the generic fix. */
+      /**
+       * Config-derived provider identity for the real failure. Never embed
+       * provider error text: resolution failures can quote payload-derived
+       * input (for example a malformed secret file's contents).
+       */
       providerDiagnostic?: string;
     },
   ) {
@@ -48,10 +52,14 @@ export class GatewaySecretRefUnavailableError extends Error {
       [
         `${path} is configured as a secret reference but is unavailable in this command path.`,
         ...(options?.providerDiagnostic
-          ? [`Provider error: ${options.providerDiagnostic}`]
-          : []),
-        "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
-        "or run a gateway command path that resolves secret references before credential selection.",
+          ? [
+              `Provider error: ${options.providerDiagnostic}`,
+              "Fix: restore access to the secret provider and retry; the configured credential itself needs no change.",
+            ]
+          : [
+              "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+              "or run a gateway command path that resolves secret references before credential selection.",
+            ]),
       ].join("\n"),
       options?.cause !== undefined ? { cause: options.cause } : undefined,
     );
