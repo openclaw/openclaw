@@ -654,7 +654,7 @@ it.skipIf(process.platform === "win32")(
         assert(child?.pid, "Owned Gateway process unavailable");
         const closed = once(child, "close");
         provider.restart();
-        expect(child.kill("SIGTERM")).toBe(true);
+        expect(process.kill(child.pid, "SIGTERM")).toBe(true);
         expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
         assert(client, "Healthy sibling client unavailable after marking");
         await client.close();
