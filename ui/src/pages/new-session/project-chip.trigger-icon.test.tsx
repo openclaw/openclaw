@@ -1,9 +1,9 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
 
-it("shows folder-git-2 by default, the selected project's icon, or GitHub for a remote repository", () => {
+it("shows folder-git-2 by default, the selected project's icon, or GitHub for a remote repository", async () => {
   const fixture = createRepositoryFixture();
   const { browser, changed } = fixture;
   onTestFinished(() => browser.disconnect());
@@ -26,9 +26,11 @@ it("shows folder-git-2 by default, the selected project's icon, or GitHub for a 
   projectId.mockReturnValue("alpha");
   changed();
   flush();
-  const projectIcon = icon().querySelector("openclaw-workspace-icon");
-  expect(projectIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
-  expect(projectIcon?.fallbackIcon).toBe("folderGit2");
+  await waitForSolid(() => {
+    const projectIcon = icon().querySelector("openclaw-workspace-icon");
+    expect(projectIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
+    expect(projectIcon?.fallbackIcon).toBe("folderGit2");
+  });
 
   projectId.mockReturnValue("");
   remoteProject.mockReturnValue({

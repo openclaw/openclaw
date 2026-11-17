@@ -1,16 +1,17 @@
-import { lazy, Show } from "solid-js";
+import { Errored, lazy, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { resolveProjectChip } from "./project-chip.ts";
-import { ProjectIcon } from "./project-icon.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 const ProjectPickerContent = lazy(() => import("./project-picker-content.tsx"), {
   export: "ProjectPickerContent",
 });
+
+const ProjectIcon = lazy(() => import("./project-icon.tsx"), { export: "ProjectIcon" });
 
 export type ProjectChipProps = {
   params: NewSessionPlaceControlsOptions;
@@ -42,11 +43,15 @@ export function ProjectChip(props: ProjectChipProps) {
           }
         >
           {(projectId) => (
-            <ProjectIcon
-              context={props.params.context}
-              projectId={projectId()}
-              fallbackIcon="folderGit2"
-            />
+            <Errored fallback={() => <Icon name="folderGit2" />}>
+              <Loading fallback={<Icon name="folderGit2" />}>
+                <ProjectIcon
+                  context={props.params.context}
+                  projectId={projectId()}
+                  fallbackIcon="folderGit2"
+                />
+              </Loading>
+            </Errored>
           )}
         </Show>
       }
