@@ -9391,7 +9391,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
     expect(job.secrets).toBeUndefined();
-    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended/floor");
+    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended,");
   });
 });
 
