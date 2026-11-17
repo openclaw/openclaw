@@ -2291,6 +2291,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   /* Keep the content-sized menu against its trigger above the composer. */
   align-self: end;
   width: min(440px, calc(100vw - 24px));
+  /* Anchor-positioned grids must size to their content, not the available block. */
+  height: max-content;
   padding: var(--chat-permission-panel-padding);
   overflow: hidden;
 }
