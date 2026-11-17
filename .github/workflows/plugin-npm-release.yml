@@ -251,21 +251,11 @@ jobs:
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy .release-tooling/scripts/plugin-npm-release-admission.py
 
-      - name: Setup qualification verifier dependencies
+      - name: Setup trusted Node for prepared publication
         if: inputs.prepared_artifact != ''
-        uses: ./.release-tooling/.github/actions/setup-pnpm-store-cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          cache-mode: off
-          package-manager-file: .release-tooling/package.json
-          lockfile-path: .release-tooling/pnpm-lock.yaml
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install qualification verifier dependencies
-        if: inputs.prepared_artifact != ''
-        working-directory: .release-tooling
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Read qualified npm preparation
         id: prepared_plan
@@ -1478,28 +1468,15 @@ jobs:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
           # Publication consumes attested tarballs and the exact source manifest.
-          # Completeness needs the pinned parser dependencies and workspace sources.
+          # Keep the workflow policy and its dependency-free verifier closure.
+          sparse-checkout: |
+            .github/workflows
+            scripts
 
       - name: Setup trusted Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup qualification verifier dependencies
-        if: inputs.prepared_artifact != ''
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          package-manager-file: ./package.json
-          lockfile-path: ./pnpm-lock.yaml
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install qualification verifier dependencies
-        if: inputs.prepared_artifact != ''
-        working-directory: .
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Resolve immutable npm publication artifact
         if: inputs.prepared_artifact == ''

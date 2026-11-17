@@ -1,4 +1,3 @@
-import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseLaneSelection } from "./lib/docker-e2e-plan.mts";
 import { allReleasePathLanes } from "./lib/docker-e2e-scenarios.mts";
@@ -636,6 +635,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   writeOutputs(plan);
   const summary = markdownForPlan(plan);
   if (process.env.GITHUB_STEP_SUMMARY) {
+    const { appendFileSync } = await import("node:fs");
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
   }
 }

@@ -6,7 +6,6 @@ import {
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({
@@ -216,7 +215,6 @@ export function trustedMainPackageFixture({
   const client = {
     validateChildReuse: unsupported,
     getRunAttempt: unsupported,
-    verifyRetainedPublicationArtifacts: unsupported,
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
@@ -224,13 +222,9 @@ export function trustedMainPackageFixture({
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
     },
-    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
-      return verifyReceiptRecoveryAuthority("openclaw/openclaw", producer);
-    },
     revalidateQualificationAdmissionAuthority: () => {
       throw new Error("historical fixture must not request candidate admission authority");
     },
-    getCandidateFileNames: () => [],
     getWorkflowSource: (_sha: string) => "name: Full Release Validation\n",
     compareCommitLineage: compareCommits,
     compareCommits,

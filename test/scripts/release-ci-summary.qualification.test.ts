@@ -559,9 +559,6 @@ describe("candidate-owned publish consumer chain", () => {
       },
       {
         ...f.client,
-        verifyRetainedPublicationArtifacts() {
-          throw new Error("Qualification fixture does not recover publication artifacts");
-        },
         downloadArtifactArchive() {
           throw new Error("Qualification fixture does not download artifact archives");
         },
@@ -636,9 +633,6 @@ describe("candidate-owned publish consumer chain", () => {
         },
         {
           ...f.client,
-          verifyRetainedPublicationArtifacts() {
-            throw new Error("Qualification fixture does not recover publication artifacts");
-          },
           downloadArtifactArchive() {
             throw new Error("Qualification fixture does not download artifact archives");
           },

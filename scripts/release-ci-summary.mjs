@@ -15,7 +15,6 @@ import { join, resolve } from "node:path";
 import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { verifyRetainedPublicationArtifacts } from "./full-release-artifacts.mjs";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
 import {
   decodePublicationDispatchEnvelope,
@@ -49,7 +48,6 @@ import {
   terminalPolicyPass,
   validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
-  qualificationChildDispatchInputs,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
   validateRetiredReleaseRetryFields,
@@ -78,7 +76,6 @@ import {
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
-  verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
@@ -93,7 +90,6 @@ import {
 import {
   qualificationAdmissionContract,
   validateQualificationCoverage,
-  validateQualificationChildCompleteness,
   validateQualificationJobs,
 } from "./release-qualification-coverage.mjs";
 
@@ -1166,6 +1162,11 @@ export function validateParentManifest(value, expected) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("release validation manifest must be an object");
   }
+  if (Object.hasOwn(value, "receiptRecovery")) {
+    throw new Error(
+      "Receipt-backed recovery is retired; run fresh Full Release Validation with an authenticated qualification admission.",
+    );
+  }
   validateRetiredReleaseRetryFields(value);
   if (![2, 3, 4].includes(value.version) || value.workflowName !== "Full Release Validation") {
     throw new Error("release validation manifest schema is unsupported");
@@ -2157,21 +2158,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
     },
-    getCandidateFileNames(sha) {
-      const exactSha = normalizeSha(sha, "candidate source SHA");
-      const path = "scripts/e2e/lib/upgrade-survivor";
-      const entries = readJson("contents/" + path + "?ref=" + exactSha);
-      if (
-        !Array.isArray(entries) ||
-        entries.length >= 1000 ||
-        entries.some(
-          (entry) => typeof entry.name !== "string" || entry.path !== path + "/" + entry.name,
-        )
-      ) {
-        throw new Error("Invalid candidate survivor directory metadata");
-      }
-      return entries.map((entry) => entry.name);
-    },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
         ![
@@ -2180,24 +2166,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           ".github/workflows/ci.yml",
           ".github/workflows/plugin-prerelease.yml",
           ".github/workflows/openclaw-release-checks.yml",
-          ".github/workflows/full-release-receipt-recovery.yml",
-          ".github/workflows/openclaw-performance.yml",
-          ".github/workflows/package-acceptance.yml",
-          ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
-          ".github/workflows/npm-telegram-beta-e2e.yml",
-          "scripts/lib/cross-os-release-checks/config.ts",
-          "scripts/plan-release-workflow-matrix.mjs",
-          "scripts/lib/update-compat-inventory.json",
-          ".github/workflows/install-smoke-reusable.yml",
-          ".github/workflows/qa-live-transports-convex.yml",
-          "scripts/plan-targeted-docker-lane-groups.mjs",
-          "scripts/lib/update-first-hop-lanes.mjs",
-          "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
-          "scripts/lib/release-version.mjs",
-          "scripts/lib/numeric-options.mjs",
-          "scripts/lib/upgrade-survivor-policy.mjs",
-          "scripts/lib/upgrade-survivor-scenarios.json",
-          "package.json",
         ].includes(sourceWorkflowPath)
       ) {
         throw new Error("Unsupported immutable release workflow path");
@@ -2206,33 +2174,19 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       const route = "contents/" + sourceWorkflowPath + "?ref=" + exactSha;
       const load = () => runReleaseCiGh(githubRestArgs(route, normalizedRepository));
       const payload = JSON.parse(immutableReads ? immutableReads.text(route, load) : load());
-      const maxBytes =
-        sourceWorkflowPath === "scripts/lib/update-compat-inventory.json"
-          ? 2 * 1024 * 1024
-          : 1024 * 1024;
       if (
         payload?.type !== "file" ||
+        payload.encoding !== "base64" ||
         payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
-        payload.size > maxBytes ||
-        !/^[a-f0-9]{40}$/u.test(payload.sha)
+        payload.size > 1024 * 1024 ||
+        typeof payload.content !== "string" ||
+        payload.content.length > 2 * 1024 * 1024
       ) {
         throw new Error("invalid immutable source-admission workflow response");
       }
-      // Contents omits bytes above 1 MiB. Read the exact indexed Git blob, not
-      // a moving download URL; retain the path, size, and blob digest checks.
-      const content = payload.encoding === "none" ? readJson("git/blobs/" + payload.sha) : payload;
-      if (
-        content.encoding !== "base64" ||
-        content.size !== payload.size ||
-        content.sha !== payload.sha ||
-        typeof content.content !== "string" ||
-        content.content.length > 2 * maxBytes
-      ) {
-        throw new Error("invalid immutable source-admission workflow content");
-      }
-      const bytes = Buffer.from(content.content, "base64");
+      const bytes = Buffer.from(payload.content, "base64");
       const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
       if (bytes.length !== payload.size || blob !== payload.sha) {
         throw new Error("source-admission workflow blob mismatch");
@@ -2276,27 +2230,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         ...(immutableReads ? { runGh: runAdmissionGh, downloadArchive: runAdmissionGh } : {}),
       });
     },
-    verifyReceiptRecoveryAuthority(producer) {
-      if (!immutableReads) {
-        return verifyReceiptRecoveryAuthority(normalizedRepository, producer);
-      }
-      return verifyReceiptRecoveryAuthority(normalizedRepository, producer, true, (args) => {
-        const query = args.indexOf("--jq");
-        const request = query < 0 ? args : [...args.slice(0, query), ...args.slice(query + 2)];
-        const route = request[1].replace("repos/" + normalizedRepository + "/", "");
-        // The raw comparison includes patches; use the existing full-response
-        // reader rather than the tooling reader's projected-response buffer.
-        return JSON.stringify(readJson(route));
-      });
-    },
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority({
         ...options,
         ...(immutableReads ? { runGh: runAdmissionGh } : {}),
       });
-    },
-    verifyRetainedPublicationArtifacts(root, env, options) {
-      return verifyRetainedPublicationArtifacts(root, env, { ...options, immutableReads });
     },
     downloadArtifactArchive(options) {
       return downloadExactActionsArtifactArchive({ ...options, immutableReads });
@@ -2419,7 +2357,6 @@ function normalizedParentTuple(evidence, identity) {
 }
 
 async function validateStrictChildRun({
-  qualification,
   child,
   childEvidence,
   childReuse,
@@ -2583,24 +2520,6 @@ async function validateStrictChildRun({
   if (child.requiredJobs) {
     validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
   }
-  if (qualification) {
-    validateQualificationChildCompleteness({
-      role: child.manifestKey,
-      inputs: qualificationChildDispatchInputs(
-        child.manifestKey,
-        qualification,
-        executionPlan.candidate,
-        client.getWorkflowSource(
-          parentEvidence.manifest.workflowSha,
-          ".github/workflows/" + child.workflow,
-        ),
-      ),
-      jobs,
-      waivedJobNames: policy.waivedJobNames,
-      getSource: (path) => client.getWorkflowSource(parentEvidence.manifest.workflowSha, path),
-      getCandidateFileNames: (sha) => client.getCandidateFileNames(sha),
-    });
-  }
   if (child.manifestKey === "productPerformance") {
     // The authenticated composite selects the newest executed attempt per job,
     // including a carried guard or a newer failure that supersedes its success.
@@ -2756,59 +2675,9 @@ export async function validateReleaseRunEvidence(
   const verifier = resolveVerifierIdentity(verifierSourceSha, verifierSourceContent);
   const selectedRun = await evidenceClient.getRun(normalizedRunId);
   if (workflowPath(selectedRun) === ".github/workflows/full-release-receipt-recovery.yml") {
-    if (
-      qualificationReuse ||
-      reuseRequest ||
-      hasRequestedEvidenceReuse({
-        expectedChangedPaths,
-        expectedEvidencePolicy,
-        expectedEvidenceSha,
-        expectedRootRunId,
-        expectedSelectedRunId,
-      })
-    ) {
-      throw new Error("Receipt recovery is an explicit aggregate, not historical parent reuse");
-    }
-    const retained = evidenceClient.loadManifest(
-      normalizedRunId,
-      selectedRun.run_attempt,
-      manifestPath,
+    throw new Error(
+      "Receipt-backed recovery is retired; run fresh Full Release Validation with an authenticated qualification admission.",
     );
-    if (!retained) {
-      throw new Error("Receipt recovery aggregate artifact is missing");
-    }
-    validateManifestArtifactBinding(
-      retained.artifact,
-      retained.manifest,
-      selectedRun,
-      normalizedRunId,
-    );
-    if (expectedTargetSha !== undefined && retained.manifest.targetSha !== expectedTargetSha) {
-      throw new Error("Receipt recovery target differs from the consumer");
-    }
-    const lineage = evidenceClient.compareCommitLineage(selectedRun.head_sha, verifier.sourceSha);
-    if (
-      !["ahead", "identical"].includes(lineage.status) ||
-      lineage.merge_base_commit?.sha !== selectedRun.head_sha
-    ) {
-      throw new Error("Receipt recovery producer is not on the selected verifier lineage");
-    }
-    if (
-      trustedIdentity.type === "tag" &&
-      evidenceClient.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
-    ) {
-      throw new Error("Protected publication tooling tag changed");
-    }
-    const { authenticateReceiptRecovery } = await import("./full-release-receipt-recovery.mjs");
-    const evidence = await authenticateReceiptRecovery({
-      manifest: retained.manifest,
-      artifact: retained.artifact,
-      run: selectedRun,
-      client: evidenceClient,
-      verifier,
-      expectedRunAttempts: remainingExpectedRunAttempts,
-    });
-    return { ...evidence, qualification: qualificationFacts(evidence) };
   }
   const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
@@ -3305,7 +3174,6 @@ export async function validateReleaseRunEvidence(
   const childResults = await Promise.allSettled(
     childEntries.map(({ child, runId: childRunId }) =>
       validateStrictChildRun({
-        qualification,
         child,
         childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
         childReuse: executionPlan?.childReuse?.[child.manifestKey],
@@ -3413,12 +3281,11 @@ export async function validateReleaseRunEvidence(
 }
 
 // Normalize only after the owner has authenticated the complete evidence graph.
-// Recovery retains its original admission here, never in the aggregate source field.
 function qualificationFacts(evidence) {
   const admission = evidence.qualificationAdmission ?? null;
   const manifest = evidence.current.manifest;
-  /** @type {"direct" | "recovery" | "historical"} */
-  const kind = admission ? (manifest.receiptRecovery ? "recovery" : "direct") : "historical";
+  /** @type {"direct" | "historical"} */
+  const kind = admission ? "direct" : "historical";
   return {
     kind,
     candidateSha: evidence.current.targetSha,

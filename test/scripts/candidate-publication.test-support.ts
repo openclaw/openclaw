@@ -15,15 +15,12 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
-  qualificationChildDispatchInputs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
 } from "../../scripts/release-qualification-admission.mjs";
-import { qualificationRequiredChildJobs } from "../../scripts/release-qualification-coverage.mjs";
 import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
@@ -262,11 +259,6 @@ export function candidatePublicationFixture(
   });
   plan.candidate = candidateBinding;
   plan.candidateRequest = candidate.request;
-  const getCandidateFileNames = () => [
-    "legacy-operator-state.mjs",
-    "custom-plugin-siblings.mjs",
-    "package-activation-recovery.mjs",
-  ];
   const qualificationSources = new Map<string, string>();
   const qualificationSource = (path: string) => {
     const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
@@ -280,23 +272,7 @@ export function candidatePublicationFixture(
       requestedRunId === runId
         ? coverage.requiredParentJobs
         : expectDefined(child, "covered child").requiredJobs;
-    const required = child
-      ? [
-          ...names,
-          ...qualificationRequiredChildJobs({
-            role: child.key,
-            inputs: qualificationChildDispatchInputs(
-              child.key,
-              admission.receipt,
-              candidateBinding,
-              qualificationSource(".github/workflows/" + child.workflow),
-            ),
-            getSource: qualificationSource,
-            getCandidateFileNames,
-          }),
-        ]
-      : names;
-    return [...new Set(required)].map((name, index) =>
+    return names.map((name, index) =>
       Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
     );
   };
@@ -323,6 +299,12 @@ export function candidatePublicationFixture(
     ),
     publicationIntentInputs(source),
   );
+  if (plan.coveragePolicy) {
+    manifest.validationInputs.coveragePolicy = plan.coveragePolicy;
+  } else {
+    delete manifest.validationInputs.coveragePolicy;
+  }
+  manifest.validationInputs.targetVersion = version;
   manifest.validationInputs.targetContextRef = expectDefined(
     inputs.target_context_ref,
     "normalized target context ref",
@@ -387,9 +369,6 @@ export function candidatePublicationFixture(
   };
   const client = {
     ...fixture.client,
-    verifyRetainedPublicationArtifacts() {
-      throw new Error("Fresh candidate fixture does not reuse publication artifacts");
-    },
     downloadArtifactArchive() {
       throw new Error("Fresh candidate fixture does not download reused artifacts");
     },
@@ -412,13 +391,9 @@ export function candidatePublicationFixture(
         runGh: admission.runGh,
         downloadArchive: admission.archive,
       }),
-    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
-      return verifyReceiptRecoveryAuthority(repository, producer);
-    },
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
-    getCandidateFileNames,
     getWorkflowSource: (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
       qualificationSource(path),
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
@@ -438,7 +413,11 @@ export function candidatePublicationFixture(
         : fixture.client
             .getJobLog(id)
             .replaceAll(legacyRunId, runId)
-            .replaceAll(fixture.targetSha, c),
+            .replaceAll(fixture.targetSha, c)
+            .replace(
+              /CI_RELEASE_SCOPE: \S+/gu,
+              `CI_RELEASE_SCOPE: ${plan.coveragePolicy === "npm-beta-v1" ? "npm-beta" : plan.coveragePolicy === "npm-stable-v1" ? "npm-stable" : "full"}`,
+            ),
     getRunAttemptJobs: async (id: string) =>
       id === runId ? [...originalJobs, sealer] : jobsFor(id),
     loadExecutionPlan: () => plan,

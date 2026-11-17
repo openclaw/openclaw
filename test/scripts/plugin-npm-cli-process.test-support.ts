@@ -19,7 +19,6 @@ import { createPluginPublicationArtifact } from "../../scripts/plugin-publicatio
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import { addRecoveryGraph } from "./plugin-npm-cli-recovery.test-support.mjs";
 import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -43,13 +42,7 @@ type RequestRecord = {
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
-// The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(
-  root: string,
-  plugins = "",
-  packageCount = 2,
-  receiptRecovery = true,
-) {
+export async function createNpmCliProcessFixture(root: string, plugins = "", packageCount = 2) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -338,11 +331,6 @@ export async function createNpmCliProcessFixture(
   for (const [path, text] of f.qualificationSources) {
     source(path, f.q, text);
   }
-  const survivorPath = "scripts/e2e/lib/upgrade-survivor";
-  json(
-    "contents/" + survivorPath + "?ref=" + f.c,
-    f.client.getCandidateFileNames().map((name) => ({ name, path: survivorPath + "/" + name })),
-  );
   json("actions/runs/" + f.runId + "/artifacts?per_page=100&page=1", {
     total_count: 2,
     artifacts: [artifacts.get(91), artifacts.get(92)],
@@ -397,24 +385,6 @@ export async function createNpmCliProcessFixture(
   for (const [id, artifact] of artifacts) {
     json("actions/artifacts/" + id, artifact);
   }
-  const ordinaryResponses = { ...responses };
-  const recovery = addRecoveryGraph({
-    parentJobs: await f.client.getRunAttemptJobs(f.runId),
-    f,
-    producer,
-    packages,
-    artifacts,
-    json,
-    bytes,
-    source,
-    metadata,
-  });
-  if (!receiptRecovery) {
-    for (const key of Object.keys(responses)) {
-      delete responses[key];
-    }
-    Object.assign(responses, ordinaryResponses);
-  }
   const responseDirectory = join(root, "responses");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
@@ -451,7 +421,7 @@ export async function createNpmCliProcessFixture(
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
-    PREPARED_NPM_FRV_RUN_ID: receiptRecovery ? recovery.runId : f.runId,
+    PREPARED_NPM_FRV_RUN_ID: f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
     PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
     PREPARED_NPM_PLUGINS: plugins,
@@ -498,7 +468,6 @@ export async function createNpmCliProcessFixture(
   let carrierDigest = "";
   return {
     f,
-    recovery,
     packages,
     previewManifest: join(root, "preview-manifest.json"),
     records,

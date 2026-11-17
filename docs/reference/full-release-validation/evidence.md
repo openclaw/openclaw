@@ -136,83 +136,24 @@ separate **not run** records.
 
 <a id="receipt-backed-beta-aggregate-recovery" />
 
-## Receipt-backed aggregate recovery
+## Unavailable qualification evidence
 
-After a reviewed P-only policy or tooling change,
-`.github/workflows/full-release-receipt-recovery.yml` can aggregate existing authenticated
-qualification receipts. The original admission determines beta, stable, or full coverage,
-including extended-stable publication. Recovery also supports an unavailable original
-plan; it never restores or reinterprets historical observations or parent conclusions.
+Receipt-backed aggregate recovery is retired for every release profile, including
+beta. An earlier recovery aggregate is not accepted as qualification evidence.
 
-```bash
-pnpm frv recover --run <original-parent-run-id> \
-  --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
-pnpm frv recover --reconcile-request <private-request-path> --json
-```
+Use the ordinary authenticated qualification flow. If its required execution plan,
+admission, child evidence, or publication artifacts are unavailable, obtain fresh
+qualification for the same immutable candidate. Do not reconstruct missing evidence,
+substitute a recovery aggregate, or relabel the original parent as successful.
 
-The helper authenticates the original admission, plan when present, child receipts, and
-publication descriptors. Without a plan, exact dispatch/adoption witnesses are required;
-an invalid existing plan never enables fallback. Required workloads—not just aggregate
-jobs—must be complete for both direct and recovered qualification. Advisory failures and
-authenticated waiver policy remain unchanged. Frozen Docker policy must match the
-supported planner/dependency closure; divergence requires a reviewed adapter, never
-silent substitution of current P policy. Survivor scenarios use that Q policy and immutable
-capability names from candidate C; same-base beta versions remain on the current line.
-
-The private request binds a new UUID and exact P before one dispatch attempt. P must be
-the main tip; movement during dispatch fails rather than adopting another P. Reopening
-the request only reconciles, including after interruption or rejection. Reconciliation
-checks a bounded inventory of 100 recovery runs and authenticates exact request bytes,
-producer, attempt, and successful ordered upload. A missing witness stays unconfirmed;
-a title match or empty inventory never authorizes redispatch. Successful qualification
-additionally requires the strict aggregate authenticator. Preserve the request until
-reconciliation completes; this command never dispatches tests or artifact preparation.
-
-- Closed `openclaw.full-release-receipt-recovery/v1` input: new request UUID, repository,
-  original qualification-admission descriptor, parent run/attempt, complete sealed
-  candidate binding, every originally admitted child selection, original publication
-  descriptors. New operator requests also bind exact recovery P. Preserve the originally
-  admitted C/Q tuple; original publication selection, complete coverage, and frozen
-  upgrade baselines remain authoritative.
-  No new test selection/current-registry baseline resolution.
-- Authenticate original admission/dispatches, current policy-passing child attempts and
-  complete composite receipts, sealed candidate/package bytes, all npm/SDK/plugin/Docker
-  producer receipts/payload digests. Only admission-authenticated version selects P-owned
-  waivers. Recheck exact aggregate causes, retain raw conclusions, seal matched waivers;
-  strict readers recompute and reject added/omitted grants. Reused children keep dispatch
-  origin; verify original parent's exact reuse-digest witness with ordinary aggregation
-  validator. Ordinary child reuse follows current admitted-P policy while preserving
-  original producer receipts.
-- Missing payloads, incomplete history, changed attempts, or lost authority fail closed.
-  Per-child complete rerun-history budget: ten minutes; ordinary reuse: two. Job-inventory
-  timeouts/retry limits unchanged. No test/preparation dispatch; Actions/content read-only.
-  Install only trusted P dependencies with lifecycle scripts disabled; never build/execute C.
-- Existing publication-admission owner uses current trusted P to read committed candidate
-  metadata and collect newly timestamped registry observations. Successful aggregate
-  records separate source/admission and original receipt request. Strict readers verify
-  workflow, upload order, observation bytes, current operator authority, original evidence,
-  trusted-main lineage. Publishers use unchanged Q-owned artifacts; P owns aggregation
-  and current admission. Never relabel original parent successful; historical validation
-  and plan restoration are unchanged.
-- Producer hashes/inspects original payloads once and seals exact inventory. Readers
-  authenticate successful recovery job, ordered uploads, observations; reconstruct full
-  inventory from original descriptors, small manifests, live artifact metadata and require
-  exact match. No repeated bulk npm/SDK/Docker/candidate downloads per plugin publisher.
-  Fresh bounded plugin listing replaces per-package metadata requests only within that
-  authentication, not immutable replay. Selected consumers still download/verify original
-  bytes; current producer attempts, expiry, authority remain mandatory. Immutable replay
-  contains raw small evidence only, with unchanged limits.
-- Parsed payloads retain archive size/integrity limits. Opaque Docker and candidate
-  image/registry archives stream SHA-256 over every byte, without retaining/expanding;
-  authenticated metadata size is exact transfer bound. Recovery Docker transfers share
-  four minutes across at most three attempts, rather than sixty seconds each. Metadata
-  and other archive callers retain sixty-second caps. Binding, expiry, exact size, and
-  full digest remain mandatory; missing/mismatched bytes never permit omission/rebuilding.
+Ordinary authenticated child and qualification reuse remains available when its
+required evidence exists and passes current admitted policy. A tooling-only repair
+may use a newly admitted Q without changing C; it still requires the normal successful
+qualification parent.
 
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
-- `.github/workflows/full-release-receipt-recovery.yml`
 - `.github/workflows/full-release-candidate.yml`
 - `.github/workflows/openclaw-release-checks.yml`
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`

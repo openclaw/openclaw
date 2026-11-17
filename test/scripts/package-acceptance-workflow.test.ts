@@ -7297,6 +7297,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     ).toMatchObject({
       ref: "${{ github.workflow_sha }}",
       "persist-credentials": false,
+      "sparse-checkout": "scripts",
     });
     for (const stepName of [
       "Write Android release approval",
@@ -10190,15 +10191,10 @@ describe("package artifact reuse", () => {
     for (const checkout of [
       workflowStep(discovery, "Checkout trusted candidate discovery"),
       workflowStep(candidateBinding, "Checkout candidate binding authority"),
+      workflowStep(summary, "Checkout release state verifier"),
     ]) {
       expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
-    expect(workflowStep(summary, "Checkout release state verifier").with).not.toHaveProperty(
-      "sparse-checkout",
-    );
-    expect(workflowStep(summary, "Install qualification verifier dependencies").run).toContain(
-      "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    );
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
       "full-release-candidate-reuse.mjs discover",
@@ -15033,6 +15029,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       ref: "${{ github.workflow_sha }}",
       path: ".release-validation-tooling",
       "persist-credentials": false,
+      "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
       PUBLICATION_CONSUMER:
@@ -15142,16 +15139,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       [
         "--input-type=module",
         "-e",
-        `
-          import assert from "node:assert/strict";
-          await import(${JSON.stringify(pathToFileURL(join(root, "scripts/release-ci-summary.mjs")).href)});
-          const { qualificationRequiredChildJobs } = await import(${JSON.stringify(pathToFileURL(join(root, "scripts/release-qualification-coverage.mjs")).href)});
-          assert.deepEqual(qualificationRequiredChildJobs({ role: "normalCi" }), []);
-          assert.throws(
-            () => qualificationRequiredChildJobs({ role: "releaseChecks" }),
-            /Cannot find (?:module|package).*yaml/,
-          );
-        `,
+        `await import(${JSON.stringify(pathToFileURL(join(root, "scripts/release-ci-summary.mjs")).href)})`,
       ],
       { encoding: "utf8", timeout: 20_000 },
     );

@@ -593,17 +593,31 @@ jobs:
             fi
           fi
 
-          TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          TARGET_VERSION="$target_version" RELEASE_CONTEXT_KIND="$identity_kind" node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
-          import { resolveReleaseQualificationScope } from './workflow/scripts/full-release-validation-policy.mjs';
+          import { normalizeReleaseCoveragePolicy } from './workflow/scripts/full-release-validation-policy.mjs';
+          import { classifyReleaseTrain, parseReleaseVersion } from './workflow/scripts/lib/release-version.mjs';
           const env = process.env;
-          const scope = resolveReleaseQualificationScope({
-            targetVersion: env.TARGET_VERSION, targetContextRef: env.TARGET_CONTEXT_REF || env.TARGET_REF,
-            releaseProfile: env.RELEASE_PROFILE, runReleaseSoak: env.RUN_RELEASE_SOAK,
-            rerunGroup: env.RERUN_GROUP, crossOsSuiteFilter: env.CROSS_OS_SUITE_FILTER,
-            skipPackageTelegramE2e: env.SKIP_PACKAGE_TELEGRAM_E2E,
-          });
-          appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${scope.npmDistTag}\nrelease_candidate_branch=${scope.releaseCandidateBranch}\ncoverage_policy=${scope.coveragePolicy ?? ''}\nci_release_scope=${scope.ciReleaseScope}\nskip_package_telegram_e2e=${scope.skipPackageTelegramE2e}\n`);
+          const version = parseReleaseVersion(env.TARGET_VERSION);
+          if (!version) throw new Error('Invalid release package version.');
+          const train = classifyReleaseTrain(version);
+          if (train === 'unsupported-extended-stable-correction') {
+            throw new Error('Extended-stable releases do not allow correction suffixes.');
+          }
+          if (train === 'alpha') throw new Error('Alpha releases are retired; use a beta prerelease.');
+          const distTag = train === 'stable' ? 'beta' : train;
+          const branch = train === 'extended-stable' ? `extended-stable/${version.year}.${version.month}.33` : '';
+          const beta = env.RELEASE_PROFILE === 'beta' && env.RUN_RELEASE_SOAK === 'false' && env.RERUN_GROUP === 'all';
+          const stable = env.RELEASE_PROFILE === 'stable' && env.RUN_RELEASE_SOAK === 'true' && env.RERUN_GROUP === 'all';
+          const releaseContext = ['release branch', 'release tag'].includes(env.RELEASE_CONTEXT_KIND);
+          // Bind qualification scope once; dispatch and sealed evidence consume the same fact.
+          const policy = releaseContext && beta && train === 'beta' ? 'npm-beta-v1'
+            : releaseContext && stable && train === 'stable' ? 'npm-stable-v1' : undefined;
+          normalizeReleaseCoveragePolicy({ coveragePolicy: policy, releaseProfile: env.RELEASE_PROFILE,
+            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version,
+            crossOsSuiteFilter: env.CROSS_OS_SUITE_FILTER });
+          const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
+          appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
           NODE
 
       - name: Validate publication source request
@@ -1061,6 +1075,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          sparse-checkout: |
+            scripts
+            .github/actions/setup-pnpm-store-cache
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1072,6 +1090,8 @@ jobs:
         with:
           ref: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}
           path: qualification-verifier
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1096,20 +1116,6 @@ jobs:
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
-
-      - name: Setup qualification verifier dependencies
-        uses: ./workflow/.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/package.json
-          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/pnpm-lock.yaml
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install qualification verifier dependencies
-        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Download publication admission for reuse budgeting
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -2340,6 +2346,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2390,22 +2398,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
-
-      - &qualification_verifier_dependencies
-        name: Setup qualification verifier dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/package.json
-          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/pnpm-lock.yaml
-          node-version: ${{ env.NODE_VERSION }}
-
-      - &qualification_verifier_dependencies_install
-        name: Install qualification verifier dependencies
-        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Prepare immutable release execution plan inputs
         id: plan_inputs
@@ -2866,6 +2858,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2893,9 +2887,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
-
-      - *qualification_verifier_dependencies
-      - *qualification_verifier_dependencies_install
 
       - name: Select newest compatible release state artifacts
         id: selected_state

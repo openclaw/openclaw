@@ -11,19 +11,4 @@ export function validateQualificationJobs(
   jobs: unknown,
   requiredNames: string[],
   label?: string,
-  waivedJobNames?: Set<string>,
-): void;
-export type QualificationChildCompletenessContext = {
-  role: string;
-  inputs: Record<string, string>;
-  /** Read immutable Q source, not the current publisher checkout. */
-  getSource: (path: string) => string;
-  /** Read immutable survivor directory names at the admitted candidate C. */
-  getCandidateFileNames: (sha: string) => string[];
-};
-export function qualificationRequiredChildJobs(
-  context: QualificationChildCompletenessContext,
-): string[];
-export function validateQualificationChildCompleteness(
-  context: QualificationChildCompletenessContext & { jobs: unknown; waivedJobNames?: Set<string> },
 ): void;

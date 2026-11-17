@@ -103,21 +103,6 @@ async function fixture() {
     const path = `contents/${key.slice(separator + 1)}?ref=${key.slice(0, separator)}`;
     api[path] = admissionResponse(path);
   }
-  api[`contents/scripts/e2e/lib/upgrade-survivor?ref=${f.admission.receipt.request.candidateSha}`] =
-    f.client
-      .getCandidateFileNames()
-      .map((name) => ({ name, path: "scripts/e2e/lib/upgrade-survivor/" + name }));
-  for (const [path, source] of f.qualificationSources) {
-    const bytes = Buffer.from(source);
-    api[`contents/${path}?ref=${f.q}`] ??= {
-      type: "file",
-      encoding: "base64",
-      path,
-      size: bytes.length,
-      content: bytes.toString("base64"),
-      sha: createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"),
-    };
-  }
   const artifact = <T extends { id: number }>(metadata: T, name: string, value: unknown) => {
     const zip = makeStoredZip({ [name]: JSON.stringify(value) });
     const result = { ...metadata, digest: "sha256:" + hash(zip), size_in_bytes: zip.length };

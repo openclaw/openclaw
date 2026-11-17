@@ -48,10 +48,6 @@ import {
   inspectActionsArtifactZipWithPolicy,
   sha256Digest,
 } from "./lib/actions-artifact-archive.mjs";
-import {
-  dispatchReceiptRecovery,
-  parseReceiptRecoveryArgs,
-} from "./lib/full-release-recovery-dispatch.mjs";
 import { execPlainGh, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 import {
   RELEASE_PRIORITY_VARIABLE,
@@ -84,7 +80,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify|recover> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record> | pnpm frv recover --run <original> --workflow-sha <P> --request-file <path> | pnpm frv recover --reconcile-request <path>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -143,7 +139,9 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 function parseArgs(argv) {
   const command = argv[0];
   if (command === "recover") {
-    return parseReceiptRecoveryArgs(argv.slice(1));
+    throw new Error(
+      "recover is retired; receipt-backed recovery is no longer supported. Run fresh qualification with pnpm ci:full-release for the same immutable candidate.",
+    );
   }
   const options = {
     command,
@@ -3883,56 +3881,6 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "help") {
     console.log(USAGE);
-    return;
-  }
-  if (options.command === "recover") {
-    const client = createReleaseEvidenceClient(options.repository);
-    const result = await dispatchReceiptRecovery(options, {
-      ...client,
-      async listRecoveryRuns() {
-        const inventory = await ghJson(
-          options.repository,
-          "actions/workflows/full-release-receipt-recovery.yml/runs?event=workflow_dispatch&branch=main&per_page=100",
-        );
-        if (!Array.isArray(inventory.workflow_runs)) {
-          throw new Error("Invalid recovery run inventory");
-        }
-        return inventory.workflow_runs;
-      },
-      async postRecovery(wire) {
-        const directory = mkdtempSync(join(dirname(options.requestFile), ".frv-recovery-"));
-        const path = join(directory, "dispatch.json");
-        try {
-          writeFileSync(path, wire, { flag: "wx", mode: 0o600 });
-          await execGh([
-            "api",
-            "--method",
-            "POST",
-            "repos/" +
-              options.repository +
-              "/actions/workflows/full-release-receipt-recovery.yml/dispatches",
-            "--input",
-            path,
-          ]);
-        } finally {
-          rmSync(directory, { recursive: true, force: true });
-        }
-      },
-    });
-    print(result, options.json);
-    if (!options.json) {
-      console.log(
-        "recovery run: " +
-          (result.runId ?? "unconfirmed") +
-          "; status: " +
-          (result.status ?? "unknown") +
-          "; conclusion: " +
-          (result.conclusion ?? "unknown"),
-      );
-      if (!result.complete) {
-        console.log("next: " + result.nextCommand);
-      }
-    }
     return;
   }
   if (options.publicationRunId) {
