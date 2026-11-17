@@ -122,6 +122,8 @@ async function occupyWorkerSlots(state: CronServiceState) {
   });
   const store = await loadCronStore(state.deps.storePath);
   await saveCronStore(state.deps.storePath, { ...store, jobs: [...store.jobs, ...jobs] });
+  // No spare memory, so these and the case's own run fill exactly the default run slots.
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   const ids = new Set(jobs.map((job) => job.id));
   const original = state.deps.runIsolatedAgentJob;
   const release = createDeferred();
