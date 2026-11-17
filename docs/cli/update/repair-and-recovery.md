@@ -354,7 +354,9 @@ beside the installation or in the system temporary directory. The updater settle
 its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
 failures while reporting the outcome. Complete projections record
 `Runtime retained at <path>: <reason>` for the next eligible update or Doctor
-cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+cleanup, so recursive deletion does not delay command exit. Run
+`openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
+extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
 the failure reason. A cleanup warning does not replace the original update
 outcome. An earlier nonzero exit remains nonzero while workers are draining.

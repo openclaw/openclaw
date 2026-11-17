@@ -16,6 +16,11 @@ Remove the service and selected local data first, then [any remaining CLI instal
 
 The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
 
+Before uninstalling, run `openclaw doctor --fix`. It reclaims retained updater
+runtimes (`openclaw-update-runtime-*` directories in the system temporary
+directory or beside the installation); `openclaw uninstall` has no scope for
+them.
+
 ```bash
 openclaw uninstall
 ```
@@ -157,6 +162,12 @@ Remove the Gateway service **before** deleting a checkout, launcher, or prefix. 
 Git checkouts default to `~/openclaw` (`%USERPROFILE%\openclaw` on Windows); use the actual target of the launcher, including custom `--git-dir` / `-GitDir` or `OPENCLAW_GIT_DIR`. On POSIX, `OPENCLAW_HOME` can change the default checkout. Remove state/workspaces only as selected above.
 
 Before deleting a prefix, move any state, configuration, and workspaces you want to keep outside it. **Never delete a shared prefix wholesale**: remove only verified OpenClaw files, preserving shared Node runtimes, packages, and tools.
+
+If an `openclaw-update-runtime-*` directory remains after the CLI is gone, inspect it before removing it. It mirrors the full installation path, so on Windows its entries can exceed 260 characters, which plain `Remove-Item` in Windows PowerShell 5.1 cannot delete. Use the extended-length prefix:
+
+```powershell
+Remove-Item -LiteralPath "\\?\$env:TEMP\openclaw-update-runtime-XXXXXX" -Recurse -Force
+```
 
 If completion remains after manual state deletion or CLI-only removal, remove only its `# OpenClaw Completion` block and OpenClaw source line from the [selected shell profile](/cli/completion#install-flow). `openclaw uninstall --state` already removes literal registrations for the state it deletes. Remove a legacy `openclaw completion` source/eval line only if it contains no other command; preserve surrounding content.
 
