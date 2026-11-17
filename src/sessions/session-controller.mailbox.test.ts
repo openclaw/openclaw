@@ -1,10 +1,12 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { reserveSteerCandidate, enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { admitFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { deferSessionControllerClaimBeforeExecution } from "./session-controller.mailbox-claim.js";
@@ -206,6 +208,42 @@ describe("controller mailbox scheduling", () => {
       expect(retried.inputs).toContain(input);
     },
   );
+  it.each(["run", "adapter"] as const)(
+    "keeps the exact controller input when its %s policy is temporarily unavailable",
+    async (owner) => {
+      let unavailable = false;
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: "queued-person",
+        scopes: ["operator.write"],
+        signal: new AbortController().signal,
+        assertCurrent() {
+          if (unavailable) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+        },
+      });
+      const input = reserveSource(owner === "adapter" ? { adapter: { authority } } : {});
+      const run = source("keep this queued message");
+      if (owner === "run") {
+        run.operatorAuthority = authority;
+      }
+      bindSessionControllerSource(input, run);
+      const first = await claimSessionControllerInput(run);
+      expect(run.controllerInput).toBe(input);
+      expect(deferSessionControllerClaimBeforeExecution(first)).toBe(true);
+
+      unavailable = true;
+      await releaseClaim(first);
+      expect(input.phase).toBe("waiting");
+      expect(input.custody.completed).not.toBe(true);
+
+      unavailable = false;
+      const retried = await claimSessionControllerInput(run);
+      expect(retried).not.toBe(first);
+      expect(retried.inputs).toContain(input);
+    },
+  );
+
   it("retires a queued injection before releasing its receipt when live authority rejects", async () => {
     const active = activeOperation("active");
     const authority = revocableAuthority("source authority revoked", () => active.complete());

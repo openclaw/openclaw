@@ -1,4 +1,5 @@
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import { isOperatorAuthorityRetryableError } from "../../../infra/operator-authority-error.js";
 import type {
   FollowupRun,
   ReplyOperationRunState,
@@ -56,8 +57,9 @@ export function isFollowupOperatorAuthorityCurrent(run: Pick<FollowupRun, "opera
   try {
     run.operatorAuthority?.assertCurrent();
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Unavailable checks refuse admission, but do not revoke custody of queued input.
+    return isOperatorAuthorityRetryableError(error);
   }
 }
 

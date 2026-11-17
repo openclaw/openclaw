@@ -6,6 +6,8 @@ import {
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -506,8 +508,35 @@ describe("createFollowupRunner", () => {
     );
   });
 
-  it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {
-    const failure = new Error("original operator role changed");
+  it.each([
+    new GatewayOperatorAccessUnavailableError(),
+    new Error("admission unavailable", { cause: new GatewayOperatorAccessUnavailableError() }),
+    new GatewayDispatchUnavailableError("chat.send", true),
+  ])("retains queued operator input after a temporary admission refusal (%s)", async (failure) => {
+    const source = new AbortController();
+    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      signal: source.signal,
+      assertCurrent: () => {
+        throw failure;
+      },
+    });
+    const deliver = attachSource(turn);
+    state.admit.mockRejectedValueOnce(failure);
+
+    await expect(createRunner()(turn.queued)).rejects.toBe(failure);
+
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(source.signal.aborted).toBe(false);
+  });
+
+  it.each([
+    new Error("original operator role changed"),
+    new GatewayDispatchUnavailableError("chat.send", false),
+  ])("withholds revoked operator input visibly instead of retrying (%s)", async (failure) => {
     turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],

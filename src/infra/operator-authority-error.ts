@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { GatewayDispatchUnavailableError } from "./restart-recovery-errors.js";
 
 /** A failed policy evaluation refuses this operation without revoking its source. */
 export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(
@@ -16,6 +17,14 @@ export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(
 export function isOperatorAuthorityUnavailable(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(
     (candidate) => candidate instanceof GatewayOperatorAccessUnavailableError,
+  );
+}
+
+/** A policy or pre-dispatch outage does not establish revocation of queued work. */
+export function isOperatorAuthorityRetryableError(error: unknown): boolean {
+  return (
+    isOperatorAuthorityUnavailable(error) ||
+    (error instanceof GatewayDispatchUnavailableError && error.retryable)
   );
 }
 

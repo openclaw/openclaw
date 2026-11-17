@@ -1,5 +1,6 @@
 /** Selected turn/source associations and their retained cleanup fence. */
 import { isFollowupRunAborted, type FollowupRun } from "../auto-reply/reply/queue/types.js";
+import { isOperatorAuthorityRetryableError } from "../infra/operator-authority-error.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -133,8 +134,8 @@ export function releaseSessionControllerClaim(claim: SessionControllerMailboxCla
           try {
             input.source?.operatorAuthority?.assertCurrent();
             input.sourceAdapter?.authority?.assertCurrent();
-          } catch {
-            authorityCurrent = false;
+          } catch (error) {
+            authorityCurrent = isOperatorAuthorityRetryableError(error);
           }
         }
         const retry =
