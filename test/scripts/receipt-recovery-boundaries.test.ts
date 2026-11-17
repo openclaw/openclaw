@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPublicationSourceFact } from "../../scripts/full-release-publication-contract.mjs";
@@ -148,7 +149,7 @@ describe("receipt recovery production boundaries", () => {
         conclusion: "success",
       });
     }
-    const directory = mkdtempSync(join(process.cwd(), ".openclaw/tmp/recovery-boundary-"));
+    const directory = mkdtempSync(join(tmpdir(), "recovery-boundary-"));
     try {
       const recoveryDirectory = join(directory, "receipt-recovery");
       mkdirSync(recoveryDirectory);

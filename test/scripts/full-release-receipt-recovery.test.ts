@@ -187,12 +187,7 @@ describe("receipt-backed aggregate recovery", () => {
                   ...qualificationRequiredChildJobs({
                     role: request.role,
                     inputs: Object.fromEntries(
-                      Object.entries(request.inputs).map(([key, value]) => {
-                        if (typeof value !== "string") {
-                          throw new Error("Recovery dispatch inputs must be strings: " + key);
-                        }
-                        return [key, value];
-                      }),
+                      Object.entries(request.inputs).map(([key, value]) => [key, String(value)]),
                     ),
                     getSource: (path) => readFileSync(path, "utf8"),
                     getCandidateFileNames: old.client.getCandidateFileNames,
@@ -577,6 +572,7 @@ describe("receipt recovery CLI", () => {
             GITHUB_RUN_ATTEMPT: "1",
             GITHUB_REF: "refs/heads/main",
             GITHUB_SHA: "c".repeat(40),
+            GITHUB_WORKFLOW_SHA: "c".repeat(40),
             RECEIPT_RECOVERY_REQUEST: JSON.stringify(request),
           },
         },

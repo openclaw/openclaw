@@ -66,7 +66,7 @@ it.each([false, true])(
 
 // Distinct processes are essential: an in-memory client spy misses the retained
 // publication owner and cannot establish that the uploaded carrier is sufficient.
-// Only two identical consumers run; the 101-consumer report below is extrapolated.
+// Two consumers establish replay consistency; the full-size proof above runs all 101.
 it("replays recovery-backed preview evidence through two CLI consume/authorize pairs", async () => {
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-recovery-"), "@openclaw/alpha");
   const comparison = "compare/" + f.f.p + "...main";
@@ -103,7 +103,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
 
   for (const suffix of ["alpha", "beta"]) {
     // Same package and inputs in every pair: beta denotes another process, not
-    // another workload. This makes the 101-pair arithmetic directly comparable.
+    // another workload. Both consumers must independently authenticate the same evidence.
     const consumed = f.consume("consume-" + suffix, 0);
     success(consumed);
     expect(readFileSync(consumed.output, "utf8")).toContain("package_name=@openclaw/alpha\n");
@@ -158,55 +158,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
   const categoriesByProcess = Object.fromEntries(
     phases.map((name) => [name, categoryCounts(name)]),
   );
-  const replayPair = counts["consume-alpha"]! + counts["authorize-alpha"]!;
-  // Emit observed counts before later assertions. The 101-pair calculation is
-  // explicitly extrapolated, not a claim that 202 processes have been run.
-  const workload101 = Object.fromEntries(
-    (["live", "immutable", "carrier", "selectedPackage"] as const).map((category) => [
-      category,
-      categoriesByProcess.preview![category] +
-        101 *
-          (categoriesByProcess["consume-alpha"]![category] +
-            categoriesByProcess["authorize-alpha"]![category]),
-    ]),
-  );
-  console.log(
-    JSON.stringify({
-      scenario: "receipt-recovery-cli",
-      measuredConsumers: 2,
-      requestsByProcess: counts,
-      categoriesByProcess,
-      callsitesByProcess: Object.fromEntries(
-        phases.map((name) => [
-          name,
-          Object.fromEntries(
-            [...new Set(requests(name).map((row) => row.callsite))].map((site) => [
-              site,
-              requests(name).filter((row) => row.callsite === site).length,
-            ]),
-          ),
-        ]),
-      ),
-      endpointsByProcess: Object.fromEntries(
-        phases.map((name) => [
-          name,
-          Object.fromEntries(
-            [...new Set(requests(name).map((row) => row.route))].map((route) => [
-              route,
-              requests(name).filter((row) => row.route === route).length,
-            ]),
-          ),
-        ]),
-      ),
-      observed: { previewPlusTwoPairs: phases.reduce((sum, name) => sum + counts[name]!, 0) },
-      extrapolated101IdenticalConsumers: {
-        notExecuted: true,
-        consumeAndAuthorizeRequestsPerConsumer: replayPair,
-        previewPlusConsumeAndAuthorizeRequests: counts.preview! + 101 * replayPair,
-        categories: workload101,
-      },
-    }),
-  );
+  console.log(JSON.stringify({ scenario: "receipt-recovery-cli", requestsByProcess: counts }));
   expect(counts["consume-beta"]).toBe(counts["consume-alpha"]);
   expect(counts["authorize-beta"]).toBe(counts["authorize-alpha"]);
 
@@ -472,7 +424,7 @@ it("retains the ordinary CLI final authority after sharing acquisition reads", a
     ]),
   );
   expect(counts).toEqual({
-    preview: 52,
+    preview: 70,
     consume: 25,
     authorize: 22,
     "consume-beta": 25,

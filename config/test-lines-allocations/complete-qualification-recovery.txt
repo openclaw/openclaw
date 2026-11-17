@@ -1,4 +1,5 @@
 # Complete qualification recovery: retained-request transport, exact bytes and attempts,
 # cross-profile C/Q/P consumption, and independent frozen workload inventories.
 # Consolidated shared profile setup; deleted the superseded channel fixture.
-845
+# Native Node isolated completeness bootstrap catches missing installed parsers and async imports.
+887

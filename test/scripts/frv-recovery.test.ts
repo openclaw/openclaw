@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -37,7 +38,7 @@ afterEach(() => {
 });
 
 function fixture(candidateSha = Q) {
-  const directory = mkdtempSync(join(process.cwd(), ".openclaw/tmp/recovery-operator-"));
+  const directory = mkdtempSync(join(tmpdir(), "recovery-operator-"));
   directories.push(directory);
   const path = join(directory, "request.json");
   const identity = {

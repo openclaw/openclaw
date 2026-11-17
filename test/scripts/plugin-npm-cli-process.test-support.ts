@@ -20,6 +20,7 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { addRecoveryGraph } from "./plugin-npm-cli-recovery.test-support.mjs";
+import { writeResponses } from "./plugin-npm-cli-transport.test-support.mjs";
 import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -335,6 +336,14 @@ export async function createNpmCliProcessFixture(
       }
     }
   }
+  for (const [path, text] of f.qualificationSources) {
+    source(path, f.q, text);
+  }
+  const survivorPath = "scripts/e2e/lib/upgrade-survivor";
+  json(
+    "contents/" + survivorPath + "?ref=" + f.c,
+    f.client.getCandidateFileNames().map((name) => ({ name, path: survivorPath + "/" + name })),
+  );
   json("actions/runs/" + f.runId + "/artifacts?per_page=100&page=1", {
     total_count: 2,
     artifacts: [artifacts.get(91), artifacts.get(92)],
@@ -391,6 +400,7 @@ export async function createNpmCliProcessFixture(
   }
   const ordinaryResponses = { ...responses };
   const recovery = addRecoveryGraph({
+    parentJobs: await f.client.getRunAttemptJobs(f.runId),
     f,
     producer,
     packages,
@@ -406,7 +416,7 @@ export async function createNpmCliProcessFixture(
     }
     Object.assign(responses, ordinaryResponses);
   }
-  const responseFile = join(root, "responses.json");
+  const responseFile = join(root, "responses");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
   writeFileSync(
@@ -418,7 +428,7 @@ export async function createNpmCliProcessFixture(
       ";\nrunGh(process.argv.slice(2));\n",
     { mode: 0o755 },
   );
-  const save = () => writeFileSync(responseFile, JSON.stringify(responses));
+  const save = () => writeResponses(responseFile, responses);
   save();
   const env = {
     ...process.env,

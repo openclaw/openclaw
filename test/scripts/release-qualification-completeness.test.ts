@@ -88,6 +88,25 @@ describe("frozen qualification completeness", () => {
     }
   });
 
+  it("reads frozen Docker shard literals without evaluating candidate code", () => {
+    const ctx = context("live-e2e");
+    ctx.inputs.phase = "candidate";
+    const required = qualificationRequiredChildJobs({
+      ...ctx,
+      getSource: (path) =>
+        path === "scripts/plan-release-workflow-matrix.mjs"
+          ? getSource(path) + '\nthrow new Error("candidate code must not execute");\n'
+          : getSource(path),
+    });
+    expect(required).toEqual(
+      expect.arrayContaining([
+        "Run Docker release-path validation / Docker E2E (core)",
+        "Run Docker release-path validation / Docker E2E (plugins/runtime install A)",
+        "Run Docker release-path validation / Docker E2E (plugins/runtime install H)",
+      ]),
+    );
+  });
+
   it("selects same-base beta survivors from candidate capabilities, not Q", () => {
     const ctx = context("package");
     ctx.inputs.run_release_soak = "false";

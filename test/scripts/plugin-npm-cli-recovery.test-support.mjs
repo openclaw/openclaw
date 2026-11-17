@@ -16,9 +16,11 @@ import {
   composeReleaseChildAttemptEvidence,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
 import { RECEIPT_RECOVERY_WORKFLOW } from "../../scripts/lib/release-evidence-identity.mjs";
+import { qualificationRequiredChildJobs } from "../../scripts/release-qualification-coverage.mjs";
 import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 
@@ -35,6 +37,7 @@ const time = "2026-08-28T12:00:00.000Z";
 const complete = { status: "completed", conclusion: "success" };
 
 export function addRecoveryGraph({
+  parentJobs: originalParentJobs,
   f,
   producer,
   packages,
@@ -395,7 +398,17 @@ export function addRecoveryGraph({
       display_title: spec.displayName + " " + dispatchId,
     });
     const coverage = f.admission.receipt.coverage.children.find((entry) => entry.key === role);
-    const childJobs = coverage.requiredJobs.map((name, offset) => job(id * 100 + offset, name, id));
+    const childJobs = [
+      ...new Set([
+        ...coverage.requiredJobs,
+        ...qualificationRequiredChildJobs({
+          role,
+          inputs,
+          getSource: (path) => f.client.getWorkflowSource(f.q, path),
+          getCandidateFileNames: f.client.getCandidateFileNames,
+        }),
+      ]),
+    ].map((name, offset) => job(id * 100 + offset, name, id));
     const publisher = job(
       id * 100 + 90,
       "Seal full release child evidence / Seal child receipt",
@@ -487,9 +500,27 @@ export function addRecoveryGraph({
       ),
     );
   }
-  const parentJobs = f.admission.receipt.coverage.requiredParentJobs
-    .filter((name) => !dispatchJobs.some((entry) => entry.name === name))
-    .map((name, index) => job(6600 + index, name, f.runId));
+  const parentJobs = originalParentJobs.filter(
+    (entry) => !dispatchJobs.some((dispatch) => dispatch.name === entry.name),
+  );
+  const plan = structuredClone(f.plan);
+  plan.candidate = candidateBinding;
+  plan.candidateRequest = candidateBinding.request;
+  for (const child of plan.children) {
+    child.runId = children[child.key].runId;
+  }
+  plan.sha256 = releaseExecutionPlanSha256(plan);
+  put(
+    92,
+    "full-release-execution-plan-" + f.runId,
+    { "full-release-execution-plan.json": JSON.stringify(plan) },
+    f.runId,
+  );
+  const sealer = parentJobs.find((entry) => entry.name === "Seal release execution plan");
+  bytes(
+    "actions/jobs/" + sealer.id + "/logs",
+    Buffer.from("2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=" + plan.sha256 + "\n"),
+  );
   parentJobs.push(
     ...dispatchJobs,
     job(Number(candidate.producer.jobId), candidate.producer.jobName, f.runId),
@@ -602,6 +633,7 @@ export function addRecoveryGraph({
   };
   delete manifest.executionPlanSha256;
   delete manifest.qualificationCoverage;
+  delete manifest.candidateBinding;
   delete manifest.qualificationInputs;
   const aggregateJob = {
     ...job(9901, "Recover original qualification receipts", 9900),
@@ -662,10 +694,11 @@ export function addRecoveryGraph({
     runId: aggregate.runId,
     manifest,
     recovery,
-    retainedArchiveIds: [6204, 6304, 6303, 444, 9001],
+    retainedArchiveIds: [92, 6204, 6304, 6303, 444, 9001],
     metadataOnlyPayloadIds: [6201, 6202, 6203, 6301, 6302, 101, 102, 103],
     immutableArchiveIds: [
       91,
+      92,
       104,
       70,
       6204,

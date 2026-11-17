@@ -1,9 +1,34 @@
 // Raw external-I/O fixture shared by the real CLI and its gh subprocesses.
 // No release owner is replaced: all authentication and archive checks run in CLI.
 import childProcess from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+
+const responsePath = (directory, route) =>
+  join(directory, createHash("sha256").update(route).digest("hex"));
+
+// Read one external response per request, not every archive in the fixture.
+export function writeResponses(directory, responses) {
+  rmSync(directory, { recursive: true, force: true });
+  mkdirSync(directory);
+  for (const [route, value] of Object.entries(responses)) {
+    writeFileSync(responsePath(directory, route), JSON.stringify(value));
+  }
+}
+function readResponse(route) {
+  const path = responsePath(process.env.NPM_CLI_RESPONSES, route);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+}
 
 const callsite = () =>
   new Error().stack
@@ -29,24 +54,28 @@ function response(route, transport) {
     route,
     callsite: process.env.NPM_CLI_CALLSITE ?? callsite(),
   });
-  const responses = JSON.parse(readFileSync(process.env.NPM_CLI_RESPONSES, "utf8"));
   const [path, query] = route.split("?");
   const params = new URLSearchParams(query);
   params.sort();
-  const value = responses[query ? path + "?" + params.toString() : route];
+  const key = query ? path + "?" + params.toString() : route;
+  const value = readResponse(key);
   if (!value) {
     throw new Error("Unconfigured external fixture request: " + route);
   }
   if (value.after) {
-    responses[value.after.route] = value.after.value;
+    const after = value.after;
     delete value.after;
-    writeFileSync(process.env.NPM_CLI_RESPONSES, JSON.stringify(responses));
+    writeFileSync(responsePath(process.env.NPM_CLI_RESPONSES, key), JSON.stringify(value));
+    writeFileSync(
+      responsePath(process.env.NPM_CLI_RESPONSES, after.route),
+      JSON.stringify(after.value),
+    );
     record({ kind: "external-change", route });
   }
   if (/^actions\/runs\/[0-9]+\/artifacts$/u.test(path)) {
     const page = JSON.parse(value.data);
     page.artifacts = page.artifacts.map((artifact) => {
-      const current = responses["actions/artifacts/" + artifact.id];
+      const current = readResponse("actions/artifacts/" + artifact.id);
       return current ? JSON.parse(current.data) : artifact;
     });
     return Buffer.from(JSON.stringify(page));

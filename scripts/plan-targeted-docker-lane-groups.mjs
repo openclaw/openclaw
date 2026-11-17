@@ -284,7 +284,7 @@ export function planTargetedDockerLaneGroups({
 
 const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
 
-if (isMain) {
+async function main() {
   const options = {
     groupSize: process.env.GROUP_SIZE,
     lanes: process.env.LANES,
@@ -310,4 +310,11 @@ if (isMain) {
     });
   }
   process.stdout.write(JSON.stringify(groups));
+}
+
+if (isMain) {
+  main().catch((/** @type {unknown} */ error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

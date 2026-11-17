@@ -493,7 +493,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: .release-validation-tooling
           fetch-depth: 1
-          sparse-checkout: scripts
           persist-credentials: false
 
       - name: Resolve full release validation run
@@ -537,6 +536,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Setup qualification verifier dependencies
+        uses: ./.release-validation-tooling/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: .release-validation-tooling/package.json
+          lockfile-path: .release-validation-tooling/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        working-directory: .release-validation-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact

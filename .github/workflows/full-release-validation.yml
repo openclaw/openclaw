@@ -1061,10 +1061,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
-          sparse-checkout: |
-            scripts
-            .github/actions/setup-pnpm-store-cache
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1076,8 +1072,6 @@ jobs:
         with:
           ref: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha }}
           path: qualification-verifier
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -1102,6 +1096,19 @@ jobs:
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+
+      - name: Setup qualification verifier dependencies
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/package.json
+          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install qualification verifier dependencies
+        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || 'workflow' }}
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Download publication admission for reuse budgeting
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -2318,8 +2325,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2370,6 +2375,21 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - &qualification_verifier_dependencies
+        name: Setup qualification verifier dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/package.json
+          lockfile-path: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}/pnpm-lock.yaml
+          node-version: ${{ env.NODE_VERSION }}
+
+      - &qualification_verifier_dependencies_install
+        name: Install qualification verifier dependencies
+        working-directory: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && 'qualification-verifier' || '.' }}
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Prepare immutable release execution plan inputs
         id: plan_inputs
@@ -2830,8 +2850,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - *qualification_evidence_verifier_checkout
@@ -2859,6 +2877,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - *qualification_verifier_dependencies
+      - *qualification_verifier_dependencies_install
 
       - name: Select newest compatible release state artifacts
         id: selected_state

@@ -1,18 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { isDeepStrictEqual } from "node:util";
-import { parse as parseJavaScript } from "@babel/parser";
-import { parse as parseYaml } from "yaml";
 import { canonicalAsciiJson, compareAscii } from "./lib/canonical-json.mjs";
-import { resolveRunnerMatrix } from "./lib/cross-os-release-checks/config.ts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
-import { isPackageRecoveryScenario } from "./lib/upgrade-survivor-policy.mjs";
-import { createReleaseCheckSelection } from "./plan-release-workflow-matrix.mjs";
-import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups.mjs";
 
 export const QUALIFICATION_COVERAGE_PATH = "scripts/lib/release-qualification-coverage.json";
 const SCHEMA = "openclaw.release-qualification-coverage/v1";
+const require = createRequire(import.meta.url);
 
 export function qualificationAdmissionContract(source) {
   if (typeof source !== "string" || Buffer.byteLength(source) > 1024 * 1024) {
@@ -230,6 +226,7 @@ export function validateQualificationJobs(
 // Read Q's declarative profile rows; never execute candidate code or substitute
 // the current publisher's provider roster for the one the qualification ran.
 function frozenProfileRows(source, name, profile) {
+  const { parse: parseJavaScript } = require("@babel/parser");
   const program = parseJavaScript(source, { sourceType: "module" }).program;
   const declaration = program.body
     .flatMap((node) => (node.type === "VariableDeclaration" ? node.declarations : []))
@@ -327,6 +324,10 @@ export function qualificationRequiredChildJobs({ role, inputs, getSource, getCan
   if (!role.startsWith("releaseChecks")) {
     return [];
   }
+  // Admission retains a fixed, dependency-free closure of this module. Load
+  // completeness-only parsers and planners only in the installed verifier.
+  const { parse: parseYaml } = require("yaml");
+  const { createReleaseCheckSelection } = require("./plan-release-workflow-matrix.mjs");
   const workflow = parseYaml(getSource(".github/workflows/openclaw-release-checks.yml"));
   const packageWorkflow = parseYaml(getSource(".github/workflows/package-acceptance.yml"));
   const liveWorkflow = parseYaml(
@@ -424,6 +425,7 @@ export function qualificationRequiredChildJobs({ role, inputs, getSource, getCan
     // status artifacts. Do not convert their raw advisory failures into gates.
   }
   if (selection.cross_os_scheduled) {
+    const { resolveRunnerMatrix } = require("./lib/cross-os-release-checks/config.ts");
     const crossSource = getSource("scripts/lib/cross-os-release-checks/config.ts");
     const baseline = /const node24Version = "([0-9.]+)";/u.exec(crossSource)?.[1];
     const versions = /\? \[node24Version, "([0-9.]+)"\]/u.exec(crossSource)?.[1];
@@ -465,6 +467,8 @@ export function qualificationRequiredChildJobs({ role, inputs, getSource, getCan
     }
   }
   if (selection.package_acceptance_scheduled) {
+    const { isPackageRecoveryScenario } = require("./lib/upgrade-survivor-policy.mjs");
+    const { planTargetedDockerLaneGroups } = require("./plan-targeted-docker-lane-groups.mjs");
     // Until a frozen adapter supports another planner policy, fail closed on
     // Q/P divergence rather than silently using P recovery pins/support floors
     // or lane expansion. First-hop inventory is already expanded from Q below.
