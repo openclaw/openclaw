@@ -72,6 +72,13 @@ const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.El
 <path class="lob-hockey-stick" d="M108 14.6 L111.6 15.5 Q114.5 12.8 119.5 11.2 Q121.6 10.2 120.6 7.6 Q115 7.8 108.6 11 Z" fill="#d6a15d"></path>
 <path class="lob-hockey-stick" d="M111.4 11.4 L113 14.4 M113.9 10.2 L115.5 13.1 M116.4 9.2 L118 12 M118.9 8.3 L120.4 10.8" fill="none" stroke="#26252b" stroke-width="1.5" stroke-linecap="round"></path>
 `),
+  clawlombian: staticSprite(`
+<path class="lob-maraca" d="M110.5 30.7 L104.1 54.8 L100.6 53.9 L107.1 29.7 Z" fill="#b5793f"></path>
+<path class="lob-maraca" d="M117.8 23.8 A7 9 15 1 1 103.9 22.5 A7 9 15 1 1 117.8 23.8 Z" fill="#ce1126"></path>
+<path class="lob-maraca" d="M117.8 23.8 L117.4 24.9 L117.3 25.1 L104 21.6 L104 21.3 L104.2 20.2 L104.6 19.1 L104.8 18.7 L118.1 22.2 L118 22.7 Z" fill="#fcd116"></path>
+<path class="lob-maraca" d="M117.3 25.1 L116.9 26 L116.4 27 L116.1 27.3 L103.9 24 L103.9 23.7 L103.9 22.5 L104 21.6 Z" fill="#003893"></path>
+<path class="lob-maraca" d="M108.7 16.7 Q109.4 14.1 111.8 14.5" fill="none" stroke="#ff8a8f" stroke-width="1.4" stroke-linecap="round"></path>
+`),
 };
 
 // Every registered pattern suppresses freckles. Null entries use geometry or CSS instead of an overlay.
@@ -282,6 +289,30 @@ const PALETTE_PATTERNS: Partial<Record<LobsterPetPaletteId, (() => JSX.Element) 
   </g>
   <path d="M59.8 20.3 L59.9 18.6 L58.1 18.7 L58.3 18 L56.5 16.6 L57 16.3 L56.7 15.2 L57.8 15.3 L58 14.9 L58.9 15.7 L58.6 13.7 L59.3 14 L60 12.8 L60.7 14 L61.4 13.7 L61.1 15.7 L62 14.9 L62.2 15.3 L63.3 15.2 L63 16.3 L63.5 16.6 L61.7 18 L61.9 18.7 L60.1 18.6 L60.2 20.3 Z" fill="#c41f2b" transform="translate(60 16.5) scale(1.25) translate(-60 -16.5)"></path>
   <circle cx="60" cy="-1.5" r="5.5" fill="#f6f1e8"></circle>
+</g>
+`),
+  // Sombrero vueltiao and ruana belong to the shell; the antennae poke out
+  // under the brim. Ruana bands are pre-clipped to the open front panels.
+  clawlombian: staticSprite(`
+<g class="lob-clawlombian">
+  <path d="M18 48 L20.5 47.5 L23 47 L25.5 46.5 L27.9 46.1 L30.4 45.8 L32.9 45.5 L35.3 45.2 L37.8 45 L40.2 44.8 L42.6 44.7 L45 44.6 L47.4 44.6 L49.8 44.6 L52.2 44.7 L54.6 44.8 L57 45 L55.6 73 L21.1 73 L20.1 70.9 L19.2 68.7 L18.4 66.5 L17.7 64.1 L17.1 61.8 L16.6 59.4 L16.3 57 L16.1 54.5 L16 52 Z M104 52 L103.9 54.5 L103.7 57 L103.4 59.4 L102.9 61.8 L102.3 64.1 L101.6 66.5 L100.8 68.7 L99.9 70.9 L98.9 73 L64.4 73 L63 45 L65.4 44.8 L67.8 44.7 L70.2 44.6 L72.6 44.6 L75 44.6 L77.4 44.7 L79.8 44.8 L82.2 45 L84.7 45.2 L87.1 45.5 L89.6 45.8 L92.1 46.1 L94.5 46.5 L97 47 L99.5 47.5 L102 48 Z" fill="#fcd116"></path>
+  <path d="M55.6 73 L55.1 85 L29.5 85 L29 84.5 L27.5 82.8 L26.1 81 L24.8 79.1 L23.5 77.2 L22.3 75.2 L21.2 73.1 L21.1 73 Z M98.9 73 L98.8 73.1 L97.7 75.2 L96.5 77.2 L95.2 79.1 L93.9 81 L92.5 82.8 L91 84.5 L90.5 85 L64.9 85 L64.4 73 Z" fill="#003893"></path>
+  <path d="M55.1 85 L54.5 96.3 L54 96.3 L53 96.2 L52 96.1 L51 96 L50 95.9 L49 95.8 L48 95.7 L47 95.5 L46 95.4 L45 95.2 L44 95 L42.3 94.3 L40.5 93.5 L38.8 92.5 L37.1 91.5 L35.4 90.3 L33.7 89 L32.1 87.6 L30.5 86.1 L29.5 85 Z M90.5 85 L89.5 86.1 L87.9 87.6 L86.3 89 L84.6 90.3 L82.9 91.5 L81.2 92.5 L79.5 93.5 L77.7 94.3 L76 95 L75 95.2 L74 95.4 L73 95.5 L72 95.7 L71 95.8 L70 95.9 L69 96 L68 96.1 L67 96.2 L66 96.3 L65.5 96.3 L64.9 85 Z" fill="#ce1126"></path>
+  <path d="M57 45 L54.5 96.3 M63 45 L65.5 96.3 M18 48 Q38 43.5 57 45 M102 48 Q82 43.5 63 45" fill="none" stroke="#1d1416" stroke-width="1" stroke-linecap="round" opacity="0.3"></path>
+  <ellipse cx="60" cy="19" rx="44" ry="6.5" fill="#efe3c4"></ellipse>
+  <g fill="none" stroke-width="1.6">
+    <ellipse cx="60" cy="19" rx="40.5" ry="5.4" stroke="#221c18"></ellipse>
+    <ellipse cx="60" cy="19" rx="34.5" ry="4.4" stroke="#221c18"></ellipse>
+    <g stroke="#efe3c4" stroke-width="0.7" stroke-dasharray="1.6 1.6">
+      <ellipse cx="60" cy="19" rx="40.5" ry="5.4"></ellipse>
+      <ellipse cx="60" cy="19" rx="34.5" ry="4.4"></ellipse>
+    </g>
+  </g>
+  <path d="M45.5 19.5 C45 10 49 3 60 3 C71 3 75 10 74.5 19.5 Q60 22.5 45.5 19.5 Z" fill="#f3e9cf"></path>
+  <path d="M47.4 8.6 Q60 5.6 72.6 8.6 L73.4 11 Q60 8 46.6 11 Z" fill="#221c18"></path>
+  <path d="M47 9.8 Q60 6.8 73 9.8" fill="none" stroke="#f3e9cf" stroke-width="0.7" stroke-dasharray="1.6 1.6"></path>
+  <path d="M45.7 14 Q60 11.4 74.3 14 L74.5 19.5 Q60 22.5 45.5 19.5 Z" fill="#221c18"></path>
+  <path d="M47 18 L49.6 15.2 L52.2 18 L54.8 15.2 L57.4 18 L60 15.2 L62.6 18 L65.2 15.2 L67.8 18 L70.4 15.2 L73 18" fill="none" stroke="#f3e9cf" stroke-width="1.1" stroke-linejoin="round"></path>
 </g>
 `),
   clawtron: staticSprite(`
