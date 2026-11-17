@@ -281,7 +281,7 @@ With `reuse_evidence=true`:
 
 - Within **two minutes**, scan at most **100** recent runs, probe at most **40** target receipt inventories, and fully validate at most **five** matching receipts per role. Nonmatching inventories do not spend full-validation budget.
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
-- Green children may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires verified main ancestry; missing/unsupported/changed closure fails closed.
+- Successful children, or failed children accepted by current P policy, may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires verified main ancestry; missing/unsupported/changed closure fails closed.
 
 | Closure     | Exact contents                                                                                                                                                                                                                                                        |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -290,9 +290,10 @@ With `reuse_evidence=true`:
 | Other roles | Conservatively all workflows and full root tree.                                                                                                                                                                                                                      |
 
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
+- Admitted P evaluates retained failures using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
 - Collectors/final verification recheck live attempt/conclusion, closure, main ancestry, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q/P contract. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
 
 ### Optional beta performance
 
