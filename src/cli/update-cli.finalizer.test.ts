@@ -195,19 +195,15 @@ describe("update-cli", () => {
       recordUpdateRunOwedStep(earlier, "plugin-convergence", "plugin registry exploded");
       recordUpdateRunOwedStep(earlier, "post-plugin-doctor", "state database is locked");
       finishUpdateRun(earlier, { status: "succeeded" });
-      if (code) {
-        mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error("registry still broken"));
-      }
 
       await runCli(["repair", "--json", "--yes"]);
 
-      // Repair runs full Doctor before its plugin phase, which settles the Doctor step either
-      // way. Convergence settles when it completes and is owed again when it throws again.
+      // Repair runs full Doctor and then completes plugin convergence, which settles both
+      // plugin steps whatever happens to the completion cache and the service definition.
       const repair = update.listUpdateRuns({ limit: 1 })[0];
       expect(repair, getErrorOutput()).toMatchObject({ status: "succeeded" });
       const owed = code
         ? [
-            { id: "plugin-convergence", reason: "registry still broken" },
             { id: "shell-completion", reason: "Completion cache update failed: still EACCES" },
             { id: "service-definition", reason: "install failed" },
           ]
@@ -221,9 +217,6 @@ describe("update-cli", () => {
       if (code) {
         expect(getErrorOutput()).toContain(
           "Warning: Gateway service definition refresh is owed: install failed. Settled when `openclaw update` next refreshes the service definition; `openclaw update repair` rechecks it.",
-        );
-        expect(getErrorOutput()).toContain(
-          "Warning: Plugin convergence is owed: registry still broken. Retried by the next `openclaw update`; run `openclaw update repair` to retry it now.",
         );
       }
       expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);

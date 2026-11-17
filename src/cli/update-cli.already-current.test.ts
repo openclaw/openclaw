@@ -265,13 +265,7 @@ describe("update-cli", () => {
         true,
       );
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-      if (code) {
-        mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error("registry still broken"));
-      } else {
-        mockPostCoreConvergenceOnce(modules.runPostCorePluginConvergenceSpy, {
-          installRecords: {},
-        });
-      }
+      mockPostCoreConvergenceOnce(modules.runPostCorePluginConvergenceSpy, { installRecords: {} });
       const earlier = modules.createUpdateRun({ trigger: "cli" }).runId;
       recordUpdateRunOwedStep(earlier, "shell-completion", "EACCES: permission denied");
       recordUpdateRunOwedStep(earlier, "service-definition", "install failed");
@@ -282,12 +276,10 @@ describe("update-cli", () => {
 
       await updateCommand({ yes: true, json: true });
 
-      // Convergence that completes settles its step; one that throws again owes it for the new
-      // reason. This command neither refreshed the service definition nor ran Doctor after
-      // changing plugins, so those steps stay owed.
+      // Completed convergence settles its step. This command neither refreshed the service
+      // definition nor ran Doctor after changing plugins, so those steps stay owed.
       const result = output();
       const owed = [
-        ...(code ? [{ id: "plugin-convergence", reason: "registry still broken" }] : []),
         ...completion,
         { id: "service-definition", reason: "install failed" },
         { id: "post-plugin-doctor", reason: "state database is locked" },
@@ -300,7 +292,7 @@ describe("update-cli", () => {
         completion.length > 0,
       );
       expect(earlierReport).toContain("Gateway service definition refresh is owed: install failed");
-      expect(result.status).not.toBe("error");
+      expect(result.status).toBe("skipped");
       expect(
         result.steps.flatMap((step) =>
           step.advisory?.message.includes(" is owed: ") ? [step.name] : [],

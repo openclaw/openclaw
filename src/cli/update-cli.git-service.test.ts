@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as deferredPluginMigrations from "../infra/deferred-plugin-migrations.js";
-import { readOwedUpdateSteps } from "../infra/update-run-ledger.js";
+import {
+  finishUpdateRun,
+  readOwedUpdateSteps,
+  recordUpdateRunOwedStep,
+} from "../infra/update-run-ledger.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -640,10 +644,15 @@ it.each([
   "keeps a managed update whose $id fails and owes the step",
   async ({ id, reason, warning }) => {
     const { version, restartedRuntimes } = await prepareManagedGitUpdate();
+    // An earlier update already owes the step: this update is also its retry, and fails again.
+    const earlier = cli.createUpdateRun({ trigger: "cli" }).runId;
+    recordUpdateRunOwedStep(earlier, id, "earlier failure");
+    finishUpdateRun(earlier, { status: "succeeded" });
     if (id === "plugin-convergence") {
       mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(reason));
     } else {
-      // Changed plugins require Doctor. It runs, then the read of what it left pending fails.
+      // Changed plugins require Doctor. Arming the fault from the Doctor child makes the next
+      // state read, the one for what Doctor left pending, fail after Doctor ran.
       mocks.syncPluginsForUpdateChannel.mockImplementationOnce(async () =>
         pluginSyncResult(f.baseConfig, true),
       );
@@ -660,8 +669,12 @@ it.each([
 
     const run = cli.listUpdateRuns({ limit: 1 })[0];
     expect(run, checks.getErrorOutput()).toMatchObject({ status: "succeeded" });
+    // This run now holds the step with its own reason; the earlier row is left as it was.
     const owed = [{ id, runId: run?.runId, reason }];
     expect(readOwedUpdateSteps()).toEqual(owed);
+    expect(cli.getUpdateRun(earlier)?.steps).toContainEqual(
+      expect.objectContaining({ step: `finalize:owed:${id}`, status: "skipped" }),
+    );
     // One stop and one start on the updated installation: nothing was rolled back.
     expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
     expect(restartedRuntimes).toHaveLength(1);

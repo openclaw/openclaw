@@ -14,13 +14,13 @@ import { defaultRuntime } from "../../runtime.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import {
-  listOwedPluginSteps,
   recordOwedUpdateStep,
   retryOwedPluginSteps,
   retryOwedUpdateSteps,
   shellProfileStillOwes,
   warnOwedUpdateStep,
 } from "./update-command-owed.js";
+import { listOwedPluginSteps } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,

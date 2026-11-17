@@ -3,10 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi, onTestFinished } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { ConfigReadOnlyError } from "../config/config-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { readOwedUpdateSteps } from "../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
@@ -426,55 +424,30 @@ describe("update-cli", () => {
     );
   });
 
-  it.each([
-    { failure: "a refused config write", error: new ConfigReadOnlyError(), owed: false },
-    {
-      failure: "an unexpected exception",
-      error: new Error("npm update invariant broke"),
-      owed: true,
-    },
-  ])(
-    "post-core npm updates that throw $failure on a current core are owed: $owed",
-    async ({ error, owed }) => {
-      await mockUnbuiltRecoveryFixture();
-      process.chdir(
-        await mockPackageInstallAtCaseDir("openclaw-current-plugin-exception", VERSION),
-      );
-      mocks.readPackageVersion.mockResolvedValue(VERSION);
-      primeNpmChannelTag("latest", VERSION);
-      mocks.updateNpmInstalledPlugins.mockRejectedValueOnce(error);
+  it("fails unexpected post-core npm update exceptions", async () => {
+    await mockUnbuiltRecoveryFixture();
+    process.chdir(await mockPackageInstallAtCaseDir("openclaw-current-plugin-exception", VERSION));
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    primeNpmChannelTag("latest", VERSION);
+    const message = "npm update invariant broke";
+    mocks.updateNpmInstalledPlugins.mockRejectedValueOnce(new Error(message));
 
-      const updating = update.updateCommand({ json: true, restart: false });
-      if (owed) {
-        await updating;
-      } else {
-        await expect(updating).rejects.toEqual(new update.ExitError(1));
-      }
-      expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
-      const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
-      expect(readOwedUpdateSteps()).toEqual(
-        owed ? [{ id: "plugin-convergence", runId: result?.runId, reason: error.message }] : [],
-      );
-      if (owed) {
-        expect(result?.status).not.toBe("error");
-        expect(result?.postUpdate?.plugins).toMatchObject({
-          status: "warning",
-          warnings: [{ reason: "plugin-convergence", message: error.message }],
-        });
-        return;
-      }
-      expect(result?.verification).toEqual({});
-      expect(result).toMatchObject({
-        status: "error",
-        reason: "post-update-failed",
-        steps: [
-          expect.objectContaining({ exitCode: 1, stderrTail: error.message }),
-          recoveryObservationStep(),
-          recoveryCleanupStep(),
-        ],
-      });
-    },
-  );
+    await expect(update.updateCommand({ json: true, restart: false })).rejects.toEqual(
+      new update.ExitError(1),
+    );
+    expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
+    const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
+    expect(result?.verification).toEqual({});
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "post-update-failed",
+      steps: [
+        expect.objectContaining({ exitCode: 1, stderrTail: message }),
+        recoveryObservationStep(),
+        recoveryCleanupStep(),
+      ],
+    });
+  });
   it("preserves convergence diagnostic output", async () => {
     const repairWarning = notice("Package lookup deferred.", ["Retry plugin repair."]);
     const smokeWarning = {

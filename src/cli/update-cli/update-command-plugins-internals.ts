@@ -14,7 +14,6 @@ import {
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateOwedStepId } from "../../infra/update-run-owed-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import { PluginInstallSettlementError } from "../../plugins/install-transaction.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
@@ -121,29 +120,45 @@ export function createPluginUpdateWarning(params: {
 }
 
 /** The plugin steps an update may owe. Each travels as a warning whose reason is its step id. */
-export type OwedPluginStepId = Extract<
-  UpdateOwedStepId,
-  "plugin-convergence" | "post-plugin-doctor"
->;
+const OWED_PLUGIN_STEP_IDS = [
+  "plugin-convergence",
+  "post-plugin-doctor",
+] as const satisfies readonly UpdateOwedStepId[];
+type OwedPluginStep = { id: (typeof OWED_PLUGIN_STEP_IDS)[number]; reason: string };
 
 export function createOwedPluginStepWarning(
-  id: OwedPluginStepId,
+  id: OwedPluginStep["id"],
   error: unknown,
 ): PluginUpdateWarning {
-  return { reason: id, message: formatErrorMessage(error), guidance: ["openclaw update repair"] };
+  return {
+    reason: id,
+    message: formatErrorMessage(error),
+    guidance: [formatCliCommand("openclaw update repair")],
+  };
+}
+
+/** The steps a plugin phase left owed. A failed phase did not keep its result and owes nothing. */
+export function listOwedPluginSteps(
+  plugins: PostCorePluginUpdateResult | undefined,
+): OwedPluginStep[] {
+  if (!plugins || plugins.status === "error") {
+    return [];
+  }
+  return (plugins.warnings ?? []).flatMap((warning) => {
+    const id = OWED_PLUGIN_STEP_IDS.find((candidate) => candidate === warning.reason);
+    return id ? [{ id, reason: warning.message }] : [];
+  });
 }
 
 /**
- * Plugin work that fails before publishing changes no record or config, so a later command can
- * retry it. These failures are different: package state, config, Doctor or update authority is
- * unsettled, so the update still fails on them.
+ * A cohort rollback restores the previous plugin set after most failures. These are different:
+ * config, Doctor, child processes or update authority are unsettled, so the update still fails.
  */
 export function pluginConvergenceFailureBlocksUpdate(error: unknown): boolean {
   return (
     hasCommandProcessCleanupError(error) ||
     collectNestedErrorCandidates(error).some(
       (cause) =>
-        cause instanceof PluginInstallSettlementError ||
         cause instanceof ConfigMutationConflictError ||
         cause instanceof ConfigReadOnlyError ||
         cause instanceof NixModeConfigMutationError ||

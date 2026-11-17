@@ -159,9 +159,15 @@ export async function updatePluginsAfterCoreUpdate(params: {
       const configConflict =
         error instanceof ConfigMutationConflictError &&
         (error.retryable || error instanceof PluginFinalizationConfigConflictError);
-      // Package work that failed before publication was rolled back above, or without a cohort
-      // settled plugin by plugin. No record or config changed, so a later command can retry.
-      if (!configConflict && (stage.publishing || pluginConvergenceFailureBlocksUpdate(error))) {
+      // Only a cohort defers every package and record change, so only its rollback above
+      // restores the previous plugin set for a later command to retry. Channel config restored
+      // for this update is published with the records; no later run could restore it.
+      const retryable =
+        publication !== undefined &&
+        !stage.publishing &&
+        params.configChanged !== true &&
+        !pluginConvergenceFailureBlocksUpdate(error);
+      if (!configConflict && !retryable) {
         throw error;
       }
       assertCurrent();
@@ -177,7 +183,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
         // The caller decides later whether the step is owed; this notice holds either way.
         const notice = configConflict
           ? warning.message
-          : `Plugin convergence did not complete: ${warning.message}. Plugin records and config are unchanged; the next \`openclaw update\` or \`openclaw update repair\` retries it.`;
+          : `Plugin convergence did not complete: ${warning.message}. Plugins stay on their previous versions; the next \`openclaw update\` or \`openclaw update repair\` retries it.`;
         (params.runtime ?? defaultRuntime).log(theme.warn(notice));
       }
       return createPostCorePluginUpdateResult({ status: "warning", warnings: [warning] });

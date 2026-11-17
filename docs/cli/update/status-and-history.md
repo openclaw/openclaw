@@ -148,9 +148,9 @@ Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warni
 with its reason and what settles it. A successful update's headline counts it
 among its warnings. The step `id` is `shell-completion`, `service-definition`,
 `plugin-convergence`, or `post-plugin-doctor`. A plugin step also appears in the
-update's `postUpdate.plugins.warnings` with the step `id` as its `reason`. The newest of the last 50 runs that mentions a step decides
-whether it is still owed, so the warning stays visible after a later run that did
-not settle it. Failed and rolled-back runs owe nothing. JSON lists owed steps as
+update's `postUpdate.plugins.warnings` with the step `id` as its `reason`. The
+newest of the last 50 runs that mentions a step decides whether it is still
+owed, so the warning stays visible after a later run that did not settle it. Failed and rolled-back runs owe nothing. JSON lists owed steps as
 `owedSteps` with `id`, `runId`, and `reason`; the field is absent when nothing is
 owed. `openclaw update repair --json` reports the steps it leaves owed in the
 same field, with `id` and `reason`. In the run record, an owed step is a

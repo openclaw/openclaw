@@ -17,7 +17,10 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
+import {
+  listOwedPluginSteps,
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins-internals.js";
 import {
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
@@ -114,13 +117,6 @@ export async function retryOwedUpdateSteps(
     );
   }
   return stillOwed;
-}
-
-/** The steps a plugin phase left owed: each is a warning whose reason is the step id. */
-export function listOwedPluginSteps(plugins: PostCorePluginUpdateResult | undefined): OwedStep[] {
-  return (plugins?.warnings ?? []).flatMap((warning) =>
-    isUpdateOwedStepId(warning.reason) ? [{ id: warning.reason, reason: warning.message }] : [],
-  );
 }
 
 /**

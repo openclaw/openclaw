@@ -792,6 +792,29 @@ describe("update-cli", () => {
       expect(diagnostics).not.toContain("Gateway version mismatch");
     },
   );
+  it("keeps a JSON package update whose plugin convergence fails and owes the step", async () => {
+    setupNpmUpdatedRootRefresh();
+    const reason = "plugin registry exploded";
+    mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(reason));
+
+    await runUpdate({ yes: true, json: true });
+
+    const result = check.lastWriteJsonCall() as UpdateRunResult;
+    expect(result.status).toBe("ok");
+    expect(result.steps.filter((step) => step.advisory?.message.includes(" is owed: "))).toEqual([
+      expect.objectContaining({
+        name: "plugin-convergence",
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: `Plugin convergence is owed: ${reason}. Retried by the next \`openclaw update\`; run \`openclaw update repair\` to retry it now.`,
+        },
+      }),
+    ]);
+    expect(readOwedUpdateSteps()).toEqual([
+      { id: "plugin-convergence", runId: result.runId, reason },
+    ]);
+  });
   it("routes a stored dev channel on package installs to the existing Git checkout", async () => {
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(
       configSnapshot({ update: { channel: "dev" } }),

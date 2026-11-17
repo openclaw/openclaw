@@ -226,11 +226,13 @@ it("retains published artifacts when install commit cleanup fails", async () => 
 });
 
 it.each([
-  { rollback: "restores", owed: true },
-  { rollback: "cannot restore", owed: false },
+  { shape: "a cohort whose rollback restores the package", owed: true },
+  { shape: "a cohort whose rollback fails", rollbackFails: true },
+  { shape: "a cohort that also restores channel config for this update", configChanged: true },
+  { shape: "no cohort", cohort: false },
 ])(
-  "owes convergence only when rollback $rollback a package replaced before a later failure",
-  async ({ owed }) => {
+  "owes convergence that throws after replacing a package only with $shape",
+  async ({ owed = false, rollbackFails = false, configChanged = false, cohort = true }) => {
     await withOpenClawTestState({ label: "updater-plugin-work-failed" }, async (state) => {
       const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
       const originalConfig = await fs.readFile(state.configPath, "utf8");
@@ -242,14 +244,16 @@ it.each([
         version: "2026.10.9",
         buildId: "fixture",
       };
-      await beginUpdatePluginCohort({
-        runId,
-        installKey: state.root,
-        from: runtime,
-        to: { ...runtime, version: "2026.10.10" },
-        env: state.env,
-        fence,
-      });
+      if (cohort) {
+        await beginUpdatePluginCohort({
+          runId,
+          installKey: state.root,
+          from: runtime,
+          to: { ...runtime, version: "2026.10.10" },
+          env: state.env,
+          fence,
+        });
+      }
       const plugin = { stateDir: state.stateDir, packageName: "@example/owed", pluginId: "owed" };
       const installPath = writeManagedNpmPlugin({ ...plugin, version: "1.0.0" });
       const next = writeManagedNpmPlugin({
@@ -257,12 +261,26 @@ it.each([
         stateDir: state.path("next"),
         version: "2.0.0",
       });
+      const records = {
+        owed: {
+          source: "npm" as const,
+          spec: "@example/owed@1.0.0",
+          version: "1.0.0",
+          installPath,
+        },
+      };
+      await seedInstalledPluginIndex(records, {
+        config: { plugins: { enabled: false } },
+        env: state.env,
+      });
       const installedVersion = async () =>
         JSON.parse(await fs.readFile(`${installPath}/package.json`, "utf8")).version;
+      const failure = new Error("plugin registry exploded");
       mocks.convergence.mockImplementationOnce(async (owner) => {
         const sink = resolvePluginInstallTransactionRequest(owner)?.transactionSink;
+        expect(sink !== undefined).toBe(cohort);
         if (!sink) {
-          throw new Error("Convergence lost its deferred transaction sink");
+          throw failure;
         }
         // The package directory owner replaces the first plugin in place and keeps its backup.
         const published = await installPackageDir(
@@ -282,21 +300,23 @@ it.each([
         }
         expect(await installedVersion()).toBe("2.0.0");
         sink.push(
-          owed
-            ? transaction
-            : {
+          rollbackFails
+            ? {
                 commit: () => transaction.commit(),
                 rollback: async () => {
                   throw new Error("backup is gone");
                 },
-              },
+              }
+            : transaction,
         );
-        throw new Error("plugin registry exploded");
+        throw failure;
       });
       const update = updatePluginsAfterCoreUpdate({
         ...prepared,
+        configChanged,
+        pluginInstallRecords: records,
         configWriteOptions: {},
-        cohort: { runId, env: state.env, fence },
+        ...(cohort ? { cohort: { runId, env: state.env, fence } } : {}),
       });
       if (owed) {
         await expect(update).resolves.toMatchObject({
@@ -310,14 +330,16 @@ it.each([
             },
           ],
         });
-      } else {
+      } else if (rollbackFails) {
         await expect(update).rejects.toThrow("Plugin install transaction rollback failed");
+      } else {
+        await expect(update).rejects.toBe(failure);
       }
-      // An owed step leaves the previous package, records and config: never a half-installed plugin.
-      expect(await installedVersion()).toBe(owed ? "1.0.0" : "2.0.0");
+      // An owed step leaves the previous package, record and config: never a half-installed plugin.
+      expect(await installedVersion()).toBe(rollbackFails ? "2.0.0" : "1.0.0");
       expect(
         await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual({});
+      ).toEqual(records);
       expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
     });
   },

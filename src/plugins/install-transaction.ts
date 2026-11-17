@@ -19,9 +19,6 @@ export type PluginCohortInstallObserver = {
   }): Promise<void>;
 };
 
-/** A package commit or rollback did not finish, so its directory may not match its record. */
-export class PluginInstallSettlementError extends AggregateError {}
-
 const PLUGIN_INSTALL_TRANSACTION = Symbol.for("openclaw.pluginInstallTransaction");
 const PLUGIN_INSTALL_TRANSACTION_REQUEST = Symbol.for("openclaw.pluginInstallTransactionRequest");
 const PLUGIN_INSTALL_OWNER_MIGRATIONS = Symbol.for("openclaw.pluginInstallOwnerMigrations");
@@ -274,11 +271,11 @@ export async function settlePluginInstallTransactions(
   if (errors.length > 0) {
     const message = `Plugin install transaction ${action} failed`;
     throw primaryFailure
-      ? new PluginInstallSettlementError(
+      ? new AggregateError(
           [primaryFailure.error, ...errors],
           `${String(primaryFailure.error)}; ${message}`,
           { cause: primaryFailure.error },
         )
-      : new PluginInstallSettlementError(errors, message);
+      : new AggregateError(errors, message);
   }
 }
