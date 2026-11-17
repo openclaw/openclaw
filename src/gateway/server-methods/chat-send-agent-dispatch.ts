@@ -402,6 +402,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   media: replyOptionMedia,
                   ...(p.timeoutMs !== undefined ? { timeoutOverrideMs: p.timeoutMs } : {}),
                   thinkingLevelOverride: p.thinking,
+                  normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
                   queueModeOverride: p.queueMode,
                   userTurnTranscriptRecorder: userTurnRecorder,

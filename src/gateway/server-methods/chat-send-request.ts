@@ -33,6 +33,7 @@ import {
   readProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -63,6 +64,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -85,6 +87,17 @@ export type NormalizedChatSendRequest = {
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
 };
+
+/** Talk settings are machine preferences, not user commands for a particular model. */
+export function shouldNormalizeTalkThinking(
+  request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
+): boolean {
+  return (
+    request.p.thinking !== undefined &&
+    request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+  );
+}
 
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
@@ -308,6 +321,7 @@ export function normalizeChatSendRequest(params: {
     inboundMessage: modelMessage,
     ...(workContext ? { workContext } : {}),
     systemInputProvenance,
+    normalizeThinkingLevelOverride: shouldNormalizeTalkThinking({ p, systemInputProvenance }),
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
     toolBindings: p.toolBindings,

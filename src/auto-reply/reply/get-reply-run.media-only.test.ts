@@ -3,6 +3,7 @@ import {
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
+import { registerPreparedReplyThinkingCases } from "./get-reply-run.thinking.test-support.js";
 import "./get-reply-run.runtime-mocks.test-support.js";
 
 // Queue admission and channel policy have their own coverage; this seam exercises cron custody through ingress and drain.
@@ -879,41 +880,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(prompt).toContain("Do not assume a prior denial still applies");
   });
 
-  it.each(["explicit", "stored"] as const)(
-    "validates %s thinking while preserving the stored preference",
-    async (source) => {
-      const sessionEntry: SessionEntry = {
-        sessionId: "session-thinking",
-        sessionFile: "/tmp/session-thinking.jsonl",
-        thinkingLevel: "high",
-        updatedAt: 1,
-      };
-      const sessionStore = { "session-key": sessionEntry };
-      const result = await runPrepared({
-        provider: "openai",
-        model: "chat-latest",
-        modelState: nonReasoningModelState(),
-        ...(source === "explicit"
-          ? { resolvedThinkLevel: "xhigh", opts: { thinkingLevelOverride: "xhigh" } }
-          : {
-              resolvedThinkLevel: "high",
-              sessionEntry,
-              sessionStore,
-              storePath: "/tmp/openclaw-sessions.json",
-            }),
-      });
-      if (source === "explicit") {
-        expect(Array.isArray(result) ? undefined : result?.text).toContain(
-          'Thinking level "xhigh" is not supported',
-        );
-        expect(runReplyAgent).not.toHaveBeenCalled();
-      } else {
-        expect(requireRunReplyAgentCall().followupRun.run.thinkLevel).toBe("high");
-        expect(sessionEntry.thinkingLevel).toBe("high");
-        expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
-      }
-    },
-  );
+  registerPreparedReplyThinkingCases(runPrepared, requireRunReplyAgentCall, runReplyAgent);
 
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
     vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");

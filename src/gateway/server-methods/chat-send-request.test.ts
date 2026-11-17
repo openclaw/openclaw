@@ -298,3 +298,25 @@ it.each([
     }
   },
 );
+it.each([
+  [undefined, "off", false],
+  ["other-tool", "off", false],
+  ["openclaw_agent_consult", undefined, false],
+  ["openclaw_agent_consult", "off", true],
+] as const)(
+  "normalizes only explicit trusted Talk preferences (%s, %s)",
+  async (sourceTool, thinking, expected) => {
+    const result = await normalizeChatSendRequest({
+      params: requestParams({
+        ...(thinking ? { thinking } : {}),
+        ...(sourceTool ? { systemInputProvenance: { kind: "internal_system", sourceTool } } : {}),
+      }),
+      client: null,
+      trustedSystemInput: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.normalizeThinkingLevelOverride).toBe(expected);
+    }
+  },
+);
