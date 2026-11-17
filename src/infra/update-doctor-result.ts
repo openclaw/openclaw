@@ -326,25 +326,14 @@ export function createUpdateDoctorDatabaseWriteCapture(
         // Earlier receipts or another process's writes must never become our baseline.
         unchanged &&= matches;
         if (!matches && first) {
-          // Published parents bind WAL-index iChange into their capture, so a no-write
-          // index rebuild after capture (readers exiting, then a native reopen) looks like
-          // a write and their forward recovery strands the Gateway. Adopt only that shape;
-          // the receipt stays unchanged=false, so no parent restores, and any other
-          // difference still refuses at the first attributed write. Accepted edge: a commit
-          // after capture that only read-only connections outlive is also rebuilt this way;
-          // a refusal there would still end in the parent's forward migration of those bytes.
-          const { hasRebuiltWalIndexOverFrames } = await import("./update-database-generations.js");
-          const stale = Object.entries(generations).filter(
-            ([pathname, generation]) => generation !== expectedGenerations?.[pathname],
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Changes after admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
           );
-          if (stale.every(([pathname]) => hasRebuiltWalIndexOverFrames(pathname))) {
-            for (const [pathname, generation] of stale) {
-              expectedGenerations[pathname] = generation;
-            }
-            options.warn(
-              "SQLite rebuilt a database index after the updater captured it; automatic database restoration is unavailable for this update.",
-            );
-          }
         }
       }
     },

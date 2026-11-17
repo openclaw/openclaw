@@ -43,16 +43,21 @@ import {
   openClientCredentialCustody,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
+import {
+  assertMigratedCredentials,
+  identity,
+  policy,
+  seedCredentials,
+} from "./client-credential-update.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { openEngineStore } from "./database-engine/open.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { inspectScopedMigrationSnapshot } from "./sqlite-migration-scoped-snapshot.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -62,7 +67,6 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 const namespaces = new Set<string>();
-const identity = generateStoredDeviceIdentity(12);
 const stat4Enabled = (() => {
   using database = openNodeSqliteDatabase(":memory:");
   return Boolean(
@@ -74,12 +78,6 @@ const credentialTables = [
   "device_auth_tokens",
   "gateway_origin_device_tokens",
 ] as const;
-const policy = {
-  version: 1,
-  socket: { path: "/synthetic/native.sock", token: "synthetic-socket-token", future: "keep" },
-  defaults: { security: "allowlist", ask: "on-miss" },
-  agents: {},
-};
 
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -102,54 +100,6 @@ afterAll(async () => {
   }
 });
 
-function seedCredentials(db: EngineConnection, native: boolean, sourceVersion: 25 | 26 | 27 | 28) {
-  db.prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)").run(
-    "primary",
-    identity.deviceId,
-    identity.publicKeyPem,
-    identity.privateKeyPem,
-    12,
-    99,
-  );
-  db.prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)").run(
-    identity.deviceId,
-    "operator",
-    "synthetic-original-token",
-    '[ "operator.read" ]',
-    101,
-  );
-  if (native) {
-    return;
-  }
-  db.prepare("INSERT INTO gateway_origin_device_tokens VALUES (?, ?, ?, ?, ?, ?)").run(
-    "https://synthetic.invalid",
-    identity.deviceId,
-    "operator",
-    "synthetic-origin-token",
-    '["operator.write"]',
-    102,
-  );
-  db.prepare("INSERT INTO exec_approvals_config VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-    "current",
-    JSON.stringify(policy),
-    policy.socket.path,
-    1,
-    "allowlist",
-    "on-miss",
-    null,
-    null,
-    0,
-    0,
-    104,
-  );
-  db.prepare(
-    "INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, 'fixture', 123, 123)",
-  ).run(sourceVersion);
-  db.prepare("INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)").run(
-    String(sourceVersion),
-  );
-}
-
 async function fixture(
   engine: "sqlite" | "postgres",
   native = false,
@@ -159,7 +109,7 @@ async function fixture(
   const root = fs.realpathSync(directories.make("client-update-"));
   const stateDir = path.join(root, "state-root");
   const pathname = path.join(stateDir, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
   if (initialState === "legacy-statistics") {
     // Empty SQLite database produced by ANALYZE sqlite_schema with ENABLE_STAT4.
     fs.writeFileSync(
@@ -357,7 +307,12 @@ async function capture(f: Fixture, fresh = false) {
   return { run, backup: result.backup! };
 }
 
-async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>>, fresh = false) {
+async function migrate(
+  f: Fixture,
+  captured?: Awaited<ReturnType<typeof capture>>,
+  fresh = false,
+  expected: { token?: string; rollback?: boolean } = {},
+) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
     options: { repair: true, nonInteractive: true },
@@ -394,7 +349,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
           source: captured.backup.sourceGenerations,
           writes,
         }),
-      ).toBe(true);
+      ).toBe(expected.rollback ?? true);
       expect(Object.keys(writes!.generations).toSorted()).toEqual(
         Object.keys(captured.backup.sourceGenerations).toSorted(),
       );
@@ -403,7 +358,11 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
           name: "candidate Doctor",
         }),
       ).toBeDefined();
-      expect(captured.backup.restoreRefusal).toBeUndefined();
+      if (expected.rollback === false) {
+        expect(captured.backup.restoreRefusal).toBeDefined();
+      } else {
+        expect(captured.backup.restoreRefusal).toBeUndefined();
+      }
     }
   } finally {
     await maintenance!.release();
@@ -413,33 +372,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
     using local = openClientCredentialCustody(f.env, { migration: true })!;
     expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
   } else {
-    assertMigratedCredentials(f);
-  }
-}
-
-function assertMigratedCredentials(f: Fixture) {
-  using local = openClientCredentialCustody(f.env, { migration: true })!;
-  expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
-  expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual({
-    identity_key: "primary",
-    device_id: identity.deviceId,
-    public_key_pem: identity.publicKeyPem,
-    private_key_pem: identity.privateKeyPem,
-    created_at_ms: 12,
-    updated_at_ms: 99,
-  });
-  expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-    token: "synthetic-original-token",
-  });
-  if (!f.native) {
-    expect(
-      local.database
-        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
-        .get(),
-    ).toEqual({
-      socket_path: "/synthetic/native.sock",
-      socket_token: "synthetic-socket-token",
-    });
+    assertMigratedCredentials(f, expected.token);
   }
 }
 
@@ -904,18 +837,34 @@ describe("client credential public update custody", () => {
     ]);
   });
 
-  it("refuses a foreign shared write after capture without retiring credentials", async () => {
+  it("migrates newer credentials after capture without allowing stale rollback", async () => {
     const f = await fixture("sqlite");
     const captured = await capture(f);
     {
       using shared = openNodeSqliteDatabase(f.pathname);
       shared.prepare("UPDATE device_auth_tokens SET token=?").run("synthetic-foreign-token");
     }
-    await expect(migrate(f, captured)).rejects.toThrow(/changed|capture|generation|custody/i);
-    expect(await f.readShared()).toEqual({ version: 25, token: "synthetic-foreign-token", policy });
-    expect(() =>
-      runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
-    ).toThrow();
+    await migrate(f, captured, false, { token: "synthetic-foreign-token", rollback: false });
+    const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+    expect(
+      await restoreFailedUpdateDatabases({
+        backup: captured.backup,
+        runId: captured.run.runId,
+        env: f.env,
+        assertCurrent() {},
+        result,
+      }),
+    ).toBe(false);
+    expect(result.rollbackOutcome?.status).toBe("not-attempted");
+    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
+    expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "synthetic-foreign-token",
+    });
+    using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+    expect(
+      shared.prepare("SELECT name FROM sqlite_schema WHERE name='device_auth_tokens'").get(),
+    ).toBeUndefined();
   });
 });
 
