@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   decodeNativeWorkerFailure,
@@ -14,6 +15,7 @@ import type {
   PluginCaptureResourceReply,
   PluginCaptureRootAnnouncement,
 } from "./plugin-capture-native-resource.types.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -30,6 +32,7 @@ type Domain = {
       root: ReturnType<typeof createPluginNativeCaptureRoot>;
     }
   >;
+  sourceParents: Map<number, number>;
   nextRoot: number;
   borrowers: number;
 };
@@ -48,7 +51,13 @@ export function createNativeWorkerResource(
     if (domain) {
       throw new Error("Plugin capture owner already exists");
     }
-    domain = { sources: new Map(), roots: new Map(), nextRoot: 0, borrowers: 0 };
+    domain = {
+      sources: new Map(),
+      sourceParents: new Map(),
+      roots: new Map(),
+      nextRoot: 0,
+      borrowers: 0,
+    };
     domains.set(config.owner, domain);
   }
   if (!domain) {
@@ -78,6 +87,59 @@ export function createNativeWorkerResource(
   const execute = async ({ id, command }: PluginCaptureResourceRequest) => {
     if (closed) {
       throw new Error("Plugin capture resource has closed");
+    }
+    if (command.type === "recovery") {
+      const { copyPluginRecoveryFiles } = await import("./plugin-recovery-source-copy.js");
+      const { createPluginSourceCapture, withPluginSourceCaptureDirectory } =
+        await import("./plugin-package-metadata-capture.js");
+      const copyInput = command.input;
+      const capture = withPluginSourceCaptureStorage(copyInput.storage, () =>
+        copyInput.directory
+          ? withPluginSourceCaptureDirectory(
+              copyInput.directory.directory,
+              createPluginSourceCapture,
+              copyInput.directory.managedRoot,
+            )
+          : createPluginSourceCapture(),
+      );
+      const source = {
+        directory: capture.directory,
+        managedRoot: capture.outputRoot,
+        release: () => capture.disposeAsync(),
+      };
+      // Keep failed cleanup under the same custody as every other source root.
+      owned.sources.set(command.captureId, source);
+      if (command.parentCaptureId !== undefined) {
+        owned.sourceParents.set(command.captureId, command.parentCaptureId);
+      }
+      try {
+        const steps = copyPluginRecoveryFiles(copyInput, source.directory);
+        let step = steps.next();
+        while (!step.done) {
+          await fs.promises.cp(...step.value);
+          step = steps.next();
+        }
+        return {
+          root: {
+            id: command.captureId,
+            directory: source.directory,
+            managedRoot: source.managedRoot,
+          },
+        };
+      } catch (error) {
+        try {
+          await source.release();
+          owned.sources.delete(command.captureId);
+          owned.sourceParents.delete(command.captureId);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Plugin recovery copy and cleanup failed",
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
     }
     if (command.type === "source") {
       const source = createPluginSourceCaptureRoot(
@@ -128,8 +190,17 @@ export function createNativeWorkerResource(
         ),
       };
     } else if (command.type === "release-source") {
+      // A crashed execution cannot dispose its derived recovery handles itself.
+      for (const [childId, parentId] of owned.sourceParents) {
+        if (parentId === command.captureId) {
+          await owned.sources.get(childId)?.release();
+          owned.sources.delete(childId);
+          owned.sourceParents.delete(childId);
+        }
+      }
       await owned.sources.get(command.captureId)?.release();
       owned.sources.delete(command.captureId);
+      owned.sourceParents.delete(command.captureId);
       for (const [rootId, entry] of owned.roots) {
         if (entry.captureId === command.captureId && !entry.announced) {
           await entry.root.disposeAsync();

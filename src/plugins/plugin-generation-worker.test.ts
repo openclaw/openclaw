@@ -226,9 +226,9 @@ it("keeps a native-only recovery fork after its worker and admission cache retir
     preparePluginNativeAdmissions(fixture.index, cache);
     const { prepared, rootCalls } = await (async () => {
       using observedFs = observeMainThreadFs();
-      const prepared = await prepare(fixture);
+      const preparedArtifact = await prepare(fixture);
       return {
-        prepared,
+        prepared: preparedArtifact,
         rootCalls: observedFs
           .stacks()
           .filter(({ stack }) => stack.includes("plugin-source-capture-directory")),
@@ -263,6 +263,8 @@ it("releases host preparation custody after unexpected worker exit with an outst
       preparePluginNativeAdmissions(fixture.index, cache);
       const prepared = await prepare(fixture);
       const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+      const recovery = await prepared.artifact.captureRecoverySourceAsync!();
+      const recoveryDirectory = recovery.sourceCapture.directory;
       const capture = posts.mock.calls.findIndex(
         ([value]) =>
           isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
@@ -272,7 +274,10 @@ it("releases host preparation custody after unexpected worker exit with an outst
       await worker.terminate();
       expectBytes(captured, fixture);
       await retirePluginCache(cache);
-      // Pool retirement releases preparation custody asynchronously after confirmed exit.
+      // Worker exit releases derived source roots, but exported native custody is independent.
+      await vi.waitFor(() => expect(fs.existsSync(recoveryDirectory)).toBe(false));
+      expectBytes(captured, fixture);
+      await recovery.native?.disposeAsync();
       await vi.waitFor(() => expect(fs.existsSync(captured)).toBe(false));
     } finally {
       await closeDefaultRetainedNativeWorkerSource();

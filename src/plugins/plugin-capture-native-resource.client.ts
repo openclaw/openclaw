@@ -19,6 +19,7 @@ import {
 } from "./plugin-capture-native-resource.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import type { PluginNativeCaptureRoot } from "./plugin-native-root.types.js";
+import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
 
 export function createPluginCaptureResourceClient(
@@ -79,7 +80,7 @@ export function createPluginCaptureResourceClient(
     async request(command: PluginCaptureResourceCommand) {
       const { id, call } = start(command);
       try {
-        return unwrap(await call.completion.promise).root;
+        return unwrap(await call.completion.promise);
       } finally {
         pending.delete(id);
       }
@@ -110,7 +111,7 @@ export function createPluginCaptureResourceClient(
 /** Independent custody and execution relay share one physical plugin capture owner. */
 export async function createPluginCaptureOwner(
   source: RetainedNativeWorkerSource,
-  callbacks: {
+  callbacks?: {
     native(captureId: number, root: PluginNativeCaptureRoot): PluginCaptureResourceRoot;
   },
 ) {
@@ -175,6 +176,9 @@ export async function createPluginCaptureOwner(
       };
       let reply: PluginCaptureResourceReply;
       try {
+        if (!callbacks) {
+          throw new Error("Plugin capture owner has no native allocation consumer");
+        }
         reply = {
           id: announcement.id,
           ok: true,
@@ -216,11 +220,18 @@ export async function createPluginCaptureOwner(
       connect,
     ),
     async createSource(captureId: number, storage: PluginSourceCaptureStorage, prefix: string) {
-      const root = await client.request({ type: "source", captureId, storage, prefix });
+      const { root } = await client.request({ type: "source", captureId, storage, prefix });
       if (!root) {
         throw new Error("Plugin capture owner returned no source root");
       }
       return root;
+    },
+    async copyRecovery(captureId: number, input: PluginRecoveryCaptureInput) {
+      const { root } = await client.request({ type: "recovery", captureId, input });
+      if (!root) {
+        throw new Error("Plugin capture owner returned no recovery source");
+      }
+      return { root };
     },
     releaseSource: (captureId: number) =>
       client.request({ type: "release-source", captureId }).then(() => {}),

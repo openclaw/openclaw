@@ -1,5 +1,6 @@
 import type { NativeWorkerFailure } from "../infra/worker-native-error.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
+import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.js";
 export const PLUGIN_CAPTURE_RESOURCE_PORT = "pluginCaptureResourcePort";
 export type PluginCaptureResourceInput = { owner: string; role: "owner" | "execution" };
 export type PluginCaptureResourceCommand =
@@ -10,6 +11,12 @@ export type PluginCaptureResourceCommand =
       prefix: string;
     }
   | { type: "native"; captureId: number; storage: PluginSourceCaptureStorage }
+  | {
+      type: "recovery";
+      captureId: number;
+      parentCaptureId?: number;
+      input: PluginRecoveryCaptureInput;
+    }
   | { type: "release-source"; captureId: number }
   | { type: "commit-native" | "release-native"; rootId: number }
   | { type: "loaded"; filename: string };

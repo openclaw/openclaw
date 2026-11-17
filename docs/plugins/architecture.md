@@ -1096,3 +1096,10 @@ ordinary Gateway restart. Loaded native code retains its physical token and unre
 broker until host exit. A failed broker remains terminal; a fresh execution source
 may use a new broker without reviving the old authority. Installed-index publication
 settles before native commit is acknowledged.
+
+Asynchronous reload recovery sends the whole copy operation to that same broker,
+including capture-root creation, symlink filtering, native-reference validation,
+and cleanup. Preparation workers borrow their existing capture domain; host-local
+recovery receives independent custody. Confirmed worker exit releases derived source
+roots without revoking native leases already exported to a surviving owner.
+Synchronous custody forks retain their existing contract and share the copy policy.

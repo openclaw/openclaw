@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -9,6 +8,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { pluginSourceCaptureDirectory } from "./plugin-source-capture-context.js";
 import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
@@ -17,6 +17,7 @@ import {
   mkdtempPluginCaptureSync,
   PLUGIN_SOURCE_CAPTURE_PREFIX,
 } from "./plugin-source-capture-path.js";
+import { createPluginSourceCaptureState } from "./plugin-source-capture-state.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
@@ -616,20 +617,18 @@ export function createPluginPackageMetadataCapture(params: {
   };
 }
 
-const sourceCaptureDirectory = new AsyncLocalStorage<{ directory: string; managedRoot?: string }>();
-
 /** A compute worker's parent reclaims this scratch directory after confirmed exit. */
 export function withPluginSourceCaptureDirectory<T>(
   directory: string,
   run: () => T,
   managedRoot?: string,
 ): T {
-  return sourceCaptureDirectory.run({ directory, managedRoot }, run);
+  return pluginSourceCaptureDirectory.run({ directory, managedRoot }, run);
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
 export function createPluginSourceCapture() {
-  const override = sourceCaptureDirectory.getStore();
+  const override = pluginSourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
   let directory: string;
@@ -664,69 +663,20 @@ export function createPluginSourceCapture() {
     }
     throw error;
   }
-  const additions = new Set<string>();
-  const captureFailures = new Map<string, unknown>();
-  let disposed = false;
-  const acquire = <T>(capture: () => T) => {
-    if (disposed) {
-      throw new Error("Plugin module capture has been disposed");
-    }
-    try {
-      const value = capture();
-      return { value, additions: [...additions] };
-    } catch (error) {
-      // Another specifier must not admit files from an incomplete capture transaction.
-      for (const filename of additions) {
-        captureFailures.set(filename, error);
-      }
-      throw error;
-    } finally {
-      additions.clear();
-    }
-  };
-  const assertModuleAvailable = (filename: string) => {
-    if (captureFailures.has(filename)) {
-      throw captureFailures.get(filename);
-    }
-  };
-  const beginDisposal = () => {
-    disposed = true;
-    // Revoke cached modules before removal yields, including compiled CJS helpers.
-    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
-    const urls = pathToFileURL(directory + path.sep).href;
-    const cache = createRequire(import.meta.url).cache;
-    for (const id of Object.keys(cache)) {
-      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
-        delete cache[id];
-      }
-    }
-    captureFailures.clear();
-  };
-  return {
-    additions,
-    capture: acquire,
-    assertModuleAvailable,
+  return createPluginSourceCaptureState({
     directory,
     outputRoot: override?.managedRoot ?? instance?.managedRoot,
-    linkHost: (hostRoot: string) => {
-      const modules = path.join(directory, "node_modules");
-      fs.mkdirSync(modules, { recursive: true, mode: 0o700 });
-      // Native ESM follows the selected host's real public exports and identity.
-      fs.symlinkSync(hostRoot, path.join(modules, "openclaw"), "junction");
-    },
     dispose() {
-      beginDisposal();
       if (!retainLoadedPluginSourceCapture(directory)) {
         fs.rmSync(directory, { recursive: true, force: true });
       }
       instance?.release();
     },
     async disposeAsync() {
-      beginDisposal();
       if (!retainLoadedPluginSourceCapture(directory)) {
         await fsPromises.rm(directory, { recursive: true, force: true });
       }
       await instance?.releaseAsync();
     },
-  };
+  });
 }

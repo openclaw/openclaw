@@ -25,10 +25,16 @@ import {
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
-import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import {
+  pluginRecoveryCapture,
+  withPluginSourceCaptureStorage,
+} from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
 
 const captureResource = createPluginCaptureResourceClient(workerData[PLUGIN_CAPTURE_RESOURCE_PORT]);
+
+// Source capture ids are positive; recovery ids share this worker and use the negative range.
+let nextRecoveryId = 0;
 
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
@@ -217,7 +223,29 @@ function createPreparationSession(
             withPluginSourceCaptureStorage(current.storage, () =>
               withPluginSourceCaptureDirectory(
                 current.scratch,
-                () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
+                () =>
+                  pluginRecoveryCapture.run(
+                    async (input) => {
+                      const captureId = --nextRecoveryId;
+                      const { root } = await captureResource.request({
+                        type: "recovery",
+                        captureId,
+                        parentCaptureId: context.captureId,
+                        input,
+                      });
+                      if (!root) {
+                        throw new Error("Plugin capture owner returned no recovery source");
+                      }
+                      return {
+                        ...root,
+                        release: () =>
+                          captureResource
+                            .request({ type: "release-source", captureId })
+                            .then(() => {}),
+                      };
+                    },
+                    () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
+                  ),
                 current.managedRoot,
               ),
             ),
@@ -353,7 +381,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
     // SAFETY: The matching internal host submits only GenerationWorkerInput to this pool.
     const command = input as GenerationWorkerInput;
     if (command.operation === "capture") {
-      const source = await captureResource.request({
+      const { root: source } = await captureResource.request({
         type: "source",
         captureId: command.captureId,
         storage: command.storage,
