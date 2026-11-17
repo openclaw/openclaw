@@ -1,18 +1,19 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import { createThemeDefinitionFixture } from "../../../test/helpers/theme-fixture.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { withControlUiSettledTargets } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { chatEvent } from "./chat-flow-fixtures.test-support.ts";
+import { agentEvent, chatEvent } from "./chat-flow-fixtures.test-support.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
+import { exactButton, layoutBox, right } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 import { themeConfigResponse } from "./theme-typography.test-support.ts";
 
@@ -49,462 +50,334 @@ const firstText = "I’ll inspect the stylesheet first.";
 const secondText = "The stylesheet is readable; checking is complete.";
 const finalText = "The iPad conversation is ready.";
 const message = (role: string, content: unknown, phase?: string) => ({ role, content, phase });
+const toolResult = (toolCallId: string, toolName: string, content: unknown) => ({
+  role: "toolResult",
+  content,
+  toolCallId,
+  toolName,
+});
 const history = [
   message("user", "Inspect the layout."),
   message("assistant", firstText, "commentary"),
-  message("assistant", [
-    { type: "toolCall", id: "read-layout", name: "read", arguments: { path: "layout.css" } },
-  ]),
-  {
-    ...message("toolResult", "The stylesheet is readable."),
-    toolCallId: "read-layout",
-    toolName: "read",
-  },
+  recordedToolCall("read-layout", "read", { path: "layout.css" }),
+  toolResult("read-layout", "read", "The stylesheet is readable."),
   message("assistant", secondText, "commentary"),
   message("assistant", finalText, "final_answer"),
-].map((entry, index) => ({
-  ...entry,
-  timestamp: Date.UTC(2026, 10, 17, 6, 0, index),
-  runId: "layout",
-  __openclaw: { id: "ipad-" + index, runId: "layout" },
-}));
+].map((entry, index) =>
+  Object.assign(entry, {
+    timestamp: Date.UTC(2026, 10, 17, 6, 0, index),
+    runId: "layout",
+    __openclaw: { id: "ipad-" + index, runId: "layout" },
+  }),
+);
+
+async function openConversation(page: Page) {
+  await seedChatSettings(page, suite.server.baseUrl, {
+    chatBubbleSessionKeys: [sessionKey],
+    theme: theme.id,
+    themeMode: "dark",
+  });
+  await page.addInitScript(() => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_EMBED__: {
+        platform: "ios",
+        formFactor: "pad",
+        surface: "conversation",
+      },
+      __OPENCLAW_NATIVE_CONVERSATION__: { contract: 1 },
+      webkit: {
+        messageHandlers: {
+          openclawConversation: { postMessage: () => Promise.resolve({ ok: true }) },
+        },
+      },
+    });
+  });
+  const identity = { assistantName: "Layout agent", assistantAvatar: avatar };
+  const gateway = await installMockGateway(page, {
+    sessionKey,
+    ...identity,
+    presenceUsers: [{ self: true, id: "profile-ipad", name: "Riley" }],
+    historyMessages: history,
+    sessions: [{ key: sessionKey, sessionId: "ipad-conversation" }],
+    methodResponses: {
+      "config.get": themeConfigResponse(theme.id, "dark"),
+      "themes.list": catalog,
+      "themes.get": catalog,
+    },
+  });
+  await page.route("**/control-ui-config.json", (route) =>
+    route.fulfill({
+      json: { ...createControlUiMockBootstrapConfig(identity), chatBubblesEnabled: true },
+    }),
+  );
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  return gateway;
+}
+
+async function checkConversation({ page }: { page: Page }) {
+  const gateway = await openConversation(page);
+  const pane = page.locator(".chat-pane-cache__pane--visible");
+  const chat = pane.locator("section.chat");
+  await browserExpect(page.locator("openclaw-chat-page[data-native-conversation]")).toBeVisible();
+  await browserExpect(
+    page.locator("openclaw-app-sidebar, openclaw-app-topbar, .native-embed-header"),
+  ).toHaveCount(0);
+  await browserExpect(chat).toHaveClass(/chat--bubbles/);
+  const final = chat.getByText(finalText, { exact: true });
+  const first = chat.getByText(firstText, { exact: true });
+  const second = chat.getByText(secondText, { exact: true });
+  const presented = <T>(targets: (typeof first)[], read: () => Promise<T>) =>
+    withControlUiSettledTargets(
+      page,
+      pane,
+      targets,
+      () =>
+        Promise.all(
+          targets.map((target) => browserExpect(target).toBeInViewport({ ratio: 1 })),
+        ).then(read),
+      { animations: "disabled" },
+    );
+  const image = chat.locator("img.chat-avatar.assistant:visible");
+  const summary = chat.locator(".chat-activity-group > button");
+  const expectAvatars = async (count: number) => {
+    await browserExpect(image).toHaveCount(count);
+    for (const element of await image.all()) {
+      await browserExpect(element).toHaveAttribute("src", avatar);
+      await browserExpect(element).toHaveJSProperty("complete", true);
+      await browserExpect(element).toHaveJSProperty("naturalWidth", 32);
+    }
+  };
+  await expectAvatars(1);
+  await browserExpect(summary).toHaveAttribute("aria-expanded", "false");
+  expect((await summary.boundingBox())!.height).toBeLessThanOrEqual(36);
+  await presented([image, first, summary, second, final], () =>
+    browserExpect(chat.locator(".chat-text:visible, .chat-activity-group > button")).toHaveText([
+      "Inspect the layout.",
+      firstText,
+      "Read files",
+      secondText,
+      finalText,
+    ]),
+  );
+  expect(await chat.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const toolToggle = exactButton(chat.locator(".chat-tool-msg-summary"), "Read layout.css");
+  const toolBody = chat.locator(".chat-tool-msg-body");
+  await summary.click();
+  await browserExpect(summary).toHaveAttribute("aria-expanded", "true");
+  await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "false");
+  // The linked filename owns the row center; the gutter opens the disclosure.
+  await toolToggle.click({ position: { x: 8, y: 8 } });
+  await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "true");
+  await presented([summary, toolBody], async () => {
+    await browserExpect(toolBody).toBeVisible();
+    await browserExpect(toolBody).toContainText("The stylesheet is readable.");
+  });
+  await toolToggle.click({ position: { x: 8, y: 8 } });
+  await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "false");
+  await browserExpect(toolBody).not.toBeVisible();
+  await summary.click();
+  await browserExpect(summary).toHaveAttribute("aria-expanded", "false");
+
+  const trigger = pane.locator(".chat-header-session-menu__trigger");
+  await trigger.click();
+  const menu = pane.locator("openclaw-chat-header-session-menu");
+  await menu.getByRole("menuitem", { name: "View", exact: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Speech bubbles", exact: true }).click();
+  await trigger.click();
+  await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
+  await pane.locator(".agent-chat__composer-combobox textarea").fill("Continue checking.");
+  const startedAt = Date.now();
+  await page.clock.setFixedTime(startedAt);
+  await pane.getByRole("button", { name: "Send message", exact: true }).click();
+  const send = await gateway.waitForRequest("chat.send");
+  expect(send.params).toMatchObject({
+    sessionKey,
+    message: "Continue checking.",
+    idempotencyKey: expect.any(String),
+  });
+  const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
+  const working = chat.locator(".chat-working-indicator");
+  const status = working.locator(".chat-working-indicator__status");
+  const composer = pane.locator(".agent-chat__composer-combobox");
+  const assertStatusLayout = async (preceding: typeof first, waiting: boolean) => {
+    const anchor = waiting ? working.locator("svg") : status;
+    const targets = [first, working, status, anchor, preceding, composer];
+    const [prose, line, label, signal, previous, input] = await presented(targets, () =>
+      Promise.all(targets.map(layoutBox)),
+    );
+    // Compare actual rendered content bounds, not the viewport or a CSS inset.
+    expect(Math.abs(line!.x - prose!.x)).toBeLessThanOrEqual(3);
+    expect(Math.abs(signal!.x - prose!.x)).toBeLessThanOrEqual(3);
+    expect(Math.abs(line!.x - previous!.x)).toBeLessThanOrEqual(3);
+    if (waiting) {
+      expect(label!.x).toBeGreaterThanOrEqual(right(signal));
+      expect(label!.x - right(signal)).toBeLessThanOrEqual(12);
+    }
+    expect(line!.y).toBeGreaterThanOrEqual(previous!.y + previous!.height - 1);
+    expect(line!.y + line!.height).toBeLessThanOrEqual(input!.y);
+    const flow = await working.evaluate((element) => {
+      const thread = element.closest(".chat-thread");
+      let viewportPinned = false;
+      for (let node: Element | null = element; node && node !== thread; node = node.parentElement) {
+        viewportPinned ||= ["fixed", "sticky"].includes(getComputedStyle(node).position);
+      }
+      return Boolean(thread) && !element.closest(".chat-bubble") && !viewportPinned;
+    });
+    expect(flow).toBe(true);
+  };
+  await page.clock.setFixedTime(startedAt + 31_000);
+  await browserExpect(working.locator(".chat-reading-indicator svg")).toBeVisible();
+  await browserExpect(status.locator(".chat-working-indicator__elapsed")).toHaveText("31s");
+  await browserExpect(status.locator("openclaw-working-phrase")).toContainText("Clawing");
+  await assertStatusLayout(final, true);
+  await gateway.emitGatewayEvent(
+    "agent",
+    agentEvent(runId, sessionKey, "usage", { outputTokens: 2400 }, 1, startedAt + 31_000),
+  );
+  const statusItems = status.locator(":scope > :not(.sr-only)");
+  await presented([working, status], () =>
+    browserExpect(statusItems).toHaveText(["2.4k output tokens", "·", "31s"]),
+  );
+  await browserExpect(status.locator("openclaw-working-phrase")).toHaveCount(0);
+  // Exercise the same real handoff events as chat-subagent-waiting: a yielded
+  // parent with an unfinished child, never a fabricated DOM or status override.
+  const snapshot = (
+    row: Pick<GatewaySessionRow, "key"> & Partial<GatewaySessionRow>,
+    offset: number,
+    activeRunIds: string[],
+    fields: Partial<GatewaySessionRow> = {},
+  ) => ({
+    kind: "direct" as const,
+    status: "running" as const,
+    ...row,
+    ...fields,
+    activeRunIds,
+    hasActiveRun: activeRunIds.length > 0,
+    updatedAt: startedAt + offset,
+    snapshotAt: startedAt + offset,
+  });
+  const parent = snapshot(
+    {
+      key: sessionKey,
+      sessionId: "ipad-conversation",
+      hasActiveSubagentRun: true,
+      childSessions: [childSessionKey],
+      startedAt,
+    },
+    31_000,
+    [runId],
+  );
+  const child = snapshot(
+    {
+      key: childSessionKey,
+      sessionId: "ipad-layout-child",
+      classification: "subagent",
+      label: "Verify layout",
+      parentSessionKey: sessionKey,
+      spawnedBy: sessionKey,
+      startedAt: startedAt + 1,
+    },
+    31_000,
+    ["layout-child-run"],
+  );
+  await gateway.setSessionsListResponse(sessionsListResponse([parent, child]));
+  await gateway.emitGatewayEvent("sessions.changed", {
+    sessionKey: child.key,
+    reason: "run-start",
+    ts: child.updatedAt,
+    session: child,
+    ancestorSessions: [parent],
+  });
+  await browserExpect(working.getByText("1 subagent running", { exact: true })).toBeVisible();
+  const delegatedText = "The layout verification is delegated.";
+  const delegatedMessages = [
+    message("user", "Continue checking."),
+    recordedToolCall("launch-layout", "sessions_spawn", {
+      label: child.label,
+      task: "Verify the layout.",
+    }),
+    toolResult(
+      "launch-layout",
+      "sessions_spawn",
+      JSON.stringify({
+        status: "accepted",
+        childSessionKey,
+      }),
+    ),
+    message("assistant", [
+      { type: "text", text: delegatedText },
+      { type: "toolCall", id: "yield-layout", name: "sessions_yield", arguments: {} },
+    ]),
+    toolResult("yield-layout", "sessions_yield", [{ type: "text", text: '{"status":"yielded"}' }]),
+  ].map((entry, index) =>
+    Object.assign(entry, {
+      timestamp: startedAt + index,
+      __openclaw: { id: "delegated-" + index, seq: history.length + index + 1, runId },
+    }),
+  );
+  const waitingParent = snapshot(parent, 32_000, [], { endedAt: startedAt + 4 });
+  await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child]));
+  await gateway.setMethodResponse("chat.history", {
+    messages: [...history, ...delegatedMessages],
+    sessionId: parent.sessionId,
+    sessionInfo: waitingParent,
+    inFlightRun: null,
+  });
+  const yieldResult = delegatedMessages.at(-1)!;
+  await gateway.emitGatewayEvent("session.message", {
+    sessionKey,
+    message: yieldResult,
+    messageId: yieldResult["__openclaw"].id,
+    messageSeq: yieldResult["__openclaw"].seq,
+    hasActiveRun: true,
+    session: parent,
+  });
+  const historyReads = (await gateway.getRequests("chat.history")).length;
+  await gateway.emitGatewayEvent("chat", chatEvent(runId, sessionKey, "final", { yielded: true }));
+  await gateway.waitForRequest("chat.history", { after: historyReads });
+  const prose = chat.locator(".chat-text");
+  const delegated = prose.getByText(delegatedText, { exact: true });
+  await browserExpect(status).toHaveText("Wait for subagents");
+  await browserExpect(
+    working.locator(
+      ".chat-reading-indicator, openclaw-working-phrase, .chat-working-indicator__elapsed, .chat-working-indicator__tokens",
+    ),
+  ).toHaveCount(0);
+  await browserExpect(pane.locator(".agent-chat__composer-run-status--waiting")).toHaveCount(0);
+  await assertStatusLayout(delegated, false);
+  expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(0);
+  const resumedRunId = "layout-parent-resumed";
+  const resumedParent = snapshot(parent, 33_000, [resumedRunId], {
+    startedAt: startedAt + 33_000,
+    hasActiveSubagentRun: false,
+  });
+  await gateway.setSessionsListResponse(
+    sessionsListResponse([
+      resumedParent,
+      snapshot(child, 32_000, [], { status: "done", endedAt: startedAt + 32_000 }),
+    ]),
+  );
+  await gateway.emitGatewayEvent("sessions.changed", {
+    sessionKey,
+    reason: "run-start",
+    ts: resumedParent.updatedAt,
+    session: resumedParent,
+    ancestorSessions: [],
+  });
+  await browserExpect(status).not.toHaveText("Wait for subagents");
+  await browserExpect(working.locator(".chat-reading-indicator svg")).toBeVisible();
+  const followupText = "The follow-up is complete.";
+  await gateway.emitChatFinal({ sessionKey, runId: resumedRunId, text: followupText });
+  await browserExpect(prose.getByText(followupText, { exact: true })).toBeVisible();
+  await browserExpect(working).toHaveCount(0);
+  await expectAvatars(2);
+}
 
 suite.define(() => {
-  it("keeps identity, ordered activity and plain waiting status across iPad widths", async () => {
-    await suite.withPage(
-      { viewport: viewports[0], locale: "en-US", serviceWorkers: "block", hasTouch: true },
-      async ({ page }) => {
-        await page.addInitScript(
-          ({ key, session, themeId }) => {
-            Object.assign(window, {
-              __OPENCLAW_NATIVE_EMBED__: {
-                platform: "ios",
-                formFactor: "pad",
-                surface: "conversation",
-              },
-              __OPENCLAW_NATIVE_CONVERSATION__: { contract: 1 },
-              webkit: {
-                messageHandlers: {
-                  openclawConversation: { postMessage: () => Promise.resolve({ ok: true }) },
-                },
-              },
-            });
-            localStorage.setItem(
-              key,
-              JSON.stringify({
-                chatBubbleSessionKeys: [session],
-                theme: themeId,
-                themeMode: "dark",
-              }),
-            );
-          },
-          {
-            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-            session: sessionKey,
-            themeId: theme.id,
-          },
-        );
-        const identity = { assistantName: "Layout agent", assistantAvatar: avatar };
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          ...identity,
-          historyMessages: history,
-          sessions: [
-            {
-              key: sessionKey,
-              sessionId: "ipad-conversation",
-              kind: "direct",
-              status: "done",
-              hasActiveRun: false,
-              activeRunIds: [],
-            },
-          ],
-          presenceUsers: [
-            {
-              self: true,
-              id: "profile-ipad",
-              name: "Riley",
-              identity: { type: "profile", id: "profile-ipad" },
-            },
-          ],
-          methodResponses: {
-            "config.get": themeConfigResponse(theme.id, "dark"),
-            "themes.list": catalog,
-            "themes.get": catalog,
-          },
-        });
-        await page.route("**/control-ui-config.json", (route) =>
-          route.fulfill({
-            json: { ...createControlUiMockBootstrapConfig(identity), chatBubblesEnabled: true },
-          }),
-        );
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const pane = page.locator(".chat-pane-cache__pane--visible");
-        const chat = pane.locator("section.chat");
-        await browserExpect(
-          page.locator("openclaw-chat-page[data-native-conversation]"),
-        ).toBeVisible();
-        await browserExpect(
-          page.locator("openclaw-app-sidebar, openclaw-app-topbar, .native-embed-header"),
-        ).toHaveCount(0);
-        await browserExpect(chat).toHaveClass(/chat--bubbles/);
-        const final = chat.getByText(finalText, { exact: true });
-        const first = chat.getByText(firstText, { exact: true });
-        const second = chat.getByText(secondText, { exact: true });
-        const image = chat.locator("img.chat-avatar.assistant:visible");
-        const summary = chat.locator(".chat-activity-group > button");
-        const capture = async (
-          stage: string,
-          width: number,
-          targets: Parameters<typeof takeControlUiScreenshotFrame>[2],
-        ) => {
-          await page.mouse.move(0, 0);
-          const frame = await takeControlUiScreenshotFrame(page, pane, targets, {
-            animations: "disabled",
-            elements: targets,
-          });
-          writeFileSync(path.join(suite.artifactDir, stage + "-" + width + ".png"), frame.png);
-          return frame;
-        };
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await browserExpect(final).toBeVisible();
-          await browserExpect(first).toBeVisible();
-          await browserExpect(second).toBeVisible();
-          await browserExpect(image).toHaveCount(1);
-          await browserExpect(image).toHaveAttribute("src", avatar);
-          await expect
-            .poll(() =>
-              image.evaluate(
-                (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
-              ),
-            )
-            .toBe(true);
-          await browserExpect(summary).toHaveCount(1);
-          await browserExpect(summary).toHaveText("Read files");
-          await browserExpect(summary).toHaveAttribute("aria-expanded", "false");
-          expect((await summary.boundingBox())!.height).toBeLessThanOrEqual(36);
-          const ordered = await chat
-            .locator(".chat-text:visible, .chat-activity-group > button")
-            .allTextContents();
-          expect(ordered.map((text) => text.trim())).toEqual([
-            "Inspect the layout.",
-            firstText,
-            "Read files",
-            secondText,
-            finalText,
-          ]);
-          expect(await chat.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-            true,
-          );
-          await capture("transcript", viewport.width, [image, first, summary, second, final]);
-        }
-        const toolSummary = chat.locator(".chat-tool-msg-summary");
-        const toolToggle = toolSummary.getByRole("button", {
-          name: "Read layout.css",
-          exact: true,
-        });
-        const toolBody = chat.locator(".chat-tool-msg-body");
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await summary.click();
-          await browserExpect(summary).toHaveAttribute("aria-expanded", "true");
-          await browserExpect(toolSummary).toContainText("layout.css");
-          await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "false");
-          // The linked filename owns the row center; the gutter opens the disclosure.
-          await toolToggle.click({ position: { x: 8, y: 8 } });
-          await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "true");
-          await browserExpect(toolBody).toContainText("The stylesheet is readable.");
-          await capture("tool-disclosure", viewport.width, [summary, toolBody]);
-          await toolToggle.click({ position: { x: 8, y: 8 } });
-          await browserExpect(toolToggle).toHaveAttribute("aria-expanded", "false");
-          await browserExpect(toolBody).not.toBeVisible();
-          await summary.click();
-          await browserExpect(summary).toHaveAttribute("aria-expanded", "false");
-        }
-
-        // The existing plain mode owns the spinner and unbubbled status line.
-        const trigger = pane.locator(".chat-header-session-menu__trigger");
-        await trigger.click();
-        const menu = pane.locator("openclaw-chat-header-session-menu > .chat-header-session-menu");
-        await menu.getByRole("menuitem", { name: "View", exact: true }).click();
-        await page.getByRole("menuitemcheckbox", { name: "Speech bubbles", exact: true }).click();
-        await trigger.click();
-        await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
-        await pane.locator(".agent-chat__composer-combobox textarea").fill("Continue checking.");
-        const startedAt = Date.now();
-        await page.clock.setFixedTime(startedAt);
-        await pane.getByRole("button", { name: "Send message", exact: true }).click();
-        const send = await gateway.waitForRequest("chat.send");
-        expect(send.params).toMatchObject({
-          sessionKey,
-          message: "Continue checking.",
-          idempotencyKey: expect.any(String),
-        });
-        const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
-        const working = chat.locator(".chat-working-indicator");
-        const status = working.locator(".chat-working-indicator__status");
-        const composer = pane.locator(".agent-chat__composer-combobox");
-        const captureStatus = async (
-          stage: "waiting" | "subagent-waiting",
-          width: number,
-          preceding: typeof first,
-        ) => {
-          const anchor = stage === "waiting" ? working.locator("svg") : status;
-          const frame = await capture(stage, width, [
-            first,
-            working,
-            status,
-            anchor,
-            preceding,
-            composer,
-          ]);
-          const [prose, line, label, signal, previous, input] = frame.elements.map(
-            (entry) => entry.bounds,
-          );
-          // Compare actual rendered content bounds, not the viewport or a CSS inset.
-          expect(Math.abs(line!.x - prose!.x)).toBeLessThanOrEqual(3);
-          expect(Math.abs(signal!.x - prose!.x)).toBeLessThanOrEqual(3);
-          expect(Math.abs(line!.x - previous!.x)).toBeLessThanOrEqual(3);
-          if (stage === "waiting") {
-            expect(label!.x).toBeGreaterThanOrEqual(signal!.x + signal!.width);
-            expect(label!.x - signal!.x - signal!.width).toBeLessThanOrEqual(12);
-          }
-          expect(line!.y).toBeGreaterThanOrEqual(previous!.y + previous!.height - 1);
-          expect(line!.y + line!.height).toBeLessThanOrEqual(input!.y);
-          const flow = await working.evaluate((element) => {
-            const thread = element.closest(".chat-thread");
-            const positions = [];
-            for (
-              let node: Element | null = element;
-              node && node !== thread;
-              node = node.parentElement
-            ) {
-              positions.push(getComputedStyle(node).position);
-            }
-            return {
-              inTranscript: Boolean(thread),
-              bubbled: Boolean(element.closest(".chat-bubble")),
-              viewportPinned: positions.some(
-                (position) => position === "fixed" || position === "sticky",
-              ),
-            };
-          });
-          expect(flow).toEqual({ inTranscript: true, bubbled: false, viewportPinned: false });
-          writeFileSync(
-            path.join(suite.artifactDir, stage + "-" + width + ".json"),
-            JSON.stringify(
-              { viewport: page.viewportSize(), prose, line, label, signal, previous, input, flow },
-              null,
-              2,
-            ),
-          );
-        };
-        await browserExpect(working).toBeVisible();
-        await page.clock.setFixedTime(startedAt + 31_000);
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await browserExpect(working.locator(".chat-reading-indicator svg")).toBeVisible();
-          await browserExpect(status.locator(".chat-working-indicator__elapsed")).toHaveText("31s");
-          await browserExpect(status.locator("openclaw-working-phrase")).toContainText("Clawing");
-          await captureStatus("waiting", viewport.width, final);
-        }
-        await gateway.emitGatewayEvent("agent", {
-          sessionKey,
-          runId,
-          stream: "usage",
-          seq: 1,
-          ts: startedAt + 31_000,
-          data: { outputTokens: 2400 },
-        });
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await browserExpect(status.locator(".chat-working-indicator__tokens")).toHaveText(
-            "2.4k output tokens",
-          );
-          expect(await status.locator(":scope > :not(.sr-only)").allTextContents()).toEqual([
-            "2.4k output tokens",
-            "·",
-            "31s",
-          ]);
-          await browserExpect(status.locator("openclaw-working-phrase")).toHaveCount(0);
-          await capture("output-tokens", viewport.width, [working, status]);
-        }
-        // Exercise the same real handoff events as chat-subagent-waiting: a yielded
-        // parent with an unfinished child, never a fabricated DOM or status override.
-        const parent = {
-          key: sessionKey,
-          sessionId: "ipad-conversation",
-          kind: "direct",
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: [runId],
-          hasActiveSubagentRun: true,
-          childSessions: [childSessionKey],
-          startedAt,
-          updatedAt: startedAt + 31_000,
-          snapshotAt: startedAt + 31_000,
-        } satisfies GatewaySessionRow;
-        const child = {
-          key: childSessionKey,
-          sessionId: "ipad-layout-child",
-          kind: "direct",
-          classification: "subagent",
-          label: "Verify layout",
-          parentSessionKey: sessionKey,
-          spawnedBy: sessionKey,
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: ["layout-child-run"],
-          startedAt: startedAt + 1,
-          updatedAt: startedAt + 31_000,
-          snapshotAt: startedAt + 31_000,
-        } satisfies GatewaySessionRow;
-        await gateway.setSessionsListResponse(sessionsListResponse([parent, child]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-start",
-          ts: child.updatedAt,
-          session: child,
-          ancestorSessions: [parent],
-        });
-        await browserExpect(working.getByText("1 subagent running", { exact: true })).toBeVisible();
-        const delegatedText = "The layout verification is delegated.";
-        const delegatedMessages = [
-          message("user", "Continue checking."),
-          message("assistant", [
-            {
-              type: "toolCall",
-              id: "launch-layout",
-              name: "sessions_spawn",
-              arguments: { label: child.label, task: "Verify the layout." },
-            },
-          ]),
-          {
-            ...message(
-              "toolResult",
-              JSON.stringify({ status: "accepted", childSessionKey: child.key }),
-            ),
-            toolCallId: "launch-layout",
-            toolName: "sessions_spawn",
-          },
-          message("assistant", [
-            { type: "text", text: delegatedText },
-            { type: "toolCall", id: "yield-layout", name: "sessions_yield", arguments: {} },
-          ]),
-          {
-            ...message("toolResult", [{ type: "text", text: '{"status":"yielded"}' }]),
-            toolCallId: "yield-layout",
-            toolName: "sessions_yield",
-          },
-        ].map((entry, index) => ({
-          ...entry,
-          timestamp: startedAt + index,
-          __openclaw: { id: "delegated-" + index, seq: history.length + index + 1, runId },
-        }));
-        const waitingParent = {
-          ...parent,
-          hasActiveRun: false,
-          activeRunIds: [],
-          endedAt: startedAt + 4,
-          updatedAt: startedAt + 32_000,
-          snapshotAt: startedAt + 32_000,
-        };
-        await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child]));
-        await gateway.setMethodResponse("chat.history", {
-          messages: [...history, ...delegatedMessages],
-          sessionId: parent.sessionId,
-          sessionInfo: waitingParent,
-          inFlightRun: null,
-        });
-        const yieldResult = delegatedMessages.at(-1)!;
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey,
-          message: yieldResult,
-          messageId: yieldResult.__openclaw.id,
-          messageSeq: yieldResult.__openclaw.seq,
-          hasActiveRun: true,
-          session: parent,
-        });
-        const historyReads = (await gateway.getRequests("chat.history")).length;
-        await gateway.emitGatewayEvent(
-          "chat",
-          chatEvent(runId, sessionKey, "final", { yielded: true }),
-        );
-        await gateway.waitForRequest("chat.history", { after: historyReads });
-        const delegated = chat.locator(".chat-text").getByText(delegatedText, { exact: true });
-        await browserExpect(delegated).toBeVisible();
-        await browserExpect(status).toHaveText("Wait for subagents");
-        await browserExpect(working).toHaveCount(1);
-        await browserExpect(
-          working.locator(
-            ".chat-reading-indicator, openclaw-working-phrase, .chat-working-indicator__elapsed, .chat-working-indicator__tokens",
-          ),
-        ).toHaveCount(0);
-        await browserExpect(pane.locator(".agent-chat__composer-run-status--waiting")).toHaveCount(
-          0,
-        );
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await captureStatus("subagent-waiting", viewport.width, delegated);
-        }
-        expect(await gateway.getRequests("chat.history", { sessionKey: child.key })).toHaveLength(
-          0,
-        );
-        // A parent continuation replaces the wait; its final removes the status.
-        const resumedRunId = "layout-parent-resumed";
-        const resumedParent = {
-          ...parent,
-          activeRunIds: [resumedRunId],
-          hasActiveSubagentRun: false,
-          updatedAt: startedAt + 33_000,
-          snapshotAt: startedAt + 33_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([
-            resumedParent,
-            {
-              ...child,
-              status: "done",
-              hasActiveRun: false,
-              activeRunIds: [],
-              endedAt: startedAt + 32_000,
-            },
-          ]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey,
-          reason: "run-start",
-          ts: resumedParent.updatedAt,
-          session: resumedParent,
-          ancestorSessions: [],
-        });
-        await browserExpect(status).not.toHaveText("Wait for subagents");
-        await browserExpect(working.locator(".chat-reading-indicator svg")).toBeVisible();
-        await gateway.emitChatFinal({
-          sessionKey,
-          runId: resumedRunId,
-          text: "The follow-up is complete.",
-        });
-        await browserExpect(
-          chat.locator(".chat-text").getByText("The follow-up is complete.", { exact: true }),
-        ).toBeVisible();
-        await browserExpect(working).toHaveCount(0);
-        for (const viewport of viewports) {
-          await page.setViewportSize(viewport);
-          await browserExpect(image).toHaveCount(2);
-          expect(
-            await image.evaluateAll((images) => images.map((image) => image.getAttribute("src"))),
-          ).toEqual([avatar, avatar]);
-          await expect
-            .poll(() =>
-              image.evaluateAll((images: HTMLImageElement[]) =>
-                images.every((element) => element.complete && element.naturalWidth > 0),
-              ),
-            )
-            .toBe(true);
-        }
-      },
-    );
-  });
+  it.each(viewports)("keeps identity, activity and waiting status at $width×$height", (viewport) =>
+    suite.withPage(
+      { viewport, locale: "en-US", serviceWorkers: "block", hasTouch: true },
+      checkConversation,
+    ),
+  );
 });
