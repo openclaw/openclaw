@@ -24,7 +24,10 @@ import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
 } from "./update-candidate-plugin-tree.js";
-import { resolveUpdateRehearsalRoot } from "./update-rehearsal-paths.js";
+import {
+  resolveUpdateRehearsalRoot,
+  UPDATE_CANDIDATE_INSTALL_ROOT_ENV,
+} from "./update-rehearsal-paths.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 
 /** Complete a published driver's private snapshot before candidate Doctor loads plugins. */
@@ -70,9 +73,16 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   if (!candidateRoot) {
     throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
-  // Private host links intentionally resolve into the staged package, including
-  // its nested node_modules. Only dependency reads may use this second root.
-  const dependencyRoots = [privateRoot, await fs.realpath(candidateRoot)];
+  const candidatePackageRoot = await fs.realpath(candidateRoot);
+  // The staging owner includes hoisted dependencies and pnpm/bun stores. Older
+  // drivers without this handoff retain the package-only dependency boundary.
+  const candidateInstallRoot = await fs.realpath(
+    params.env[UPDATE_CANDIDATE_INSTALL_ROOT_ENV] ?? candidatePackageRoot,
+  );
+  if (!isPathInside(candidateInstallRoot, candidatePackageRoot)) {
+    throw new Error("Staged OpenClaw package is outside its update installation");
+  }
+  const dependencyRoots = [privateRoot, candidateInstallRoot];
   const isDependencySource = (file: string) =>
     dependencyRoots.some((root) => isPathInside(root, file));
   const isDependencyLookup = (specifier: string) => {

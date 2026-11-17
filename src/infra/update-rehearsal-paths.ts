@@ -4,6 +4,9 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js"
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 
+/** The package staging owner supplies this exact root; never infer it from package ancestors. */
+export const UPDATE_CANDIDATE_INSTALL_ROOT_ENV = "OPENCLAW_UPDATE_CANDIDATE_INSTALL_ROOT";
+
 /** Declare the private filesystem namespace shared by every rehearsal child. */
 export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
   return {

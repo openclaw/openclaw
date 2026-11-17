@@ -377,7 +377,7 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   installEnv?: NodeJS.ProcessEnv;
   installTarget: ResolvedGlobalInstallTarget;
   beforeVerifyCandidate?: (root: string) => Promise<void>;
-  validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
+  validateCandidate: (root: string, installRoot?: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
@@ -439,11 +439,11 @@ export async function stagePackageInstallUpdate(
         onStepComplete: (step) => (active?.progress ?? params.progress)?.onStepComplete?.(step),
         onHeartbeat: () => (active?.progress ?? params.progress)?.onHeartbeat?.(),
       },
-      validateCandidate: async (root) => {
+      validateCandidate: async (root, installRoot) => {
         if (!params.pauseBeforeVerification) {
           await retainCandidate(root);
         }
-        return await requireActive().validateCandidate(root);
+        return await requireActive().validateCandidate(root, installRoot);
       },
       beforeActivate: () => requireActive().beforeActivate(),
       assertCurrent: () => requireActive().assertCurrent?.(),

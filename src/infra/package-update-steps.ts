@@ -96,7 +96,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   postVerifyStep?: PackagePostInstallVerifier;
   beforeVerifyCandidate?: (packageRoot: string) => Promise<void>;
   resolveLifecycleNodeRunner?: () => string | undefined;
-  validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
+  validateCandidate?: (packageRoot: string, installRoot?: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
@@ -595,7 +595,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {
-      const validation = (await params.validateCandidate?.(verificationPackageRoot)) ?? [];
+      const installRoot = params.expectedGitCheckout?.root ?? stagedInstall.prefix;
+      const validation =
+        (await params.validateCandidate?.(verificationPackageRoot, installRoot)) ?? [];
       steps.push(...validation);
       const rejectedCandidate = validation.find(isFailedUpdateStep);
       if (rejectedCandidate) {
@@ -702,14 +704,11 @@ export async function runGlobalPackageUpdateSteps(params: {
     };
   } catch (error) {
     cleanupUncertain = hasCommandProcessCleanupError(error);
-    if (cleanupUncertain) {
+    if (cleanupUncertain || error instanceof SystemPackageOwnershipError) {
       throw error;
     }
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
-    }
-    if (error instanceof SystemPackageOwnershipError) {
-      throw error;
     }
     // An operator's signal is not a package failure; the caller reports the interruption.
     if (

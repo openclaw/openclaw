@@ -9,7 +9,10 @@ import { resolveUpdateCandidatePluginPath } from "./update-candidate-paths.js";
 import { completeUpdateCandidatePluginRehearsal } from "./update-candidate-plugin-repair.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
-import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import {
+  buildUpdateRehearsalPathEnv,
+  UPDATE_CANDIDATE_INSTALL_ROOT_ENV,
+} from "./update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -41,11 +44,16 @@ async function expectOutput(
 async function fixture(
   locatorKind: "directory" | "file" | "alias" | "install-record" = "directory",
   surface: "runtime" | "doctor" = "runtime",
+  layout: "package" | "stage" = "package",
 ) {
   const root = dirs.make("candidate-plugin-repair-");
   const sourceState = path.join(root, "serving-state");
   const stateDir = path.join(root, "rehearsal");
-  const candidateRoot = path.join(root, "candidate");
+  const candidateInstallRoot = path.join(root, "stage");
+  const candidateRoot =
+    layout === "stage"
+      ? path.join(candidateInstallRoot, "node_modules", "openclaw")
+      : path.join(root, "candidate");
   const plugin = path.join(root, "plugins", "demo");
   const shared = path.join(root, "plugins", "shared");
   const siblingImport = 'import value from "../shared/value.js"; console.log(value);';
@@ -84,7 +92,8 @@ async function fixture(
         ? { installs: { demo: { source: "path", sourcePath: locator, installPath: locator } } }
         : { load: { paths: [locator] } },
   };
-  const env = {
+  const env: NodeJS.ProcessEnv = {
+    [UPDATE_CANDIDATE_INSTALL_ROOT_ENV]: layout === "stage" ? candidateInstallRoot : undefined,
     ...buildUpdateRehearsalPathEnv(stateDir),
     ...buildUpdateDoctorEnv({
       allowGatewayServiceRepair: false,
@@ -104,6 +113,7 @@ async function fixture(
   const candidate = { config, env, candidateRoot };
   return {
     ...candidate,
+    candidateInstallRoot,
     root,
     plugin,
     shared,
@@ -375,6 +385,61 @@ it.each(["relative", "package", "absolute", "file URL"])(
     const original = await fs.readFile(path.join(f.shared, "value.js"));
     await expect(f.repair()).rejects.toThrow("outside the temporary update copy");
     expect(await fs.readFile(path.join(f.shared, "value.js"))).toEqual(original);
+  },
+);
+
+it.each([
+  { layout: "pnpm store", location: "stage" },
+  { layout: "npm hoisted", location: "stage" },
+  { layout: "nested junction", location: "stage" },
+  { layout: "pnpm store", location: "serving-install" },
+  { layout: "npm hoisted", location: "user-files" },
+])(
+  "validates transitive candidate dependencies in a $layout layout ($location)",
+  async ({ layout, location }) => {
+    const f = await fixture("directory", "runtime", "stage");
+    const dependency = path.join(f.candidateRoot, "node_modules", "typebox");
+    const stagedVendor =
+      layout === "pnpm store"
+        ? path.join(
+            f.candidateInstallRoot,
+            "node_modules",
+            ".pnpm",
+            "vendor@1",
+            "node_modules",
+            "vendor",
+          )
+        : layout === "npm hoisted"
+          ? path.join(f.candidateInstallRoot, "node_modules", "vendor")
+          : path.join(dependency, "node_modules", "vendor");
+    const vendor = location === "stage" ? stagedVendor : path.join(f.root, location, "vendor");
+    await writeTree(dependency, {
+      "package.json": {
+        name: "typebox",
+        type: "module",
+        exports: "./build/index.mjs",
+        dependencies: { vendor: "1.0.0" },
+      },
+      "build/index.mjs": 'export { default } from "vendor";',
+    });
+    await writeTree(vendor, {
+      "package.json": { name: "vendor", type: "module", exports: "./index.mjs" },
+      "index.mjs": 'export default "candidate-layout-ready";',
+    });
+    if (layout === "pnpm store" || location !== "stage") {
+      await fs.symlink(vendor, path.join(f.candidateRoot, "node_modules", "vendor"), "junction");
+    }
+    const modules = path.join(f.copiedPlugin, "node_modules");
+    await fs.mkdir(modules);
+    await fs.symlink(dependency, path.join(modules, "typebox"), "junction");
+    await fs.writeFile(f.copiedEntry, 'import value from "typebox"; console.log(value);');
+
+    if (location !== "stage") {
+      await expect(f.repair()).rejects.toThrow("outside the temporary update copy");
+      return;
+    }
+    expect(await f.repair()).toEqual({ copiedFiles: 0, warnings: [] });
+    await expectOutput(f.run, "candidate-layout-ready");
   },
 );
 
