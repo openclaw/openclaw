@@ -2248,6 +2248,7 @@
     "test:docker:published-driver-release-rollback": "env OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1 OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP=rollback bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-driver-scoped-restore": "env OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE=1 bash scripts/e2e/published-driver-update-docker.sh",
     "test:docker:published-driver-update": "bash scripts/e2e/published-driver-update-docker.sh",
+    "test:docker:installed-terminal": "node scripts/test-docker-all.mjs --lanes=installed-terminal",
     "test:docker:package-installed-recovery": "node scripts/test-docker-all.mjs --lanes=package-installed-recovery",
     "test:docker:published-upgrade-survivor": "node scripts/test-docker-all.mjs --lanes=published-upgrade-survivor",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",

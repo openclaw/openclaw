@@ -517,7 +517,7 @@ describe("scripts/test-docker-all scheduler", () => {
     ).toThrow("conflicting plan/prep options");
   });
 
-  it.for(["package-installed-recovery", "published-upgrade-survivor"])(
+  it.for(["package-installed-recovery", "published-upgrade-survivor", "installed-terminal"])(
     "selects the %s package family over inherited lane settings",
     (family) => {
       const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;

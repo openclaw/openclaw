@@ -3,6 +3,21 @@ export function installedTerminalDescendants(
   root: number,
 ): Set<number>;
 
+export function assertInstalledTerminalOutput(
+  rows: Record<string, unknown>[],
+  spec: { root: string; fault: boolean; historical: boolean },
+  result: { pid: number; code: number; stdout: string; stderr: string },
+): void;
+
+export function restoreInstalledTerminalLauncher(spec: {
+  directory: string;
+  bin: string;
+  escrow: string;
+}): {
+  status: "not-armed" | "unchanged" | "restored";
+  row?: Record<string, unknown>;
+};
+
 export function readInstalledTerminalHasher(
   root: string,
   identity: {
@@ -85,3 +100,19 @@ export function publishInstalledTerminalEvidence(
     cells: { name: string }[];
   },
 ): void;
+
+export function summarizeInstalledTerminalLaunches(rows: Record<string, unknown>[]): {
+  workersWithoutPreload: Record<string, unknown>[];
+  processesWithoutPreload: Record<string, unknown>[];
+  workerLifetimeBounds: Record<string, unknown>[];
+};
+
+export function buildInstalledTerminalSummary(
+  summary: {
+    status: string;
+    cells: Record<string, unknown>[];
+    [key: string]: unknown;
+  },
+  manifestBytes: Uint8Array,
+  readArtifact: (name: string) => Uint8Array,
+): Record<string, unknown>;
