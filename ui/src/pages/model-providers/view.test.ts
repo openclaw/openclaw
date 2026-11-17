@@ -980,9 +980,9 @@ it("filters provider access without hiding global defaults and exposes an empty 
   const viewProps = props({
     cards: [
       card(),
-      card({ id: "anthropic", displayName: "Anthropic", credentialProviderIds: ["anthropic"] }),
+      card({ id: "anthropic", displayName: "A\u0308", credentialProviderIds: ["anthropic"] }),
     ],
-    providerQuery: " ANTHROPIC ",
+    providerQuery: " Ä ",
   });
   const container = mount(viewProps);
   expect(container.querySelectorAll("[data-provider-id]")).toHaveLength(1);
