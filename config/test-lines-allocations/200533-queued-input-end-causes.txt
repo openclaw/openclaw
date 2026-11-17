@@ -8,4 +8,4 @@
 # queued-chat-inputs.metadata and chat-pending-inputs: source-specific authority,
 # replay before fresh input, and visible cancellation causes.
 # Identity guard regression: typeof-ID validation is not identity pinning.
-920
+973
