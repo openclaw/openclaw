@@ -61,6 +61,9 @@ export type AgentDatabaseRegistryMutation = {
   sources: readonly AgentDatabaseRegistrySource[];
 };
 
+// Diagnostic-only provenance follows the mutation without retaining source identity.
+const mutationOrigins = new WeakMap<AgentDatabaseRegistryMutation, string>();
+
 function registeredPathKey(source: {
   agentId: string;
   path: string;
@@ -183,6 +186,7 @@ function captureRegistryMutation(
     schemaVersion?: number;
     capturedIdentity?: DatabasePathIdentity;
   }[],
+  producer: "native-registration" | "state-transaction" | "unknown",
 ): AgentDatabaseRegistryMutation | undefined {
   try {
     const captured: AgentDatabaseRegistrySource[] = [];
@@ -199,7 +203,9 @@ function captureRegistryMutation(
         schemaVersion: source.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
       });
     }
-    return { kind, sources: captured };
+    const mutation = { kind, sources: captured };
+    mutationOrigins.set(mutation, producer);
+    return mutation;
   } catch {
     // An uninspectable publication cannot certify an unrelated selection.
     return undefined;
@@ -221,7 +227,8 @@ export async function prepareOpenClawAgentDatabaseRegistryRemoval(
   }
   const sources = read.result.entries.filter((entry) => entry.agentId === agentId);
   // Unregistered stores do not establish which retained selections deletion can affect.
-  const mutation = sources.length > 0 ? captureRegistryMutation("remove", sources) : undefined;
+  const mutation =
+    sources.length > 0 ? captureRegistryMutation("remove", sources, "unknown") : undefined;
   const pathname = resolveDatabasePath(options);
   return () => {
     advanceRegisteredAgentDatabasesMemo(pathname, {
@@ -240,7 +247,7 @@ export function recordOpenClawAgentDatabaseRegistryMutation(
   sources: readonly { agentId: string; path: string; schemaVersion?: number }[],
 ): void {
   const operation = Symbol("agent-registry-mutation");
-  const mutation = captureRegistryMutation(kind, sources);
+  const mutation = captureRegistryMutation(kind, sources, "state-transaction");
   for (const source of mutation?.sources ?? []) {
     publishSqliteDatabaseAdmission(database.db, registeredPathKey(source), kind === "upsert");
   }
@@ -307,9 +314,17 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 }) {
   const options = { path: params.admission.databasePath };
   const operation = Symbol("agent-registry-registration");
-  const mutation = captureRegistryMutation(params.kind ?? "upsert", [
-    { agentId: params.agentId, path: params.agentPath, capturedIdentity: params.capturedIdentity },
-  ]);
+  const mutation = captureRegistryMutation(
+    params.kind ?? "upsert",
+    [
+      {
+        agentId: params.agentId,
+        path: params.agentPath,
+        capturedIdentity: params.capturedIdentity,
+      },
+    ],
+    "native-registration",
+  );
   const advance = (phase: RegistryTransition["phase"]) => {
     const change = advanceRegisteredAgentDatabasesMemo(options.path, {
       operation,
@@ -427,8 +442,11 @@ type AgentDatabaseRegistryListOptions = OpenClawStateDatabaseOptions & {
 };
 
 class AgentDatabaseRegistryChangedError extends Error {
-  constructor(message = "Agent database registry changed during discovery; retry the read.") {
-    super(message);
+  constructor(
+    message = "Agent database registry changed during discovery; retry the read.",
+    cause?: unknown,
+  ) {
+    super(message, { cause });
     this.name = "AgentDatabaseRegistryChangedError";
   }
 }
@@ -604,6 +622,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
       const memo = activateRegisteredAgentDatabasesMemo(options);
       let cursor = memo;
       let invalidated = false;
+      let invalidationCause: unknown;
       let referenceEntries = memo.entries;
       const followedRegistrations = new Set<symbol>();
       const unchanged = (mutation: AgentDatabaseRegistryMutation | undefined) => {
@@ -612,11 +631,19 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         }
         return unchangedBy(mutation, referenceEntries);
       };
+      const diagnostic = (phase: string, mutation?: AgentDatabaseRegistryMutation) => ({
+        diagnostic: "session-registry",
+        phase,
+        kind: mutation?.kind ?? "unknown",
+        producer: mutation ? (mutationOrigins.get(mutation) ?? "unknown") : "unknown",
+        filterPresent: unchangedBy !== undefined,
+        sourceCount: mutation?.sources.length ?? 0,
+      });
       const assertCurrent = () => {
         assertAdmissionCurrent();
         const current = registry.memo;
         if (invalidated) {
-          throw new AgentDatabaseRegistryChangedError();
+          throw new AgentDatabaseRegistryChangedError(undefined, invalidationCause);
         }
         const pending = unchangedBy
           ? [...registry.pending.values()].filter(
@@ -629,6 +656,7 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
         if (pending.length > 0) {
           throw new AgentDatabaseRegistryChangedError(
             "Agent database registry ownership is changing during discovery",
+            diagnostic("pending", pending[0]?.mutation),
           );
         }
         while (cursor !== current) {
@@ -639,7 +667,9 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             (next.transition.phase === "commit" && !unchanged(next.transition.mutation))
           ) {
             invalidated = true;
-            throw new AgentDatabaseRegistryChangedError();
+            const transition = next?.transition;
+            invalidationCause = diagnostic(transition?.phase ?? "unknown", transition?.mutation);
+            throw new AgentDatabaseRegistryChangedError(undefined, invalidationCause);
           }
           cursor = next;
         }

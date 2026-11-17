@@ -104,7 +104,7 @@ export async function prepareSessionMutationFacts(
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
   let waitingForStorage = false;
-  let invalidated = false;
+  let invalidated: { cause: unknown } | undefined;
   let pendingTopologyChanges: SessionRowChange[] | undefined;
   let facts: PreparedSessionSourceFacts | undefined;
   let assertRegistryPublication: (() => void) | undefined;
@@ -124,11 +124,11 @@ export async function prepareSessionMutationFacts(
   };
   const assertActive = () => {
     if (!active || invalidated) {
-      throw new SessionMutationFactsUnavailableError();
+      throw new SessionMutationFactsUnavailableError(invalidated);
     }
   };
-  const invalidate = () => {
-    invalidated = true;
+  const invalidate = (cause?: unknown) => {
+    invalidated ??= { cause };
   };
   const acquisition = createSessionSharingFactAcquisition({
     followLifecycle: params.followLifecycle,
@@ -169,8 +169,8 @@ export async function prepareSessionMutationFacts(
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
           try {
             assertRegistryPublication();
-          } catch {
-            invalidate();
+          } catch (error) {
+            invalidate(error);
           }
         } else {
           invalidate();

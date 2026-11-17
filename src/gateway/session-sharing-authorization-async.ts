@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
@@ -450,6 +451,30 @@ export async function resolveSessionMutationAuthorizationAsync(
           return retained.readCurrent(params.context.getRuntimeConfig());
         } catch (error) {
           if (error instanceof SessionMutationFactsUnavailableError) {
+            if (params.method === "chat.send") {
+              let cause: unknown = error.cause;
+              for (let depth = 0; depth < 4 && cause instanceof Error; depth++) {
+                cause = cause.cause;
+              }
+              if (isRecord(cause) && cause.diagnostic === "session-registry") {
+                // Emit only bounded scalar classifications, never error text or source identity.
+                console.error("[chat-send-registry-rejection]", {
+                  phase:
+                    typeof cause.phase === "string" &&
+                    ["pending", "begin", "commit", "finish"].includes(cause.phase)
+                      ? cause.phase
+                      : "unknown",
+                  kind: cause.kind === "upsert" || cause.kind === "remove" ? cause.kind : "unknown",
+                  producer:
+                    typeof cause.producer === "string" &&
+                    ["native-registration", "state-transaction"].includes(cause.producer)
+                      ? cause.producer
+                      : "unknown",
+                  filterPresent: cause.filterPresent === true,
+                  sourceCount: typeof cause.sourceCount === "number" ? cause.sourceCount : 0,
+                });
+              }
+            }
             throw sessionMutationTargetChanged(params.method, target.sessionKey);
           }
           throw error;
