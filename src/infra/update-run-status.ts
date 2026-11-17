@@ -11,13 +11,19 @@ import { isAcknowledgedAbandonedUpdateRun, toPublicUpdateRun } from "./update-ru
 /** Status heals expired admissions and proven handoff death; other driver loss stays descriptive. */
 export async function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;
+  let healed = false;
   try {
-    await reconcileAbandonedUpdateRunsAsync({ statusOnly: true });
+    healed = (await reconcileAbandonedUpdateRunsAsync({ statusOnly: true })).length > 0;
   } catch (error) {
     runReconciliationError = formatErrorMessage(error);
   }
   try {
-    const { activeRun, lastRun, expiredRun: expired } = await getUpdateRunHistoryStatusAsync();
+    // An enclosing inspection image predates this healing commit; report the healed rows.
+    const {
+      activeRun,
+      lastRun,
+      expiredRun: expired,
+    } = await getUpdateRunHistoryStatusAsync({}, { current: healed });
     const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
     const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
     return {

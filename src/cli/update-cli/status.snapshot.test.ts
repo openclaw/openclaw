@@ -112,6 +112,12 @@ it("copies the state database once while a live writer commits between status se
 
   const report = runtime.writeJson.mock.lastCall?.[0] as Record<string, unknown> | undefined;
   expect(report).toBeDefined();
-  expect(report?.runStatusError).toBeUndefined();
+  expect(report).not.toHaveProperty("runStatusError");
+  expect(report).not.toHaveProperty("recoverySetsError");
+  expect(report).not.toHaveProperty("migrationWarningsError");
+  // Only the absent Gateway's channel probe may fail; every state section read the image.
+  expect(
+    (report?.inspectionErrors as { section: string }[] | undefined)?.map((e) => e.section),
+  ).toEqual(["channels"]);
   expect(copies.count).toBe(1);
 });
