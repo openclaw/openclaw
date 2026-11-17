@@ -755,7 +755,7 @@ describe("trusted-proxy auth", () => {
       ).resolves.toEqual({ ok: false, reason: "trusted_proxy_access_keys_unavailable" });
     });
 
-    it("keeps the last good keys when a refresh fails", async () => {
+    it("keeps the last good keys and backs off when a refresh fails", async () => {
       const headers = {
         ...identityHeaders,
         "cf-access-jwt-assertion": jwt({ ...userClaims, exp: now + 3600 }),
@@ -764,18 +764,19 @@ describe("trusted-proxy auth", () => {
       await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual(
         admitted,
       );
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(null, { status: 503 })),
-      );
+      const failingCerts = vi.fn(async () => new Response(null, { status: 503 }));
+      vi.stubGlobal("fetch", failingCerts);
       vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 11 * 60_000 });
       try {
-        await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual(
-          admitted,
-        );
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expect(authorizeTrustedProxy({ auth: withAccessJwt(), headers })).resolves.toEqual(
+            admitted,
+          );
+        }
       } finally {
         vi.useRealTimers();
       }
+      expect(failingCerts).toHaveBeenCalledTimes(1);
     });
   });
 

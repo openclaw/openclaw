@@ -1,21 +1,25 @@
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
+import { readResponseWithLimit } from "../infra/http-response-body.js";
 
 type CloudflareAccessJwtConfig = NonNullable<GatewayTrustedProxyConfig["cloudflareAccessJwt"]>;
 type KeySet = { keys: Map<string, KeyObject>; fetchedAt: number };
 
 const CERTS_PATH = "/cdn-cgi/access/certs";
-const KEY_SET_TTL_MS = 10 * 60_000;
-// Access rotates signing keys; an unknown kid refetches at most this often.
-const UNKNOWN_KID_REFETCH_MS = 30_000;
+const CERTS_MAX_BYTES = 64 * 1024;
 const CERTS_TIMEOUT_MS = 10_000;
+const KEY_SET_TTL_MS = 10 * 60_000;
+// At most one certs fetch per issuer this often, whether the last one failed or an
+// assertion names an unknown kid (Access rotated keys, or a forgery).
+const MIN_REFETCH_MS = 30_000;
 const CLOCK_SKEW_SECONDS = 60;
 
-// Last good key set and in-flight refresh per configured issuer; the certs URL
-// depends on nothing else. A failed refresh keeps the last good keys.
+// Last good key set, in-flight refresh and last fetch attempt per configured issuer;
+// the certs URL depends on nothing else. A failed refresh keeps the last good keys.
 const keySets = new Map<string, KeySet>();
 const refreshes = new Map<string, Promise<KeySet | undefined>>();
+const lastFetchAttempts = new Map<string, number>();
 
 async function fetchKeySet(issuer: string): Promise<KeySet> {
   const response = await fetch(`${issuer}${CERTS_PATH}`, {
@@ -26,7 +30,9 @@ async function fetchKeySet(issuer: string): Promise<KeySet> {
     await response.body?.cancel().catch(() => {});
     throw new Error(`Cloudflare Access certs request failed: HTTP ${response.status}`);
   }
-  const body: unknown = await response.json();
+  const body: unknown = JSON.parse(
+    (await readResponseWithLimit(response, CERTS_MAX_BYTES)).toString("utf8"),
+  );
   const keys = new Map<string, KeyObject>();
   for (const jwk of isRecord(body) && Array.isArray(body.keys) ? body.keys : []) {
     if (isRecord(jwk) && jwk.kty === "RSA" && typeof jwk.kid === "string") {
@@ -40,9 +46,22 @@ async function fetchKeySet(issuer: string): Promise<KeySet> {
   return { keys, fetchedAt: Date.now() };
 }
 
-function refreshKeySet(issuer: string): Promise<KeySet | undefined> {
+/** Returns the key for kid, undefined for an unknown kid, or null when no keys could be loaded. */
+async function resolveSigningKey(
+  issuer: string,
+  kid: string,
+): Promise<KeyObject | undefined | null> {
+  const cached = keySets.get(issuer);
+  const key = cached?.keys.get(kid);
+  if (key && Date.now() - cached!.fetchedAt < KEY_SET_TTL_MS) {
+    return key;
+  }
   let pending = refreshes.get(issuer);
   if (!pending) {
+    if (Date.now() - (lastFetchAttempts.get(issuer) ?? -Infinity) < MIN_REFETCH_MS) {
+      return cached ? key : null;
+    }
+    lastFetchAttempts.set(issuer, Date.now());
     pending = fetchKeySet(issuer)
       .then(
         (keySet) => {
@@ -53,23 +72,11 @@ function refreshKeySet(issuer: string): Promise<KeySet | undefined> {
       )
       .finally(() => refreshes.delete(issuer));
     refreshes.set(issuer, pending);
-  }
-  return pending;
-}
-
-/** Returns the key for kid, undefined for an unknown kid, or null when no keys could be loaded. */
-async function resolveSigningKey(
-  issuer: string,
-  kid: string,
-): Promise<KeyObject | undefined | null> {
-  const cached = keySets.get(issuer);
-  const age = cached ? Date.now() - cached.fetchedAt : Infinity;
-  const key = cached?.keys.get(kid);
-  // Known keys never wait on a refresh that a forged kid triggered.
-  if (key ? age < KEY_SET_TTL_MS : age < UNKNOWN_KID_REFETCH_MS) {
+  } else if (key) {
+    // A known key never waits on a refresh (which a forged kid may have triggered).
     return key;
   }
-  const keySet = (await refreshKeySet(issuer)) ?? cached;
+  const keySet = (await pending) ?? cached;
   return keySet ? keySet.keys.get(kid) : null;
 }
 
