@@ -163,7 +163,7 @@ Git checkouts default to `~/openclaw` (`%USERPROFILE%\openclaw` on Windows); use
 
 Before deleting a prefix, move any state, configuration, and workspaces you want to keep outside it. **Never delete a shared prefix wholesale**: remove only verified OpenClaw files, preserving shared Node runtimes, packages, and tools.
 
-If an `openclaw-update-runtime-*` directory remains after the CLI is gone, inspect it before removing it. It mirrors the full installation path, so on Windows its entries can exceed 260 characters, which plain `Remove-Item` in Windows PowerShell 5.1 cannot delete. Use the extended-length prefix:
+If an `openclaw-update-runtime-*` directory remains after the CLI is gone, inspect it before removing it. It mirrors the full installation path, so on Windows its entries can exceed 260 characters, which plain `Remove-Item` in Windows PowerShell 5.1 cannot delete. Use the extended-length prefix with the full drive path (for a network path `\\server\share\...`, use `\\?\UNC\server\share\...` instead):
 
 ```powershell
 Remove-Item -LiteralPath "\\?\$env:TEMP\openclaw-update-runtime-XXXXXX" -Recurse -Force
