@@ -303,6 +303,7 @@ Keys under `entries` match the skill `name` by default. If a skill defines
 <ParamField path="skills.entries.<key>.apiKey" type='string | { source, provider, id }'>
   Convenience field for skills that declare `metadata.openclaw.primaryEnv`.
   Supports a plaintext string or a SecretRef: `{ source: "env", provider: "default", id: "VAR_NAME" }`.
+  `skills.update` preserves referenced keys: it rejects a plaintext replacement of a SecretRef or `${VAR}`. To deliberately replace a reference with plaintext, edit Settings Raw mode or `openclaw.json`. Clearing the key or replacing it with another `${VAR}` remains supported.
 </ParamField>
 
 <ParamField path="skills.entries.<key>.env" type="Record<string, string>">
