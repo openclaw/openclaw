@@ -341,6 +341,7 @@
     "!dist/extensions/firecrawl/**",
     "!dist/extensions/fireworks/**",
     "!dist/extensions/fish-audio-speech/**",
+    "!dist/extensions/gbrain/**",
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
     "!dist/extensions/gmi/**",
