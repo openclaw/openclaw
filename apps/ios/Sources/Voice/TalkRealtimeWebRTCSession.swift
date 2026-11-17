@@ -189,6 +189,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
     private var liveCaptionBuffer = TalkRealtimeLiveCaptionBuffer()
+    private var transcriptOrder = TalkRealtimeTranscriptOrder()
+    private var transcriptHoldTask: Task<Void, Never>?
+    private var transcriptHoldTurn: Int?
+    private let transcriptHoldTimeoutSeconds: Double
+    private let transcriptHoldSleep: @MainActor (UInt64) async throws -> Void
     private var session: TalkRealtimeClientSession?
     private var toolBuffers: [String: ToolBuffer] = [:]
     private var activeToolTasks: [String: Task<Void, Never>] = [:]
@@ -224,8 +229,14 @@ final class TalkRealtimeWebRTCSession: NSObject {
         sessionKey: String,
         voiceSessionId: String? = nil,
         transcriptStore: TalkRealtimeTranscriptStore,
+        transcriptHoldTimeoutSeconds: Double = 5,
+        transcriptHoldSleep: @escaping @MainActor (UInt64) async throws -> Void = {
+            try await Task.sleep(nanoseconds: $0)
+        },
         delegate: TalkRealtimeWebRTCSessionDelegate)
     {
+        self.transcriptHoldSleep = transcriptHoldSleep
+        self.transcriptHoldTimeoutSeconds = transcriptHoldTimeoutSeconds
         self.gateway = gateway
         self.gatewayRoute = gatewayRoute
         self.sessionKey = sessionKey
@@ -259,6 +270,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.stopped = false
         self.peerReady = false
         self.liveCaptionBuffer.reset()
+        self.resetTranscriptOrder()
         self.delegate?.realtimeSession(self, didChangeStatus: "Connecting")
         let session: TalkRealtimeClientSession = if let prefetchedSession {
             prefetchedSession
@@ -337,6 +349,9 @@ final class TalkRealtimeWebRTCSession: NSObject {
         self.peerReady = false
         self.finishReadiness(error: CancellationError())
         self.liveCaptionBuffer.reset()
+        // Finished turns still persist; only stalled predecessors give up their place.
+        self.recordFinalTranscripts(self.transcriptOrder.releaseHeld())
+        self.resetTranscriptOrder()
         self.audioLevelPollTask?.cancel()
         self.audioLevelPollTask = nil
         self.cancelActiveToolCalls(preserveRuns: self.preserveRunsOnStop)
@@ -432,12 +447,19 @@ final class TalkRealtimeWebRTCSession: NSObject {
     #endif
 
     func flushTranscriptWrites() async {
+        // Give the current blocker its remaining grace period, not every later turn.
+        if let hold = self.transcriptHoldTask {
+            await hold.value
+        }
+        self.recordFinalTranscripts(self.transcriptOrder.releaseHeld())
         guard let voiceSessionId = self.voiceSessionId else { return }
         await self.transcriptStore.flush(voiceSessionId: voiceSessionId)
     }
 
     private func handleRealtimeEvent(_ event: TalkRealtimeServerEvent) {
         guard !self.stopped else { return }
+        // Reserve conversation order before audio-state handling consumes commit events.
+        self.recordFinalTranscripts(self.transcriptOrder.observe(event))
         if self.handleRealtimeAudioStateEvent(event) {
             return
         }
@@ -1157,7 +1179,8 @@ extension TalkRealtimeWebRTCSession {
             self.deliverTranscript(event.delta ?? event.transcript, role: .user)
         case "conversation.input_transcript.done",
              "conversation.item.input_audio_transcription.completed":
-            self.deliverTranscript(event.transcript ?? event.text, role: .user, persist: true)
+            self.deliverTranscript(
+                event.transcript ?? event.text, role: .user, persist: true, itemId: event.resolvedItemId)
         case "conversation.output_transcript.delta",
              "response.output_text.delta",
              "response.audio_transcript.delta",
@@ -1167,7 +1190,8 @@ extension TalkRealtimeWebRTCSession {
              "response.output_text.done",
              "response.audio_transcript.done",
              "response.output_audio_transcript.done":
-            self.deliverTranscript(event.transcript ?? event.text, role: .assistant, persist: true)
+            self.deliverTranscript(
+                event.transcript ?? event.text, role: .assistant, persist: true, itemId: event.resolvedItemId)
         default:
             return false
         }
@@ -1176,25 +1200,62 @@ extension TalkRealtimeWebRTCSession {
 
     private func handleFramelessTurnDone(_ turn: TalkRealtimeServerTurn?) {
         guard let turn else { return }
-        if let text = turn.transcript, !text.isEmpty,
-           let role = turn.role.flatMap(TalkRealtimeTranscriptRole.init(rawValue:))
-        {
-            self.deliverTranscript(text, role: role, persist: true)
+        if let role = turn.role.flatMap(TalkRealtimeTranscriptRole.init(rawValue:)) {
+            if let text = turn.transcript, !text.isEmpty {
+                self.deliverTranscript(text, role: role, persist: true)
+            } else {
+                self.recordFinalTranscripts(self.transcriptOrder.settle(role: role, text: "", itemId: nil))
+            }
         }
         if turn.role == "assistant" {
             self.scheduleAssistantAudioFinished()
         }
     }
 
-    private func deliverTranscript(_ text: String?, role: TalkRealtimeTranscriptRole, persist: Bool = false) {
+    private func deliverTranscript(
+        _ text: String?,
+        role: TalkRealtimeTranscriptRole,
+        persist: Bool = false,
+        itemId: String? = nil)
+    {
         guard let text else { return }
         switch role {
         case .user: self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
         case .assistant: self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
         }
         if persist {
-            self.recordFinalTranscript(role: role, text: text)
+            self.recordFinalTranscripts(self.transcriptOrder.settle(role: role, text: text, itemId: itemId))
         }
+    }
+
+    /// Persists finals in conversation order, never waiting indefinitely on a stalled turn.
+    private func recordFinalTranscripts(_ entries: [TalkRealtimeTranscriptOrder.Entry]) {
+        for entry in entries {
+            self.recordFinalTranscript(role: entry.role, text: entry.text)
+        }
+        let holdingTurn = self.transcriptOrder.holdingTurn
+        // Each stalled turn gets the full grace period, measured from when it started blocking.
+        guard holdingTurn != self.transcriptHoldTurn else { return }
+        self.transcriptHoldTask?.cancel()
+        self.transcriptHoldTask = nil
+        self.transcriptHoldTurn = holdingTurn
+        guard holdingTurn != nil else { return }
+        let timeout = UInt64(self.transcriptHoldTimeoutSeconds * 1_000_000_000)
+        let sleep = self.transcriptHoldSleep
+        self.transcriptHoldTask = Task { @MainActor [weak self] in
+            try? await sleep(timeout)
+            guard let self, !Task.isCancelled else { return }
+            self.transcriptHoldTask = nil
+            self.transcriptHoldTurn = nil
+            self.recordFinalTranscripts(self.transcriptOrder.expireHoldingTurn())
+        }
+    }
+
+    private func resetTranscriptOrder() {
+        self.transcriptHoldTask?.cancel()
+        self.transcriptHoldTask = nil
+        self.transcriptHoldTurn = nil
+        self.transcriptOrder.reset()
     }
 }
 
