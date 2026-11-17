@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.ts";
 import { GatewayBrowserClient } from "../api/gateway.ts";
@@ -169,28 +170,49 @@ function setupRecovery() {
   return { snapshot, connect, fetchProbe, visibility, notify, dispose };
 }
 
-it.each([false, true])(
-  "replaces a blackholed opening without an online event (HTTP initially live: %s)",
-  async (initiallyLive) => {
-    const { connect, fetchProbe, snapshot, notify } = setupRecovery();
-    if (initiallyLive) {
-      await vi.advanceTimersByTimeAsync(9_000);
-    } else {
-      fetchProbe.mockRejectedValue(new TypeError("offline"));
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(connect).not.toHaveBeenCalled();
-      fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
-      await vi.advanceTimersByTimeAsync(2_500);
-    }
-    expect(connect).toHaveBeenCalledOnce();
-    expect(wsInstances).toHaveLength(2);
-    expect(wsInstances[0]?.lastClose).not.toBeNull();
-    snapshot.phase = "connected";
-    notify();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(connect).toHaveBeenCalledOnce();
-  },
-);
+it("preserves an opening awaiting proxy authentication while HTTP health stays live", async () => {
+  const { connect } = setupRecovery();
+  const socket = wsInstances[0]!;
+  await vi.advanceTimersByTimeAsync(29_000);
+  expect(connect).not.toHaveBeenCalled();
+  expect(wsInstances).toHaveLength(1);
+  expect(socket.lastClose).toBeNull();
+
+  socket.emitOpen();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(connect).not.toHaveBeenCalled();
+  expect(socket.lastClose).toBeNull();
+});
+
+it("leaves a socket-only blackhole bounded by the transport opening deadline", async () => {
+  const { connect } = setupRecovery();
+  const socket = wsInstances[0]!;
+  await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS - 1);
+  expect(wsInstances).toHaveLength(1);
+  expect(socket.lastClose).toBeNull();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(socket.lastClose).not.toBeNull();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(wsInstances).toHaveLength(2);
+  expect(connect).not.toHaveBeenCalled();
+});
+
+it("replaces an opening after HTTP reachability returns without churning its successor", async () => {
+  const { connect, fetchProbe } = setupRecovery();
+  fetchProbe.mockRejectedValue(new TypeError("offline"));
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(connect).not.toHaveBeenCalled();
+  fetchProbe.mockResolvedValue(Response.json({ ok: true, status: "live" }));
+  await vi.advanceTimersByTimeAsync(2_500);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(wsInstances).toHaveLength(2);
+  expect(wsInstances[0]?.lastClose).not.toBeNull();
+  const successor = wsInstances[1]!;
+  await vi.advanceTimersByTimeAsync(12_000);
+  expect(connect).toHaveBeenCalledOnce();
+  expect(wsInstances).toHaveLength(2);
+  expect(successor.lastClose).toBeNull();
+});
 
 it("cuts short transport backoff after a successful fresh probe", async () => {
   const { connect, fetchProbe } = setupRecovery();
