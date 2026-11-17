@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
@@ -50,6 +50,12 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .addOption(
+      new Option(
+        "--state-upgrade-live-state-dir <path>",
+        "Internal state-upgrade publication destination",
+      ).hideHelp(),
+    )
     .option(
       "--client-credentials",
       "Prepare local client credentials and runtime intent (requires --repair --non-interactive)",
@@ -260,6 +266,9 @@ export function registerMaintenanceCommands(
             {
               watchExitAfterComplete: hasCliProcessScope(),
               ...(modelReplacements.length ? { modelReplacements } : {}),
+              ...(typeof opts.stateUpgradeLiveStateDir === "string"
+                ? { stateUpgradeLiveStateDir: opts.stateUpgradeLiveStateDir }
+                : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),

@@ -52,6 +52,8 @@ export async function captureAuthProfileAuthorization(params: {
   profileId: string;
   agentDir?: string;
   cfg?: OpenClawConfig;
+  /** Identify a private upgrade copy by its publication destination; reads stay on the copy. */
+  publishedStateDir?: string;
   assertCurrent: () => void;
 }): Promise<AuthProfileAuthorization> {
   if (isUserModelAuthProfileId(params.profileId)) {
@@ -285,7 +287,7 @@ export async function captureAuthProfileAuthorization(params: {
         // State-upgrade Doctor runs on a private copy that is then published at the live state
         // directory. Identify its databases by where they will be published, or every binding
         // recorded during the upgrade names paths that no longer exist after it.
-        const publishedStateDir = env.OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR;
+        const { publishedStateDir } = params;
         const copyStateDir =
           publishedStateDir && resolvePathViaExistingAncestorSync(resolveStateDir(env));
         const published = (databasePath: string) => {

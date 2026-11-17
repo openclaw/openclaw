@@ -53,6 +53,7 @@ import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
+  publishedStateDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
@@ -395,6 +396,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           profileId: candidate.profileId,
           agentDir: selected.owner.agentDir,
           cfg,
+          publishedStateDir: params.publishedStateDir,
           // The credential owner captures and revalidates the Doctor maintenance scope.
           assertCurrent() {},
         });

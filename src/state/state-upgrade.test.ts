@@ -158,7 +158,7 @@ describe("createDoctorChain", () => {
     const entry = path.join(root, "entry.mjs");
     fs.writeFileSync(
       entry,
-      "console.log(JSON.stringify([process.env.OPENCLAW_AGENT_DIR, process.env.PI_CODING_AGENT_DIR ?? null, process.env.OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR]));",
+      "console.log(JSON.stringify([process.env.OPENCLAW_AGENT_DIR, process.env.PI_CODING_AGENT_DIR ?? null, process.argv.slice(2)]));",
     );
     const logPath = path.join(root, "chain.log");
     await createDoctorChain(
@@ -177,7 +177,13 @@ describe("createDoctorChain", () => {
     expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
       path.join(root, "shadow", "agents", "main", "agent"),
       null,
-      path.join(root, "live"),
+      [
+        "doctor",
+        "--fix",
+        "--non-interactive",
+        "--state-upgrade-live-state-dir",
+        path.join(root, "live"),
+      ],
     ]);
   });
 });

@@ -42,8 +42,6 @@ export const createDoctorChain =
     }
     Object.assign(childEnv, {
       OPENCLAW_STATE_DIR: stateDir,
-      // Opaque identities recorded in the copy name the databases as published here.
-      OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR: liveStateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       OPENCLAW_NO_RESPAWN: "1",
@@ -53,7 +51,15 @@ export const createDoctorChain =
       const code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(
           process.execPath,
-          [...execArgv, entry, "doctor", "--fix", "--non-interactive"],
+          [
+            ...execArgv,
+            entry,
+            "doctor",
+            "--fix",
+            "--non-interactive",
+            "--state-upgrade-live-state-dir",
+            liveStateDir,
+          ],
           { env: childEnv, stdio: ["ignore", log, log] },
         );
         const timer = setTimeout(() => child.kill("SIGKILL"), CHAIN_TIMEOUT_MS);

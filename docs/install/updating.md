@@ -73,6 +73,11 @@ invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
 
+During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
+credential databases at their eventual live paths. Reads and repairs remain on
+the private copy. The updater passes this destination directly to Doctor; no
+additional environment variable or operator configuration is needed.
+
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
 and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup

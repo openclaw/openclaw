@@ -360,12 +360,18 @@ it("records an upgrade copy's authorization as the live databases it is publishe
     for (const dir of ["agents", "state"]) {
       fs.cpSync(path.join(root.stateDir, dir), path.join(shadow, dir), { recursive: true });
     }
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: shadow, OPENCLAW_STATE_UPGRADE_LIVE_STATE_DIR: root.stateDir },
-      async () => {
-        const copy = await root.capture("shared", agentDir(shadow), true);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: shadow }, async () => {
+      const copy = await captureAuth({
+        profileId: "shared",
+        agentDir: agentDir(shadow),
+        publishedStateDir: root.stateDir,
+        assertCurrent: root.caller.assertCurrent,
+      });
+      try {
         expect(copy.authorizationId).toBe(live.authorizationId);
-      },
-    );
+      } finally {
+        copy.dispose();
+      }
+    });
   });
 });
