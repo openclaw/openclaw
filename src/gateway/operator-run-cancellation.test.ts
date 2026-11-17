@@ -267,13 +267,15 @@ describe("operator access cancellation", () => {
           });
         }
         expect(restored.authority.assertCurrent).toThrow();
-        expect(restored.authority.signal?.aborted).toBe(end !== "occurrence retired");
+        // Ending the occurrence revokes only that captured lifetime, not its accepted turn.
+        expect(restored.authority.signal?.aborted).toBe(true);
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
         // The accepted turn still enforces the sender's device, profile and role.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
         expect(retained.authority!.assertCurrent).toThrow();
+        expect(retained.authority!.signal?.aborted).toBe(true);
       } finally {
         restored.release();
       }

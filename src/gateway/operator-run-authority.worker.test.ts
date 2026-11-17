@@ -9,6 +9,7 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -43,6 +44,10 @@ import {
   captureChannelOperatorRunAuthority,
   captureGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
+import {
+  registerIngressPrincipalRecovery,
+  restoreIngressPrincipalRecovery,
+} from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -194,6 +199,57 @@ it.each(["unprofiled backend", "synthetic owner"] as const)(
     ).resolves.toBeUndefined();
   },
 );
+
+it("aborts captured authority when its live ingress recovery owner is replaced", () =>
+  withOperator(async ({ profile, client, context }) => {
+    const source = new AbortController();
+    const owner = {
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+      resume: async (audienceId: string) => ({
+        audienceId,
+        recoveryId: "accepted-consent",
+        principal: { kind: "person" as const, profileId: profile.id },
+        operatorScopeCeiling: ["operator.read"],
+        signal: source.signal,
+        assertCurrent: () => source.signal.throwIfAborted(),
+      }),
+    };
+    registerIngressPrincipalRecovery(context, "queued-app", owner);
+    const restored = await restoreIngressPrincipalRecovery(
+      context,
+      { pluginId: "queued-app", audienceId: "queued-person", recoveryId: "accepted-consent" },
+      profile.id,
+      ["operator.read"],
+    );
+    const captured = await capture({ client, context, sourceAuthority: restored });
+    try {
+      expect(captured.authority.assertCurrent).not.toThrow();
+      registerIngressPrincipalRecovery(context, "queued-app", { ...owner });
+      let failure: unknown;
+      try {
+        captured.authority.assertCurrent();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(GatewayDispatchUnavailableError);
+      expect(failure).toMatchObject({
+        retryable: true,
+        message: expect.stringContaining("owner changed"),
+      });
+      expect(restored.signal.aborted).toBe(false);
+      expect(captured.authority.signal?.aborted).toBe(true);
+      expect(captured.authority.signal?.reason).toBe(failure);
+      registerIngressPrincipalRecovery(context, "queued-app", owner);
+      expect(restored.assertCurrent).not.toThrow();
+      expect(captured.authority.assertCurrent).toThrow(failure);
+      expect(captured.authority.signal?.reason).toBe(failure);
+    } finally {
+      captured.release();
+      restored.release();
+      source.abort();
+    }
+  }));
 
 it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
   withOperator(
@@ -579,9 +635,11 @@ it("rechecks current role and latched revocation after a source callback mutates
     using _ = { [Symbol.dispose]: captured.release };
 
     change = true;
-    expect(captured.authority.assertCurrent).toThrow("no longer active");
+    expect(captured.authority.assertCurrent).toThrow(
+      /operator (?:role changed|execution authority is no longer active)/,
+    );
     expect(captured.authority.signal?.aborted).toBe(true);
-    expect(captured.authority.assertCurrent).toThrow("no longer active");
+    expect(captured.authority.assertCurrent).toThrow(captured.authority.signal?.reason);
   }));
 
 it("uses membership authority for operator runs despite a read-only named-role default, and refuses a later downgrade", async () => {

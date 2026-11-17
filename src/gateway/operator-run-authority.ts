@@ -517,7 +517,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         assertRoleCurrent();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
+          revoke(error);
         }
         throw error;
       }

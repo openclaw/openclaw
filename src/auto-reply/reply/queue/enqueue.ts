@@ -2,7 +2,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import {
   diagnosticLogger,
   logMessageQueuedWithBacklogPolicy,
@@ -577,8 +576,8 @@ export function reserveSteerCandidate(
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;
-        // No native handoff occurred; an unavailable policy keeps queued custody.
-        finish(cancelled || !isOperatorAuthorityUnavailable(error));
+        // No native handoff occurred; only recorded cancellation ends queued custody.
+        finish(cancelled);
         if (cancelled) {
           return "cancelled";
         }
