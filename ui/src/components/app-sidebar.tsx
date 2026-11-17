@@ -90,7 +90,7 @@ function AppSidebarContent(
   // The page decides the sidebar however it was reached: rail, link or history.
   const [pluginRevision, setPluginRevision] = createSignal(0);
   onSettled(() => context.plugins.subscribe(() => setPluginRevision((value) => value + 1)));
-  const pluginSection = () => {
+  const pluginSection = createMemo(() => {
     pluginRevision();
     return Boolean(
       navigationSectionForPage(
@@ -98,7 +98,7 @@ function AppSidebarContent(
         props.activePluginTabId,
       ),
     );
-  };
+  });
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,
