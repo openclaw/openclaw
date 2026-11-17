@@ -319,6 +319,44 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
+it("opens setup directly for a settled empty catalog and restores the picker when models arrive", async () => {
+  const onModelSetup = vi.fn();
+  const params = pickerProps({
+    modelOptions: [],
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    onModelSetup,
+  });
+  const view = mountPicker(params);
+  const setup = view.container.querySelector<HTMLButtonElement>("button[data-chat-model-setup]");
+  expect(setup?.textContent).toBe("Set up a model");
+  expect(view.container.querySelector("details")).toBeNull();
+  view.update({ ...params, disabled: true });
+  expect(setup?.disabled).toBe(true);
+  setup!.click();
+  expect(onModelSetup).not.toHaveBeenCalled();
+  view.update(params);
+  setup!.click();
+  expect(onModelSetup).toHaveBeenCalledOnce();
+  view.update({ ...params, modelOptions: [option("fixture", "current")], open: true });
+  await waitForMenu(view.container);
+  expect(control(view.container, "option", "fixture/current")).not.toBeNull();
+  view.update(params);
+  expect(view.container.querySelector("details")).toBeNull();
+  expect(view.container.querySelector("button[data-chat-model-setup]")).not.toBeNull();
+});
+
+it.each(["loading", "error", "offline"] as const)(
+  "does not replace an empty %s catalog with setup",
+  (status) => {
+    const { container } = mountPicker({
+      modelCatalogState: { hasSnapshot: true, status },
+      onModelSetup: vi.fn(),
+    });
+    expect(container.querySelector("details")).not.toBeNull();
+    expect(control(container, "setup")).toBeNull();
+  },
+);
+
 it("keeps account recovery searchable with an empty catalog", async () => {
   const selectAccount = vi.fn();
   const { container } = mountPicker({
@@ -326,6 +364,7 @@ it("keeps account recovery searchable with an empty catalog", async () => {
     modelOptions: [],
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     accountSection: accountSection(selectAccount),
+    onModelSetup: vi.fn(),
   });
   await waitForMenu(container);
   const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"));

@@ -9,6 +9,30 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "opens setup directly from an empty model control in /%s",
+    async (route) => {
+      await suite.withPage({ viewport: { width: 1240, height: 794 } }, async ({ page }) => {
+        await installMockGateway(page, {
+          models: [],
+          methodResponses: { "models.list": { models: [] } },
+        });
+        await page.goto(new URL(route, suite.server.baseUrl).href);
+        const composer = page.locator(".agent-chat__input").first();
+        const setup = composer.getByRole("button", { name: "Set up a model", exact: true });
+        await setup.waitFor();
+        expect(await composer.locator(".chat-controls__model-picker").count()).toBe(0);
+        if (route === "chat") {
+          await setup.click();
+        } else {
+          await setup.press("Enter");
+        }
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+        await page.getByRole("dialog", { name: "Add an account", exact: true }).waitFor();
+      });
+    },
+  );
+
   it.each(
     ["chat", "new"].flatMap((route) => [false, true].map((restricted) => ({ route, restricted }))),
   )(
@@ -47,7 +71,16 @@ suite.define(() => {
           await picker.locator('[data-chat-model-option="example/model-a"]').waitFor();
           await gateway.setMethodResponse("models.list", { models: [], modelSelectionPolicy });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          await expect.poll(() => trigger.textContent()).toContain(emptyLabel);
+          if (restricted) {
+            await expect.poll(() => trigger.textContent()).toContain(emptyLabel);
+          } else {
+            await page
+              .locator(".agent-chat__input")
+              .first()
+              .getByRole("button", { name: "Set up a model", exact: true })
+              .waitFor();
+            expect(await picker.count()).toBe(0);
+          }
           expect(prematureLabel).not.toContain(emptyLabel);
         },
       );

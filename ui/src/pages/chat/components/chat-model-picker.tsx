@@ -72,6 +72,34 @@ export type ChatModelPickerParams = {
 };
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
+  const setup = createMemo(() =>
+    params.modelCatalogState?.status === "ready" &&
+    params.modelCatalogState.hasSnapshot &&
+    !params.modelCatalogState.pendingProviders?.length &&
+    params.modelOptions.length === 0 &&
+    !params.accountSection &&
+    !params.targetGroups?.length &&
+    !params.modelSelectionLocked
+      ? params.onModelSetup
+      : undefined,
+  );
+  return (
+    <Show when={setup()} fallback={<ModelPickerPopover {...params} />}>
+      <button
+        class="chat-controls__inline-select-trigger chat-controls__model-trigger"
+        type="button"
+        data-chat-model-setup="true"
+        disabled={params.disabled}
+        aria-description={params.disabledReason}
+        onClick={() => setup()?.()}
+      >
+        <span class="chat-controls__inline-select-label">{t("modelSetup.required.action")}</span>
+      </button>
+    </Show>
+  );
+}
+
+function ModelPickerPopover(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
   let summary: HTMLElement;
   let searchInput: HTMLInputElement | undefined;
