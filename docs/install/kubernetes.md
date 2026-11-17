@@ -102,6 +102,28 @@ The Deployment checks `/readyz` for startup and traffic readiness with a five-mi
 
 `/startupz` is the better traffic-admission check because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from `2026.8.1` or newer, the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness checks to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
 
+## Private storage after a volume remount
+
+Gateway startup and admitted Doctor repair restore private modes on the client
+credential store, daemon runtime pin store, their SQLite sidecars, and the sibling
+`<stateDir>.update-captures` directory before those stores are used. This repairs
+group permissions and setgid bits widened by an `fsGroup` volume remount.
+
+The repair covers only these enumerated, UID-owned paths, not the entire state
+tree. It leaves the state root mode unchanged, preserves file contents, and
+refuses symlinks, hardlinked files, foreign owners, and paths with world-access
+bits. Existing private-storage admission checks remain unchanged; membership in
+the volume group does not grant credential authority. Diagnostic Doctor runs
+without repair admission do not change these modes.
+
+If private-storage admission still fails, keep the Gateway stopped and have the
+storage owner verify ownership and private modes (`0700` for directories, `0600`
+for files). Recovery captures also need trusted ancestors that other users
+cannot replace. A foreign-owned, group-writable mount root needs provisioning by
+the storage owner; mode restoration does not transfer ownership. Ensure the
+sibling capture directory has suitable persistent storage as well as the state
+directory itself.
+
 ## Customization
 
 ### Agent instructions

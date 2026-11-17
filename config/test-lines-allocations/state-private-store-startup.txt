@@ -1,0 +1,6 @@
+29
+# Required #197009 closure for #194307: enter through actual Gateway preflight
+# before credential reads and keep shared-state commits out of sibling stores.
+# Replaces the lower-level credential-admission test with the startup regression.
+# Net 409 added test lines together with the 380-line fsGroup allocation.
+# Performance measurement and unrelated picker fixtures are not imported.
