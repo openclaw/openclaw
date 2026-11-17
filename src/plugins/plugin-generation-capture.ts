@@ -26,7 +26,6 @@ import {
 } from "./plugin-native-admission.js";
 import { createPluginNativeImportPattern } from "./plugin-native-resolution.js";
 import {
-  capturePluginPackageMetadata,
   capturePluginDependencies,
   resolvePluginModulePackageRoot,
   createPluginDependencyLookup,
@@ -87,6 +86,8 @@ function createPluginGenerationArtifact(
     sourceCapture.outputRoot,
   );
   const metadataCapture = createPluginPackageMetadataCapture({
+    retainedManifest: (filename) =>
+      retained?.packageManifests.get(path.relative(directory, filename)),
     sourceForCaptured: (filename) => originalSources.get(filename),
     packageForFile,
     isRetainedReference: nativeAdmission.isRetainedReference,
@@ -604,14 +605,7 @@ function createPluginGenerationArtifact(
       });
     };
     if (metadataOnly) {
-      const manifest = capturePluginPackageMetadata(
-        root,
-        destination,
-        copy,
-        nativeAdmission.isRetainedReference,
-        nativeAdmission.resolvePreparedSource,
-      );
-      metadataCapture.setManifest(path.join(destination, "package.json"), manifest ?? null);
+      metadataCapture.capturePackage(root, destination, copy);
     } else {
       owner.materialize(entry);
     }
@@ -672,9 +666,10 @@ function createPluginGenerationArtifact(
       // The receipt attests the initial snapshot; lazy imports retain their own copied bytes.
       sourceDigest: initialReceipt.sourceDigest,
       ...sourceLookup,
-      retainSourceCustody: markPluginSourceCaptureOperation(() =>
-        sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
-      ),
+      retainSourceCustody: markPluginSourceCaptureOperation(() => ({
+        ...sourceFacts.captureCustody(sourceLookup.captureRecoverySource),
+        packageManifests: metadataCapture.snapshot(directory),
+      })),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
         originalSources,

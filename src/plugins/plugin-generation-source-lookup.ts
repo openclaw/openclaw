@@ -35,8 +35,9 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
 type SourceCustody = {
   source: PluginRecoverySource;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  packageManifests: ReadonlyMap<string, Record<string, unknown> | null>;
 };
-export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
+export type PluginSourceCustodyFork = SourceCustody;
 type PluginGenerationCaptureArguments = [
   rootDir: string,
   entryFile?: string | readonly string[],
@@ -134,6 +135,7 @@ export function createPluginGenerationCapture<
       return create(rootDir, entryFile, execute, moduleSource, undefined, undefined, {
         source: fork,
         files: retained.files,
+        packageManifests: retained.packageManifests,
       });
     } catch (error) {
       fork.dispose();
@@ -151,7 +153,7 @@ export function createPluginSourceFacts(
   return {
     files: captureForCustody ? files : undefined,
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
-    captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
+    captureCustody: (capture: () => PluginRecoverySource) => ({
       source: capture(),
       files,
     }),

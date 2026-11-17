@@ -229,58 +229,6 @@ export function resolvePluginModulePackageRoot(filename: string): string {
   return path.dirname(filename);
 }
 
-export function capturePluginPackageMetadata(
-  root: string,
-  destination: string,
-  copy: (source: string, target: string) => void,
-  isRetainedReference?: (source: string, real: string) => boolean,
-  resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
-) {
-  const manifest = path.join(destination, "package.json");
-  copy(path.join(root, "package.json"), manifest);
-  let data: Record<string, unknown> | undefined;
-  try {
-    data = asOptionalRecord(JSON.parse(fs.readFileSync(manifest, "utf8")));
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) {
-      throw error;
-    }
-    // Keep invalid optional metadata for native validation only if that alias is selected.
-  }
-  if (data && data.exports == null) {
-    // Node's legacy package entry search is finite; raw entry bytes let native selection
-    // succeed before the chosen owner's remaining body is materialized for execution.
-    const main = typeof data.main === "string" && data.main ? data.main : undefined;
-    const bases = main === undefined ? ["./index"] : [`./${main}`, `./${main}/index`, "./index"];
-    const candidates = [
-      ...(main === undefined ? [] : [main]),
-      ...bases.flatMap((base) => [".js", ".json", ".node"].map((extension) => base + extension)),
-    ];
-    for (const candidate of candidates) {
-      const url = new URL(candidate, pathToFileURL(path.join(root, "package.json")));
-      if (url.protocol !== "file:") {
-        continue;
-      }
-      const filename = fileURLToPath(url);
-      const prepared = resolveSource?.(filename);
-      const input = prepared?.path ?? filename;
-      const insideRoot = isPathInside(root, filename);
-      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
-        const real = fs.realpathSync(input);
-        if (
-          !isPathInside(prepared?.boundary ?? root, real) &&
-          !isRetainedReference?.(filename, real)
-        ) {
-          continue;
-        }
-        copy(filename, path.join(destination, path.relative(root, filename)));
-        break;
-      }
-    }
-  }
-  return data;
-}
-
 export const packageName = (specifier: string) =>
   specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
 export const importTargetNames = (value: unknown): string[] => {
@@ -365,6 +313,7 @@ export function findPluginCapturedPackage(
 
 /** Captured metadata and declared target preparation share the artifact lifetime. */
 export function createPluginPackageMetadataCapture(params: {
+  retainedManifest?: (filename: string) => Record<string, unknown> | null | undefined;
   sourceForCaptured: (filename: string) => string | undefined;
   isRetainedReference?: (source: string, real: string) => boolean;
   resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
@@ -386,29 +335,31 @@ export function createPluginPackageMetadataCapture(params: {
   >();
   const getManifest = (metadata: string) => {
     const scope = metadataScopes.get(metadata)!;
-    const manifest =
-      asOptionalRecord(scope.manifest) ??
-      asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ??
-      {};
-    scope.manifest = manifest;
-    return manifest;
+    if (scope.manifest === undefined) {
+      scope.manifest = asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ?? {};
+    }
+    return scope.manifest ?? {};
+  };
+  const inspectOptionalMetadata = (metadata: string) => {
+    const scope = metadataScopes.get(metadata)!;
+    if (scope.manifest === undefined) {
+      try {
+        scope.manifest = asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ?? null;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) {
+          throw error;
+        }
+        // Unselected malformed bytes remain for native validation if their alias is selected.
+        scope.manifest = null;
+      }
+    }
+    return scope;
   };
   const pendingScopes = new Set<string>();
   const prepareNativeScopes = () => {
     for (const metadata of pendingScopes) {
       pendingScopes.delete(metadata);
-      const scope = metadataScopes.get(metadata)!;
-      if (scope.manifest === undefined) {
-        try {
-          scope.manifest = asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ?? null;
-        } catch (error) {
-          if (!(error instanceof SyntaxError)) {
-            throw error;
-          }
-          // Unselected malformed scope bytes remain for the native loader to validate.
-          scope.manifest = null;
-        }
-      }
+      const scope = inspectOptionalMetadata(metadata);
       const manifest = scope.manifest;
       const owner = params.packageForFile(metadata);
       if (!manifest || !owner) {
@@ -518,12 +469,57 @@ export function createPluginPackageMetadataCapture(params: {
   };
 
   return {
+    capturePackage(
+      root: string,
+      destination: string,
+      copy: (source: string, target: string) => void,
+    ) {
+      const { isRetainedReference, resolveSource } = params;
+      const manifest = path.join(destination, "package.json");
+      copy(path.join(root, "package.json"), manifest);
+      const data = inspectOptionalMetadata(manifest).manifest;
+      if (data && data.exports == null) {
+        // Node's legacy package entry search is finite; raw entry bytes let native selection
+        // succeed before the chosen owner's remaining body is materialized for execution.
+        const main = typeof data.main === "string" && data.main ? data.main : undefined;
+        const bases =
+          main === undefined ? ["./index"] : [`./${main}`, `./${main}/index`, "./index"];
+        const candidates = [
+          ...(main === undefined ? [] : [main]),
+          ...bases.flatMap((base) =>
+            [".js", ".json", ".node"].map((extension) => base + extension),
+          ),
+        ];
+        for (const candidate of candidates) {
+          const url = new URL(candidate, pathToFileURL(path.join(root, "package.json")));
+          if (url.protocol !== "file:") {
+            continue;
+          }
+          const filename = fileURLToPath(url);
+          const prepared = resolveSource?.(filename);
+          const input = prepared?.path ?? filename;
+          const insideRoot = isPathInside(root, filename);
+          if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+            const real = fs.realpathSync(input);
+            if (
+              !isPathInside(prepared?.boundary ?? root, real) &&
+              !isRetainedReference?.(filename, real)
+            ) {
+              continue;
+            }
+            copy(filename, path.join(destination, path.relative(root, filename)));
+            break;
+          }
+        }
+      }
+    },
     record(metadata: string, prepareAliases: (manifest: Record<string, unknown>) => void) {
       if (metadataScopes.has(metadata)) {
         return;
       }
       let aliasesPrepared = false;
       metadataScopes.set(metadata, {
+        manifest: params.retainedManifest?.(metadata),
         prepareAliases(manifest) {
           if (!aliasesPrepared) {
             prepareAliases(manifest);
@@ -533,8 +529,14 @@ export function createPluginPackageMetadataCapture(params: {
       });
       pendingScopes.add(metadata);
     },
-    setManifest(metadata: string, manifest: Record<string, unknown> | null | undefined) {
-      metadataScopes.get(metadata)!.manifest = manifest;
+    snapshot(directory: string): ReadonlyMap<string, Record<string, unknown> | null> {
+      const manifests = new Map<string, Record<string, unknown> | null>();
+      for (const [filename, scope] of metadataScopes) {
+        if (scope.manifest !== undefined) {
+          manifests.set(path.relative(directory, filename), scope.manifest);
+        }
+      }
+      return manifests;
     },
     dependencyPlan(metadata: string): PluginDependencyPlan {
       const scope = metadataScopes.get(metadata)!;
