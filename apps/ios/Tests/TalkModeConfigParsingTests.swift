@@ -879,8 +879,19 @@ struct TalkModeManagerTests {
             ],
             [
                 "role": "assistant",
-                "__openclaw": ["idempotencyKey": "current-run"],
+                "__openclaw": ["runId": "current-run", "idempotencyKey": "native-message-key"],
                 "content": [["type": "text", "text": "current answer"]],
+            ],
+            [
+                "role": "assistant",
+                "__openclaw": ["idempotencyKey": "legacy-run"],
+                "content": [["type": "text", "text": "legacy answer"]],
+            ],
+            [
+                "role": "assistant",
+                "idempotencyKey": "current-run",
+                "__openclaw": ["runId": "other-run"],
+                "content": [["type": "text", "text": "unrelated answer"]],
             ],
         ]
 
@@ -890,6 +901,9 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_latestAssistantText(
             messages: messages,
             runId: "missing-run") == nil)
+        #expect(TalkModeManager._test_latestAssistantText(
+            messages: messages,
+            runId: "legacy-run") == "legacy answer")
     }
 
     @Test func `native Talk chat request inherits Gateway run timeout and thinking policy`() {
@@ -898,7 +912,6 @@ struct TalkModeManagerTests {
             sessionKey: "agent:main:main",
             idempotencyKey: "talk-1")
 
-        #expect(TalkModeManager.chatThinkingOverride == nil)
         #expect(request.method == "chat.send")
         #expect(request.params["message"]?.value as? String == "hello")
         #expect(request.params["sessionKey"]?.value as? String == "agent:main:main")
