@@ -2020,6 +2020,7 @@ src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
+src/shared/assertion.ts
 src/shared/assistant-error-format.ts
 src/shared/async-context.ts
 src/shared/async-store.ts
