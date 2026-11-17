@@ -421,6 +421,66 @@ describe("memory forget source removal", () => {
       sessionIds.toSorted().map((sessionId) => ({ sessionId, reason: "forgotten" })),
     );
   });
+  it("bounds selected chunk bindings for selections above SQLite's variable limit", async () => {
+    const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
+    await storage.loadSqliteVecExtension({ db });
+    storage.ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    db.exec(
+      "CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])",
+    );
+    const variableLimit = Number(
+      db
+        .prepare("PRAGMA compile_options")
+        .all()
+        .map((row) => String(row.compile_options))
+        .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="))
+        ?.split("=")[1] ?? 32766,
+    );
+    const selectedCount = variableLimit + 1;
+    const indexData = memoryIndexFixture(db);
+    const targetPath = "sessions/main/target.jsonl";
+    indexData.source(targetPath, "sessions", "target");
+    const insertVector = db.prepare(
+      "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+    );
+    for (let index = 0; index < selectedCount; index += 1) {
+      const chunkId = `target-chunk-${index}`;
+      indexData.chunk(chunkId, targetPath);
+      indexData.provenance(chunkId);
+      insertVector.run(chunkId, new Float32Array([1, 0]));
+    }
+    const survivorPath = "sessions/main/survivor.jsonl";
+    indexData.source(survivorPath, "sessions", "survivor");
+    indexData.chunk("survivor-chunk", survivorPath);
+    indexData.provenance("survivor-chunk");
+    insertVector.run("survivor-chunk", new Float32Array([1, 0]));
+    const count = (table: string) => db.prepare(`SELECT count(*) AS count FROM ${table}`).get();
+
+    const preview = await forget({ sessionIds: ["target"], dryRun: true });
+    expect(preview).toMatchObject({
+      dryRun: true,
+      sessionIds: ["target"],
+      artifacts: {
+        indexChunks: selectedCount,
+        indexSources: 1,
+        ftsRows: selectedCount,
+        vectorRows: selectedCount,
+      },
+    });
+    expect(count("memory_index_chunks")).toEqual({ count: selectedCount + 1 });
+    expect(count("memory_index_chunks_fts")).toEqual({ count: selectedCount + 1 });
+    expect(count("memory_index_chunks_vec")).toEqual({ count: selectedCount + 1 });
+
+    const report = await forget({ sessionIds: ["target"] });
+    expect(report).toEqual({ ...preview, dryRun: false });
+    expect(count("memory_index_chunks")).toEqual({ count: 1 });
+    expect(count("memory_index_chunks_fts")).toEqual({ count: 1 });
+    expect(count("memory_index_chunks_vec")).toEqual({ count: 1 });
+    expect(db.prepare("SELECT id FROM memory_index_chunks").all()).toEqual([
+      { id: "survivor-chunk" },
+    ]);
+    expect(tombstones()).toMatchObject([{ sessionId: "target", reason: "forgotten" }]);
+  });
   it("keeps the index intact when batched admission fails", async () => {
     const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     const sessionIds = Array.from({ length: 130 }, (_, index) => `target-${index}`);

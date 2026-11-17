@@ -64,18 +64,14 @@ export function purgeForgottenMemory(
     if (input.hasVectorTable && !isPostgresSqlConnection(db)) {
       executeSqliteQuerySync(
         db,
-        kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", input.chunkIds),
+        kysely
+          .deleteFrom("memory_index_chunks_vec")
+          .where("id", "in", sqliteStringSet(input.chunkIds)),
       );
     }
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("memory_index_chunks")
-        .where(
-          "id",
-          "in",
-          isPostgresSqlConnection(db) ? sqliteStringSet(input.chunkIds) : input.chunkIds,
-        ),
+      kysely.deleteFrom("memory_index_chunks").where("id", "in", sqliteStringSet(input.chunkIds)),
     );
   }
   deleteMemoryIndexSources(db, input.sources);
