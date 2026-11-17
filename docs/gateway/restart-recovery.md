@@ -15,7 +15,12 @@ execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
 survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
-replay the old execution.
+replay the old execution. For a captured interrupted turn, the shutdown marker
+retains its original requester's bounded authentication source. Startup revalidates
+that source and current session access before admitting the continuation; a shared
+session's owner or another participant cannot replace it. A revoked or unavailable
+source fails recovery rather than falling back to another person. Older markers
+without a captured source keep the session-principal recovery policy.
 
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
