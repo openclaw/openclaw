@@ -249,6 +249,8 @@ struct RootTabs: View {
                 }
                 .background {
                     self.sessionObserverVisibilityTask
+                        // Observation-only content must not cover native accessibility hit targets.
+                            .frame(width: 0, height: 0)
                 }
         }
     }
