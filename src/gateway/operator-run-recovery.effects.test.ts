@@ -158,7 +158,7 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
                     await releaseWrite.promise;
                   }
                 },
-                readFile,
+                readFile: (file, signal?: AbortSignal) => readFile(file, { signal }),
                 statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                 writeFile: async (file, content) => {
                   writes += 1;
