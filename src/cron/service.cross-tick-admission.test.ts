@@ -1,12 +1,7 @@
-import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
-import { stubFreeMemory } from "../../test/helpers/cron/free-memory.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
-import * as hostMemory from "../infra/host-memory.js";
-import * as childMemory from "../process/child-memory.js";
 import * as work from "../process/gateway-work-admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
@@ -44,6 +39,10 @@ function blockedJob(id: string, nowMs: number, nextRunAtMs: number) {
 }
 
 afterEach(work.resetGatewayWorkAdmission);
+// Capacity cases fill the default run slots; no spare memory admits an extra run.
+beforeEach(() => {
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+});
 
 it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
   const t0 = Date.now();
@@ -299,9 +298,7 @@ it("queues a source-less one-shot for its busy session before launching the sess
 it("checks conditions while every run slot is busy and runs a fired payload when one frees", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
-  const longs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
-    dueJob(`long-${index}`, nowMs, dueAtMs),
-  );
+  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
   const watchers = ["quiet", "fires"].map((id) =>
     Object.assign(dueJob(id, nowMs, dueAtMs), {
       schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
@@ -335,7 +332,7 @@ it("checks conditions while every run slot is busy and runs a fired payload when
   try {
     nowMs = dueAtMs;
     await running.wake(state);
-    // Long payloads hold every run slot; both conditions are checked all the same.
+    // Eight payloads hold every run slot; both conditions are checked all the same.
     await vi.waitFor(() => expect(evaluated).toEqual(["quiet", "fires"]));
     expect(started.toSorted()).toEqual(longs.map((job) => job.id).toSorted());
     // The fired condition waits for a run slot, holding neither a slot nor a check.
@@ -363,9 +360,7 @@ it.each([
 ])("%s a fired condition's wait for a run slot", async (_name, reload) => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
-  const longs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
-    dueJob(`long-${index}`, nowMs, dueAtMs),
-  );
+  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
   const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
     schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
     trigger: { script: "return { fire: true }" },
@@ -420,7 +415,7 @@ it.each([
   }
 });
 
-it("starts no further run while free memory is under 4 GiB, and at least one", async () => {
+it("starts one run past the eight default slots per drain while 1 GiB is free", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
@@ -437,81 +432,19 @@ it("starts no further run while free memory is under 4 GiB, and at least one", a
       return { status: "ok" as const, summary: job.id };
     },
   });
-  const gib = 1024 ** 3;
-  stubFreeMemory(3 * gib);
-  const running = await captureCronSchedulerWakeForTest(() => start(state));
-  try {
-    // Under the threshold: one run, so automation still progresses, and no second one.
-    nowMs = dueAtMs;
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(1));
-    await running.wake(state);
-    expect(started).toHaveLength(1);
-
-    // The host has memory again, but the jobs' exec commands leave less than 4 GiB of budget.
-    stubFreeMemory(16 * gib);
-    const exec = vi
-      .spyOn(childMemory, "readHostExecMemory")
-      .mockReturnValue({ budgetBytes: 6 * gib, usedBytes: 3 * gib });
-    await running.wake(state);
-    expect(started).toHaveLength(1);
-
-    // Memory is free: the rest start together.
-    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0 });
-    await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(12));
-  } finally {
-    finish.resolve();
-    await waitForCronRunQueue(state);
-    stop(state);
-  }
-});
-
-it("counts other processes in the Gateway's cgroup against its memory limit", async () => {
-  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
-  const dueAtMs = nowMs + 1_000;
-  const store = await seedJobs(
-    Array.from({ length: 4 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
-  );
-  const finish = createDeferred();
-  const started: string[] = [];
-  const state = cron.createCronRegressionState({
-    storePath: store.storePath,
-    nowMs: () => nowMs,
-    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
-      started.push(job.id);
-      await finish.promise;
-      return { status: "ok" as const, summary: job.id };
-    },
-  });
-  const gib = 1024 ** 3;
-  // An 8 GiB limit on the Gateway's parent cgroup, holding the 512 MiB Gateway, a 5 GiB peer
-  // process and 1 GiB of reclaimable file cache: 2.5 GiB is left, though the limit minus the
-  // Gateway's own memory is 7.5 GiB.
-  vi.spyOn(hostMemory, "readCgroupMemoryHeadroomBytes").mockRestore();
-  vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * gib);
-  vi.spyOn(process.memoryUsage, "rss").mockReturnValue(gib / 2);
-  const files: Record<string, string> = {
-    "/proc/self/cgroup": "0::/openclaw.slice/gateway\n",
-    "/sys/fs/cgroup/openclaw.slice/gateway/memory.max": "max\n",
-    "/sys/fs/cgroup/openclaw.slice/memory.max": `${8 * gib}\n`,
-    "/sys/fs/cgroup/openclaw.slice/memory.current": `${6.5 * gib}\n`,
-    "/sys/fs/cgroup/openclaw.slice/memory.stat": `anon ${5.5 * gib}\ninactive_file ${gib}\n`,
-    // Not the test host's own container limit.
-    "/sys/fs/cgroup/memory.max": "max\n",
-  };
-  const readFileSync = fs.readFileSync;
-  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) =>
-    typeof args[0] === "string" && args[0] in files
-      ? files[args[0]]
-      : readFileSync(...args)) as typeof fs.readFileSync);
+  const free = vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
     nowMs = dueAtMs;
     await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(1));
+    await vi.waitFor(() => expect(started).toHaveLength(9));
+    // Each drain reads memory again and adds at most one run.
     await running.wake(state);
-    expect(started).toHaveLength(1);
+    await vi.waitFor(() => expect(started).toHaveLength(10));
+    // Under 1 GiB free, the queue keeps the rest waiting.
+    free.mockReturnValue(1024 ** 3 - 1);
+    await running.wake(state);
+    expect(started).toHaveLength(10);
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);

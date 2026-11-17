@@ -1,6 +1,3 @@
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import { readCgroupMemoryHeadroomBytes, readHostFreeMemoryBytes } from "../../infra/host-memory.js";
-import { readHostExecMemory } from "../../process/child-memory.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
 import { listAgentDatabaseAdmissionRefusals } from "../../state/agent-database-admission.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -15,32 +12,15 @@ export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
     .map((refusal) => refusal.agentId);
 }
 
-/**
- * Free memory below which automation starts no further run while one is going, as GNU parallel's
- * `--memfree` does. Due jobs often come due together, and a drain starts all it may at once,
- * before their memory shows, so the threshold holds a full burst: 16 runs at the 256 MiB that
- * each command took in an 8 GiB container where, on main, eight runs started with about 1 GiB
- * left and 15 of 16 commands were OOM-killed.
- */
-const CRON_RUN_MEMFREE_BYTES = DEFAULT_CRON_MAX_CONCURRENT_RUNS * 256 * 1024 ** 2;
+/** Free memory that lets automation start one run past its default slots; see `cron.drainQueue`. */
+const CRON_EXTRA_RUN_FREE_MEMORY_BYTES = 1024 ** 3;
 
 /**
- * Run slots automation may hold right now: the fixed cron limit, or one while free memory is
- * under {@link CRON_RUN_MEMFREE_BYTES}, so a run always progresses and running ones are never
- * stopped. Free memory is the least of what the host has free or reclaimable, what the Gateway's
- * cgroup v2 limits leave (counting every process in them, not inactive file cache), and on Linux
- * what the exec memory budget leaves. Where the cgroup files cannot be read, as on cgroup v1, the
- * limit minus the Gateway's own memory stands in, which does not see other processes.
+ * Whether one memory reading shows room for another automation run once the default slots are
+ * busy. Node's available memory counts the process's cgroup limit, as in a container.
  */
-export function resolveCronRunSlots(): number {
-  const exec = readHostExecMemory();
-  const limit = process.constrainedMemory();
-  const free = Math.min(
-    readHostFreeMemoryBytes(),
-    readCgroupMemoryHeadroomBytes() ?? (limit > 0 ? limit - process.memoryUsage.rss() : Infinity),
-    exec ? exec.budgetBytes - exec.usedBytes : Infinity,
-  );
-  return free < CRON_RUN_MEMFREE_BYTES ? 1 : DEFAULT_CRON_MAX_CONCURRENT_RUNS;
+export function cronMemoryAllowsExtraRun(): boolean {
+  return process.availableMemory() >= CRON_EXTRA_RUN_FREE_MEMORY_BYTES;
 }
 
 /** The conversation a job's run would have to wait for right now, if its turn is still running. */
@@ -77,7 +57,7 @@ export async function captureCronSchedulerSnapshot(
       cronEnabled: state.deps.cronEnabled,
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
-      maxConcurrentRuns: resolveCronRunSlots(),
+      memoryAllowsExtraRun: cronMemoryAllowsExtraRun(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
         ? preparedOwner.defaultAgentId

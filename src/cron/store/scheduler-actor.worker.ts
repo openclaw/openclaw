@@ -30,7 +30,7 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { awaitsRunSlot, requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
+import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -241,30 +241,17 @@ function armActor(
       );
     }
   }
-  // Memory being freed opens a run slot without any automation event. While a run is queued or a
-  // fired condition waits for a slot, look again within a minute.
-  const awaitingRunSlot = jobs.some(waitsForRunSlot);
-  if (!enabled && !awaitingRunSlot) {
+  if (!enabled) {
     return undefined;
   }
-  const delay = Math.min(
-    nextWakeAtMs === undefined ? MAX_CRON_TIMER_DELAY_MS : Math.max(0, nextWakeAtMs - nowMs),
-    awaitingRunSlot ? MAX_CRON_TIMER_DELAY_MS : Infinity,
-  );
+  const delay =
+    nextWakeAtMs === undefined ? MAX_CRON_TIMER_DELAY_MS : Math.max(0, nextWakeAtMs - nowMs);
   const wakeAtMs = nowMs + (delay === 0 ? MIN_REFIRE_GAP_MS : delay);
   actor.wakeAtMs = wakeAtMs;
   // Observe wall-clock changes without reloading SQL every minute. Native timers
   // alone cannot notice a clock step or suspend on every supported platform.
   scheduleWake(storeKey, actor, Math.min(wakeAtMs - nowMs, MAX_CRON_TIMER_DELAY_MS), wakeAtMs);
   return nextWakeAtMs ?? wakeAtMs;
-}
-
-/** A queued run, or a fired condition whose payload waits for a run slot. */
-function waitsForRunSlot(job: CronJob): boolean {
-  return (
-    job.state.queuedAtMs !== undefined ||
-    (job.state.runningReceiptId !== undefined && awaitsRunSlot(job, job.state.runningReceiptId))
-  );
 }
 
 function isAgentWork(job: CronJob): boolean {
@@ -560,7 +547,9 @@ export function runCronSchedulerInWorker(
     );
     if (
       command.type !== "cron.schedulerRefresh" &&
-      (owned.length > 0 || (input.requests?.length ?? 0) > 0 || currentJobs().some(waitsForRunSlot))
+      (owned.length > 0 ||
+        (input.requests?.length ?? 0) > 0 ||
+        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
     ) {
       currentJobs();
       for (const job of owned) {
@@ -585,10 +574,11 @@ export function runCronSchedulerInWorker(
         },
         {
           requests: input.requests ?? [],
-          maxConcurrentRuns: snapshot.config.maxConcurrentRuns ?? DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,
+          memoryAllowsExtraRun: snapshot.config.memoryAllowsExtraRun,
           hostProcessId: snapshot.config.hostProcessId,
           pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },

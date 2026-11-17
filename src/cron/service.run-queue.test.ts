@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDueIsolatedJob } from "../../test/helpers/cron/service-regression-fixtures.js";
 import {
@@ -7,7 +7,6 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   createAgentDatabaseInspectionRefusal,
   readAgentDatabaseAdmissionRefusal,
@@ -47,6 +46,11 @@ import { loadCronStore, saveCronStore } from "./store.js";
 import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
 import type { CronJob } from "./types.js";
+
+// Capacity cases fill the default run slots; no spare memory admits an extra run.
+beforeEach(() => {
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
+});
 
 const NOW = Date.parse("2026-10-01T12:00:00.000Z");
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -228,7 +232,7 @@ it("finishes cron initialization while missed command jobs await their agents", 
 it.for(["manual", "scheduled"] as const)(
   "keeps service-scoped preparing jobs queued while a healthy agent runs: %s",
   async (source, { signal }) => {
-    const slowJobs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) => ({
+    const slowJobs = Array.from({ length: 8 }, (_, index) => ({
       ...commandJob(`slow-${index}`, NOW),
       agentId: "preparing",
     }));
@@ -596,9 +600,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
   const capacityFilled = createDeferred();
   const exitAccepted = createDeferred();
   const timerRequested = createDeferred();
-  const blockers = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
-    commandJob(`blocker-${index}`),
-  );
+  const blockers = Array.from({ length: 8 }, (_, index) => commandJob(`blocker-${index}`));
   const manual = commandJob("queued-manual");
   const disabled = commandJob("queued-disabled");
   const removed = commandJob("queued-removed");
@@ -680,7 +682,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
         await cron.update(job.id, { enabled: false });
       }
       expect(await sibling.waitForManualRun(ack.runId, 60_000, signal)).toBe(true);
-      expect(active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+      expect(active).toBe(8);
       expect(executed).toEqual([]);
     }
     const streamRun = sibling.run(stream.id, "force", {
@@ -720,7 +722,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       throw new Error("Expected the accepted manual request ID");
     }
     expect(await cron.waitForManualRun(manualAck.runId, 60_000, signal)).toBe(true);
-    expect(peakActive).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(peakActive).toBe(8);
     expect(executed.map((job) => job.id).toSorted()).toEqual(
       [exit.id, manual.id, timed.id].toSorted(),
     );

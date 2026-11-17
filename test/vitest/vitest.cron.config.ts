@@ -11,7 +11,6 @@ export function createCronVitestConfig(
     name: "cron",
     pool: "forks",
     passWithNoTests: true,
-    setupFiles: ["test/helpers/cron/free-memory.setup.ts"],
   });
   return {
     ...config,

@@ -344,9 +344,6 @@ ends it without running the payload. Freed slots go to waiting payloads and queu
 order, so a run due before the condition's check still starts first. A check started by a manual or stream
 run, and the check of a job with a script payload, takes a run slot first.
 
-There are 16 run slots. While less than 4 GiB of memory is free, no further run starts, but one may always run. See
-[how automation works](/automation/cron-jobs/how-it-works).
-
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's
 budget when longer; cancelling the evaluation that started it still cancels preparation.

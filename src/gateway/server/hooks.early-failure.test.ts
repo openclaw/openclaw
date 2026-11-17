@@ -6,7 +6,6 @@ import type { AcpRuntime, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { consumeAcpTurnStream } from "../../acp/control-plane/manager.turn-stream.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
@@ -595,9 +594,10 @@ describe("gateway hook early-failure recovery", () => {
     async (expire) => {
       const config = { agents: createConfig(false).agents };
       mocks.getRuntimeConfig.mockReturnValue(config);
-      applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(config));
+      const lanes = resolveGatewayLaneConcurrency(config);
+      applyGatewayLaneConcurrency(lanes);
       const releaseCron = createDeferred();
-      const cronRuns = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+      const cronRuns = Array.from({ length: lanes.cron }, () =>
         enqueueCommandInLane(CommandLane.CronNested, async () => await releaseCron.promise),
       );
       const onStart = queueHookRunner();
@@ -609,7 +609,7 @@ describe("gateway hook early-failure recovery", () => {
       try {
         await vi.waitFor(() =>
           expect(getCommandLaneSnapshot(CommandLane.CronNested)).toMatchObject({
-            activeCount: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            activeCount: lanes.cron,
             queuedCount: 1,
           }),
         );

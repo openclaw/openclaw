@@ -173,15 +173,6 @@ export function getHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
   return (owner.budget ??= resolveHostExecMemoryBudget());
 }
 
-/**
- * The exec budget and what watched commands hold now, for work that starts commands later and
- * must leave them room. Sizes the budget if no command has yet; undefined off Linux.
- */
-export function readHostExecMemory(): { budgetBytes: number; usedBytes: number } | undefined {
-  const budget = getHostExecMemoryBudget();
-  return budget && { budgetBytes: budget.memoryBytes, usedBytes: totalUsage().memoryBytes };
-}
-
 function formatLimit(observed: HostExecMemoryUsage, budget: HostExecMemoryBudget): string {
   const mib = (bytes: number) => Math.ceil(bytes / 1024 ** 2);
   return `Command killed because the shared host exec memory budget was exceeded (RAM ${mib(observed.memoryBytes)}/${mib(budget.memoryBytes)} MiB; swap ${mib(observed.swapBytes)}/${mib(budget.swapBytes)} MiB). Reduce concurrent work or input size. Check completed side effects before retrying; commands are never automatically replayed.`;
