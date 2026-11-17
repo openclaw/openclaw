@@ -60,7 +60,6 @@ import {
   capLiveAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
-import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -112,6 +111,7 @@ import {
   resolveDeltaPayload,
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
+import { readEmbeddedChatHistoryPage } from "./embedded-full-message-reader.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
 import { enqueuePendingLocalMessage, findQueuedSessionRun } from "./embedded-local-queue.js";
 import {
@@ -456,7 +456,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, opts.limit ?? 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
-    const historyPage = await readChatHistoryPage({
+    const historyPage = await readEmbeddedChatHistoryPage({
       entry,
       provider: resolvedSessionModel.provider,
       sessionId,
