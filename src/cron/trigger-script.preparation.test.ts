@@ -191,6 +191,7 @@ it("borrows the current Gateway plugins for detached conditions before and after
       await expectGeneration(nextRuntime, 2);
     }
   } finally {
+    vi.useRealTimers();
     await owner.close();
   }
 });
