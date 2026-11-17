@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 
 # Bootstrapped directly from the authenticated revision; no local imports.
@@ -30,8 +31,14 @@ for path in paths:
     if not any(name == encoded or name.startswith(encoded + b"/") for _, _, name in entries):
         raise ValueError("Missing export component: " + path)
 
-# One batch process, exactly one request per selected file. Missing blobs may
-# hydrate through Git's existing promisor remote; unrelated blobs are never asked for.
+# Git's cache-tree owner batches missing blobs using its own promisor routing.
+# Give it only the selected entries in a disposable index, never the whole revision.
+with tempfile.TemporaryDirectory(prefix=".pr-export-index-", dir=destination) as scratch:
+    env = dict(os.environ, GIT_INDEX_FILE=str(Path(scratch).resolve() / "index"))
+    subprocess.run([*git, "update-index", "-z", "--index-info"], input=listing, env=env, check=True)
+    subprocess.run([*git, "write-tree"], env=env, check=True, stdout=subprocess.DEVNULL)
+
+# One batch process, exactly one contents request per selected file.
 with subprocess.Popen([*git, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE) as child:
     try:
         for mode, oid, name in entries:

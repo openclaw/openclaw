@@ -50,7 +50,9 @@ See the [merge recovery contract](/reference/scripts/merge-recovery).
 ## Wrapper execution and dependencies
 
 Revision exports read only the selected tree paths and their blobs through one
-`git cat-file --batch` process. They preserve raw blob bytes, executable modes,
+`git cat-file --batch` process. A disposable index containing only those entries
+lets Git batch any missing blobs through its existing promisor routing before
+export; it never replaces the working index. Exports preserve raw blob bytes, executable modes,
 and symlinks without applying archive attributes or checkout filters. The
 bootstrap exporter itself comes directly from the authenticated main revision;
 the existing verification still checks extracted helpers before execution.
@@ -132,8 +134,8 @@ set: all package manifests, lockfile, workspace/package-manager configuration,
 patches, lifecycle code (including `pnpm:devPreinstall`) and its imports, both
 SQL schemas, and the native protocol generator's declared inputs and TypeScript
 configuration. Git-hook setup reads the presence of its
-directory, not hook contents. Generated outputs start absent in the archive.
-The full archive still undergoes the same Git blob, mode, symlink, and inventory
+directory, not hook contents. Generated outputs start absent in the export.
+The full export still undergoes the same Git blob, mode, symlink, and inventory
 verification before installation; sharing changes only dependency identity.
 
 The audit signature covers executable inputs and dependency/build policy.

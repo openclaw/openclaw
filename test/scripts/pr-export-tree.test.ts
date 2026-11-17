@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -51,6 +52,7 @@ it.skipIf(process.platform === "win32")(
     git("add", ".");
     git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
     git("repack", "-ad", "--window=0");
+    git("config", "uploadpack.allowFilter", "true");
 
     const inline = readFileSync("scripts/pr", "utf8")
       .split("<<'EOF_WRAPPER_GIT'\n")[1]!
@@ -80,6 +82,7 @@ it.skipIf(process.platform === "win32")(
                 ],
               ];
         });
+    const originalIndex = readFileSync(join(repo, ".git/index"));
     for (const paths of [["scripts"], []]) {
       const suffix = paths.length ? "selected" : "full";
       const expected = join(root, `${suffix}-archive`);
@@ -94,11 +97,51 @@ it.skipIf(process.platform === "win32")(
         env: { ...env, GIT_TRACE_PACK_ACCESS: trace },
       });
       expect(inventory(actual)).toEqual(inventory(expected));
+      const partial = join(root, `${suffix}-partial`);
+      git(
+        "clone",
+        "--quiet",
+        "--no-checkout",
+        "--filter=blob:none",
+        pathToFileURL(repo).href,
+        partial,
+      );
+      const hydrated = join(root, `${suffix}-hydrated`);
+      mkdirSync(hydrated);
+      const events = join(root, `${suffix}-fetch.jsonl`);
+      execFileSync("python3", ["-I", "-B", exporter, "git", partial, "HEAD", hydrated, ...paths], {
+        env: { ...env, GIT_TRACE2_EVENT: events },
+      });
+      expect(inventory(hydrated)).toEqual(inventory(expected));
+      const fetches = readFileSync(events, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; argv?: string[] })
+        .filter((event) => event.event === "child_start" && event.argv?.includes("fetch"));
+      expect(fetches).toHaveLength(1);
+      const missing = execFileSync(
+        "git",
+        [
+          "-C",
+          partial,
+          "rev-list",
+          "--objects",
+          "--missing=print",
+          "--quiet",
+          "--max-count=1",
+          "HEAD",
+        ],
+        { env, encoding: "utf8" },
+      );
+      expect(missing.split("\n").filter((line) => line.startsWith("?"))).toHaveLength(
+        paths.length ? 100 : 0,
+      );
       if (paths.length) {
         // Four selected files plus their commit and ancestor trees; the hundred
         // unrelated subtrees must never be expanded or have their blobs opened.
         expect(readFileSync(trace, "utf8").trim().split("\n").length).toBeLessThanOrEqual(9);
       }
     }
+    expect(readFileSync(join(repo, ".git/index"))).toEqual(originalIndex);
   },
 );
