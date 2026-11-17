@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../../gateway/auth-token-source-conflict.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -80,6 +82,33 @@ describe("statusAllCommand report data", () => {
         "Retry: openclaw secrets reload",
       ],
       ["synthetic-secret", "✓ Secret diagnostics (0)"],
+    );
+  });
+
+  it("shows the whole token conflict fix text while masking secret values", async () => {
+    const secretValue = ["ghp", "R3alLook1ngT0kenValue9xQ2mZ7pL4vK8sW1"].join("_");
+    const fixText =
+      resolveGatewayAuthTokenSourceConflict({
+        cfg: { gateway: { auth: { token: secretValue } } },
+        env: { OPENCLAW_GATEWAY_TOKEN: `${secretValue}-env` },
+      })?.diagnostic ?? "";
+    // Console output passes through the logging redactor too.
+    expect(redactSensitiveText(fixText)).toBe(fixText);
+    // ...and still masks a real secret value after the same key.
+    expect(redactSensitiveText(`gateway.auth.token: ${secretValue}`)).toBe(
+      "gateway.auth.token: ghp_R3…8sW1",
+    );
+    const output = await reportText({
+      overview: { secretDiagnostics: [fixText, `gateway.remote.token: ${secretValue}`] },
+    });
+    expectReport(
+      output,
+      [
+        "Remove OPENCLAW_GATEWAY_TOKEN from the shell",
+        "if the environment variable should supply the token.",
+        "gateway.remote.token: ***",
+      ],
+      [secretValue],
     );
   });
 
