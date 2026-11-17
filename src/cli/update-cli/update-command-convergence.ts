@@ -50,7 +50,7 @@ import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withOwnedManagedUpdateEnv, withUpdateEnv } from "./update-command-service-env.js";
 
 /** A Git update that switched the release link instead of rewriting a checkout. */
-export function isSwitchedGitRelease(result: UpdateRunResult): boolean {
+function isSwitchedGitRelease(result: UpdateRunResult): boolean {
   return result.mode === "git" && readPackageReleaseSlotSync(result.root ?? "") !== null;
 }
 
