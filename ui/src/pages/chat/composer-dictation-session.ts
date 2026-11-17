@@ -62,6 +62,8 @@ function formatDictationError(error: unknown): string {
 export class ComposerDictationCommits {
   private readonly sessions = new Set<ComposerDictationSession>();
   private tail: Promise<unknown> = Promise.resolve();
+  // Consumers place delivered and preview transcripts in their drafts.
+  readonly place = placeComposerDictation;
 
   get size(): number {
     return this.sessions.size;
