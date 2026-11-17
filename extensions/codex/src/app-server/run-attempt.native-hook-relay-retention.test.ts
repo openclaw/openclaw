@@ -125,7 +125,6 @@ function createRelay(
     attemptTimeoutMs: 30_000,
     startupTimeoutMs: 1_000,
     turnStartTimeoutMs: 1_000,
-    loopDetectionPreToolUseRelay: false,
     signal,
     hostCapabilities,
     onPreToolUseFailure: () => {},

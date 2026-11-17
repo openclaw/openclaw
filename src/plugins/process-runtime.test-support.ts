@@ -14,6 +14,14 @@ export const pluginProcessRuntimeEntrypoints = {
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   sourceCapture: entrypoint("plugin-generation-capture"),
   snapshotPreparation: entrypoint("plugin-generation-worker"),
+  nativeLifecycle: entrypoint(
+    "../infra/worker-native-lifecycle",
+    "infra/worker-native-lifecycle.js",
+  ),
+  mainThreadFsGuard: entrypoint(
+    "../test-utils/main-thread-fs-spies.test-support",
+    "test-utils/main-thread-fs-spies.test-support.js",
+  ),
   directoryInventory: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/directory-walk",

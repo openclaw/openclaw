@@ -14,6 +14,7 @@ import { resolveExecutablePath } from "./executable-path.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageVersion } from "./package-json.js";
+import { resolvePackageReleaseSlotForRootSync } from "./package-release-slot-path.js";
 import {
   archivePackageActivationCustody,
   settlePackageActivationCustody,
@@ -197,6 +198,14 @@ export async function preparePackageActivation(
     params.installTarget.directNodeModulesRoot ||
     !(await fsp.lstat(params.stageRoot)).isDirectory()
   ) {
+    return undefined;
+  }
+  if (resolvePackageReleaseSlotForRootSync(params.liveRoot)) {
+    // The journal publishes at the installation key, which is the package link; a
+    // release that the link selects is replaced in place by the ordinary swap.
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable for a release replaced in place behind its package link; the package backup and rollback path is used.",
+    );
     return undefined;
   }
   const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });

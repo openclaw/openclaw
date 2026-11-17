@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import {
   isDeliveryRecoveryOwnedRetry,
@@ -48,6 +47,7 @@ import {
   type ReplyDispatchRuntimeInfo,
   type ReplyDispatcher,
   type ReplyDispatcherOptions,
+  type ReplyDispatcherWithTypingOptions,
 } from "./reply-dispatcher.types.js";
 import type { TypingController } from "./typing.js";
 
@@ -175,16 +175,6 @@ function buildReplyDispatchRuntimeInfo(
     ...(participant ? { participant } : {}),
   };
 }
-
-export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
-  typingCallbacks?: TypingCallbacks;
-  onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => Promise<void> | void;
-  onSettled?: () => unknown;
-  onFreshSettledDelivery?: () => unknown;
-  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
-  onCleanup?: () => void;
-};
 
 type ReplyDispatcherWithTypingResult = {
   dispatcher: ReturnType<typeof createReplyDispatcher>;

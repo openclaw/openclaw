@@ -64,6 +64,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
     case "transcript-hydration":
+    case "compaction-preparation":
     case "current-turn-entry":
     case "recent-active-events":
     case "latest-active-message":

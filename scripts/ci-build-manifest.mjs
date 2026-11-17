@@ -516,11 +516,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Match four observed CPUs per 16-class job; nine Control UI shards fit slow hosted runners.
 // Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 7
+  ? 10
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -654,6 +654,13 @@ const testRuntimeMode = testRuntimePolicy
       ? "dual-all"
       : "bun-all")
   : "node";
+// Preserve deliberate daily/PR colocation and capacity. Only full manual validation
+// pays duplicate runtime setup for independent execution and retries.
+const splitRuntimeJobs =
+  eventName === "workflow_dispatch" &&
+  !runtimePullRequest &&
+  !mainValidation &&
+  typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
 // Timing readers and the executor must price the same runtime before planning.
 process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
@@ -918,8 +925,8 @@ const publishedDriverUpdate =
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
-// main have no branch-protection consumers. Dispatch (release
-// validation) keeps the full named matrix.
+// main have no branch-protection consumers. Dispatch keeps the complete
+// inventory; runtime-capable full dispatches share the existing bounded packer.
 const compactPlanMode = !isCanonicalRepository
   ? undefined
   : runtimePullRequest
@@ -1310,9 +1317,15 @@ const rawNodeTestShards = runNodeFull
           // Keep the legacy boolean for historical targets. Hourly main uses
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
-          compactMode: mainValidation ? "pull-request" : compactPlanMode,
+          compactMode: mainValidation
+            ? "pull-request"
+            : (compactPlanMode ??
+              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
           mainValidation,
-          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
+          compactNodeJobCap:
+            splitRuntimeJobs && testRuntimeMode !== "node"
+              ? undefined
+              : nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
         ...nodeWorkerE2eShards,
@@ -1438,6 +1451,7 @@ const uiTestRuntimePolicy =
   )
     ? testRuntimeMode
     : "node";
+
 const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
 const knownToolingConfigs = new Set([
   goToolingConfig,
@@ -1493,7 +1507,17 @@ const nodeTestShards = targetNodeTestShards
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
-  .map((shard) => {
+  .flatMap((shard) => {
+    const runtimes =
+      !shard.requiresDist && splitRuntimeJobs
+        ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        : null;
+    // Node-hosted packaging proof also launches a pinned Bun child.
+    const needsBunChild =
+      !shard.requiresDist &&
+      shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+        plan.configs?.includes(goToolingConfig),
+      );
     const minTotalMemoryBytes = Math.max(
       0,
       ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
@@ -1537,11 +1561,10 @@ const nodeTestShards = targetNodeTestShards
         ) || undefined,
       requires_bun:
         !shard.requiresDist &&
-        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
-          // Node-hosted packaging proof also launches a pinned Bun child.
-          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
-            plan.configs?.includes(goToolingConfig),
-          )),
+        ((runtimes
+          ? runtimes.includes("bun")
+          : Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))) ||
+          needsBunChild),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1555,7 +1578,7 @@ const nodeTestShards = targetNodeTestShards
       runner: capacity?.runner ?? shard.runner,
       runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
-        !shard.requiresDist && testRuntimeMode === "dual-all"
+        !shard.requiresDist && testRuntimeMode === "dual-all" && !splitRuntimeJobs
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
@@ -1627,10 +1650,20 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    const rows = runtimes
+      ? runtimes.map((runtime) =>
+          Object.assign({}, row, {
+            base_check_name: row.check_name,
+            check_name: `${row.check_name} (${runtime})`,
+            test_runtime: runtime,
+            requires_bun: runtime === "bun" || needsBunChild,
+          }),
+        )
+      : [row];
     if (packedGroups) {
-      packedNodeTestRows.push({ row, groups });
+      packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
-    return row;
+    return rows;
   });
 // Vary the single audit capture across runs instead of always observing the first row.
 const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);

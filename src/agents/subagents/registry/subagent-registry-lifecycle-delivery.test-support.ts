@@ -62,6 +62,65 @@ export function registerLifecycleDeliveryReceiptCases({
   completeRun: CompleteLifecycleRun;
   completeAndJoinCleanup: CompleteLifecycleRun;
 }) {
+  it("settles a restored consumed private completion without announcing it again", async () => {
+    const entry = createRunEntry({
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "already consumed result" },
+      delivery: {
+        status: "pending",
+        requesterDelivery: { state: "consumed", runId: "requester-continuation", at: Date.now() },
+      },
+    });
+    const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => "delivered");
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+    });
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery).toMatchObject({
+      status: "delivered",
+      requesterDelivery: entry.delivery?.requesterDelivery,
+    });
+  });
+
+  it("keeps an undelivered completion retryable when process custody retires", async () => {
+    const actualPolicy = await vi.importActual<typeof cleanupPolicy>(
+      "./subagent-registry-cleanup.js",
+    );
+    vi.spyOn(cleanupPolicy, "resolveDeferredCleanupDecision").mockImplementation(
+      actualPolicy.resolveDeferredCleanupDecision,
+    );
+    const entry = createRunEntry({
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "retained result" },
+    });
+    const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async () => {
+      subagentRuns.retireCompletionAuthority(readLifecycleRun(entry));
+      return "retryable";
+    });
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+      maybeWakeRequesterAfterAllChildrenSettled: async () => false,
+    });
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+    expect(readLifecycleRun(entry).delivery).toMatchObject({ status: "pending" });
+    expect(readLifecycleRun(entry).delivery?.suspendedReason).toBeUndefined();
+  });
+
   it.each([false, true])(
     "records private transcript consumption before cancellation (consumed: %s)",
     async (consumed) => {

@@ -44,7 +44,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
-import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
+import {
+  normalizeOpenAIResponsesReasoningReplayItem,
+  replayOpenAIResponsesToolArguments,
+} from "./openai-responses-replay.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -222,10 +225,10 @@ export type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
   sessionId?: string;
-  authProfileId?: string;
   replayMode?: OpenAIResponsesReplayMode;
   retainUserProvenance?: boolean;
   mutableInput?: boolean;
+  onItemRecovery?: () => void;
 };
 
 // Weak source keys release projections with history. Keep a bounded set of route/position
@@ -264,7 +267,6 @@ function convertResponsesMessagesWithStyle(
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
   const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
   });
   const shouldNormalizeSameModelToolCallIds = model.provider === "github-copilot";
   const sanitizeIdPart = (part: string) => {
@@ -309,9 +311,11 @@ function convertResponsesMessagesWithStyle(
   };
   const replayPlan = buildOpenAIResponsesCompactionReplayPlan(context.messages, model, {
     sessionId: options?.sessionId,
-    authProfileId: options?.authProfileId,
     mode: options?.replayMode,
   });
+  if (replayPlan.itemRecovery) {
+    options?.onItemRecovery?.();
+  }
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
@@ -383,14 +387,14 @@ function convertResponsesMessagesWithStyle(
   const replayCallId = (id: string) =>
     recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
-  const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
+  const nativeOpenAI = supportsNativeOpenAIResponsesEndpoint(model);
   const convertMessage = (
     msg: Context["messages"][number],
     messageIndex: number,
   ): ResponseInput => {
     const replayItemIds = shouldReplayResponsesItemIds && !recoveryAnchor;
     const converted: ResponseInput = [];
-    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
+    if (nativeOpenAI && isRuntimeContextMessage(msg)) {
       converted.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
@@ -402,7 +406,7 @@ function convertResponsesMessagesWithStyle(
     } else if (msg.role === "user") {
       const role =
         msg.operatorMessage &&
-        inHistorySystemUpdates &&
+        nativeOpenAI &&
         (typeof msg.content === "string" || msg.content.every((block) => block.type === "text"))
           ? resolveResponsesInstructionRole(model)
           : "user";
@@ -436,7 +440,7 @@ function convertResponsesMessagesWithStyle(
       const output = converted;
       let textFallbackId: string | undefined;
       let textFallbackOrdinal = 0;
-      let previousReplayItemWasReasoning = false;
+      let previousReasoningHasId = false;
       let seenReplayableReasoning = false;
       const isDifferentModel =
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
@@ -466,35 +470,34 @@ function convertResponsesMessagesWithStyle(
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
-            if (!replayItemIds) {
+            // OpenAI's store records replayed ciphertext under its ID. An ID from a store:false
+            // or compacted turn names no stored record, so the second stored replay fails with
+            // item_conflict. Ciphertext is self-contained; dependent message and call IDs follow.
+            // Foundry instead validates ciphertext against its original ID.
+            if (replayableReasoningItem.encrypted_content && (nativeOpenAI || !replayItemIds)) {
               delete replayableReasoningItem.id;
-              // Summaries alone cannot verify stateless reasoning and poison
-              // the next cached continuation, even if this request succeeds.
-              if (!replayableReasoningItem.encrypted_content) {
-                continue;
-              }
-            }
-            if (
-              replayItemIds &&
-              !providerStyle &&
-              model.provider === "github-copilot" &&
-              !isSafeResponsesReplayItemId(replayableReasoningItem.id)
+            } else if (
+              // Summaries alone cannot verify stateless reasoning and poison the next cached continuation.
+              !replayItemIds ||
+              (!providerStyle &&
+                model.provider === "github-copilot" &&
+                !isSafeResponsesReplayItemId(replayableReasoningItem.id))
             ) {
               continue;
             }
             output.push(replayableReasoningItem as ResponseInputItem);
-            previousReplayItemWasReasoning = true;
+            const reasoningId: unknown = replayableReasoningItem.id;
+            previousReasoningHasId = typeof reasoningId === "string";
             seenReplayableReasoning ||=
-              typeof replayableReasoningItem.id === "string" &&
-              replayableReasoningItem.id.startsWith("rs_");
+              typeof reasoningId === "string" && reasoningId.startsWith("rs_");
           }
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
           let msgId: string | undefined;
           if (replayItemIds) {
             if (textSignature?.id) {
-              // Signed text can only replay its ID after reasoning.
-              msgId = previousReplayItemWasReasoning ? textSignature.id : undefined;
+              // Signed text can only replay its ID after its reasoning ID.
+              msgId = previousReasoningHasId ? textSignature.id : undefined;
             } else {
               if (!textFallbackId) {
                 const sourceTurnKey = responsesAssistantTurnKey(msg);
@@ -536,7 +539,7 @@ function convertResponsesMessagesWithStyle(
             phase: textSignature?.phase,
           };
           output.push(messageItem as ResponseInputItem);
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         } else if (block.type === "toolCall") {
           const separatorIndex = block.id.indexOf("|");
           const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
@@ -553,13 +556,13 @@ function convertResponsesMessagesWithStyle(
             call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
-            arguments: providerStyle
-              ? JSON.stringify(block.arguments)
-              : typeof block.arguments === "string"
-                ? block.arguments
-                : JSON.stringify(block.arguments ?? {}),
+            arguments: replayOpenAIResponsesToolArguments(
+              block,
+              providerStyle,
+              msg.model === model.id && msg.provider === model.provider && msg.api === model.api,
+            ),
           });
-          previousReplayItemWasReasoning = false;
+          previousReasoningHasId = false;
         }
       }
       // Completed encrypted reasoning is self-contained, including steered async
@@ -634,7 +637,7 @@ function convertResponsesMessagesWithStyle(
     conversionStyle,
     replayContext,
     shouldReplayResponsesItemIds,
-    inHistorySystemUpdates,
+    nativeOpenAI,
     resolveResponsesInstructionRole(model),
     model.input.includes("image"),
     options?.retainUserProvenance === true,

@@ -28,7 +28,10 @@ vi.mock("./tunnel-runtime.js", () => ({
   }),
 }));
 // mock-isolation: the native tunnel runtime and Discovery mailbox loop stay out of these service tests.
-vi.mock("./mailbox-reader.js", () => ({ startMailboxReader: () => ({ stop() {} }) }));
+vi.mock("./mailbox-reader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./mailbox-reader.js")>()),
+  startMailboxReader: () => ({ stop() {} }),
+}));
 
 let stateDir: string;
 let service: OpenClawIdService;

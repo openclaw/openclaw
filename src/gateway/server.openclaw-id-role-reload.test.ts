@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import http, { type IncomingMessage } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   formatIrohEndpointKey,
-  randomBytes,
+  generateEd25519Signer,
+  signStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
@@ -16,7 +18,10 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -27,6 +32,7 @@ import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-supp
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { isOpenClawIdTunnelPrincipalAdmitted } from "./openclaw-id/tunnel-principal.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { expectNonAdminMemberProfileActions } from "./server.openclaw-id-role-reload.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 
@@ -41,7 +47,8 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
   const origin = `http://127.0.0.1:${port}`;
   const token = "member-role-reload-test-token";
   const memberOrigin = "http://member.test";
-  const peer = formatIrohEndpointKey(randomBytes(32));
+  const memberSigner = await generateEd25519Signer();
+  const peer = formatIrohEndpointKey(memberSigner.publicKey);
   // oxlint-disable-next-line typescript/unbound-method -- The observer supplies the original server receiver.
   const emit = http.Server.prototype.emit;
   const intercepted = vi.spyOn(http.Server.prototype, "emit").mockImplementation(function (
@@ -68,6 +75,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
   };
   try {
     await state.writeConfig({
+      agents: { defaults: { workspace: state.workspaceDir } },
       gateway: {
         mode: "local",
         bind: "loopback",
@@ -81,7 +89,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
         await claw.sign({
           op: "add",
           account_id: "role-member",
-          role: "guest",
+          role: "viewer",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -129,16 +137,18 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       scopes: ["operator.admin"],
     };
     await apply(config);
-    const connectMember = async () => {
+    const connectMember = async (memberDeviceToken?: string) => {
       const closed = createDeferredCore<number>();
       let hello: HelloOk | undefined;
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         origin: memberOrigin,
+        deviceToken: memberDeviceToken,
+        timeoutMs: 6000,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
         platform: "web",
-        scopes: ["operator.admin", "operator.pairing"],
+        scopes: ["operator.admin"],
         onHelloOk: (value) => {
           hello = value;
         },
@@ -150,14 +160,61 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       clients.push(client);
       return { client, hello, closed };
     };
+    const firstViewer = await connectMember();
+    expect(firstViewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    const memberPairing = (await listDevicePairing()).paired.find(
+      (device) => device.tokens?.operator?.token === firstViewer.hello?.auth.deviceToken,
+    )!;
+    expect(memberPairing.approvedScopes).toEqual(["operator.sessions.read"]);
+    // The real owner RPC accepts a device signature; a member cannot sign this change.
+    const changeRole = async (role: string) => {
+      const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
+      const statement = await signStatement(
+        "MembershipChange",
+        {
+          claw_id: claw.clawId,
+          seq: link.seq + 1,
+          target: { op: "set_role", account_id: "role-member", role },
+          issued_at: Math.floor(Date.now() / 1000),
+        },
+        claw.device,
+      );
+      await reconnect.request("openclawId.authority", { action: "submit", statement });
+    };
+    await changeRole("guest");
+    expect(await withinTest(firstViewer.closed.promise, signal)).toBe(1008);
+    await firstViewer.client.stopAndWait();
     const member = await connectMember();
+    expect(member.hello?.auth.scopes).toEqual(["operator.admin"]);
     expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
-    expect(member.hello?.auth.scopes).toContain("operator.admin");
     await member.client.request("device.pair.list", {});
+    expect((await listDevicePairing()).pending).toEqual([]);
+    const oldAdminToken = member.hello?.auth.deviceToken;
+    expect(oldAdminToken).toBeTruthy();
+    await changeRole("viewer");
+    expect(await withinTest(member.closed.promise, signal)).toBe(1008);
+    await member.client.stopAndWait();
+    expect(
+      await verifyDeviceToken({
+        deviceId: memberPairing.deviceId,
+        token: oldAdminToken!,
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).toMatchObject({ ok: false });
+    const reassigned = await connectMember(oldAdminToken);
+    expect(reassigned.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    await reassigned.client.request("sessions.list", {});
+    await expect(reassigned.client.request("device.pair.list", {})).rejects.toThrow();
+    await changeRole("guest");
+    expect(await withinTest(reassigned.closed.promise, signal)).toBe(1008);
+    await reassigned.client.stopAndWait();
+    const restored = await connectMember();
+    expect(restored.hello?.auth.roleAllowsAdmin).toBe(true);
     config.gateway!.roles!.definitions.guest = MEMBER_ROLE_PRESETS.viewer;
     await apply(config);
-    expect(await withinTest(member.closed.promise, signal)).toBe(4001);
-    await member.client.stopAndWait();
+    expect(await withinTest(restored.closed.promise, signal)).toBe(4001);
+    await restored.client.stopAndWait();
     const viewer = await connectMember();
     expect(viewer.hello?.auth.roleAllowsAdmin).toBe(false);
     expect(viewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
@@ -169,6 +226,67 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     expect(await withinTest(viewer.closed.promise, signal)).toBe(4001);
     await viewer.client.stopAndWait();
     await expect(connectMember()).rejects.toThrow();
+    // An independent named-role default must not cap administrator members.
+    config.gateway!.roles!.default = "blocked";
+    config.gateway!.roles!.definitions.blocked = {
+      scopes: [],
+      agents: [],
+      sessions: { others: "none" },
+    };
+    config.gateway!.roles!.definitions.admin = {
+      scopes: ["operator.admin"],
+      agents: "*",
+      sessions: { others: "write" },
+    };
+    await apply(config);
+    await changeRole("admin");
+    await ensureCanonicalUserProfileForEmail("another-person@example.test");
+    const administrator = await connectMember();
+    expect(administrator.hello?.auth.scopes).toEqual(["operator.admin"]);
+    expect(administrator.hello?.auth.roleAllowsAdmin).toBe(true);
+    expect.soft(administrator.hello?.auth.profileActivityViewerId).toBeUndefined();
+    const self = await administrator.client.request<{ profile: { id: string } }>("users.self", {});
+    expect(self.profile.id).not.toBe(GATEWAY_OWNER_PROFILE_ID);
+    const profileActions = [
+      ["users.listChannelIdentities", { profileId: self.profile.id }],
+      ["users.background.remove", { expectedAssetId: null, expectedPreference: null }],
+      ["users.channelIdentity", { action: "status", channelId: "slack" }],
+      ["users.personalFile.get", { agentId: "main" }],
+      ["mentions.list", {}],
+      ["users.mentionable", { agentId: "main", visibility: "shared" }],
+    ] as const;
+    for (const [method, params] of profileActions) {
+      const result = await administrator.client.request(method, params).then(
+        () => "allowed",
+        (error: unknown) => String(error),
+      );
+      expect.soft(result, method).toBe("allowed");
+    }
+    const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
+    const forged = await signStatement(
+      "MembershipChange",
+      {
+        claw_id: claw.clawId,
+        seq: link.seq + 1,
+        target: { op: "set_role", account_id: "role-member", role: "operator" },
+        issued_at: Math.floor(Date.now() / 1000),
+      },
+      memberSigner,
+    );
+    await expect(
+      administrator.client.request("openclawId.authority", { action: "submit", statement: forged }),
+    ).rejects.toMatchObject({ details: { code: "not_an_owner" } });
+    for (const action of ["prepare", "rebind_prepare"]) {
+      await expect(
+        administrator.client.request("openclawId.authority", { action }),
+      ).rejects.toMatchObject({ details: { code: "not_local_operator" } });
+    }
+    await changeRole("operator");
+    expect(await withinTest(administrator.closed.promise, signal)).toBe(1008);
+    await administrator.client.stopAndWait();
+    const operator = await connectMember();
+    expect(operator.hello?.auth.scopes).not.toContain("operator.admin");
+    await expectNonAdminMemberProfileActions(operator.client, profileActions, self.profile.id);
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   } finally {
     for (const client of clients) {

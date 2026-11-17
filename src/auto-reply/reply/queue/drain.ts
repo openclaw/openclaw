@@ -54,7 +54,11 @@ import {
   updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import { followupQueueSources, followupSourceRunners } from "./state.js";
-import { isFollowupRunAborted, type FollowupRun } from "./types.js";
+import {
+  isFollowupOperatorAuthorityCurrent,
+  isFollowupRunAborted,
+  type FollowupRun,
+} from "./types.js";
 
 type AdmissionSessionRebind = { from: string; to: string };
 
@@ -341,19 +345,14 @@ async function executeClaim(
     // Preserve the preparation refusal so its source records abandonment.
     const retrySources =
       claim.retryBeforeExecution && !pluginUnavailable
-        ? sources.filter((item) => {
-            try {
-              item.operatorAuthority?.assertCurrent();
-            } catch {
-              return false;
-            }
-            return (
+        ? sources.filter(
+            (item) =>
+              isFollowupOperatorAuthorityCurrent(item) &&
               !isFollowupRunAborted(item) &&
               !item.controllerInput?.retirementRequested &&
               (!adoptionRefused || !item.controllerInput?.custody.adopted) &&
-              !item.controllerInput?.custody.completed
-            );
-          })
+              !item.controllerInput?.custody.completed,
+          )
         : [];
     if (!retrySources.length) {
       claim.retryBeforeExecution = false;

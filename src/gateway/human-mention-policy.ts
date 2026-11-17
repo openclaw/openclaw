@@ -28,6 +28,8 @@ import {
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
+  resolveAdministratorMemberRolePolicy,
+  resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
@@ -55,7 +57,11 @@ type MentionTarget = {
   sessionKey?: string;
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
-type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
+type MentionReader = {
+  profile: MentionProfile;
+  administratorMemberPolicy: ReturnType<typeof resolveAdministratorMemberRolePolicy>;
+  canRead: (target: MentionTarget) => boolean;
+};
 type MentionRanking = {
   participants: readonly SessionParticipantRecord[];
   members: ReadonlySet<string>;
@@ -156,23 +162,28 @@ export function createHumanMentionPolicy(params: {
     if (!profile) {
       return err(authenticatedProfileUnavailableError());
     }
-    const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
+    const administratorMemberPolicy = resolveAdministratorMemberRolePolicy(client, cfg);
+    const readerClient: GatewayClient = {
+      connect: { ...client.connect },
+      internal: {
+        ...client.internal,
+        operatorRoleActor: { kind: "operator", profileId: profile.profileId },
+      },
+    };
+    const policy = resolveOperatorRolePolicy(readerClient, cfg);
     if (policy && !operatorScopeSatisfied(SESSION_READ_SCOPE, policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
     const admin =
       client.connect.scopes?.includes(ADMIN_SCOPE) &&
       (!policy || policy.scopes.includes(ADMIN_SCOPE));
+    // Keep connection authority even when its linked profile has broader local access.
+    readerClient.connect.scopes = admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE];
     // The reader lives for one synchronous projection, never across an await.
-    const { entryFilter } = prepareSessionSharing({
-      cfg,
-      client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
-        internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
-      },
-    });
+    const { entryFilter } = prepareSessionSharing({ cfg, client: readerClient });
     return ok({
       profile,
+      administratorMemberPolicy,
       canRead: (target) => entryFilter?.(target.sessionKey, target.entry) ?? true,
     });
   }
@@ -239,11 +250,16 @@ export function createHumanMentionPolicy(params: {
     if (!agent.ok) {
       return err(agent.error);
     }
-    const creationError = authorizeGatewaySessionCreation({
-      cfg,
-      profileId: requester.profile.profileId,
-      agentId: agent.agentId,
-    });
+    const creationError = authorizeGatewaySessionCreation(
+      {
+        cfg,
+        profileId: requester.profile.profileId,
+        agentId: agent.agentId,
+      },
+      requester.administratorMemberPolicy
+        ? { policy: requester.administratorMemberPolicy }
+        : undefined,
+    );
     if (creationError) {
       return err(creationError);
     }

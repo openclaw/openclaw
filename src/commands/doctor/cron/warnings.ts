@@ -18,9 +18,11 @@ import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPlan } from "../../../cron/delivery-plan.js";
 import type { CronJob } from "../../../cron/types.js";
+import { resolveUpdateRehearsalRoot } from "../../../infra/update-rehearsal-paths.js";
 import { PluginSetupPreparationRequiredError } from "../../../plugins/plugin-setup-module.js";
 import { runExec } from "../../../process/exec.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
+import { isUpdateDoctorLintPass } from "../shared/update-phase.js";
 
 type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
 
@@ -227,9 +229,17 @@ export async function collectLegacyWhatsAppCrontabHealthWarning(
   params: {
     platform?: NodeJS.Platform;
     readCrontab?: CrontabReader;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<string | null> {
   if ((params.platform ?? process.platform) !== "linux") {
+    return null;
+  }
+  const env = params.env ?? process.env;
+  // Update Doctors must prove every child exited. Debian's crontab is setgid, so with
+  // /proc hidepid this user cannot inspect it and settlement fails (#199559). The live
+  // crontab is outside the update; plain `openclaw doctor` still reports this advisory.
+  if (isUpdateDoctorLintPass(env) || resolveUpdateRehearsalRoot(env) !== undefined) {
     return null;
   }
 

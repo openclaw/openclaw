@@ -8,7 +8,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import {
   clawHubTemplateRef,
   isCanonicalClawHubPackageName,

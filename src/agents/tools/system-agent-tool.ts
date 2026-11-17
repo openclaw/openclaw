@@ -10,7 +10,7 @@ import {
   validateTemplatesAddApplyParams,
   validateTemplatesAddPlanParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { TemplatesAddApplyParamsSchema } from "../../../packages/gateway-protocol/src/schema/templates.js";
+import { TemplatesAddReviewedApplyParamsSchema } from "../../../packages/gateway-protocol/src/schema/templates.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -258,11 +258,12 @@ const SystemAgentToolSchema = Type.Object({
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
   spec: Type.Optional(Type.String({ description: "npm/clawhub spec for plugin_install" })),
   pluginId: Type.Optional(Type.String({ description: "Plugin id for plugin_uninstall" })),
-  source: Type.Optional(TemplatesAddApplyParamsSchema.properties.source),
-  planIntegrity: TemplatesAddApplyParamsSchema.properties.planIntegrity,
-  acknowledgeClawHubRisk: TemplatesAddApplyParamsSchema.properties.acknowledgeClawHubRisk,
-  acknowledgeCapabilities: TemplatesAddApplyParamsSchema.properties.acknowledgeCapabilities,
-  acknowledgeSkillWarnings: TemplatesAddApplyParamsSchema.properties.acknowledgeSkillWarnings,
+  source: Type.Optional(TemplatesAddReviewedApplyParamsSchema.properties.source),
+  planIntegrity: TemplatesAddReviewedApplyParamsSchema.properties.planIntegrity,
+  acknowledgeClawHubRisk: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeClawHubRisk,
+  acknowledgeCapabilities: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeCapabilities,
+  acknowledgeSkillWarnings:
+    TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeSkillWarnings,
   approved: Type.Optional(
     Type.Boolean({
       description:
@@ -361,7 +362,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
           ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
           : {}),
       };
-      if (!validateTemplatesAddApplyParams(install)) {
+      // The helper installs from a reviewed plan only; chat-based Add is not offered here.
+      if (!validateTemplatesAddApplyParams(install) || "mode" in install) {
         throw new ToolInputError("openclaw: invalid Template install review or acknowledgements");
       }
       return { kind: "template-install", ...install };

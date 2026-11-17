@@ -26,6 +26,7 @@ import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -46,6 +47,7 @@ import {
   claimSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
+  stageSessionEventInput,
   resolveSessionEventExecRequestOwners,
 } from "./session-event-context.js";
 import type {
@@ -516,7 +518,7 @@ function enqueueSessionEventAttempt(
     isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
     assertOwnerCurrent();
     const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
-    const { prepareSessionGenerationFacts } =
+    const { prepareChatLease } =
       await import("../../config/sessions/session-delivery-generation.js");
     target ??= await captureSessionEventTargetForHost(agentId, sessionKey, {
       env,
@@ -600,19 +602,12 @@ function enqueueSessionEventAttempt(
           operation = owned;
         },
         internalEventExecution: {
+          // The admitted source authorizes board writes, not a disconnected inline renderer.
+          pinnedWidgetAuthoring:
+            options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            if (
-              !recorder.stageApproved ||
-              !(await recorder.stageApproved({
-                runId: occurrenceId,
-                assertCurrent,
-                // Only this live policy retry can reclaim its cancelled attempt.
-                retryCancelled: readmissionAttempt > 0,
-              }))
-            ) {
-              throw new Error("Session event input was not durably admitted");
-            }
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmissionAttempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,
@@ -736,13 +731,7 @@ function enqueueSessionEventAttempt(
             ) {
               generationLease?.release();
               generationLease = undefined;
-              generationLease = await prepareSessionGenerationFacts({
-                agentId,
-                storePath,
-                sessionKey,
-                sessionId: preparedBinding.sessionId,
-                lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
-              });
+              generationLease = await prepareChatLease(chatRef({ agentId, storePath, sessionKey }));
             }
             await prepareCurrent();
             await options.onAdopted?.();

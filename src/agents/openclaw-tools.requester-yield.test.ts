@@ -595,12 +595,13 @@ describe("requester yield ownership", () => {
     { deadlineAtMs: Date.now() + 60_000, expected: "yielded" },
     { deadlineAtMs: undefined, expected: "error" },
   ])(
-    "awaits a wake-armed command its run started, bounded by its deadline ($expected)",
+    "awaits a wake-armed command of its chat, bounded by its deadline ($expected)",
     async ({ deadlineAtMs, expected }) => {
       const sessionKey = "agent:main:subagent:watcher";
       await seedNativeChild({ runId: "run-watcher", childSessionKey: sessionKey });
+      // No run owns the command: an earlier run on this chat may have started it.
       const process = Object.assign(backgroundProcess(sessionKey), {
-        originRunId: "run-watcher",
+        agentId: "main",
         notifyOnExit: true,
         notifyOnExitEmptySuccess: true,
         notifySessionTarget: {} as NonNullable<ProcessSession["notifySessionTarget"]>,
