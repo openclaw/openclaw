@@ -108,6 +108,9 @@ will reject the operation on failure.
 For claim hooks, continuing means trying the next handler. The caller decides
 what happens if nobody claims; a failed `inbound_claim` for a bound
 conversation can produce a binding notice instead of an ordinary agent reply.
+ACP `reply_dispatch` errors and timeouts instead terminate dispatch, because the
+handler may already have started work. They never authorize another runtime to
+replay the task. Explicit declines and pre-invocation reload refusals can continue.
 
 Channel plugins that use `createReplyDispatcher` can likewise declare a larger
 positive per-stage budget with `beforeDeliverOptions: { timeoutMs }`, or when
