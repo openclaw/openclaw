@@ -544,6 +544,8 @@ type AgentHarnessContract<
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   /** Native context management ignores OpenClaw Responses compaction tuning, not request policy. */
   contextManagement?: "native";
+  /** Hard per-turn text input cap of the native runtime; core fits the current request under it. */
+  maxInputTextChars?: number;
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   /** Core must reject containment this runtime cannot implement before invoking it. */
   executionEnvironment?: "host-only";

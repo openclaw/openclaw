@@ -43,6 +43,7 @@ import {
   type ContextEngineAssemblySnapshot,
 } from "./context-engine-assembly-attempt.js";
 import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
+import { fitCurrentInputForHarness } from "./current-input-budget.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
@@ -429,10 +430,15 @@ export async function runAgentHarnessAttempt(
                   : undefined,
                 pluginAttempt.setToolPolicyScope,
               );
-          const effectiveAttemptParams =
+          const policyAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
               ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
               : preparedParams;
+          // Read policy is final here, so an oversized request can become a readable attachment.
+          const effectiveAttemptParams = await fitCurrentInputForHarness(
+            policyAttemptParams,
+            harness,
+          );
           assertPluginHarnessConversationToolPolicySupport(
             harness,
             effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&

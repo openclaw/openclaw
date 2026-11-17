@@ -93,6 +93,13 @@ Before streaming, an admitted run records its durable `activeWriterRunId` claim.
 
 System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap context, and per-run overrides. Model-specific limits and compaction reserve tokens are enforced. See [System prompt](/concepts/system-prompt) for what the model sees.
 
+A current request can be larger than the runtime accepts in one turn (the Codex runtime takes at most 1,048,576 characters) or than most of the model's context window. The model then sees the request's start and end, which keep its instruction and any untrusted-content markers, with a marker in place of the middle:
+
+- When the run may read files, the complete request is saved as an inbound attachment named `current-request.txt`, and the model gets its path with an instruction to search or read it before answering.
+- Otherwise, such as in a sandbox, a workspace-only run or without the `read` tool, only the middle is cut.
+
+The transcript keeps the complete original request, and the Gateway logs `current input oversize: chars=… budget=… action=attached|cut`. Smaller models can be unreliable at finding a fact that is only in the attachment.
+
 ## Hooks
 
 OpenClaw has two in-process hook systems:
