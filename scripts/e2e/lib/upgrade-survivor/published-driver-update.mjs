@@ -26,6 +26,11 @@ export function publishedDriverFixtureVersion(candidateVersion, driverVersion) {
 
 // Keep the published updater's channel policy intact. Only its registry I/O is
 // replaced, through the shipped loopback seam, with the exact candidate archive.
+/**
+ * @template T
+ * @param {{ fromVersion: string, toVersion: string, tarball: string, env: NodeJS.ProcessEnv, runtime: string, signal?: AbortSignal, timeoutMs: number, extra?: string[], run: (args: string[], env: NodeJS.ProcessEnv) => T | Promise<T> }} options
+ * @returns {Promise<T>}
+ */
 export async function withPublishedDriverUpdate({
   fromVersion,
   toVersion,

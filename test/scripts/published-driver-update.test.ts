@@ -78,6 +78,8 @@ it.each([
       fromVersion,
       toVersion,
       tarball: "/candidate.tgz",
+      runtime: dirs.make("published-driver-artifact-"),
+      timeoutMs: 10_000,
       env,
       extra: ["--no-restart"],
       run: (args: string[], updateEnv: NodeJS.ProcessEnv) => {
