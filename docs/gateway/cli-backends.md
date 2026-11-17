@@ -613,7 +613,7 @@ A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults
 
 - The prelude prefers the latest `/compact` summary or `compact_boundary` marker, then appends the most recent post-boundary turns up to a char budget. Pre-boundary turns are dropped because the summary already represents them.
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
-- Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own `--resume` and skip the prelude.
+- Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own `--resume` and skip the prelude. If the first turn exceeds an output limit, OpenClaw keeps its native session for retry once Claude has flushed the transcript. Existing bindings and the current session owner's authority still govern that write.
 - The seed reuses the existing Claude session-file path validation, so arbitrary paths cannot be read.
 
 ## Images

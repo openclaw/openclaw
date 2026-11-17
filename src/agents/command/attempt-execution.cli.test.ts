@@ -1033,6 +1033,31 @@ describe("CLI attempt execution", () => {
     };
   }
 
+  it("resumes a first-turn session kept after a format refusal", async () => {
+    const sessionKey = "agent:main:subagent:cli-first-format";
+    const cliSessionId = "refused-first-turn";
+    const { sessionStore, runCli } = await createCliSession(sessionKey);
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      await run.persistStoppedFirstCliSession?.({
+        sessionId: cliSessionId,
+        authProfileId: "anthropic:claude-cli",
+      });
+      throw new FailoverError("CLI output refused", {
+        reason: "format",
+        provider: "claude-cli",
+        model: "opus",
+      });
+    });
+    await expect(runCli()).rejects.toMatchObject({ reason: "format" });
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed reply", cliSessionId));
+    await runCli();
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    expect(firstRunCliAgentArg().cliSessionId).toBeUndefined();
+    expect(firstRunCliAgentArg(1).cliSessionId).toBe(cliSessionId);
+    expectBindingIds(sessionStore, sessionKey, cliSessionId);
+  });
+
   it("preserves and resumes a valid Claude CLI binding after format failover", async () => {
     const sessionKey = "agent:main:subagent:cli-format";
     const cliSessionId = "format-retry-session";

@@ -38,6 +38,7 @@ import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
+  createCliStreamRefusalError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -101,6 +102,19 @@ export async function executeCliProcess(params: {
     runId: runParams.runId,
     classifyErrorCode: context.backendResolved.classifyErrorCode,
   };
+  // The runner may keep a refused first turn's native session, so the refusal
+  // carries the executed prompt for its reseed receipt as a returned turn does.
+  const refuseStream = (
+    errorText: string,
+    output: CliOutput | null | undefined,
+    options?: Parameters<typeof createCliStreamRefusalError>[3],
+  ) =>
+    createCliStreamRefusalError(
+      errorText,
+      failoverContext,
+      output && { ...output, finalPromptText: params.prompt },
+      options,
+    );
   // buildCliArgs emits this option only for an actual checkpointed resume.
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
@@ -334,7 +348,7 @@ export async function executeCliProcess(params: {
           consumeStdout(chunk);
           const errorText = streamingParser?.getErrorText();
           if (errorText) {
-            throw createCliFailoverError(errorText, "format", failoverContext);
+            throw refuseStream(errorText, streamingParser?.getOutput());
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
@@ -351,7 +365,7 @@ export async function executeCliProcess(params: {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
-            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
+            throw refuseStream(partialOutput.errorText, partialOutput, {
               code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
             });
           }
@@ -482,7 +496,7 @@ export async function executeCliProcess(params: {
   streamingParser?.finish();
   const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
-    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
+    throw refuseStream(streamingParserErrorText, streamingParser?.getOutput());
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.

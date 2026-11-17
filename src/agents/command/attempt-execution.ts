@@ -344,7 +344,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
       },
-      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
+      async (turn) => {
+        const { sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult } = turn;
         const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
         if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
@@ -497,6 +498,15 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
             forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
+            // A preserved binding stays as-is; otherwise a lost first turn keeps its native session.
+            persistStoppedFirstCliSession: params.preserveCliSessionBinding
+              ? undefined
+              : (binding) =>
+                  turn.persistStoppedFirstSession({
+                    binding,
+                    expectedSession: sessionEntry,
+                    sessionStore: params.sessionStore,
+                  }),
             ...(forkStoreParams
               ? buildCliSessionForkRunParams(
                   {

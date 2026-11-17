@@ -1,0 +1,2 @@
+# First-turn output refusal and command retry persistence contracts.
+33
