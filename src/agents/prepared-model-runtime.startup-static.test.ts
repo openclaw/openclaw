@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,11 +12,17 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
+
+let state: OpenClawTestState;
 
 type CreateStaticCatalogResolver =
   typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
@@ -185,7 +191,7 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
   }),
 }));
 
-// mock-isolation: Startup fixtures provide auth and catalog snapshots without opening real stores.
+// mock-isolation: Model assertions supply credentials independently of the prepared empty store.
 vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorageFacts: (agentDir: string, options?: unknown) => {
     const authStorage = mocks.discoverAuthStorage(agentDir, options);
@@ -214,15 +220,16 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./legacy-inherited-auth-dir.js", () => ({
-  resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
+vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
+  resolveLegacyInheritedAuthDir: () => state.agentDir("default"),
 }));
 
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
-  resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
+  resolveAgentDir: () => state.agentDir("default"),
+  resolveAgentWorkspaceDir: () => state.workspaceDir,
 }));
 
 vi.mock("./auth-profiles/runtime-snapshots.js", async (importOriginal) => ({
@@ -240,7 +247,7 @@ vi.mock("./model-catalog.js", async () => ({
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 
-// mock-isolation: Static startup fixtures keep model planning and publication persistence unloaded.
+// mock-isolation: Static planning assertions do not perform catalog writes.
 vi.mock("./models-config.core.js", () => ({
   ensureOpenClawModelsJsonWithInput: mocks.ensureOpenClawModelsJson,
   planOpenClawModelsJsonSourceWithInput: mocks.planOpenClawModelsJsonSource,
@@ -263,9 +270,13 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
   createBundledStaticCatalogModelResolver: () => mocks.resolveStaticCatalogModel,
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn() }),
-}));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) => createMockSubsystemLogger(subsystem),
+  };
+});
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
   await import("./prepared-model-runtime.js");
@@ -279,13 +290,13 @@ const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 const inputFor = (config: OpenClawConfig) => ({
   agentId: "default",
   config,
-  agentDir: "/tmp/prepared-static-agent",
-  workspaceDir: "/tmp/prepared-static-workspace",
+  agentDir: state.agentDir("default"),
+  workspaceDir: state.workspaceDir,
 });
 const snapshotFor = (config: OpenClawConfig) =>
   getPreparedModelRuntimeSnapshot({
     ...inputFor(config),
-    inheritedAuthDir: "/tmp/prepared-static-agent",
+    inheritedAuthDir: state.agentDir("default"),
   });
 const refresh = (config: OpenClawConfig) =>
   refreshPreparedModelRuntimeSnapshots(config, {
@@ -310,6 +321,8 @@ async function withScopedCatalogCache<T>(read: () => Promise<T>): Promise<T> {
 
 beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  state = await createOpenClawTestState({ label: "prepared-static-catalog" });
+  await state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
   bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
@@ -318,6 +331,11 @@ beforeEach(async () => {
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
+});
+
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
+  await state.cleanup();
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {

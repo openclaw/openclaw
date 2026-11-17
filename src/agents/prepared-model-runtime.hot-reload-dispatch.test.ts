@@ -809,6 +809,7 @@ it.each(["success", "activation failure"] as const)(
 it.for(["config write", "plugins.reload"] as const)(
   "recovers failed reply publication after %s without waiting on its own lifecycle lease",
   async (entrypoint, { signal }) => {
+    await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
     const events: string[] = [];
     const restart = createDeferred();
     const cleanups: Array<() => Promise<void>> = [];

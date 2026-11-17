@@ -1,9 +1,30 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  closeSqliteReadOnlyWorkersForBroker,
+  runSqliteReadOnlyWorker,
+  withSqliteReadOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { prepareModelRuntimeOwner } from "./prepared-model-runtime.owner.js";
-import { listConfiguredRefreshInputs as refreshInputs } from "./prepared-model-runtime.refresh-scope.js";
+import {
+  listConfiguredRefreshInputs as refreshInputs,
+  refreshCommittedProviderCatalogs,
+} from "./prepared-model-runtime.refresh-scope.js";
 
 type Owners = Parameters<typeof refreshInputs>[2];
 function configuredOwner(input: Parameters<typeof prepareModelRuntimeOwner>[0]): Owners {
@@ -106,3 +127,94 @@ describe("configured model runtime refresh inputs", () => {
     });
   });
 });
+
+it.for(["broker", "disabled"] as const)(
+  "background catalog reads outlive caller inspection with %s transport",
+  async (transport, { signal }) => {
+    await withOpenClawTestState({ label: "catalog-background-reader" }, async (state) => {
+      const store = {
+        version: 1,
+        profiles: {
+          "fixture:default": { type: "api_key", provider: "fixture", key: "synthetic" },
+        },
+      };
+      const databasePath = await state.writeAuthProfiles(store);
+      const identity = readDatabasePathIdentitySync(databasePath);
+      const broker = createSpawnBrokerHost();
+      const selection: DatabaseEngineSelection = { effectiveEngines: createSqliteFamilyEngines() };
+      const entered = createDeferred();
+      const release = createDeferred();
+      let discovery: Promise<ModelCatalogSnapshot> | undefined;
+      const config = {};
+      const base = createModelRuntimeChoiceOwnerFixture(
+        config,
+        () => true,
+        {},
+        {
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+        },
+      );
+      const owner = prepareModelRuntimeOwner(
+        {
+          config,
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          env: state.env,
+        },
+        "configured",
+        "static",
+      );
+      owner.needsRefresh = false;
+      owner.snapshot = {
+        ...base,
+        loadFullModelCatalog: () => {
+          discovery = (async () => {
+            entered.resolve();
+            await withinTest(release.promise, signal);
+            expect(getSpawnBroker()).toBe(transport === "broker" ? broker : undefined);
+            expect(getDatabaseEngineSelection()).toBe(selection);
+            const rows = await runSqliteReadOnlyWorker(databasePath, {
+              mode: "auth-profile-rows",
+              source: "canonical",
+              expectedIdentity: identity.key,
+              expectedBirthtime: identity.birthtime,
+              env: state.env,
+              signal,
+            });
+            expect(rows.store).toEqual({ status: "readable", raw: store });
+            return base.modelCatalog;
+          })();
+          return discovery;
+        },
+      };
+      try {
+        await broker.ready();
+        await withDatabaseEngineSelection(selection, () =>
+          runWithSpawnBroker(transport === "broker" ? broker : undefined, () =>
+            withSqliteReadOnlyWorkerScope(async () => {
+              refreshCommittedProviderCatalogs([owner]);
+              await withinTest(entered.promise, signal);
+            }),
+          ),
+        );
+        release.resolve();
+        expect(discovery).toBeDefined();
+        await expect(discovery).resolves.toBe(base.modelCatalog);
+      } finally {
+        release.resolve();
+        await Promise.allSettled(discovery ? [discovery] : []);
+        try {
+          await closeSqliteReadOnlyWorkersForBroker(broker);
+        } finally {
+          try {
+            await broker.close();
+          } finally {
+            await cleanupSnapshotOperations();
+          }
+        }
+      }
+    });
+  },
+);

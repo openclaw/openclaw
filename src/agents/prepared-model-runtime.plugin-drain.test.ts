@@ -27,6 +27,7 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-runtime-plugin
 async function publishConfigured(config: RuntimeInput["config"] = {}) {
   fixture.mocks.authStorage.getAll.mockReturnValue({});
   fixture.mocks.configuredAgentIds = ["default"];
+  await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
   await refresh(config, { gatewayLifecycle: true });
   return fixture.agentInput("default", config);
 }

@@ -59,6 +59,7 @@ it("rejects descriptors captured before auth reload rebinds the retained plugin 
     auth: { profiles: { [`${id}:manual`]: { provider: id, mode: "api_key" } } },
   };
   fixture.mocks.configuredAgentIds = ["default"];
+  await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
   fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
   fixture.mocks.prepareStaticCatalog.mockImplementation(prepareImplicitProviderStaticCatalog);
   setRuntimeConfigSnapshot(before, before);

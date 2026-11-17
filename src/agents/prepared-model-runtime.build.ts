@@ -70,7 +70,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   isGenerationCurrent?: () => boolean;
   retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
-  onBeforeAuthCapture?: () => void;
+  onBeforeAuthCapture?: (signal?: AbortSignal) => void | Promise<void>;
   inspectRegistry?: boolean;
 }>;
 
@@ -252,7 +252,8 @@ async function buildSnapshotBatch(
           getConfiguredHarnessRuntimes,
           getConfiguredModelFacts,
           assertCurrent: assertBuildCurrent,
-          onBeforeAuthCapture: (input) => candidateByInput.get(input)!.onBeforeAuthCapture?.(),
+          onBeforeAuthCapture: (input) =>
+            candidateByInput.get(input)!.onBeforeAuthCapture?.(signal),
           onStage,
           signal,
           registryResources,

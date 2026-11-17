@@ -30,6 +30,9 @@ it.each([true, false])(
   "reads published discovery rows from a project workspace (gateway=%s)",
   async (gatewayLifecycle) => {
     mocks.configuredAgentIds = ["pro"];
+    if (gatewayLifecycle) {
+      await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "pro");
+    }
     mocks.preparedAuthStore = { version: 1, profiles: {} };
     const publish = async (config: OpenClawConfig, ids: readonly string[]) => {
       mocks.runPreparedModelCatalogWorker.mockResolvedValue(discoveredCatalog(ids));

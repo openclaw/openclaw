@@ -13,6 +13,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
   scopePreparedModelRuntimeLease,
@@ -622,6 +623,12 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("does not replay an auth mutation that occurs before the first owner is registered", async () => {
+    await fixture.state.writeAuthProfiles({ version: 1, profiles: {} }, "default");
+    // Complete persisted auth reads before timing first-owner publication and replay.
+    await loadAuthProfileStoreWithoutExternalProfilesAsync(fixture.state.agentDir("default"), {
+      inheritedAuthDir: fixture.state.agentDir("default"),
+    });
+    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
     getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
     mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       mocks.mutationListener?.({ affectsInheritedStores: true });
