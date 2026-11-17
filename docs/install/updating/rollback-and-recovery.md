@@ -272,12 +272,17 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
-Once the updater verifies that the target Gateway is serving, later optional
-recognized maintenance failures, such as a late restart-health report or removing
-an old CLI wrapper, remain warnings and do not trigger rollback or turn the update
-into a failure. Authority refusals, data-at-risk failures, and unclassified errors
-still block successful completion. This does not rewrite an earlier failed
-attempt when a later status check finds the Gateway healthy.
+Once the updater verifies that the target Gateway is serving, a late
+restart-health report remains a warning and does not trigger rollback or turn the
+update into a failure. An old CLI wrapper that cannot be removed after a switch
+from a Git checkout to a package install is also a warning, whether or not the
+Gateway restarted: the package install is kept, and the wrapper keeps starting
+the old checkout wherever it comes first on `PATH` until you remove it. The
+warning names the path it could not remove or inspect. A wrapper that a system package owns still fails the
+update and rolls the package install back. Authority refusals, data-at-risk
+failures, and unclassified errors still block successful completion. This does
+not rewrite an earlier failed attempt when a later status check finds the
+Gateway healthy.
 
 A verified rollback names the version serving after recovery, including when
 an additional repair was needed. If the restored service fails its health check,
