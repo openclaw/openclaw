@@ -1726,6 +1726,10 @@ The target applies the migration content while retaining the old published
 schema version, so the old updater can finish its ledger writes and final
 report. Doctor explains that schema content is applied and version publication
 is deferred. The new Gateway runs on the migrated content during this interval.
+Retained candidate connections and plugin lease writes adopt a later Gateway
+publication only when both the SQLite header and schema metadata match the
+candidate's current schema. This fix must be in the candidate; mismatched markers
+still refuse admission, and existing lease and write-authority checks remain.
 
 Publication waits until every affected update run has been terminal for at least
 five minutes. A running row that has not changed for more than 30 minutes counts

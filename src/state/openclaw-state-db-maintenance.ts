@@ -23,6 +23,7 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { VERSION } from "../version.js";
 import {
+  adoptPeerPublishedStateSchemaVersion,
   getStateRuntimeSchemaAdmission,
   getStateSchemaVersionAdmission,
   publishStateSchemaVersionAdmission,
@@ -241,33 +242,32 @@ export function assertOpenClawStateDatabaseForMaintenance(
   options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
   readTable?: SqliteTableContractReader,
 ): void {
+  const { pathname, schemaVersions } = options;
   if (isPostgresSqlConnection(database)) {
     requireNativeDatabaseFile("postgres", "repair");
   }
-  const userVersion = assertSupportedStateSchemaVersion(
-    database,
-    options.pathname,
-    options.schemaVersions,
-  );
-  const contentVersion =
-    options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
+  const userVersion = assertSupportedStateSchemaVersion(database, pathname, schemaVersions);
+  const contentVersion = schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
   if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
+      `OpenClaw state database ${pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
 
   const metadata = assertOpenClawStateDatabaseOwner(database, options);
-  if (metadata?.schema_version !== userVersion) {
+  if (
+    metadata?.schema_version !== userVersion &&
+    !adoptPeerPublishedStateSchemaVersion(database, metadata)
+  ) {
     const schemaVersion =
       typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
+      `OpenClaw state database ${pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
     );
   }
   assertSqliteSchemaContains(
     database,
-    options.pathname,
+    pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
     OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
     readTable,
