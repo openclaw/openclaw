@@ -211,6 +211,9 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 | YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
 Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
+For concrete frontmatter writes, `name/absent` is unresolved.
+Insert keys directly into `[frontmatter]` with `+key`; insertion below a key,
+such as `name/+added`, is not writable. Rejected writes leave the file unchanged.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
 
@@ -252,6 +255,10 @@ depending on the per-kind AST shape.
   `parse-error`.
   Leaf replacement through object-valued mapping keys, such as YAML 1.1
   timestamp keys, is refused with `unresolved` and leaves the file unchanged.
+
+`--value-json` is refused for Markdown and YAML without changing the file.
+Pass a plain `<value>` without that flag to use their existing string/scalar
+write behavior.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`

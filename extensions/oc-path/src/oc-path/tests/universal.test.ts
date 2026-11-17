@@ -67,9 +67,12 @@ describe("resolveOcPath", () => {
     expect(resolve(ast, uri)).toMatchObject({ kind: "insertion-point", container });
   });
 
-  it("returns null when insertion target is not a container", () => {
-    const ast = parseJsonc('{ "k": 42 }');
-    expect(resolve(ast, "oc://config/k/+")).toBeNull();
+  it.each([
+    [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
+  ])("returns null for an invalid target at %s %s", (ast, uri) => {
+    expect(resolve(ast, uri)).toBeNull();
   });
   it("preserves source line lookup for numeric map keys", () => {
     const ast = parseYaml("name: x\n1: one\n");
@@ -126,6 +129,8 @@ describe("setOcPath", () => {
     [parseJsonc('{"k":true}'), "oc://config/k", "maybe", "parse-error"],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", "not json", "parse-error"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent", "y", "unresolved"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added", "y", "not-writable"],
     [parseJsonc('{"plugins":{"github":"x"}}'), "oc://config/plugins/+github", '"y"', "unresolved"],
     [parseJsonc('{"items":[1,2]}'), "oc://config/items/+abc", "3", "type-mismatch"],
     [parseJsonl(""), "oc://log/+", "not json", "parse-error"],
@@ -133,11 +138,13 @@ describe("setOcPath", () => {
     [parseJsonc("{}"), "oc://config/missing", "v", "unresolved"],
   ])("rejects invalid edit at %s %s with %s (%s)", expectEditError);
 
-  it("rejects non-finite parsed JSON replacement values", () => {
-    const ast = parseJsonc('{ "limit": 1 }');
-    expect(() => edit(ast, "oc://openclaw.json/limit", "1e999", { valueJson: true })).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+  it.each([
+    [parseJsonc('{ "limit": 1 }'), "oc://openclaw.json/limit", "1e999", "parse-error"],
+    [parseYaml("name: x\n"), "oc://X.yaml/name", "{}", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name", "{}", "not-writable"],
+  ])("rejects invalid JSON-value replacement at %s %s", (ast, uri, value, reason) => {
+    const replace = () => edit(ast, uri, value, { valueJson: true });
+    expect(replace).toThrow(expect.objectContaining({ reason }));
   });
   it("replaces whole line via JSON value", () => {
     const ast = parseJsonl('{"event":"start"}\n');
@@ -221,10 +228,8 @@ describe("setOcPath", () => {
     const { raw } = edit(ast, "oc://log/+", '{"event":"step","n":1}');
     const lines = raw.split("\n").filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(expectDefined(lines[1], "appended JSONL line"))).toEqual({
-      event: "step",
-      n: 1,
-    });
+    const appended = expectDefined(lines[1], "appended JSONL line");
+    expect(JSON.parse(appended)).toEqual({ event: "step", n: 1 });
   });
 
   it.each([
