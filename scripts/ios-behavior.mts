@@ -766,8 +766,9 @@ function streamCase(keyboardUp: boolean): Case {
       // layouts of 5–60 pt that never reach the screen, so its drift is reported only. Two drawn
       // windows cover it. While the reply grows, its footer row moves down, which the recording
       // cannot tell from a scroll, so the early window's area ends above the footer's first
-      // position (it only moves down from there). It opens once that area holds two strips,
-      // ~150–400 ms after the first second. From when the reply fills the screen, the late window
+      // position (it only moves down from there). It opens once that area spans three 40 pt
+      // strips, so two hold content even when the gap above the reply leaves one blank, ~150–500
+      // ms after the first second. From when the reply fills the screen, the late window
       // covers the whole transcript above the run footer, which appears when the reply ends,
       // minus the columns of the jump-to-latest button, which floats over the reply.
       const pinned = motion(window(log, sentAt + 1000, end).frames, { aliases });
@@ -782,7 +783,7 @@ function streamCase(keyboardUp: boolean): Case {
       // Bottom of the reply's footer row: avatar and elapsed time, 44 pt tall.
       const footerTop = (frame: ProbeFrame) => (frame.f.live?.[1] ?? 0) - 44;
       const early = view.frames.find(
-        (frame) => frame.t >= sentAt + 1000 && footerTop(frame) - transcript.y >= 80,
+        (frame) => frame.t >= sentAt + 1000 && footerTop(frame) - transcript.y >= 120,
       );
       const jump = axFrame((node) => node.AXLabel === "Jump to latest reply");
       return {
@@ -1546,6 +1547,8 @@ try {
             ]).stdout,
           ) as { frames: number; strips: number; maxMovePt: number; unexplainedFrames: number };
         });
+        // Per window: which one moved, and at what second of the recording.
+        console.log(`ios:behavior: ${name} #${sample} drawn windows ${JSON.stringify(measured)}`);
         result.metrics.drawnMovePt = Math.max(...measured.map((entry) => entry.maxMovePt));
         // Reported, not gated: on `main` the live bubble → final row handoff redraws the reply
         // about 2 pt right and 1 pt down for a few frames, which no vertical shift explains.
