@@ -116,7 +116,6 @@ const normalizeVerboseLevelMock = vi.fn();
 export const isThinkingLevelSupportedMock = vi.fn();
 export const resolveSupportedThinkingLevelMock = vi.fn();
 const supportsXHighThinkingMock = vi.fn();
-const resolveSessionTranscriptPathMock = vi.fn();
 const setSessionRuntimeModelMock = vi.fn();
 export const registerAgentRunContextMock = vi.fn();
 export const buildSafeExternalPromptMock = vi.fn();
@@ -164,7 +163,6 @@ vi.mock("./run.runtime.js", async (importOriginal) => ({
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
-  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   normalizeAgentId: vi.fn((id: string) => id),
@@ -281,7 +279,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   isCliProvider: isCliProviderMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
   normalizeVerboseLevel: normalizeVerboseLevelMock,
-  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
@@ -587,7 +584,6 @@ function resetRunExecutionMocks(): void {
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
-  resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
   registerAgentRunContextMock.mockReturnValue(undefined);
   runWithModelFallbackMock.mockReset();
   runWithModelFallbackMock.mockResolvedValue(makeDefaultModelFallbackResult());
