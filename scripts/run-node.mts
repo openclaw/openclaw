@@ -941,22 +941,17 @@ const parsePositiveInteger = (value: unknown) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
-const listRunNodeCpuProfiles = (
-  deps: RunNodeDeps,
-  absoluteProfileDir: string,
-  commandName: string,
-) => {
+const listRunNodeCpuProfiles = (deps: RunNodeDeps, absoluteProfileDir: string) => {
   let entries;
   try {
     entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
   } catch {
     return [];
   }
-  const prefix = `openclaw-${commandName}-`;
   return entries
     .filter(
       (entry) =>
-        entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".cpuprofile"),
+        entry.isFile() && entry.name.startsWith("CPU.") && entry.name.endsWith(".cpuprofile"),
     )
     .flatMap((entry) => {
       const filePath = path.join(absoluteProfileDir, entry.name);
@@ -970,16 +965,12 @@ const listRunNodeCpuProfiles = (
     .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
 };
 
-const pruneRunNodeCpuProfiles = (
-  deps: RunNodeDeps,
-  absoluteProfileDir: string,
-  commandName: string,
-) => {
+const pruneRunNodeCpuProfiles = (deps: RunNodeDeps, absoluteProfileDir: string) => {
   const maxFiles = parsePositiveInteger(deps.env[RUN_NODE_CPU_PROF_MAX_FILES_ENV]);
   if (!maxFiles) {
     return;
   }
-  const profiles = listRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
+  const profiles = listRunNodeCpuProfiles(deps, absoluteProfileDir);
   const deleteCount = Math.max(0, profiles.length - maxFiles + 1);
   for (const profile of profiles.slice(0, deleteCount)) {
     try {
@@ -997,18 +988,17 @@ const resolveRunNodeCpuProfileArgs = (deps: RunNodeDeps) => {
   }
 
   const absoluteProfileDir = path.resolve(deps.cwd, profileDir);
-  deps.fs.mkdirSync(absoluteProfileDir, { recursive: true });
   deps.env[RUN_NODE_CPU_PROF_DIR_ENV] = absoluteProfileDir;
 
   const commandName = sanitizeCpuProfileNamePart(deps.args[0]);
-  pruneRunNodeCpuProfiles(deps, absoluteProfileDir, commandName);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const pid = Number.isInteger(deps.process.pid) && deps.process.pid > 0 ? deps.process.pid : "pid";
-  const profileName = `openclaw-${commandName}-${pid}-${timestamp}.cpuprofile`;
-  const profilePath = path.join(absoluteProfileDir, profileName);
-  const relativeProfilePath = path.relative(deps.cwd, profilePath) || profilePath;
-  logRunner(`Writing Node CPU profile to ${relativeProfilePath}.`, deps);
-  return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
+  const commandProfileDir = path.join(absoluteProfileDir, `openclaw-${commandName}`);
+  deps.fs.mkdirSync(commandProfileDir, { recursive: true });
+  pruneRunNodeCpuProfiles(deps, commandProfileDir);
+  const relativeProfileDir = path.relative(deps.cwd, commandProfileDir) || commandProfileDir;
+  logRunner(`Writing Node CPU profiles to ${relativeProfileDir}.`, deps);
+  // Respawns and workers inherit these flags. Node's default names include the
+  // actual PID and thread ID; a fixed name lets the last launcher overwrite them.
+  return ["--cpu-prof", `--cpu-prof-dir=${commandProfileDir}`];
 };
 
 const resolveRunNodeDiagnosticArgs = (deps: RunNodeDeps) => {
