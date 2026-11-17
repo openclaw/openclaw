@@ -3,7 +3,6 @@ import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
-import { validateToolArguments } from "../../packages/agent-core/src/validation.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -11,7 +10,10 @@ import {
   finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
 } from "./agent-tools.before-tool-call.js";
-import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
+import {
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
@@ -151,30 +153,6 @@ async function validateCatalogSchemaValue(
   }
 }
 
-function isToolParameters(
-  value: unknown,
-): value is Parameters<typeof validateToolArguments>[0]["parameters"] {
-  return isRecord(value);
-}
-
-function coerceCatalogInput(entry: ToolSearchCatalogEntry, input: unknown): unknown {
-  if (entry.source !== "openclaw" || !isRecord(input)) {
-    return input;
-  }
-  const parameters = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
-  if (!isToolParameters(parameters)) {
-    return input;
-  }
-  try {
-    return validateToolArguments(
-      { name: entry.name, description: entry.description, parameters },
-      { type: "toolCall", id: entry.id, name: entry.name, arguments: input },
-    );
-  } catch {
-    return input;
-  }
-}
-
 async function assertCatalogInputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   value: unknown,
@@ -245,7 +223,6 @@ export class ToolSearchRuntime {
     private readonly options: {
       prepareInput?: boolean;
       validateInput?: boolean;
-      coerceInput?: boolean;
       callIdScope?: string;
     } = {},
   ) {}
@@ -426,8 +403,13 @@ export class ToolSearchRuntime {
   ) => {
     this.pluginRuntimeRefresh.assertCurrent();
     catalog.callCount += 1;
-    const normalizedInput = this.options.coerceInput
-      ? coerceCatalogInput(entry, input ?? {})
+    const validateInput = this.options.validateInput && entry.source === "openclaw";
+    const normalizedInput = validateInput
+      ? coerceToolExecutionArguments(
+          entry,
+          resolveAgentToolExecutionSchema(entry.tool, entry.parameters),
+          input ?? {},
+        )
       : (input ?? {});
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const scope = this.options.callIdScope
@@ -487,7 +469,6 @@ export class ToolSearchRuntime {
       acceptedSnapshot = snapshot;
       return snapshot;
     };
-    const validateInput = this.options.validateInput && entry.source === "openclaw";
     const validateExecution = validateInput || outputVariants !== undefined;
     const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
       ...this.options,

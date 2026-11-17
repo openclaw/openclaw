@@ -2,7 +2,10 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
-import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
+import {
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../tool-effect-receipt.js";
 import { resolveToolResultFailureKind } from "../tool-result-error.js";
@@ -59,6 +62,9 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
     if (params.prepareArguments) {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
+    }
+    if (params.validateArguments) {
+      preparedArgs = coerceToolExecutionArguments(tool, tool.parameters, preparedArgs);
     }
     const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
     // Preparation can mutate in place; otherwise the initial capture is already exact.

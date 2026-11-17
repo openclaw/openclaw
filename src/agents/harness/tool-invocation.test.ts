@@ -86,6 +86,29 @@ it("snapshots executed arguments before result middleware can mutate them", asyn
   expect(telemetry.successfulCronAdds).toBe(1);
 });
 
+it("coerces quoted scalars for validated tools as direct calls do", async () => {
+  const execute = vi.fn(async () => textToolResult("ok", {}));
+  await runAgentHarnessToolInvocation({
+    tool: {
+      name: "exec",
+      label: "exec",
+      description: "Execute a tool.",
+      parameters: Type.Object({ limit: Type.Integer(), recursive: Type.Boolean() }),
+      execute,
+    },
+    call: { ...call, arguments: { limit: "3", recursive: "true" } },
+    validateArguments: () => {},
+    signal: new AbortController().signal,
+    boundaries: createAgentHarnessToolExecutionBoundaryRegistry(),
+    applyMiddleware: async (event) => event.result,
+    onResult: (execution) => execution,
+    onError: ({ error }) => {
+      throw error;
+    },
+  });
+  expect(execute.mock.calls[0]?.at(1)).toEqual({ limit: 3, recursive: true });
+});
+
 it.each([false, true])(
   "retains nested execution arguments through executor, middleware, and hook mutations (prepare=%s)",
   async (prepare) => {
