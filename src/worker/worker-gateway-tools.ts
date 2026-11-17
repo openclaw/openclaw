@@ -31,22 +31,33 @@ export function createWorkerGatewayToolProxies(
             )
           : undefined;
         const invocation = { generation: surface.generation, toolCallId };
+        let cancelRequested = false;
         const cancel = () => {
+          if (cancelRequested) {
+            return;
+          }
+          cancelRequested = true;
           void client.cancelGatewayTool(invocation).catch(() => {});
         };
         signal?.addEventListener("abort", cancel, { once: true });
         try {
-          const response = await client.invokeGatewayTool(
-            { ...invocation, toolId: entry.id, arguments: args },
-            {
-              replay: entry.replay,
-              timeoutMs,
-              signal,
-              onUpdate: onUpdate
-                ? (result) => onUpdate({ ...result, details: result.details })
-                : undefined,
-            },
-          );
+          const response = await client
+            .invokeGatewayTool(
+              { ...invocation, toolId: entry.id, arguments: args },
+              {
+                replay: entry.replay,
+                timeoutMs,
+                signal,
+                onUpdate: onUpdate
+                  ? (result) => onUpdate({ ...result, details: result.details })
+                  : undefined,
+              },
+            )
+            .catch((error: unknown) => {
+              // A lost response abandons this observer, not the Gateway's live call.
+              cancel();
+              throw error;
+            });
           signal?.throwIfAborted();
           if (!response.ok) {
             throw new Error(response.error.message);

@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WorkerToolSurfaceSchema,
@@ -11,6 +11,10 @@ import {
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import {
+  createCatalogCodeModeHarness,
+  resetCodeModeTestState,
+} from "../../agents/code-mode.test-support.js";
 import { stringEnum } from "../../agents/schema/string-enum.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
@@ -18,6 +22,7 @@ import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createWorkerGatewayToolProxies } from "../../worker/worker-gateway-tools.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
@@ -125,6 +130,81 @@ function request(
   const { generation } = surface;
   return { generation, toolId: entry.id, toolCallId: call, arguments: { value: "input" } };
 }
+
+it.each(["node", "quickjs"] as const)(
+  "%s cancels abandoned transport calls but preserves parked calls through resume",
+  async (executor) => {
+    onTestFinished(resetCodeModeTestState);
+    for (const abandon of [true, false]) {
+      const entered = createDeferredCore<AbortSignal>();
+      const release = createDeferredCore();
+      const finished = createDeferredCore<boolean>();
+      const disconnected = createDeferredCore<never>();
+      const source = tool("remote", async (_id, _args, signal) => {
+        assert.isDefined(signal);
+        const abort = () => release.resolve();
+        signal.addEventListener("abort", abort, { once: true });
+        entered.resolve(signal);
+        try {
+          await release.promise;
+          return success;
+        } finally {
+          signal.removeEventListener("abort", abort);
+          finished.resolve(signal.aborted);
+        }
+      });
+      const { runtime } = fixture([source]);
+      const surface = await runtime.getSurface(identity);
+      const proxies = createWorkerGatewayToolProxies(surface, {
+        invokeGatewayTool: async (params) => {
+          const response = runtime.invoke(identity, params, sink).then((payload) => ({
+            type: "res" as const,
+            id: "host-result",
+            ok: true as const,
+            payload,
+          }));
+          // Fixed transport I/O: losing the response does not stop Gateway execution.
+          return await Promise.race([response, disconnected.promise]);
+        },
+        cancelGatewayTool: async (params) => ({
+          type: "res",
+          id: "host-cancel",
+          ok: true,
+          payload: runtime.cancel(params),
+        }),
+      });
+      const guest = createCatalogCodeModeHarness(proxies, { codeMode: { executor } });
+      try {
+        const parked = await guest.run(
+          'const pending = remote({ value: "input" }); await yield_control(); return await pending;',
+        );
+        expect(parked.status).toBe("waiting");
+        const signal = await entered.promise;
+        expect(signal.aborted).toBe(false);
+        if (abandon) {
+          disconnected.reject(new Error("Worker gateway-tool request timed out"));
+          expect(await guest.resume(parked)).toMatchObject({
+            status: "failed",
+            failurePhase: "bridge",
+            error: expect.stringContaining("timed out"),
+          });
+          expect(signal.aborted).toBe(true);
+          expect(await finished.promise).toBe(true);
+        } else {
+          const resumed = guest.resume(parked);
+          expect(signal.aborted).toBe(false);
+          release.resolve();
+          expect(await resumed).toMatchObject({ status: "completed", value: success.details });
+          expect(await finished.promise).toBe(false);
+          expect(signal.aborted).toBe(false);
+        }
+      } finally {
+        release.resolve();
+        await runtime.close();
+      }
+    }
+  },
+);
 
 it("enforces the deployment action policy when dispatching an issued worker handle", async () => {
   const config: OpenClawConfig = {
