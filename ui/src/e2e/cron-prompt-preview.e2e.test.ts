@@ -6,7 +6,13 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomation,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Automation prompt preview",
@@ -37,8 +43,10 @@ suite.define(() => {
           payload: { kind: "agentTurn", message: prompt },
         });
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
             "cron.list": cronList([job], "garden-preview"),
+            "cron.get": job,
             "cron.runs": cronRuns([]),
             "cron.status": { enabled: true, jobs: 1 },
             "cron.update": {
@@ -48,7 +56,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
-        await page.locator('[data-test-id="cron-row-garden-preview"] .cron-table__name').click();
+        await openAutomation(page, job.id);
         const input = page.locator("#cron-payload-text");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe(prompt);

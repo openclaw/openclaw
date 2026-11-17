@@ -1,6 +1,6 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -164,6 +164,7 @@ export function createContext(
       },
     },
     navigate: vi.fn(),
+    replace: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }
@@ -232,6 +233,18 @@ export function createPage(
   };
   flush();
   return page;
+}
+
+/** The page's copy of an automation once its list read has landed. */
+export async function heldJob(page: CronTestPage, id: string): Promise<CronJob> {
+  await waitForSolid(() => expect(page.cron.cronJobs.some((job) => job.id === id)).toBe(true));
+  return page.cron.cronJobs.find((job) => job.id === id)!;
+}
+
+/** Opens a held automation, as choosing it in the Automations sidebar does. */
+export async function openJob(page: CronTestPage, id: string): Promise<void> {
+  page.selectJob(await heldJob(page, id));
+  await page.settle();
 }
 
 export function cronListResponse(jobs: CronJob[]): CronJobsListResult {

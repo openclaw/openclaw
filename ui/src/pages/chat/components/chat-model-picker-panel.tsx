@@ -57,8 +57,6 @@ registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
-  onSelectionClose: (event: MouseEvent) => void;
-  searchRef: (element: HTMLInputElement) => void;
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
@@ -308,7 +306,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       entry.runtimeOverride ??
         (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
     );
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -317,7 +315,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       return;
     }
     panel.params.onTargetSelect?.(groupId, value);
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   // Retain the route boundary across unrelated owner publications.
   const renderDirect = (render: () => JSX.Element) => render();
@@ -505,7 +503,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={[search?.inputRef(), panel.searchRef]}
+                ref={searchView?.inputRef()}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"

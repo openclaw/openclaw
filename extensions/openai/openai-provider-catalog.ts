@@ -16,12 +16,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENAI_UNKNOWN_MODEL_COST } from "./account-models.js";
-import {
-  OPENAI_CODEX_RESPONSES_BASE_URL,
-  resolveOpenAICodexModelsEndpoint,
-  type OpenAICodexModelsEndpointContext,
-  resolveOpenAIDefaultBaseUrl,
-} from "./base-url.js";
+import { OPENAI_CODEX_RESPONSES_BASE_URL, resolveOpenAIDefaultBaseUrl } from "./base-url.js";
 import {
   normalizeOpenAICodexCatalogModel,
   readCodexReasoningLevels,
@@ -210,12 +205,12 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
-  catalogContext?: OpenAICodexModelsEndpointContext;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
   const { fetchLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
-  const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
+  // Discover the account's broader catalog; the runtime still owns turn compatibility.
+  const endpoint = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=99.0.0`;
   try {
     return await getCachedLiveCatalogValue({
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
@@ -350,7 +345,6 @@ export function buildOpenAIProviderCatalog(): Pick<
             await buildOpenAICodexLiveProviderConfig({
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
-              catalogContext: ctx,
             }),
             runtimeAuth.profileId ?? auth.profileId,
           );
@@ -366,7 +360,7 @@ export function buildOpenAIProviderCatalog(): Pick<
             };
           }
           return projectOpenAICatalog(
-            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey, catalogContext: ctx }),
+            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey }),
           );
         }
         if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
