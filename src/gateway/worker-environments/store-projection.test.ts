@@ -8,6 +8,7 @@ import {
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -16,6 +17,7 @@ import {
 import type { WorkerCredentialRecord } from "./credential.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
+import { WorkerEnvironmentMutationPendingError } from "./store-errors.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { createWorkerEnvironmentReceipt, readWorkerEnvironmentReceipt } from "./store-receipt.js";
@@ -116,6 +118,50 @@ function attachment(sessionId = "session", closedAtMs: number | null = null) {
     closedAtMs,
   };
 }
+
+it("lets an attachment reader await its pending activity publication", async () => {
+  const owner = acquireProjection();
+  const before = { ...facts(environment), attachments: [attachment()] };
+  owner.install(before, owner.nextSequence(), false);
+  const after = {
+    ...before,
+    attachments: [{ ...before.attachments[0]!, lastUsedAtMs: 2 }],
+  };
+  const entered = createDeferredCore();
+  const publish = createDeferredCore();
+  const write = owner.enqueue(async () => {
+    const token = fence(owner, after);
+    entered.resolve();
+    await publish.promise;
+    owner.install(after, owner.nextSequence(), false);
+    owner.release(token);
+  });
+  try {
+    await entered.promise;
+    let pending: unknown;
+    try {
+      owner.attachment("session");
+    } catch (error) {
+      pending = error;
+    }
+    expect(pending).toBeInstanceOf(WorkerEnvironmentMutationPendingError);
+    if (!(pending instanceof WorkerEnvironmentMutationPendingError)) {
+      throw new Error("Expected the pending attachment write");
+    }
+    let settled = false;
+    const reader = pending.settled.then(() => {
+      settled = true;
+      return owner.attachment("session");
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    publish.resolve();
+    await expect(reader).resolves.toEqual(after.attachments[0]);
+  } finally {
+    publish.resolve();
+    await write;
+  }
+});
 
 it("requires complete exact-key receipts before replacing environment authority", () => {
   const owner = acquireProjection();

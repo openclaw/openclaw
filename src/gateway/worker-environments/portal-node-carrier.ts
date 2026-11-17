@@ -13,6 +13,7 @@ import {
   type WorkerNodeCarrierRuntime,
 } from "./node-carrier-binding.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
+import { WorkerEnvironmentMutationPendingError } from "./store-errors.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 type ActiveNodePortal = {
@@ -111,6 +112,7 @@ export function createWorkerNodePortalCarrier(options: {
     };
     // Publish the connection before node discovery yields so owner teardown can fence it.
     portal.streams.add(active);
+    let dispatchAuthorizationError: unknown;
     try {
       assertCurrent?.();
       const node = await findCurrentNode(portal.binding, capturedRuntime, active.controller.signal);
@@ -131,10 +133,12 @@ export function createWorkerNodePortalCarrier(options: {
         timeoutMs: 0,
         signal: active.controller.signal,
         isDispatchAuthorized: () => {
+          dispatchAuthorizationError = undefined;
           try {
             assertCurrent?.();
             return !signal.aborted && bindingIsCurrent(portal.binding, capturedRuntime, node);
-          } catch {
+          } catch (error) {
+            dispatchAuthorizationError = error;
             return false;
           }
         },
@@ -165,7 +169,7 @@ export function createWorkerNodePortalCarrier(options: {
       return active.stream;
     } catch (error) {
       await stopStream(active);
-      throw error;
+      throw dispatchAuthorizationError ?? error;
     }
   };
 
@@ -224,8 +228,20 @@ export function createWorkerNodePortalCarrier(options: {
         await findCurrentNode(binding, capturedRuntime, portal.controller.signal);
         return {
           // Per-connection resource guards survive the operation that published the URL.
-          connect: (assertCurrent, touch) =>
-            connectPortal(portal, request.remotePort, assertCurrent, touch),
+          connect: async (assertCurrent, touch) => {
+            for (;;) {
+              try {
+                return await connectPortal(portal, request.remotePort, assertCurrent, touch);
+              } catch (error) {
+                if (!(error instanceof WorkerEnvironmentMutationPendingError)) {
+                  throw error;
+                }
+                // No request bytes have crossed the connection yet. Wait for the
+                // inventory owner, then repeat admission against its current facts.
+                await raceNodeWorkerOperation(error.settled, portal.controller.signal);
+              }
+            }
+          },
           close: () => closePortal(portal),
         };
       } catch (error) {
