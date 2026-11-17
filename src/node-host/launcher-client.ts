@@ -13,6 +13,7 @@ type LauncherChannel = EventEmitter & {
 };
 
 function launcherChannel(): LauncherChannel | undefined {
+  // SAFETY: node-host-launcher.mjs sets this process symbol to a LauncherMessageChannel for pipe children.
   return Reflect.get(process, CHANNEL_MARKER) as LauncherChannel | undefined;
 }
 
