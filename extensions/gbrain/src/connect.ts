@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Connects OpenClaw to the brain that GBrain itself runs.
@@ -119,7 +120,7 @@ export function authoredGbrainEntry(
 ): GbrainMcpServerEntry | "foreign" | undefined {
   let node = parsed;
   for (const key of ["mcp", "servers", GBRAIN_SERVER_NAME]) {
-    node = asRecord(node)?.[key];
+    node = asOptionalRecord(node)?.[key];
   }
   if (!node || typeof node !== "object") {
     return resolved ? "foreign" : undefined;
@@ -139,15 +140,9 @@ export function applyGbrainConnection(
   entry.headers = { ...entry.headers, Authorization: authorization };
 }
 
-/** A JSON object's fields, each still `unknown` until the caller checks it. */
-export function asRecord(value: unknown): Record<string, unknown> | undefined {
-  // SAFETY: any non-null object can be read by key; every read value stays `unknown`.
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function parseJson(text: string): Record<string, unknown> | undefined {
   try {
-    return asRecord(JSON.parse(text));
+    return asOptionalRecord(JSON.parse(text));
   } catch {
     return undefined;
   }

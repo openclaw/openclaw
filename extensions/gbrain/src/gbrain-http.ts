@@ -2,7 +2,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asRecord, type Health } from "./connect.js";
+import type { Health } from "./connect.js";
 
 const HEALTH_TIMEOUT_MS = 3000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -45,8 +45,8 @@ export async function readGbrainHealth(baseUrl: string): Promise<Health> {
   } catch {
     return { kind: "down" };
   }
-  const body = asRecord(response.body);
-  const fixCommand = asRecord(body?.fix)?.command;
+  const body = asOptionalRecord(response.body);
+  const fixCommand = asOptionalRecord(body?.fix)?.command;
   if (response.ok && body?.status === "ok" && typeof body.version === "string") {
     return { kind: "ok", version: body.version };
   }
@@ -133,7 +133,7 @@ export async function mintGbrainKey(
     async (response) => ({
       ok: response.ok,
       status: response.status,
-      body: asRecord(await response.json().catch(() => undefined)),
+      body: asOptionalRecord(await response.json().catch(() => undefined)),
     }),
   );
   const body = mint.body;
