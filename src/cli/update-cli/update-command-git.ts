@@ -372,6 +372,7 @@ export async function updateGitInstall(params: {
   switchToGit: boolean;
   /** Decided once by the update command (usesGitReleases). */
   gitReleases?: boolean;
+  deferReleaseActivation?: boolean;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
   startedAt: number;
@@ -515,6 +516,7 @@ export async function updateGitInstall(params: {
       startedAt: params.startedAt,
       opts: {
         gitReleases: params.gitReleases === true,
+        deferReleaseActivation: params.deferReleaseActivation,
         releaseNode: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         sourceRuntimePrepared: params.sourceRuntimePrepared,

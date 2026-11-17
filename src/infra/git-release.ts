@@ -46,6 +46,8 @@ export async function publishGitRelease(params: {
   prefix: string;
   releaseRoot: string;
   trial: boolean;
+  /** Leave the link to the next service start, which selects the release on trial. */
+  pending?: boolean;
   assertCurrent?: () => void;
 }): Promise<{ previous: string | null; target: string }> {
   const slot = gitReleaseSlot(params.prefix);
@@ -62,12 +64,14 @@ export async function publishGitRelease(params: {
     previous = capture.target;
     // A stale trial must not switch the next release back.
     await fs.rm(trialFile, { force: true });
-    await switchPackageReleaseLink({
-      slot,
-      expected: { identity: capture.identity, target: capture.target },
-      target,
-      assertCurrent: () => params.assertCurrent?.(),
-    });
+    if (!params.pending) {
+      await switchPackageReleaseLink({
+        slot,
+        expected: { identity: capture.identity, target: capture.target },
+        target,
+        assertCurrent: () => params.assertCurrent?.(),
+      });
+    }
   } else {
     const globalRoot = path.dirname(slot);
     await fs.mkdir(globalRoot, { recursive: true });
@@ -87,6 +91,7 @@ export async function publishGitRelease(params: {
       ...(buildId ? { buildId } : {}),
       // The update admits only a service whose config selection matches this process.
       config: resolveConfigPath(process.env),
+      ...(params.pending ? { pending: true } : {}),
       createdAt: Date.now(),
       attempts: 0,
     };

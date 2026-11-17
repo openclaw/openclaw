@@ -57,6 +57,7 @@ import {
   withRecoveredSource,
   writePlan,
   type UpgradeOp,
+  type UpgradePlan,
 } from "./state-upgrade-tree.js";
 import {
   ChainStepError,
@@ -72,6 +73,15 @@ const WORK_PREFIX = ".upgrade-";
 // exactly what its build replaced. A build without a build ID names them by version, as
 // every build did before; those files stay readable and prunable by the same rules.
 const GENERATION = resolveRuntimeServiceBuildId() ?? VERSION;
+// An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
+// Git release trial reads it to remove the files that upgrade added (no `.pre-*` to restore).
+const APPLIED_PREFIX = ".upgraded-";
+
+function retainAppliedPlan(stateDir: string, plan: UpgradePlan): void {
+  const file = path.join(stateDir, `${APPLIED_PREFIX}${plan.appVersion}.json`);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(plan), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+}
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
 
@@ -313,6 +323,14 @@ function finish(
     ]),
     ownedFiles,
   );
+  const kept = new Set(
+    [GENERATION, ...resumedGenerations].map((g) => `${APPLIED_PREFIX}${g}.json`),
+  );
+  for (const entry of fs.readdirSync(stateDir)) {
+    if (entry.startsWith(APPLIED_PREFIX) && !kept.has(entry)) {
+      fs.rmSync(path.join(stateDir, entry), { force: true });
+    }
+  }
   if (workDir) {
     fs.rmSync(workDir, { recursive: true, force: true });
   }
@@ -367,6 +385,7 @@ export async function upgradeStateDirectory(params: {
     const top = path.relative(stateDir, absolute).split(path.sep)[0] ?? "";
     return (
       top.startsWith(WORK_PREFIX) ||
+      top.startsWith(APPLIED_PREFIX) ||
       excludedRoots.some((dir) => within(absolute, dir)) ||
       // Managed outgoing JSON is still a Doctor input; payloads are not.
       (within(absolute, media) &&
@@ -388,6 +407,7 @@ export async function upgradeStateDirectory(params: {
       // Environment selection may already hold the shared database being replaced.
       await params.beforeSwap?.();
       applyPlan(plan);
+      retainAppliedPlan(stateDir, plan);
       resumedGenerations.add(plan.appVersion);
       for (const op of plan.ops) {
         if (!skip(op.live)) {
@@ -630,6 +650,7 @@ export async function upgradeStateDirectory(params: {
     writePlan(workDir, { appVersion: GENERATION, ops });
     planWritten = true;
     applyPlan({ appVersion: GENERATION, ops });
+    retainAppliedPlan(stateDir, { appVersion: GENERATION, ops });
     if (fs.existsSync(chainLog)) {
       // The chain's own output stays next to the other logs for diagnosis.
       fs.mkdirSync(path.join(stateDir, "logs"), { recursive: true });

@@ -1062,7 +1062,10 @@ their failure diagnostics.
 For Git checkouts and immutable preparation-only updates, `--no-restart` leaves
 activation to the operator. An in-use Git runtime is protected from replacement;
 the flag does not authorize overwriting files a running Gateway still needs.
-Restart through the installation's service owner when ready to activate it.
+Restart through the installation's service owner when ready to activate it. A Git
+checkout that runs from releases builds the new release and leaves the serving one
+selected; the next service start selects the new release, with the same two-start
+fallback as an update that restarts.
 After a successful update with changed plugins, the final report reminds you to
 restart to activate them, including when the core version also changed.
 

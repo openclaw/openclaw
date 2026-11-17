@@ -15,6 +15,8 @@ export type GitReleaseTrial = {
   attempts: number;
   /** The resolved config path; a config outside the state directory is not in the scan. */
   config?: string;
+  /** Selected by the next service start instead of now (`--no-restart`). */
+  pending?: boolean;
   /** Written by the launcher before it restores anything: what the rollback restores. */
   restoring?: Array<{ suffix: string; files: string[] }>;
 };
@@ -78,10 +80,20 @@ function writeTrial(record) {
   fs.renameSync(temporary, trialFile);
 }
 
-// A trial that crashed mid-upgrade leaves its durable plan ("<stateDir>/.upgrade-<generation>-*",
-// owned by src/state/state-upgrade.ts). Retire it before restoring, or the previous release
-// would finish it on start: undo the files it added, and the suffix restore covers the rest.
+// The trial's upgrade plans (owned by src/state/state-upgrade.ts): an interrupted one
+// ("<stateDir>/.upgrade-<generation>-*/plan.json") would be finished by the previous release,
+// and an applied one (".upgraded-<generation>.json") names files it added with no
+// predecessor. Undo those additions and retire both; the suffix restore covers the rest.
 function retirePlans(stateDir, generation) {
+  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
+  try {
+    for (const op of JSON.parse(fs.readFileSync(applied, "utf8")).ops ?? []) {
+      if (op.kind === "add") {
+        fs.rmSync(op.live, { force: true });
+      }
+    }
+  } catch {}
+  fs.rmSync(applied, { force: true });
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(".upgrade-" + generation + "-")) {
       continue;
@@ -100,10 +112,22 @@ function retirePlans(stateDir, generation) {
   }
 }
 
+function switchLink(target) {
+  const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
+  fs.symlinkSync(target, temporary);
+  fs.renameSync(temporary, slot);
+}
+
 let trial;
 try {
   trial = JSON.parse(fs.readFileSync(trialFile, "utf8"));
 } catch {}
+// An update run with --no-restart leaves activation to the next service start.
+if (trial?.pending && counts && fs.readlinkSync(slot) === trial.previous) {
+  switchLink(trial.target);
+  delete trial.pending;
+  writeTrial(trial);
+}
 if (trial && counts) {
   if (fs.readlinkSync(slot) !== trial.target) {
     fs.rmSync(trialFile, { force: true });
@@ -129,9 +153,7 @@ if (trial && counts) {
     for (const { suffix, files } of trial.restoring) {
       restoreState(files, suffix);
     }
-    const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
-    fs.symlinkSync(trial.previous, temporary);
-    fs.renameSync(temporary, slot);
+    switchLink(trial.previous);
     fs.rmSync(trialFile, { force: true });
     console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {

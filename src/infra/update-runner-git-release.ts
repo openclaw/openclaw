@@ -264,7 +264,12 @@ export async function updateGitRelease(params: {
     beforeGitMutation: opts.beforeGitMutation,
   });
   if (target.status === "ok") {
-    await publishGitRelease({ prefix, releaseRoot, trial: true });
+    await publishGitRelease({
+      prefix,
+      releaseRoot,
+      trial: true,
+      pending: opts.deferReleaseActivation,
+    });
   }
   const collected = await collectGitReleases({
     prefix,

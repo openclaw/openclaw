@@ -60,6 +60,14 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     await fs.writeFile(`${db}-wal`, "new wal");
     await fs.writeFile(`${db}-shm`, "new shm");
     await fs.writeFile(`${db}.seal`, "new seal");
+    // A finished part of its upgrade added a file with no predecessor.
+    const created = path.join(stateDir, "client", "credentials.sqlite");
+    await fs.mkdir(path.dirname(created), { recursive: true });
+    await fs.writeFile(created, "new only");
+    await fs.writeFile(
+      path.join(stateDir, ".upgraded-2.0.0.json"),
+      JSON.stringify({ appVersion: "2.0.0", ops: [{ kind: "add", live: created }] }),
+    );
     // It crashed partway through its durable plan: one file added, one still pending.
     const plan = path.join(stateDir, ".upgrade-2.0.0-1-1");
     const added = path.join(stateDir, "state", "added.sqlite");
@@ -94,6 +102,7 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     // The previous release finds no plan to finish and none of the trial's files.
     await expect(fs.access(plan)).rejects.toThrow();
     await expect(fs.access(added)).rejects.toThrow();
+    await expect(fs.access(created)).rejects.toThrow();
     expect(await fs.readFile(pending, "utf8")).toBe("old pending");
   });
 
@@ -145,6 +154,11 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     );
     await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
     expect((await upgradeAs("1.0.0-bbb")).status).toBe("upgraded");
+    // The applied plan stays for the trial; the earlier build's record is retired.
+    await expect(
+      fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json")),
+    ).resolves.toBeUndefined();
+    await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-aaa.json"))).rejects.toThrow();
 
     startGateway(prefix);
     startGateway(prefix);
@@ -156,6 +170,7 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     } finally {
       restored.close();
     }
+    await expect(fs.access(path.join(stateDir, ".upgraded-1.0.0-bbb.json"))).rejects.toThrow();
   });
 
   it("resumes an interrupted rollback before the link moves", async () => {
@@ -242,6 +257,26 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
 
     expect(startGateway(prefix, env).stdout).toContain("old");
     expect(await fs.readFile(config, "utf8")).toBe("old config");
+  });
+
+  it("leaves a --no-restart release to the next service start", async () => {
+    const { prefix } = await setup();
+    const current = await release(prefix, "1.0.0", 'console.log("current");\n');
+    await publishGitRelease({ prefix, releaseRoot: current, trial: false });
+    const slot = gitReleaseSlot(prefix);
+    const serving = await fs.readlink(slot);
+    const next = await release(prefix, "2.0.0", 'console.log("next");\n');
+    await publishGitRelease({ prefix, releaseRoot: next, trial: true, pending: true });
+
+    // The serving Gateway's link is untouched until the operator restarts it.
+    expect(await fs.readlink(slot)).toBe(serving);
+    expect(startGateway(prefix).stdout).toContain("next");
+    expect(await fs.readlink(slot)).not.toBe(serving);
+    const trial = JSON.parse(
+      await fs.readFile(path.join(prefix, "releases", GIT_RELEASE_TRIAL), "utf8"),
+    );
+    expect(trial).toMatchObject({ attempts: 1 });
+    expect(trial.pending).toBeUndefined();
   });
 
   it("stops counting once the trial release reports ready", async () => {
