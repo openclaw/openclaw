@@ -1,6 +1,7 @@
 import { getObserver } from "@solidjs/signals";
 import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, lazy, Loading, Show } from "solid-js";
+import { isRailSectionPin } from "../app-navigation.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
@@ -105,8 +106,10 @@ function renderSidebarMenus(
   return [
     <Show when={projected.railPinMenuPosition} keyed>
       {(menu) => {
+        // Moves stay within the pin's rail group: sections above the separator, the rest below.
+        const group = isRailSectionPin(menu.entry);
         const entries = [...projected.railPins]
-          .filter(([, element]) => element.isConnected)
+          .filter(([entry, element]) => element.isConnected && isRailSectionPin(entry) === group)
           .toSorted(([, left], [, right]) =>
             left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
           )

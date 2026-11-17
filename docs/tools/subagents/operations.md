@@ -58,6 +58,8 @@ the result and the earlier blocked-delivery notice are kept.
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.
+A required parent completion that expires also records the visible failure notice
+in the requester conversation, so ending delivery is never silent.
 For a retained run, `/subagents info <runId>` shows the captured result, discarded
 delivery status, and original error, even after the run leaves the recent list.
 Inspect that result or available child session history and ask the requester to
@@ -97,7 +99,10 @@ New execution uses current authority and the session's current tool policy.
 
 If a requester wake is refused because the child's completion owner changed,
 that attempt ends instead of retrying indefinitely. The same requester and wake
-generation can still record a result already delivered after child cleanup. Otherwise, OpenClaw records failed delivery and attempts to append a
+generation can still record a result already delivered after child cleanup. A yielded
+child's pause notice also settles if a resumed sibling changes the batch's run IDs;
+the notice belongs to that child, while the batch still waits for final results.
+Otherwise, OpenClaw records failed delivery and attempts to append a
 short notice to the requester session. If that session is unavailable, the failure
 is logged without retrying the wake. Retained wakes converge on their next
 attempt; no manual database edits are needed.
@@ -242,13 +247,10 @@ session work, clears its queues, and cancels its active child tree. Session-wide
 requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
 cascade to children. These operations retain their normal authorization checks.
 
-A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId`: the leaf
-must still be on the active branch. If the check fails during descendant
-cancellation, the Gateway refuses further cancellation and reports
-`active-leaf-changed`. Cancellation already accepted by a child still settles.
-If child ownership refuses cancellation before the branch check runs, the Gateway
-rechecks the requested leaf: a changed leaf takes precedence, while an unchanged
-leaf preserves the ownership error. Neither outcome authorizes changing a replacement child.
+A typed `/stop` sent through `chat.send` stops the work of the chat as it is
+when the Gateway receives it. It does not compare the sender's leaf or session id.
+Work that starts after the Stop, including a replacement conversation and its
+children, is not cancelled and needs its own Stop request.
 The cancellation result waits for pending child-session metadata writes before
 checking that the original session still owns the outcome.
 

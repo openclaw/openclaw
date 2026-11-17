@@ -14,7 +14,7 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { runControlUiPluginAction } from "./control-ui-actions.ts";
+import { runControlUiPluginAction, type ControlUiComposerDraft } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
@@ -27,6 +27,8 @@ type ContributionsProps = {
   navigationChildren: boolean;
   navigationMenus: SidebarMenus | undefined;
   presented: boolean;
+  /** The pane's draft owner, exposed to composer actions. */
+  composer: ControlUiComposerDraft | undefined;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
@@ -170,7 +172,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         <span class="nav-item__icon" aria-hidden="true">
           <Show
             when={emojiIcon(link.item.entry)}
-            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+            fallback={
+              <Icon name={iconName(link.item.entry, link.fallbackIcon)} filled={link.item.active} />
+            }
           >
             {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
           </Show>
@@ -258,6 +262,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                         sessionKey: host.sessionKey,
                         agentId: host.agentId,
                         session: currentSession(),
+                        composer: host.composer,
                         signal: current.signal,
                         isCurrent: () => host.isConnected && host.presented,
                       }).catch((error: unknown) => {
@@ -361,6 +366,7 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     navigationChildren: { default: true, type: Boolean },
     navigationMenus: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
+    composer: { default: undefined, attribute: false },
   },
 });
 

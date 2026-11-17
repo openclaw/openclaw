@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import childProcess, { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,6 +16,7 @@ import {
   vi,
 } from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
+import * as processMemory from "../../scripts/lib/process-memory.mts";
 import {
   readProcessCgroupV2Snapshot,
   readProcessMemoryCapacity,
@@ -689,7 +690,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(shortfall?.message).not.toContain("set OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
   });
 
-  it("refuses a fatal plan before cleanup and lets an explicit heap override proceed", () => {
+  it("refuses a fatal plan before cleanup and lets an explicit heap override proceed", async () => {
     const cleanup = vi.fn();
     const reportShortfall = vi.fn();
     expect(
@@ -721,6 +722,56 @@ describe("resolveTsdownBuildInvocation", () => {
         "--trace-warnings --max-old-space-size=4096",
       );
     }
+    await fixture.run(async () => {
+      const capacity = readProcessMemoryCapacity({
+        ...NO_MEMORY_LIMIT,
+        cgroupMemoryLimitBytes: 4 * GiB,
+      });
+      const memory = vi.spyOn(processMemory, "readProcessMemoryCapacity").mockReturnValue(capacity);
+      const snapshot = vi.spyOn(processMemory, "readProcessCgroupV2Snapshot").mockReturnValue(
+        Array.from({ length: 10 }, () => ({
+          directory: "/private-cgroup-path",
+          counters: { "memory.current": "123", "memory.peak": "456" },
+        })),
+      );
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const remove = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+        throw new Error("unexpected cleanup");
+      });
+      const compiler = vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+        throw new Error("unexpected compiler launch");
+      });
+      vi.stubEnv("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB", undefined);
+      try {
+        await expect(runTsdownBuild([], { cwd: createTempDir("tsdown-refusal-") })).resolves.toBe(
+          1,
+        );
+        const diagnostic = error.mock.calls.find(
+          ([label]) => label === "[tsdown-build:memory-refusal]",
+        );
+        expect(diagnostic).toBeDefined();
+        expect(JSON.parse(String(diagnostic?.[1]))).toEqual({
+          sample: "after-refusal",
+          memoryCapacity: capacity,
+          rssBytes: expect.any(Number),
+          cgroup: Array.from({ length: 8 }, (_, depth) => ({
+            depth,
+            currentBytes: 123,
+            peakBytes: 456,
+          })),
+        });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("full build needs 4352MB"));
+        expect(remove).not.toHaveBeenCalled();
+        expect(compiler).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+        compiler.mockRestore();
+        remove.mockRestore();
+        error.mockRestore();
+        snapshot.mockRestore();
+        memory.mockRestore();
+      }
+    });
   });
 
   it("caps finite cgroups by host MemAvailable and preserves zero", () => {

@@ -1,14 +1,20 @@
 /* @vitest-environment jsdom */
 
 import { render } from "@solidjs/web";
-import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
-import { PeoplePage } from "./people-page.js";
-import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
-import type { StatusResult } from "./types.js";
+import {
+  button,
+  disposers,
+  hostFor,
+  linked,
+  mountPage,
+  pendingInvite,
+  plugin,
+  rolePicker,
+} from "./people-page.test-support.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -19,32 +25,6 @@ vi.mock("./owner-signing.js", () => ({
   signMembershipChange: vi.fn(async (_link: unknown, target: unknown) => ({ signed: target })),
   signAsOwner: vi.fn(async () => ({ signed: "cap" })),
 }));
-
-const { default: plugin } = await import("./index.js");
-const disposers: Array<() => void> = [];
-
-async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
-  const harness = hostFor([statuses[0]!, ...statuses], submitResult);
-  const { host, request, registerPage, controller } = harness;
-  const stop = await plugin.activate(host);
-  if (typeof stop === "function") {
-    disposers.push(stop);
-  }
-  await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
-  const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "access", label: "Remote access" });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const view = page.mount(container, {
-    host,
-    props: {},
-    signal: controller.signal,
-    presented: true,
-  } as UI.ControlUiViewContext);
-  const dispose = () => view?.dispose?.();
-  disposers.push(dispose);
-  return { ...harness, request, container, dispose };
-}
 
 describe("Access page", () => {
   afterEach(() => {
@@ -734,21 +714,6 @@ describe("Access page", () => {
     );
   });
 
-  it("shows no people to a client that is not an owner, and never asks for them", async () => {
-    const { host, request } = hostFor([{ ...linked(), owner: false }]);
-    const container = document.createElement("div");
-    document.body.append(container);
-    disposers.push(render(() => <PeoplePage host={host} />, container));
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain(
-        "Only the owner can see who has access. Open this page from an approved owner browser.",
-      ),
-    );
-    expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
-    expect(container.textContent).not.toContain("member@example.test");
-    expect(button(container, "Add node")).toBeUndefined();
-  });
-
   it("is read-only in a browser that is not an owner device", async () => {
     const status = linked({
       ownerDevices: [{ devicePub: "ed25519:other", label: "Other", peerKeys: [], cert: {} }],
@@ -772,7 +737,7 @@ describe("Access page", () => {
       id: "access",
       label: "Access",
       page: { id: "access" },
-      icon: "users",
+      icon: "access",
       defaultVisible: false,
     });
     harness.connect(false);

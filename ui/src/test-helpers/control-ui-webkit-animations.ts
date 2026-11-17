@@ -40,10 +40,26 @@ export async function readWebKitAnimations(page: Page): Promise<AnimationSnapsho
     const snapshots: AnimationSnapshot[] = [];
     for (const animationId of ids) {
       try {
-        const { object } = await session.send<{ object: { objectId: string } }>(
-          "Animation.resolveAnimation",
-          { animationId, objectGroup },
-        );
+        const resolved = await session
+          .send<{ object: { objectId: string } }>("Animation.resolveAnimation", {
+            animationId,
+            objectGroup,
+          })
+          .catch((error: unknown) => {
+            // WebKit unbinds retired IDs before its deferred animationDestroyed event.
+            if (
+              error instanceof Error &&
+              error.message ===
+                "Protocol error (Animation.resolveAnimation): Missing animation for given animationId"
+            ) {
+              return null;
+            }
+            throw error;
+          });
+        if (!resolved) {
+          continue;
+        }
+        const { object } = resolved;
         const result = await session.send<{
           result: { value: AnimationSnapshot };
           wasThrown?: boolean;

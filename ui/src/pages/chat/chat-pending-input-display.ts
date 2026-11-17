@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -48,7 +49,13 @@ export function preparePendingInputQueueItems(
   preparation: PendingInputPreparation,
 ): ChatQueueDisplayItem[] {
   return inputs
-    .filter((input) => input.queued && input.state === "queued" && input.runId)
+    .filter(
+      (input) =>
+        input.queued &&
+        input.state === "queued" &&
+        input.runId &&
+        !messageSubagentCompletions(input.message).length,
+    )
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
     .map<ChatQueueDisplayItem>((input) => ({
       id: `pending-input:${input.id}`,

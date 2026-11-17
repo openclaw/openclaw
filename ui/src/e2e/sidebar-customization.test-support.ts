@@ -77,7 +77,7 @@ export async function openSidebarCustomizationPage(
       .getByRole("button", { name: "Pin", exact: true })
       .click();
   }
-  await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
+  await sidebar.locator('[data-navigation-view="sessions"]').click();
   return { context, page };
 }
 

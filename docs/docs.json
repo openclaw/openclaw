@@ -1851,6 +1851,7 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/gbrain",
                       "plugins/knowledge",
                       {
                         "group": "Knowledge",

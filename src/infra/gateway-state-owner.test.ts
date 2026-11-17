@@ -705,6 +705,38 @@ describe("Gateway state ownership", () => {
     },
   );
 
+  it.each(["exited", "unverified"] as const)(
+    "keeps a changing owner observation bounded until death is proven: %s",
+    (state) => {
+      const pathname = markerPath(databasePath);
+      const raw = JSON.stringify({
+        ...ownerPayload(root, process.ppid),
+        role: "sqlite-maintenance",
+        stateOwnerKind: "schema",
+      });
+      fs.writeFileSync(pathname, raw);
+      cleanups.push(() => fs.rmSync(pathname, { force: true }));
+      vi.spyOn(pidAlive, "isPidDefinitelyDead")
+        .mockReturnValueOnce(false)
+        .mockReturnValue(state === "exited");
+      vi.spyOn(pidAlive, "isPidAlive").mockReturnValue(false);
+      const admitted = vi.fn();
+      const open = () =>
+        withStateDatabaseColdAdmission(
+          { databasePath, busyTimeoutMs: state === "exited" ? 100 : 0 },
+          admitted,
+        );
+      if (state === "exited") {
+        expect(open).not.toThrow();
+        expect(admitted).toHaveBeenCalledOnce();
+      } else {
+        expect(open).toThrow(StateDatabaseAdmissionPendingError);
+        expect(admitted).not.toHaveBeenCalled();
+      }
+      expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+    },
+  );
+
   it.each(["foreign", "matching PID", "dead PID"] as const)(
     "checks %s persisted ownership without borrowing its authority",
     async (kind) => {

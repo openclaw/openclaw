@@ -47,6 +47,7 @@ import {
   claimSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
+  stageSessionEventInput,
   resolveSessionEventExecRequestOwners,
 } from "./session-event-context.js";
 import type {
@@ -81,9 +82,6 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   () => import("./queue/drain-admission-scope.js"),
   "runOutsideAdmittedGenerationScopes",
 );
-
-/** Policy publications an accepted occurrence may outlive before it settles as failed. */
-const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
@@ -288,6 +286,7 @@ function enqueueSessionEventAttempt(
     }
     options.scheduledAutomation?.onStarted?.();
     ownership.start();
+    configPolicy.start();
     started = true;
     accept();
   };
@@ -330,7 +329,7 @@ function enqueueSessionEventAttempt(
       const retainForConfigChange = () =>
         configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
-      if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
+      if (retainForConfigChange() && configPolicy.canReadmit(attempt)) {
         // Reuse this occurrence's bounded readmission, yielding before fresh authority.
         await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
           (error: unknown) => {
@@ -341,7 +340,7 @@ function enqueueSessionEventAttempt(
         );
       }
       settlement = "finished";
-      const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
+      const canReadmit = retainForConfigChange() && configPolicy.canReadmit(attempt);
       const terminal = resolveSessionEventTerminalOutcome({
         operation,
         signal,
@@ -601,19 +600,12 @@ function enqueueSessionEventAttempt(
           operation = owned;
         },
         internalEventExecution: {
+          // The admitted source authorizes board writes, not a disconnected inline renderer.
+          pinnedWidgetAuthoring:
+            options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            if (
-              !recorder.stageApproved ||
-              !(await recorder.stageApproved({
-                runId: occurrenceId,
-                assertCurrent,
-                // Only this live policy retry can reclaim its cancelled attempt.
-                retryCancelled: readmissionAttempt > 0,
-              }))
-            ) {
-              throw new Error("Session event input was not durably admitted");
-            }
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmissionAttempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,

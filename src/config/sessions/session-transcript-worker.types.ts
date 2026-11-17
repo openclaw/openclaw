@@ -129,6 +129,11 @@ import type {
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
+import type {
+  TranscriptActiveFactsBackfillCursor,
+  TranscriptActiveFactsBackfillProbe,
+  TranscriptActiveFactsBackfillSession,
+} from "./session-transcript-active-facts-backfill.worker.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
 import type {
   SessionTranscriptHydrationWorkerInput,
@@ -191,7 +196,6 @@ export type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
-  SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-hydration.types.js";
 
@@ -286,6 +290,17 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | {
+      kind: "transcript-facts-discover";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+    }
+  | {
+      kind: "transcript-facts-probe";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      cursor: TranscriptActiveFactsBackfillCursor;
+    }
   | AgentToolUsageReadInput
   | AgentToolUsageImportReadInput
   | SessionRetirementReadWorkerInput
@@ -384,6 +399,14 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "transcript-facts-discover": {
+      kind: "transcript-facts-discover";
+      result: { supported: boolean; sessions: TranscriptActiveFactsBackfillSession[] };
+    };
+    "transcript-facts-probe": {
+      kind: "transcript-facts-probe";
+      result: TranscriptActiveFactsBackfillProbe;
+    };
     "compaction-preparation": SessionPreparedCompactionWireValue;
     "session-retirement-read": {
       kind: "session-retirement-read";
@@ -569,6 +592,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       signal?: AbortSignal,
     ) => Promise<SessionPreparedCompactionValue>;
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
+    discoverTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-discover", "result">;
+    probeTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-probe", "result">;
     readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;
@@ -609,6 +634,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     searchTranscripts: (
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+      filterCandidates?: import("./session-transcript-search.types.js").SessionTranscriptSearchFilter,
     ) => Promise<SessionTranscriptSearchResult>;
     assertCurrent: () => void;
     run: (

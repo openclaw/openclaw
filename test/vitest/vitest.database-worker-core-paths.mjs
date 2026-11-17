@@ -1,6 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-system-prompt.watched-sessions.postgres.test.ts",
   "src/agents/subagents/registry/subagent-registry-maintenance.completion.test.ts",
   "src/agents/clawrouter-failover.integration.test.ts",
   "src/infra/backup-local-companion.test.ts",
@@ -68,7 +69,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/session-prompt-state.tool-usage.worker.test.ts",
   "src/agents/embedded-agent-runner.responses-cold-prefix.test.ts",
   "src/agents/workspace-sandbox.test.ts",
-  "src/agents/embedded-agent-runner.session-fork.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
@@ -204,6 +204,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-existing-write.test.ts",
   "src/cli/admin-state-owner.process.test.ts",
   "src/cli/templates-cli.state-owner.test.ts",
+  "src/cli/templates-cli.release.test.ts",
   "src/cli/gateway-cli/run-loop.state-ownership.test.ts",
   "src/pairing/pairing-store.worker.test.ts",
   "src/plugin-sdk/channel-pairing.store.test.ts",
@@ -835,6 +836,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-doctor-capability.test.ts",
   "src/cli/update-cli/update-command-finalize-refusal.test.ts",
+  "src/cli/update-cli/update-command-killed-run.process.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",
   "src/cli/update-cli/update-command-service-publication.test.ts",
