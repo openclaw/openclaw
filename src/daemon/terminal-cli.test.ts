@@ -26,6 +26,8 @@ async function fixture(profile = "default", shell = "/bin/bash") {
   roots.push(root);
   const home = path.join(root, "home with '$ characters");
   await fs.mkdir(home);
+  // Keep distro first-login notices out of command stdout without bypassing shell startup.
+  await fs.writeFile(path.join(home, ".hushlogin"), "");
   const packageRoot = path.join(root, "package with ' quote");
   await fs.mkdir(packageRoot);
   await fs.writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
