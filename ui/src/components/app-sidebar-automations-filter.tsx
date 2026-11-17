@@ -1,6 +1,7 @@
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import {
   automationsFilter,
+  automationsFiltered,
   DEFAULT_AUTOMATIONS_FILTER,
   setAutomationsFilter,
   type AutomationsFilter,
@@ -14,16 +15,6 @@ registerEnglishCatalog(registerCronEnglish);
 const STATUSES = ["all", "active", "paused"] as const;
 const LAST_RUNS = ["all", "ok", "error"] as const;
 const SORTS = ["name", "nextRunAtMs", "updatedAtMs"] as const;
-
-/** Whether the Automations sidebar filter differs from its defaults. */
-export function automationsFiltered(): boolean {
-  const filter = automationsFilter();
-  return (
-    filter.status !== DEFAULT_AUTOMATIONS_FILTER.status ||
-    filter.lastRun !== DEFAULT_AUTOMATIONS_FILTER.lastRun ||
-    filter.sort !== DEFAULT_AUTOMATIONS_FILTER.sort
-  );
-}
 
 /** The Automations sidebar filter: status, last activity and order. */
 export function renderSidebarAutomationsFilterMenuForMenus(menus: SidebarMenus) {

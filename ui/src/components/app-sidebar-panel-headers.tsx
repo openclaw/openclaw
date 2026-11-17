@@ -3,9 +3,9 @@ import { Show } from "solid-js";
 import { titleForRoute } from "../app-navigation.ts";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { automationsFiltered } from "../lib/cron/automations-filter.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
-import { automationsFiltered } from "./app-sidebar-automations-filter.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import type { SidebarFilterMenu, SidebarMenus } from "./sidebar-menus.tsx";
@@ -70,8 +70,8 @@ export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) 
         menu="automationsFilter"
         expanded={props.host.sidebarMenus.automationsFilterMenuPosition !== null}
         filtered={automationsFiltered()}
-        title={t("cron.list.filters")}
-        label={t("cron.list.filters")}
+        title={t("chat.sidebar.menuFilters")}
+        label={t("chat.sidebar.menuFilters")}
       />
     </SidebarPanelHeader>
   );
