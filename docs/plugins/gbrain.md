@@ -16,6 +16,19 @@ GBrain runs as its own service, which GBrain installs and supervises. OpenClaw n
 starts or restarts it: it runs GBrain's own commands once for first-time setup, then
 only connects and reports.
 
+## Before you install
+
+On macOS and Linux, GBrain needs [Bun](https://bun.sh) 1.4.4 or newer. OpenClaw does
+not install Bun. If neither `gbrain` nor `bun` is installed, the plugin shows this
+command in the Control UI; run it once and setup finishes within a minute:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+On Linux, Bun's installer also needs `unzip` (for example `sudo apt install unzip`).
+In Docker, the GBrain container image already includes Bun; see [Docker](#docker).
+
 ## What install does
 
 On the first Gateway start after install, the plugin:
