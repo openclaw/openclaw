@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
   closeOpenClawAgentDatabasesAsync,
@@ -19,7 +21,10 @@ import {
 } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath as resolveTarget } from "./session-sqlite-target.js";
 import { resolveExistingAgentSessionStoreTargetsSync as existingTargets } from "./targets-discovery.native.js";
-import { resolveSessionStoreTargets as selectStores } from "./targets.js";
+import {
+  isConfiguredAgentDatabaseTarget,
+  resolveSessionStoreTargets as selectStores,
+} from "./targets.js";
 import { EXPLICIT_MAIN_CONFIG } from "./targets.test-support.js";
 
 async function withSessionStoreHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -328,5 +333,84 @@ describe("resolveSessionStoreTargets", () => {
     expect(() => selectStores({}, { store: "/tmp/sessions.json", allAgents: true })).toThrow(
       /cannot be combined/i,
     );
+  });
+});
+
+describe("isConfiguredAgentDatabaseTarget", () => {
+  const cleanup: Array<() => void> = [];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    while (cleanup.length > 0) {
+      cleanup.pop()!();
+    }
+  });
+
+  function tempDir() {
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-targets-"));
+    cleanup.push(() => fsSync.rmSync(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  it("answers an exact configured claim without filesystem probes", () => {
+    const dir = tempDir();
+    const database = path.join(dir, "agent.sqlite");
+    const statSpy = vi.spyOn(fsSync, "statSync");
+    expect(
+      isConfiguredAgentDatabaseTarget(
+        [{ agentId: "main", path: database }, { path: path.join(dir, "missing.sqlite") }],
+        "main",
+        database,
+      ),
+    ).toBe(true);
+    expect(statSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores exact claims owned by another agent", () => {
+    const dir = tempDir();
+    const database = path.join(dir, "agent.sqlite");
+    const statSpy = vi.spyOn(fsSync, "statSync");
+    expect(
+      isConfiguredAgentDatabaseTarget([{ agentId: "other", path: database }], "main", database),
+    ).toBe(false);
+    expect(statSpy).not.toHaveBeenCalled();
+  });
+
+  it("stats a missing candidate row once instead of once per owned target", () => {
+    const dir = tempDir();
+    const targets = Array.from({ length: 40 }, (_, index) => ({
+      agentId: "main",
+      path: path.join(dir, `agent-${index}.sqlite`),
+    }));
+    for (const target of targets) {
+      fsSync.writeFileSync(target.path, "");
+    }
+    const pathname = path.join(dir, "candidate.sqlite");
+    const statSpy = vi.spyOn(fsSync, "statSync");
+    expect(isConfiguredAgentDatabaseTarget(targets, "main", pathname)).toBe(false);
+    expect(statSpy.mock.calls.filter(([probed]) => probed === pathname)).toHaveLength(1);
+  });
+
+  it("still resolves aliases through existing owned targets", () => {
+    const dir = tempDir();
+    const real = path.join(dir, "real.sqlite");
+    fsSync.writeFileSync(real, "");
+    const alias = path.join(dir, "alias.sqlite");
+    fsSync.symlinkSync(real, alias);
+    expect(
+      isConfiguredAgentDatabaseTarget([{ agentId: "main", path: alias }], "main", real),
+    ).toBe(true);
+  });
+
+  it("does not fail an exact configured claim on an unusable earlier target", () => {
+    const dir = tempDir();
+    const database = path.join(dir, "agent.sqlite");
+    const unusable = path.join(dir, "bad\u0000name.sqlite");
+    expect(
+      isConfiguredAgentDatabaseTarget(
+        [{ agentId: "main", path: unusable }, { agentId: "main", path: database }],
+        "main",
+        database,
+      ),
+    ).toBe(true);
   });
 });
