@@ -329,10 +329,11 @@ remains pending.
 
 The next `openclaw update` settles the plugin recovery a killed command-line
 update reserved, and continues without a repair, when the previous version is
-still installed or the Gateway was already verified on the new one. In the other
-cases it refuses and names `openclaw update repair`: the installed version was
-never verified, the Gateway is still stopped, the Gateway started that update,
-or the update lease store no longer holds that update's lease. See
+still installed or the Gateway was already verified on the new one. Otherwise
+it refuses and names the command to run, in most cases `openclaw update repair`:
+for example when the installed version was not confirmed finished, the Gateway
+is still stopped, the Gateway started that update, an update may still be
+running, or the update lease store no longer holds that update's lease. See
 [how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
 
 ### Interrupted state restore

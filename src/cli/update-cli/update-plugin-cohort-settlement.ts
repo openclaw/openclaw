@@ -84,7 +84,12 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   options: OpenClawStateDatabaseOptions & { env: NodeJS.ProcessEnv };
   assertCurrent: () => void;
   /** Throws to refuse the selected outcome before anything is restored or released. */
-  admit?: (plan: { action: "commit" | "rollback"; originalCore: boolean }) => void;
+  admit?: (plan: {
+    action: "commit" | "rollback";
+    originalCore: boolean;
+    /** The cohort owner finishes a recorded rollback that restored anything, whatever `action` says. */
+    rollbackStarted: boolean;
+  }) => void;
 }): Promise<"commit" | "rollback"> {
   const { expected, options, assertCurrent } = params;
   assertCurrent();
@@ -131,7 +136,11 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   const { settleUpdatePluginCohort } = await import("../../plugins/update-cohort-recovery.js");
   assertCurrent();
   const action = current.cohort.disposition === "commit" || forward ? "commit" : "rollback";
-  params.admit?.({ action, originalCore: installed(from) });
+  params.admit?.({
+    action,
+    originalCore: installed(from),
+    rollbackStarted: current.cohort.disposition === "rollback",
+  });
   await settleUpdatePluginCohort({
     runId: current.cohort.runId,
     action,
@@ -371,14 +380,18 @@ export async function inspectInterruptedUpdateRecovery(
               throw new Error("Plugin cohort recovery installation changed during settlement.");
             }
           },
-          admit: ({ action: outcome, originalCore }) => {
-            if (outcome === "rollback" && !originalCore) {
-              // Repair also finishes the installed candidate; an update that finds it
-              // already current would not, so rolling back alone leaves it half updated.
-              unfinished = refuse(
-                `That update replaced OpenClaw ${pair.reservation.from.version} and did not verify what it installed.`,
-                `Run ${repair} to finish it, then retry ${update}.`,
-              );
+          admit: ({ action: outcome, originalCore, rollbackStarted }) => {
+            // Repair also finishes the installed candidate; an update that finds it
+            // already current would not, so a rollback over it leaves it half updated.
+            // That includes a commit the cohort owner would turn back into a rollback.
+            const why =
+              outcome === "rollback" && !originalCore
+                ? `That update replaced OpenClaw ${pair.reservation.from.version} and was not confirmed finished.`
+                : outcome === "commit" && rollbackStarted
+                  ? "That update had begun rolling its plugin changes back on the version it installed."
+                  : undefined;
+            if (why) {
+              unfinished = refuse(why, `Run ${repair} to finish it, then retry ${update}.`);
               throw unfinished;
             }
           },

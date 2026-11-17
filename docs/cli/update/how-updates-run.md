@@ -1753,9 +1753,12 @@ The update prints what it settled, continues, and records an
 Otherwise the update stops with `Update <id> has unfinished recovery`. When
 repair can settle the recovery, the message adds the reason and the command:
 
-- **The killed update replaced the installed version and nothing verified it.**
-  Run `openclaw update repair`, which also runs Doctor for that version. An
-  update that found it already current would not.
+- **The killed update replaced the installed version and was not confirmed
+  finished.** Run `openclaw update repair`, which also runs Doctor for that
+  version. An update that found it already current would not.
+- **The killed update had begun rolling its plugin changes back** on the version
+  it installed. Run `openclaw update repair`, which finishes that rollback and
+  then the installed version.
 - **The killed update stopped the Gateway and never started it again.** Run
   `openclaw update repair`, which settles the recovery, then restarts and
   verifies the Gateway.
@@ -1766,7 +1769,11 @@ repair can settle the recovery, the message adds the reason and the command:
   `openclaw update repair` if it has stopped.
 - **The update lease store no longer holds the killed update's lease.** A
   restart cleared temporary files, the store was replaced, or another command
-  already claimed the installation. Run `openclaw update repair`.
+  already claimed the installation. That includes an earlier `openclaw update`
+  that claimed it and then refused for one of the reasons above, so a second
+  attempt reports this reason. Run `openclaw update repair`.
+- **The recovery could not be settled.** The message includes the cause. Run
+  `openclaw update repair`.
 - **The installation is a source checkout.** Its version does not show whether
   the killed update had already switched the sources. Run
   `openclaw update repair`.

@@ -334,8 +334,19 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     {
       // Repair also runs the installed candidate's Doctor; an already-current update would not.
       name: "the dead update installed a candidate that nothing verified",
-      refusal: new RegExp(`replaced OpenClaw 2026.11.3 and did not verify.*Run ${repair}`, "u"),
+      refusal: new RegExp(`replaced OpenClaw 2026.11.3 and was not confirmed.*Run ${repair}`, "u"),
       dead: { installed: "candidate" },
+    },
+    {
+      // The cohort owner finishes a rollback that restored anything, even over a verified candidate.
+      name: "the dead update had begun rolling back on a verified candidate",
+      refusal: new RegExp(`had begun rolling its plugin changes back.*Run ${repair}`, "u"),
+      dead: { installed: "candidate", gateway: "restarted" },
+      control: (killed) =>
+        writeConfigMachineState(`update.pluginCohort.${killed.runId}`, {
+          ...loadPluginCohortRecovery(killed.runId)!.cohort,
+          disposition: "rollback",
+        }),
     },
     {
       name: "the recorded settlement cannot be applied",
@@ -394,7 +405,8 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       const before = reserved(killed.runId);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         await executor.enter(killed.slot);
-        await expect(nextUpdate(killed.slot)).rejects.toThrow(/has unfinished recovery/u);
+        // The holder's claim retired the dead updater's lease: the proof is gone.
+        await expect(nextUpdate(killed.slot)).rejects.toThrow(unleased);
       });
       expect(mocks.proceed).not.toHaveBeenCalled();
       expect(reserved(killed.runId)).toEqual(before);

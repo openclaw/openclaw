@@ -1,11 +1,11 @@
 # The next `openclaw update` settles a killed update's plugin recovery itself.
-# Exact net test lines: 465 in update-command-killed-run.process.test.ts and 85 in its
-# child fixture update-run-kill.process.test-support.ts, 150 over the allowance.
-# Each of 20 cases starts from a child process that ran the updater's own steps and
-# was SIGKILLed with its recovery reserved: 3 settlements, and 17 controls that must
+# Exact net test lines: 477 in update-command-killed-run.process.test.ts and 85 in its
+# child fixture update-run-kill.process.test-support.ts, 162 over the allowance.
+# Each of 21 cases starts from a child process that ran the updater's own steps and
+# was SIGKILLed with its recovery reserved: 3 settlements, and 18 controls that must
 # keep refusing (live updater, second live update, held installation, lease store
 # removed, replaced or already retired, managed helper, Gateway-started update,
-# stopped Gateway, unverified candidate, unusable settlement, source checkout, other
-# installation, dry run, recovery repair cannot settle, rollback in progress,
-# journal from another build).
-150
+# stopped Gateway, unverified candidate, rollback already begun, unusable settlement,
+# source checkout, other installation, dry run, recovery repair cannot settle,
+# rollback in progress, journal from another build).
+162
