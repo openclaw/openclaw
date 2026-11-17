@@ -95,6 +95,14 @@ effects before choosing another action. Network-controlled tool output and error
 retain their existing untrusted-content wrapping and sanitization; continuing
 after a failure does not grant new permissions or replay completed side effects.
 
+A suspended cell is parked, not abandoned: its pending calls keep running so
+`wait` can deliver their results. A rejected program, canceled cell, expired
+continuation, or closed catalog abandons pending results and aborts those calls.
+For worker-hosted Gateway tools, a transport wait that rejects (including a
+request timeout) also abandons that invocation and requests remote cancellation.
+This does not add a tool deadline or undo completed effects; tools must honor
+their abort signal to stop ongoing work and release resources.
+
 Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
 earlier catalog calls to finish and blocks later calls until its result has been
 accepted. Parallel-capable calls can overlap before the next sequential call.
