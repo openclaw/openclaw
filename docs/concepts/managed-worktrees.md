@@ -259,6 +259,13 @@ prepared tree and checks the affected target paths for conflicts. It does not
 build another target manifest that the checkpoint would discard; rollback
 journals and pending-conflict recovery retain their existing ownership.
 
+Reconciliation journals contain the old bytes of changed paths needed for rollback,
+not a history of accepted checkpoints. Acceptance clears the journal together with
+publication of the accepted baseline. Large local rollback packs use a separate
+worker-prepared publication buffer transferred to the database worker; the original
+remains available for recovery. Oversized-mutation diagnostics inspect payloads in
+that worker, keeping pack serialization and diagnostic parsing off the Gateway thread.
+
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
 machine-state table when the workspace writer prepares content or changes a
