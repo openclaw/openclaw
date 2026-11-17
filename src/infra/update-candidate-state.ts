@@ -24,6 +24,7 @@ import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-direct
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
+import { linkRehearsalColdArchives } from "./update-candidate-cold-archives.js";
 import {
   StateDatabaseDiscoverySchema,
   UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
@@ -684,12 +685,7 @@ export async function snapshotUpdateCandidateState(
         : {}),
     });
     if (file !== shared) {
-      // Rehearsal Doctor resolves file-backed cold archives beside the copied store, which has
-      // no archive directory; embed the verified payloads so the copy is self-contained.
-      const { embedSessionColdArchivesInSnapshot } =
-        await import("../config/sessions/session-cold-storage-backup.js");
-      using copy = openNodeSqliteDatabase(target);
-      await embedSessionColdArchivesInSnapshot({ database: copy, sourceStorePath: file });
+      await linkRehearsalColdArchives(target, file);
     }
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
