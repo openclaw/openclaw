@@ -603,7 +603,7 @@ function inferBunGlobalRootFromPackageRoot(
   return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot, env)?.globalRoot ?? null) : null;
 }
 
-function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+export function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
   const isolatedGlobalRoot = inferPnpmIsolatedGlobalRootFromPackageRoot(pkgRoot);
   if (isolatedGlobalRoot) {
     return isolatedGlobalRoot;

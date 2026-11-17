@@ -530,6 +530,8 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     // Published builds lazily import these lifecycle facts from a hashed chunk; update
     // compatibility bridges need a current chunk that still exports them.
     "agents/provider-runtime-lifecycle": "src/agents/provider-runtime-lifecycle.ts",
+    // Shipped pnpm updaters need this export even without a current service caller.
+    "infra/update-global-pnpm-retired": "src/infra/update-global-pnpm-retired.ts",
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",

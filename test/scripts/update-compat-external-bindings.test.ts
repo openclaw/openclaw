@@ -75,6 +75,28 @@ it("keeps the published recovery predicate bound to its current command owner", 
   expect(legacy.isPackageManagerUpdateMode()).toBe("current predicate");
 });
 
+it("preserves the extended-stable immutable updater denial after activation", async () => {
+  const release = previousReleaseInventory.releases.find((entry) => entry.version === "2026.9.37")!;
+  const published = release.chunks.find((entry) =>
+    entry.exports.some(
+      (binding) => binding.origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess",
+    ),
+  )!;
+  const f = fixtureFiles(createTempDir("update-compat-immutable-denial-"));
+  f.json("package.json", { type: "module" });
+  f.write(
+    "dist/current.mjs",
+    "export function isCurrentManagedServiceUpdateHandoffProcess() { return true; }\n",
+  );
+  writeUpdateCompatibilityChunks({
+    distDir: f.file("dist"),
+    sourceDir: f.root,
+    inventory: { schemaVersion: 1, releases: [{ ...release, chunks: [published] }] },
+  });
+  const legacy = await f.load(`dist/${published.path}`);
+  expect(await legacy.isCurrentManagedServiceUpdateHandoffProcess({})).toBe(false);
+});
+
 it.each([
   'import { safePath as helper } from "@openclaw/fs-safe/path"; export { helper };',
   'import helper from "external-package"; export { helper };',

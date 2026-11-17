@@ -1,0 +1,2 @@
+# Recovery diagnostics and supported historical update bridges: triggering-failure retention, inline immutable denial, and retired pnpm owner boundaries.
+184

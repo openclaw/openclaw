@@ -54,6 +54,14 @@ async function inputOptions(config: UserConfig) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("tsdown config", () => {
+  it("emits the retained pnpm updater compatibility owner without changing service reconciliation", () => {
+    expect(
+      entrySources(runtimeGraph("infra/update-global-pnpm-retired"))[
+        "infra/update-global-pnpm-retired"
+      ],
+    ).toBe("src/infra/update-global-pnpm-retired.ts");
+  });
+
   it("keeps isolated and unselected plugin workers out of the host build graph", async () => {
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "0");
     const { default: selectedConfigs } = await importFreshModule<
