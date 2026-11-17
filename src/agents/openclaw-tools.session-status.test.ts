@@ -6,8 +6,10 @@ import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.j
 import { clearInternalHooks } from "../hooks/internal-hooks.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
@@ -406,6 +408,7 @@ const channelKey = "agent:main:scope:scopy:direct:scopy";
 describe("session_status tool", () => {
   beforeEach(() => {
     clearInternalHooks();
+    resetPluginRuntimeStateForTest();
     buildStatusMessageMock.mockClear();
   });
 
@@ -657,28 +660,39 @@ describe("session_status tool", () => {
 
   it.each([
     { requireMention: false, expected: "always" },
-    { requireMention: undefined, expected: "mention" },
+    { requireMention: true, expected: "mention" },
   ])(
-    "reports the reply-path default activation for a channel thread (requireMention=$requireMention)",
+    "reports the channel policy's activation for a stored thread route (requireMention=$requireMention)",
     async ({ requireMention, expected }) => {
-      const sessionKey = "agent:main:slack:channel:c123:thread:t1";
+      const resolveRequireMention = vi.fn(() => requireMention);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "chatter",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({ id: "chatter" }),
+              groups: { resolveRequireMention },
+            },
+          },
+        ]),
+      );
+      const sessionKey = "agent:main:chatter:channel:room1:thread:t1";
       resetSessionStore({
-        [sessionKey]: fixtureSession("s-slack-thread", {
+        [sessionKey]: fixtureSession("s-chatter-thread", {
           chatType: "channel",
           delivery: normalizeSessionDeliveryState({
-            context: { channel: "slack", to: "channel:C123", accountId: "work", threadId: "t1" },
+            context: { channel: "chatter", to: "channel:room1", accountId: "work", threadId: "t1" },
           }),
         }),
       });
-      mockConfig = {
-        ...createMockConfig(),
-        channels: {
-          slack: { accounts: { work: { groups: { "*": { requireMention } } } } },
-        },
-      };
 
       await status({ sessionKey: "current" }, sessionKey, { runSessionKey: sessionKey });
 
+      // The tool asks the channel's own mention policy for the stored room and account.
+      expect(resolveRequireMention).toHaveBeenCalledWith(
+        expect.objectContaining({ groupId: "room1", accountId: "work" }),
+      );
       const statusArg = buildStatusMessageMock.mock.calls[0]?.[0] as {
         isGroup?: boolean;
         defaultGroupActivation?: () => string;

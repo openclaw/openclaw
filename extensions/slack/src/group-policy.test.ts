@@ -146,6 +146,30 @@ describe("slack group policy", () => {
     );
   });
 
+  it.each([
+    ["root default", false, undefined, undefined, false],
+    ["account default over root", true, false, undefined, false],
+    ["channel value over default", false, undefined, true, true],
+  ] as const)(
+    "applies the %s like message ingress",
+    (_name, rootMention, accountMention, channelMention, expected) => {
+      const policyCfg = channelConfig(
+        channelMention === undefined
+          ? undefined
+          : { C01234567: { requireMention: channelMention } },
+        {
+          requireMention: rootMention,
+          accounts:
+            accountMention === undefined ? undefined : { work: { requireMention: accountMention } },
+        },
+      );
+      const accountId = accountMention === undefined ? undefined : "work";
+      expect(
+        resolveSlackGroupRequireMention({ cfg: policyCfg, groupId: "C01234567", accountId }),
+      ).toBe(expected);
+    },
+  );
+
   it.each(["c01234567", "C01234567"])("prefers exact case for %s", (groupId) => {
     const policyCfg = channelConfig({
       c01234567: { tools: allowed },

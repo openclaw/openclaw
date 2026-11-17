@@ -9,6 +9,7 @@ import {
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
@@ -202,7 +203,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
             ctx: sessionState.sessionCtx,
             sessionEntry:
               sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry,
-            groupResolution: sessionState.groupResolution,
+            // Keep topic/thread identity so per-topic policy wins over its parent group.
+            groupResolution:
+              sessionState.groupResolution ??
+              resolveGroupSessionKey(sessionState.sessionCtx) ??
+              undefined,
           }).group,
         }),
       )

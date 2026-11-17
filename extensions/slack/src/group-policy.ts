@@ -118,12 +118,16 @@ function resolveSlackGroupPolicyScope(params: ChannelGroupContext) {
     channelName,
     normalizeHyphenSlug(channelName),
   );
-  return buildSlackChannelPolicyScope({ channels, candidates });
+  return {
+    ...buildSlackChannelPolicyScope({ channels, candidates }),
+    defaultRequireMention: slack.requireMention,
+  };
 }
 
 export function resolveSlackGroupRequireMention(params: ChannelGroupContext): boolean {
-  // The adapter intentionally ignores root requireMention; the monitor resolves that default.
-  return resolveScopeRequireMention(resolveSlackGroupPolicyScope(params));
+  const { defaultRequireMention, ...scope } = resolveSlackGroupPolicyScope(params);
+  // Unscoped channels fall back to the root/account default, as message ingress does.
+  return resolveScopeRequireMention({ ...scope, requireMentionOverride: defaultRequireMention });
 }
 
 export function resolveSlackGroupToolPolicy(

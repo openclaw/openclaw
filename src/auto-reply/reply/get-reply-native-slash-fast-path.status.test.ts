@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
@@ -57,6 +58,21 @@ function runStatus(
     }),
     ...overrides,
   });
+}
+
+function renderRealStatus() {
+  buildStatusReplyMock.mockImplementation(
+    async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
+      buildStatusReplyParts({
+        ...params,
+        statusChannel: "telegram",
+        resolvedHarness: "openclaw",
+        pluginHealthLineOverride: "",
+        modelAuthOverride: "api-key",
+        activeModelAuthOverride: "api-key",
+        includeTranscriptUsage: false,
+      }),
+  );
 }
 
 beforeEach(() => {
@@ -244,18 +260,7 @@ it.each<[string, NativeStatusSelectionCase]>([
 it.each([false, true])(
   "renders parent selection with explicit Default=%s without changing stored pins",
   async (explicitDefault) => {
-    buildStatusReplyMock.mockImplementation(
-      async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
-        buildStatusReplyParts({
-          ...params,
-          statusChannel: "telegram",
-          resolvedHarness: "openclaw",
-          pluginHealthLineOverride: "",
-          modelAuthOverride: "api-key",
-          activeModelAuthOverride: "api-key",
-          includeTranscriptUsage: false,
-        }),
-    );
+    renderRealStatus();
     const parentSessionKey = "agent:main:telegram:group:parent";
     const sessionKey = "agent:main:telegram:group:parent:topic:77";
     const parent = {
@@ -324,18 +329,7 @@ it.each([
 ])(
   "renders native group /status activation $expected (requireMention=$requireMention, stored=$stored)",
   async ({ requireMention, stored, expected }) => {
-    buildStatusReplyMock.mockImplementation(
-      async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
-        buildStatusReplyParts({
-          ...params,
-          statusChannel: "telegram",
-          resolvedHarness: "openclaw",
-          pluginHealthLineOverride: "",
-          modelAuthOverride: "api-key",
-          activeModelAuthOverride: "api-key",
-          includeTranscriptUsage: false,
-        }),
-    );
+    renderRealStatus();
     const sessionKey = "agent:main:telegram:group:123";
     await fixture.write(
       { sessionId: "group", updatedAt: Date.now(), groupId: "123", groupActivation: stored },
@@ -361,3 +355,38 @@ it.each([
     });
   },
 );
+
+it("resolves native /status activation for a forum topic, not its parent group", async () => {
+  const registry = createSessionConversationTestRegistry();
+  const telegram = registry.channels.find((entry) => entry.plugin.id === "telegram")?.plugin;
+  // Parent group requires a mention; topic 77 opts out, as Telegram topic config can.
+  const resolveRequireMention = vi.fn(
+    ({ groupId }: { groupId?: string | null }) => groupId !== "-1001:topic:77",
+  );
+  Object.assign(expectDefined(telegram, "telegram stub"), { groups: { resolveRequireMention } });
+  setActivePluginRegistry(registry);
+  renderRealStatus();
+  const sessionKey = "agent:main:telegram:group:-1001:topic:77";
+  await fixture.write({ sessionId: "topic", updatedAt: Date.now() }, sessionKey);
+
+  const result = await runStatus(
+    {
+      From: "telegram:group:-1001:topic:77",
+      OriginatingTo: "telegram:-1001",
+      MessageThreadId: 77,
+      IsForum: true,
+      SessionKey: "telegram:slash:-1001",
+      CommandTargetSessionKey: sessionKey,
+    },
+    {
+      cfg: fixture.config({ agents: { defaults: { model: "openai/gpt-5.5" } } } as OpenClawConfig),
+    },
+  );
+
+  expect(resolveRequireMention).toHaveBeenCalledWith(
+    expect.objectContaining({ groupId: "-1001:topic:77" }),
+  );
+  expect(result).toMatchObject({
+    reply: { text: expect.stringContaining("Activation: always") },
+  });
+});

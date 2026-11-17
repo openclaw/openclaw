@@ -66,7 +66,7 @@ export function resolveSlackChannelConfig(params: {
   const match = buildSlackChannelPolicyScope({ channels: entries, candidates });
   const { entry: matched, wildcardEntry: fallback } = match;
 
-  // The monitor honors root channels.slack.requireMention; the adapter deliberately ignores it.
+  // Root/account channels.slack.requireMention is the default for channels without their own value.
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {
     return { allowed: true, requireMention: requireMentionDefault };
