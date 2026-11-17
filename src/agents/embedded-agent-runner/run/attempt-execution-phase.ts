@@ -210,6 +210,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     markTimedOutByRunBudget: () =>
       mergeTerminal({ kind: "timeout", phase: "prompt", source: "run_budget" }),
   });
+  toolBase.bindRunAbortDeadline(attemptTimeout.getRunAbortDeadlineAtMs);
 
   const preparedStreamRuntime = {
     abortable,
