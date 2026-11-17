@@ -586,6 +586,31 @@ it.for(["header", "compaction"] as const)(
   },
 );
 
+it("keeps escaped legacy IDs distinct from SQLite replacement strings", async ({ scope }) => {
+  const escaped = storedMessage("\ud800", null, "user", "Escaped ID.");
+  const replacement = storedMessage(
+    "\ufffd\ufffd\ufffd",
+    "\ud800",
+    "assistant",
+    "Literal replacement ID.",
+  );
+  await seedImportedTranscript(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    escaped,
+    replacement,
+  ]);
+  const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+  expect(
+    database.db
+      .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
+      .get(scope.sessionId),
+  ).toEqual({ count: 0 });
+  expect(historyEvent(scope, "\ud800", { currentOnly: true })?.event).toEqual(escaped);
+  expect(historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true })?.event).toEqual(
+    replacement,
+  );
+});
+
 it("selects imported headers and retention anchors before later indexed duplicates", async ({
   scope,
 }) => {

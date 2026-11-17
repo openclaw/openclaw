@@ -1,4 +1,5 @@
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   readProjectionTranscriptPayload,
   selectActiveTranscriptEventRows,
@@ -14,6 +15,10 @@ import {
   type SessionTranscriptAccountingOptions,
   type SessionTranscriptAccountingSnapshot,
 } from "./session-transcript-accounting.types.js";
+import {
+  projectTranscriptNavigationForReadSql,
+  readTranscriptNavigation,
+} from "./session-transcript-navigation.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
 function readAccountingTail(
@@ -29,14 +34,38 @@ function readAccountingTail(
       projection.database.db,
       query
         .select("active.active_position")
-        .select(transcriptEventNavigationSql(projection.database.db, "event").as("navigation"))
+        .select((eb) => {
+          const navigation = projectTranscriptNavigationForReadSql(
+            projection.database.db,
+            transcriptEventNavigationSql(projection.database.db, "event"),
+          );
+          // SQLite treats literal NUL as an end marker, but JSON.parse rejects it.
+          // Do not let compact projection hide corrupted identity bytes from accounting.
+          return (
+            isPostgresSqlConnection(projection.database.db)
+              ? navigation
+              : eb
+                  .case()
+                  .when(
+                    eb.fn<number>("instr", [
+                      eb.ref("event.event_json"),
+                      eb.fn<string>("char", [eb.val(0)]),
+                    ]),
+                    ">",
+                    0,
+                  )
+                  .then(null)
+                  .else(navigation)
+                  .end()
+          ).as("navigation");
+        })
         .limit(SQLITE_USAGE_TAIL_MAX_EVENTS),
     ),
     (row) => {
       if (row.navigation === null) {
         throw new Error("Transcript accounting navigation is unavailable");
       }
-      return { position: row.active_position, event: JSON.parse(row.navigation) as unknown };
+      return { position: row.active_position, event: readTranscriptNavigation(row.navigation) };
     },
   );
   const selected = selectSessionTranscriptAccountingTail(
