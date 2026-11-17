@@ -8,7 +8,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
-import type { AgentSession } from "../../sessions/index.js";
+import { SessionManager, type AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -67,7 +67,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     repairToolUseResultPairing: false,
     sessionAgentId: "main",
-    sessionManager: {},
+    sessionManager: SessionManager.inMemory(),
     settingsManager,
     ...overrides,
   };

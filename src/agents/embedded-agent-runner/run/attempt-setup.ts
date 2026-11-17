@@ -54,6 +54,8 @@ import {
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
 import {
+  estimateToolResultReductionPotential,
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   resolveCacheTtlPruningSettings,
   resolveLiveToolResultMaxChars,
@@ -384,6 +386,17 @@ export function installEmbeddedAttemptContextGuards(input: {
       }
       checkMidTurnPrecheck({
         ...request,
+        // Only persisted, owner-reducible text can satisfy truncation recovery.
+        estimateRecoverableToolResultChars: () =>
+          estimateToolResultReductionPotential({
+            messages: projectToolResultMessages({
+              messages: input.sessionManager.buildSessionContext().messages,
+              projectionState: input.toolResultPromptProjectionState,
+              recovering: true,
+            }).messages,
+            contextWindowTokens: contextTokenBudget,
+            maxCharsOverride: toolResultMaxChars,
+          }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: settingsManager.getCompactionReserveTokens(),
         toolResultMaxChars,

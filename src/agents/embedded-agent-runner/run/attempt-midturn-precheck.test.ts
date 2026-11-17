@@ -188,7 +188,20 @@ describe("provider request admission", () => {
             ingest: async () => ({ ingested: true }),
             assemble: async ({ messages }) => ({
               messages: oversizedAssembly
-                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                ? [
+                    { role: "user", content: "history ".repeat(40_000), timestamp: 1 },
+                    ...Array.from({ length: 6 }, (_, index) => ({
+                      role: "toolResult" as const,
+                      toolName: "read",
+                      toolCallId: `engine-only-${index}`,
+                      content: [
+                        { type: "text" as const, text: "synthetic projection ".repeat(600) },
+                      ],
+                      isError: false,
+                      timestamp: 1,
+                    })),
+                    ...messages,
+                  ]
                 : messages,
               estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
             }),
@@ -420,6 +433,12 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (oversizedAssembly) {
+          expect(pendingPrecheck).toMatchObject({
+            route: "compact_only",
+            toolResultReducibleChars: 0,
+          });
+        }
         if (compatibleBudget) {
           if (responseSchema) {
             expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });

@@ -191,6 +191,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   toolSchemaTokens?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
   replay?: CompactionReplayPressureContext;
@@ -291,6 +292,7 @@ export function resolveProjectedRequestPressure(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   replay?: CompactionReplayPressureContext;
 }) {
   const { context, previousRequest } = params;
@@ -326,7 +328,12 @@ function resolveCompactionPressureDecision(
   pressure: Pick<TranscriptBoundaryTokenPressure, "messages" | "estimatedPromptTokens"> & {
     source: string;
   },
-  params: { contextTokenBudget: number; reserveTokens: number; toolResultMaxChars?: number },
+  params: {
+    contextTokenBudget: number;
+    reserveTokens: number;
+    toolResultMaxChars?: number;
+    estimateRecoverableToolResultChars?: () => number;
+  },
 ): CompactionPressureDecision {
   const { estimatedPromptTokens } = pressure;
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
@@ -336,18 +343,21 @@ function resolveCompactionPressureDecision(
   });
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
-  const toolResultPotential = estimateToolResultReductionPotential({
-    messages: pressure.messages,
-    contextWindowTokens: params.contextTokenBudget,
-    maxCharsOverride: params.toolResultMaxChars,
-  });
+  const toolResultReducibleChars =
+    overflowTokens > 0
+      ? (params.estimateRecoverableToolResultChars?.() ??
+        estimateToolResultReductionPotential({
+          messages: pressure.messages,
+          contextWindowTokens: params.contextTokenBudget,
+          maxCharsOverride: params.toolResultMaxChars,
+        }).maxReducibleChars)
+      : 0;
   const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
   const truncateOnlyThresholdChars = Math.max(
     overflowChars + truncationBufferChars,
     Math.ceil(overflowChars * 1.5),
   );
-  const toolResultReducibleChars = toolResultPotential.maxReducibleChars;
 
   // Choose truncate-only only when available reduction comfortably exceeds the overflow.
   const route: PreemptiveCompactionRoute =

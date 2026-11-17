@@ -97,24 +97,12 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
       sessionKey: attempt.sessionKey,
       agentId: input.sessionAgentId,
     });
-    if (
-      truncationResult.truncated ||
-      truncationResult.reason === "no oversized or aggregate tool results"
-    ) {
-      if (truncationResult.truncated) {
-        input.replaceSessionMessages(
-          sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
-        );
-      }
-      // The mid-turn estimate sees the in-memory prompt view, while persisted
-      // recovery may already have capped the same tool results. Retry without
-      // manufacturing compaction when the persisted branch has nothing to trim.
-      const truncatedCount = truncationResult.truncated ? truncationResult.truncatedCount : 0;
-      logMidTurnPrecheck(
-        request.route,
-        `handled=true truncatedCount=${truncatedCount}` +
-          (truncationResult.truncated ? "" : ` truncateSkippedReason=${truncationResult.reason}`),
+    if (truncationResult.truncated) {
+      input.replaceSessionMessages(
+        sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
       );
+      const { truncatedCount } = truncationResult;
+      logMidTurnPrecheck(request.route, `handled=true truncatedCount=${truncatedCount}`);
       return { preflightRecovery: { ...preflightRecovery, handled: true, truncatedCount } };
     }
 
