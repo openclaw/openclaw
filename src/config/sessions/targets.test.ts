@@ -353,11 +353,18 @@ describe("isConfiguredAgentDatabaseTarget", () => {
 
   it("answers an exact configured claim without filesystem probes", () => {
     const dir = tempDir();
+    const earlier = path.join(dir, "earlier.sqlite");
+    fsSync.writeFileSync(earlier, "");
     const database = path.join(dir, "agent.sqlite");
+    fsSync.writeFileSync(database, "");
     const statSpy = vi.spyOn(fsSync, "statSync");
     expect(
       isConfiguredAgentDatabaseTarget(
-        [{ agentId: "main", path: database }, { path: path.join(dir, "missing.sqlite") }],
+        [
+          { agentId: "main", path: earlier },
+          { agentId: "main", path: database },
+          { path: path.join(dir, "missing.sqlite") },
+        ],
         "main",
         database,
       ),
