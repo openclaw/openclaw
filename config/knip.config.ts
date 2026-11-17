@@ -102,6 +102,7 @@ const repositoryScriptEntries = [
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
+  "scripts/lib/plugin-npm-build-and-pack-batch.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Package scripts execute these maintained generators, whose inputs are production contracts.
@@ -607,7 +608,7 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
         /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
-      .filter(([, , toolingRoot]) => toolingRoot === stagedToolingRoot)
+      .filter((match) => match[2] === stagedToolingRoot)
       .map(
         ([, names, , specifier]) =>
           `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,

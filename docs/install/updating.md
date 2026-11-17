@@ -75,6 +75,9 @@ uncopied workspace file, startup leaves the original alone and reports a warning
 
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
 and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
+Completed agent deletions whose journal retains files are excluded from startup
+upgrade discovery and copying; their retained files remain unchanged. Pending
+deletions keep their existing deletion-owner behavior.
 Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
 migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
 exec approvals, audit logs, config, and installed extensions remain available.

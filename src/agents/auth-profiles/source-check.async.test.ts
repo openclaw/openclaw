@@ -7,12 +7,14 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState as State,
 } from "../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
+import { resolveSessionAuthSelection } from "./session-override.js";
 import {
   hasAnyAuthProfileStoreSourceAsync as hasSource,
   hasLocalAuthProfileStoreSourceAsync,
@@ -139,11 +141,39 @@ it("refreshes absent and malformed rows through the cohort", () =>
       if (json !== undefined) {
         peer.prepare(`INSERT INTO auth_profile_${table} VALUES ('primary', ?, 1)`).run(json);
       }
-      await expectSource(state.agentDir(), expected, reader);
+      await expectSource(state.agentDir(), expected, { agentId: "main", reader });
     }
     expect(
       standalone.mock.calls.filter(([input]) => input.databasePath === database.path),
     ).toHaveLength(0);
+  }));
+
+it("checks session auth sources through its admitted cohort without synchronous filesystem work", () =>
+  withState(async (state) => {
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
+    await using cohort = await prepareSourceCohort(state);
+    const { reader } = cohort;
+    const sessionEntry = { sessionId: "auth-source", updatedAt: 1 };
+    using readCohort = vi.spyOn(reader, "withRead");
+    using filesystem = observeMainThreadFs();
+    expect(
+      await resolveSessionAuthSelection({
+        cfg: {},
+        provider: "openai",
+        modelId: "synthetic-model",
+        agentId: "main",
+        agentDir: state.agentDir(),
+        reader,
+        sessionEntry,
+        sessionKey: reader.sessionKey,
+        sessionStore: { [reader.sessionKey]: sessionEntry },
+        isNewSession: false,
+      }),
+    ).toBeUndefined();
+    expect(readCohort).toHaveBeenCalled();
+    expect(
+      filesystem.stacks().filter(({ stack }) => /auth-profiles[/\\]source-check\.ts:/.test(stack)),
+    ).toEqual([]);
   }));
 
 it("rejects cohort path, agent owner, and state root mismatches", () =>
@@ -158,7 +188,7 @@ it("rejects cohort path, agent owner, and state root mismatches", () =>
       { env: { ...reader.database.env, OPENCLAW_STATE_DIR: state.path("another-state-root") } },
     ]) {
       const mismatched = { ...reader, database: { ...reader.database, ...changed } };
-      expect(await hasSource(state.agentDir(), mismatched)).toBe(true);
+      expect(await hasSource(state.agentDir(), { agentId: "main", reader: mismatched })).toBe(true);
     }
     expect(readCohort).not.toHaveBeenCalled();
   }));
