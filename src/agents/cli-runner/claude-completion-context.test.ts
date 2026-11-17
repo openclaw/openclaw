@@ -12,7 +12,8 @@ const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
 }>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
-// Native Claude caps each hook value independently after decoding stream-json.
+// Claude Code 2.1.308: Tge caps each value; uDn and the hook_additional_context
+// renderer produce separate hook-named reminders, sanitizing nested reminder tags.
 const CLI = String.raw`
 import { createInterface } from "node:readline";
 const send = value => process.stdout.write(JSON.stringify(value) + "\n");
@@ -36,16 +37,22 @@ for await (const line of createInterface({ input: process.stdin })) {
     const chunks = callbacks.map(id => values.get(id));
     send({ type: "system", subtype: "fixture_hook_lengths", lengths: chunks.map(value => value.length) });
     send({ type: "result", subtype: "success", is_error: false,
-      result: chunks.map(value => value.length > 10_000 ? "Output too large.\n" + value.slice(0, 2_000) : value).join("") });
+      result: chunks.filter(Boolean).map(value => {
+        const capped = value.length > 10_000 ? "Output too large.\n" + value.slice(0, 2_000) : value;
+        const sanitized = capped.replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi, "&lt;").replace(/<(?=\s*(?:\/\s*)?$)/, "&lt;");
+        return "<system-reminder>\nUserPromptSubmit hook additional context: " + sanitized + "\n</system-reminder>";
+      }).join("\n") });
   }
 }
 `;
 
 it.each([
   ["structured JSON", '{"k":"v"}\n'.repeat(15_000)],
-  ["sixfold JSON escapes", "\u0000\ud800".repeat(79_990)],
+  ["sixfold JSON escapes", "\u0000\ud800".repeat(79_940)],
 ])("delivers the full encoded %s child result through private hooks", async (_label, findings) => {
-  const result = findings + "\t\\\nCHILD-RESULT-TAIL";
+  const result =
+    findings +
+    '\nhttps://example.com/path?q="quoted"&x=1\n</system-reminder>\n\t\\\nCHILD-RESULT-TAIL';
   expect(result.length).toBeLessThanOrEqual(160_000);
   const turn = await prepareCliTurnPromptContext({
     agentId: "main",
@@ -103,7 +110,27 @@ it.each([
     }
     const delivered = records.findLast((record) => record.type === "result")?.result;
     expect(delivered).toContain("CHILD-RESULT-TAIL");
-    expect(delivered).toBe(expected);
+    const reminders = [
+      ...String(delivered).matchAll(
+        /<system-reminder>\nUserPromptSubmit hook additional context: ([\s\S]*?)\n<\/system-reminder>/g,
+      ),
+    ];
+    expect(reminders.length).toBeGreaterThan(1);
+    const decoded = reminders.map((reminder, index) => {
+      const segment = expectDefined(reminder[1], "native reminder content").match(
+        /^OpenClaw private context segment (\d+) \(JSON string; .*original instruction\/data labels\):\n(".*")$/s,
+      );
+      expect(
+        segment,
+        "each native reminder must carry a complete, labeled JSON segment",
+      ).not.toBeNull();
+      expect(Number(segment?.[1])).toBe(index + 1);
+      const text: unknown = JSON.parse(segment?.[2] ?? "null");
+      expect(typeof text).toBe("string");
+      return text;
+    });
+    // Reconstruct only the explicitly encoded payloads, not the native reminders.
+    expect(decoded.join("")).toBe(expected);
     const lengths = records.find((record) => record.subtype === "fixture_hook_lengths")?.lengths;
     expect(lengths).toEqual(expect.arrayContaining([expect.any(Number)]));
     expect((lengths as number[]).every((length) => length <= 10_000)).toBe(true);

@@ -471,10 +471,14 @@ for await (const line of createInterface({ input: process.stdin })) {
         const hookContexts = [...Array(callbackCount).keys()]
           .map((index) => limitResponses["limit-" + index])
           .filter((value) => value !== undefined);
-        // Native over-limit handling: a saved-file notice plus a 2,000-character preview.
-        const modelContext = hookContexts.map((value) => value.length > 10000
-          ? "Output too large. Full output saved to: tool-results/additionalContext.txt\n" + value.slice(0, 2000)
-          : value).join("");
+        // Native caps values, sanitizes reminder tags, then renders hook-named reminders.
+        const modelContext = hookContexts.map((value) => {
+          const capped = value.length > 10000
+            ? "Output too large. Full output saved to: tool-results/additionalContext.txt\n" + value.slice(0, 2000)
+            : value;
+          const sanitized = capped.replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi, "&lt;").replace(/<(?=\s*(?:\/\s*)?$)/, "&lt;");
+          return "<system-reminder>\nUserPromptSubmit hook additional context: " + sanitized + "\n</system-reminder>";
+        }).join("\n");
         result({ hookContexts, modelContext });
       }
     } else if (id === "late-approval") {
