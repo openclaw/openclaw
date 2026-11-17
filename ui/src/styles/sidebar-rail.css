@@ -1,6 +1,9 @@
 .sidebar.sidebar--rail {
   flex-direction: row;
   overflow: visible;
+  /* The rail's surface runs behind the sidebar panel. Imported palettes without a rail
+     surface keep the sidebar surface rather than showing the app artwork through the rail. */
+  background: var(--sidebar-rail-surface, var(--sidebar-bg));
 }
 
 /* Account identity remains recognizable while a cold profile photo resolves. */
@@ -41,10 +44,34 @@
   height: 28px;
 }
 
+/* An open sidebar sits on the rail as a panel: the rail's surface runs behind it and shows
+   through its two rounded rail-side corners, where a hairline follows the curve in place of
+   the straight divider. The content side keeps its square edge and the shell's divider. */
 .sidebar--rail .sidebar-shell {
+  --sidebar-pad-x: 8px;
+  --sidebar-panel-radius: calc(18px * var(--openclaw-corner-radius-scale));
   min-width: 0;
   overflow: hidden;
-  --sidebar-pad-x: 8px;
+  --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
+  background: var(--sidebar-bg);
+  /* The hairline is drawn inside the panel so it moves nothing; the page side has none. */
+  box-shadow:
+    inset 1px 1px 0 var(--sidebar-panel-hairline),
+    inset 0 -1px 0 var(--sidebar-panel-hairline);
+  border-start-start-radius: var(--sidebar-panel-radius);
+  border-end-start-radius: var(--sidebar-panel-radius);
+  corner-shape: superellipse(1.5);
+}
+
+/* The rail's surface runs behind the sidebar panel. */
+.shell--navigation-rail .shell-nav {
+  background: var(--sidebar-rail-surface, var(--sidebar-bg));
+}
+
+/* The divider stays transparent so the rail keeps its width. */
+.shell:not(.shell--nav-collapsed, .shell--settings) .sidebar-rail,
+.shell-nav:has(openclaw-app-sidebar[data-peek]) .sidebar-rail {
+  border-inline-end-color: transparent;
 }
 
 /* Preserve title space beside the rail, row insets, and the 44px menu target. */
@@ -409,106 +436,6 @@
   background: var(--border);
 }
 
-/* Page entries paint around the link and pin. */
-.sidebar-pages__entry {
-  --sidebar-pages-pin-width: 28px;
-
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-md);
-  transition:
-    background var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
-
-/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
-   separate rows instead of merging into one block. */
-.sidebar-pages__entry + .sidebar-pages__entry {
-  margin-block-start: 2px;
-}
-
-.sidebar-pages__entry:has(.nav-item):where(:hover) {
-  background: var(--surface-hover);
-}
-
-.sidebar-pages__entry:has(.nav-item--active) {
-  background: var(--surface-selected);
-}
-
-.sidebar-pages__entry:has(.nav-item--active):hover {
-  background: var(--surface-selected-hover);
-}
-
-/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px
-   title, and the same lead column (the 1px transparent border is part of the inset). */
-.sidebar-pages__entry .nav-item {
-  min-height: var(--sidebar-session-row-floor, 30px);
-  padding-inline-start: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset) - 1px);
-  background: transparent;
-  border-color: transparent;
-}
-
-.sidebar-pages__entry .nav-item__icon {
-  color: var(--muted);
-  opacity: 1;
-}
-
-.sidebar-pages__entry .nav-item__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.75px;
-}
-
-.sidebar-pages__entry .nav-item__text {
-  letter-spacing: -0.008em;
-}
-
-.sidebar-pages__entry:hover .nav-item:not(.nav-item--active) {
-  color: var(--text);
-}
-
-.sidebar-pages__entry:hover .nav-item__icon {
-  opacity: 1;
-}
-
-.sidebar-pages__entry > .sidebar-zone-entry {
-  flex: 1;
-  min-width: 0;
-}
-
-.sidebar-pages__pin {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 var(--sidebar-pages-pin-width, 28px);
-  height: 28px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
-  opacity: 0;
-}
-
-.sidebar-pages__pin svg {
-  width: 14px;
-  height: 14px;
-}
-
-.sidebar-pages__entry:hover .sidebar-pages__pin,
-.sidebar-pages__pin:focus-visible,
-.sidebar-pages__pin--pinned {
-  opacity: 1;
-}
-
-.sidebar-pages__pin:hover,
-.sidebar-pages__entry:hover .sidebar-pages__pin--pinned {
-  color: var(--text);
-}
-
-.sidebar-pages__pin--pinned svg {
-  fill: currentColor;
-}
-
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
   padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
@@ -612,11 +539,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   .shell:not(.shell--mobile-nav) .sidebar-rail {
     --sidebar-rail-control-size: 38px;
     flex-basis: 52px;
-  }
-
-  .sidebar-pages__pin {
-    opacity: 1;
-    height: 38px;
   }
 }
 
