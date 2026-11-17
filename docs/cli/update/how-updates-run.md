@@ -1609,29 +1609,45 @@ does not make simultaneous package swaps safe.
 
 ### Replacing the package directory
 
-The swap publishes the staged package in one of two ways.
+The swap publishes the staged package with or without a
+[package-publication journal](/install/updating#package-publication-recovery).
+On macOS and Linux both ways publish with one atomic exchange (`renameat2` with
+`RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP` on macOS), so the
+package path names a complete package at every instant, also when the updater,
+its managed helper, or the machine dies. The tools that make the call are the
+ones the release-directory conversion below uses. The `package-swap` step of the
+update result reads `published by an atomic exchange (<tool>)`.
 
-A POSIX npm update that prepared a
-[package-publication journal](/install/updating#package-publication-recovery)
-moves the old package into the journal's recovery directory and then moves the
-new one into place. Between those two moves the package path is missing. An
-updater killed there leaves no runnable `openclaw`. The managed update helper,
-when it is still alive, or the journal's printed recovery command, run with the
-recorded external runtime, finishes the publication. This path is unchanged.
+A POSIX npm update that prepared a journal records a publish intent, gives the
+candidate the name `previous` inside the journal's recovery directory, and
+exchanges that name with the package path. The new package is then installed and
+the old one is under `previous`, which is where every recovery reader expects it
+after a publication.
 
-Every other swap of a package directory publishes with one atomic exchange on
-macOS and Linux: pnpm and Bun, where the directory is the manager's whole global
-project, and npm when the journal is not used, for example with
-`--reapply-local-overrides`, for a release replaced in place behind its package
-link, or for a target without delegated post-core execution. The staged
+An updater killed between those two steps leaves the old package serving and the
+candidate waiting under `previous`. The journal still records the publish
+intent, so the next update, and `openclaw update repair`, refuse with `Package
+publication is incomplete` until it is settled. Only the managed update helper,
+when it is still alive, or the journal's printed recovery command settles it:
+`repair` returns the candidate to its own name and aborts the publication, and
+`retire` then removes the recovery directory. That
+state is read only with the recorded intent and the recorded identities of all
+three directories. A reader that finds the layout without that intent, and the
+recovery code of earlier releases, refuses it by its identity check instead of
+taking the candidate for the previous package. An updater killed after the
+exchange leaves the new package installed, as a killed publication always did
+from that point. The exchange tool is a separate short-lived process: when the
+updater is killed while it runs, it can still complete the exchange a moment
+later, and recovery then reads the publication as published.
+
+Without a journal, the same exchange covers pnpm and Bun, where the directory is
+the manager's whole global project, and npm when the journal is not used, for
+example with `--reapply-local-overrides`, for a release replaced in place behind
+its package link, or for a target without delegated post-core execution. The
+staged
 directory first takes the backup name `.openclaw.package-backup-<pid>-<time>`
-beside the directory it replaces. One exchange (`renameat2` with
-`RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP` on macOS) then puts
-the new directory in place and the old one under the backup name, so the package
-path names a complete package at every instant, also when the updater is killed.
-The tools that make the call are the ones the release-directory conversion below
-uses. The `package-swap` step of the update result reads `published by an atomic
-exchange (<tool>)`.
+beside the directory it replaces. One exchange then puts the new directory in
+place and the old one under the backup name.
 
 An updater killed after the staged directory took the backup name and before the
 exchange leaves the old package serving and the new, unpublished one under that
@@ -1643,12 +1659,21 @@ the tool can still complete the exchange a moment later, which leaves the new
 package in place and the old one under the backup name.
 
 When the exchange is unavailable (a system without the tool, a filesystem that
-refuses the call, or a stage on another filesystem), the update still installs:
-the staged directory returns to its stage, the old one moves to the backup name,
-and the staged one moves into place. The step reads `published by two moves
-(atomic exchange unavailable: <reason>)`. Between the two moves the package path
-is missing. If the updater dies there, `openclaw` cannot start and the old
-directory is intact under the backup name. Check the `version` in its
+refuses the call, or a stage on another filesystem), the update still installs
+with two moves, and the step reads `published by two moves (atomic exchange
+unavailable: <reason>)`. Between the two moves the package path is missing and
+`openclaw` cannot start.
+
+With a journal, the candidate returns to its own name, the old package moves to
+`previous`, and the candidate moves into place. If the updater dies between
+those moves, the managed update helper, when it is still alive, or the journal's
+printed recovery command, run with the recorded external runtime, finishes the
+publication. `openclaw update repair` cannot run while the package is missing.
+
+Without a journal, the staged directory returns to its stage, the old one moves
+to the backup name, and the staged one moves into place. If the updater dies
+between those moves, the old directory is intact under the backup name. Check
+the `version` in its
 `package.json` first (for pnpm and Bun, in the `openclaw` package inside it):
 the backup that holds the previous version is the one to restore. Rename it back
 to the directory it was taken from, the package path for npm or the global
@@ -1762,10 +1787,10 @@ prevents automatic rollback; restoring a link alone does not prove runtime safet
 
 Package updates preserve local `dist` edits in a recovery bundle before replacing
 the old package. Capture happens after service drain, so edits made while the new
-version installs are included. A macOS or Linux swap without a journal reads the
-old package at its path immediately before publication. A journaled swap and a
-swap on another platform capture after the old-tree move, and a release switch
-reads the previous release in place. The report names the bundle
+version installs are included. A macOS or Linux swap of a package directory
+reads the old package at its path immediately before publication. A swap on
+another platform, or of a staged link, captures after the old-tree move, and a
+release switch reads the previous release in place. The report names the bundle
 under the selected state directory's `update-recovery/` directory. Keep it until
 you have checked the updated installation; removal is manual.
 

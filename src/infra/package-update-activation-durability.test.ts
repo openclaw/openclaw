@@ -839,6 +839,69 @@ describe.skipIf(process.platform === "win32")("package activation journal", () =
     },
   );
 
+  it.each([
+    ["no intent", undefined],
+    ["a displacement intent", { kind: "displace" }],
+    ["a publish intent", { kind: "publish" }],
+  ] as const)(
+    "reads a candidate under the previous name only as %s allows",
+    async (_recorded, intent) => {
+      if (intent) {
+        await f.transition(f.record, "publishing", intent);
+      }
+      fs.renameSync(path.join(f.anchor, "candidate"), path.join(f.anchor, "previous"));
+      const before = journalFiles(f.anchor);
+      const repair = recovery(f.anchor, "repair", f.operationId);
+      if (intent?.kind === "publish") {
+        // The one state an exchange publication records: the candidate returns to
+        // its own name, and the untouched publication aborts.
+        await expect(repair).resolves.toMatchObject({ phase: "aborted" });
+        expect(fs.readdirSync(f.anchor)).toEqual(expect.arrayContaining(["candidate"]));
+        expect(fs.existsSync(path.join(f.anchor, "previous"))).toBe(false);
+      } else {
+        await expect(repair).rejects.toThrow("Package publication object changed");
+        expectFilesEqual(journalFiles(f.anchor), before);
+        expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(false);
+        expect(fs.readFileSync(path.join(f.anchor, "previous/package.json"), "utf8")).toContain(
+          '"version":"2.0.0"',
+        );
+      }
+      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+    },
+  );
+
+  it("reads the publication as published when a surviving exchange tool finishes during recovery", async () => {
+    await f.transition(f.record, "publishing", { kind: "publish" });
+    const previous = path.join(f.anchor, "previous");
+    const candidate = path.join(f.anchor, "candidate");
+    fs.renameSync(candidate, previous);
+    const rename = fsp.rename.bind(fsp);
+    const spy = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+      if (from === previous && to === candidate) {
+        // The tool's exchange lands after recovery observed the waiting candidate.
+        spy.mockRestore();
+        fs.renameSync(f.packageRoot, `${f.packageRoot}.exchanging`);
+        fs.renameSync(previous, f.packageRoot);
+        fs.renameSync(`${f.packageRoot}.exchanging`, previous);
+      }
+      return rename(from, to);
+    });
+    await expect(recovery(f.anchor, "repair", f.operationId)).resolves.toMatchObject({
+      phase: "publication-complete",
+    });
+    const version = (root: string) =>
+      JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+    expect([version(f.packageRoot), version(previous), fs.existsSync(candidate)]).toEqual([
+      "2.0.0",
+      "1.0.0",
+      false,
+    ]);
+    expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+  });
+
   it("observes a committed intent after its acknowledgement is lost", async () => {
     const failure = new Error("journal commit acknowledgement lost");
     let lost = false;

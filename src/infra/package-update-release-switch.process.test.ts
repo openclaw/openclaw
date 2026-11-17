@@ -1,20 +1,40 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  captureUpdateCommandExecutorAuthority,
+  withUpdateCommandExecutor,
+} from "../cli/update-cli/update-command-executor.js";
 import { collectPackageReleases, listPackageReleases } from "./package-release-retention.js";
 import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { capturePackageReleaseSlot, switchPackageReleaseLink } from "./package-release-slot.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+  resolvePackageActivationJournalPath,
+} from "./package-update-activation-journal.js";
+import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeEntrypoint } from "./package-update-activation-runtime-assets.js";
+import {
+  assertNoPendingPackageActivation,
+  runPackageActivationRecovery,
+} from "./package-update-activation.js";
 import { stagePackageRelease } from "./package-update-release-switch.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { expectedPathExchangeRoute } from "./path-exchange.test-support.js";
-import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const child = fileURLToPath(
-  new URL("./package-update-release-switch.process.test-support.ts", import.meta.url),
+  resolveRuntimeWorkerUrl({
+    ...packageActivationRuntimeEntrypoint,
+    sourceWorkerName: "package-update-release-switch.process.test-support",
+    distWorkerPath: "infra/package-update-release-switch.process.test-support.js",
+  }),
 );
 
 let dir: string;
@@ -34,14 +54,26 @@ type ChildEvent = {
   rollback?: { exitCode: number | null; error?: string | null };
 };
 type Tools = "missing" | undefined;
+type ChildEnv = (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
 
 /** Run one installation in a child on its own prefix; `cut` says where it is killed. */
 async function runSwitch(
   cut: string,
-  layout: "linked" | "plain" | "swap",
-  options: { root?: string; tools?: Tools; verification?: "fails" } = {},
+  layout: "linked" | "plain" | "swap" | "journal",
+  options: { root?: string; tools?: Tools; verification?: "fails"; env?: ChildEnv } = {},
 ) {
   const root = options.root ?? dir;
+  const packagePath = path.join(root, "prefix", "lib", "node_modules", "openclaw");
+  let authority = "";
+  if (layout === "journal") {
+    // The child publishes under an executor that uses this test's private lease database.
+    fs.mkdirSync(packagePath, { recursive: true });
+    authority = JSON.stringify(
+      await withUpdateCommandExecutor(randomUUID(), async (executor) =>
+        captureUpdateCommandExecutorAuthority(await executor.enter(packagePath)),
+      ),
+    );
+  }
   const proc = spawn(
     process.execPath,
     [
@@ -51,8 +83,12 @@ async function runSwitch(
       layout,
       options.tools ?? "",
       options.verification ?? "",
+      authority,
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: options.env?.({ ...process.env, HOME: root, USERPROFILE: root }),
+    },
   );
   let stdout = "";
   let stderr = "";
@@ -93,27 +129,41 @@ const version = (root: string) =>
  * that run with the updater killed there. `installed` is the version the
  * package path serves afterwards, or null when it serves nothing.
  */
-async function killAtEveryBoundary(layout: "plain" | "swap", tools?: Tools) {
+async function killAtEveryBoundary(
+  layout: "plain" | "swap" | "journal",
+  tools?: Tools,
+  journal?: { root: string; env: ChildEnv },
+) {
+  const base = journal?.root ?? dir;
   const complete = await runSwitch("complete", layout, {
-    root: path.join(dir, "complete"),
+    root: path.join(base, "complete"),
     tools,
+    env: journal?.env,
   });
   const labels = complete.events.flatMap((event) => event.label ?? []);
-  const killed = await Promise.all(
-    labels.map(async (label, index) => {
-      const state = await runSwitch(`boundary:${index + 1}`, layout, {
-        root: path.join(dir, `killed-${index + 1}`),
-        tools,
-      });
-      let installed: string | null = null;
-      try {
-        installed = version(state.slot);
-      } catch {
-        // The package path resolves to no package.
-      }
-      return { label, state, installed };
-    }),
-  );
+  const kill = async (label: string, index: number) => {
+    const state = await runSwitch(`boundary:${index + 1}`, layout, {
+      root: path.join(base, `killed-${index + 1}`),
+      tools,
+      env: journal?.env,
+    });
+    let installed: string | null = null;
+    try {
+      installed = version(state.slot);
+    } catch {
+      // The package path resolves to no package.
+    }
+    return { label, state, installed };
+  };
+  // Journaled runs share one lease database, whose file lock refuses a crowd.
+  const killed: Array<Awaited<ReturnType<typeof kill>>> = [];
+  if (journal) {
+    for (const [index, label] of labels.entries()) {
+      killed.push(await kill(label, index));
+    }
+  } else {
+    killed.push(...(await Promise.all(labels.map(kill))));
+  }
   // Every killed run died right after the boundary the completed run names at that position.
   expect(killed.map((run) => run.state.events.at(-2)?.label)).toEqual(labels);
   expect(complete.events.at(-1)?.status).toBe("committed");
@@ -364,5 +414,157 @@ describe.skipIf(process.platform === "win32")("package swap killed by SIGKILL", 
         "openclaw",
       ]);
     },
+  );
+});
+
+describe.skipIf(process.platform === "win32")("journaled publication killed by SIGKILL", () => {
+  const fixtures = createPackageActivationLifetimeFixture();
+  let journal: { root: string; env: ChildEnv };
+  beforeEach(() => {
+    const { root, childGuardEnv } = fixtures.setup();
+    journal = { root, env: childGuardEnv };
+  });
+  afterEach(() => fixtures.cleanup());
+  const anchored = (name: string) => `lib/node_modules/.openclaw.package-activation/${name}`;
+  const read = (slot: string) =>
+    openPackageActivationJournal(resolvePackageActivationAnchor(slot), { readOnly: true }).read();
+
+  /**
+   * Recover a killed run with the recovery the printed command runs: repair,
+   * repair again, retire. Returns the phase repair reached, or undefined for a
+   * run that died before it published a journal.
+   */
+  async function recover(slot: string) {
+    const anchor = resolvePackageActivationAnchor(slot);
+    if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+      expect(() => assertNoPendingPackageActivation(slot)).not.toThrow();
+      return undefined;
+    }
+    const operation = read(slot).descriptor.operationId;
+    const repair = () => runPackageActivationRecovery(anchor, "repair", operation);
+    const layout = () => ({
+      // The revision counts journal writes; a repeated completion rewrites the same record.
+      record: { ...read(slot), revision: 0 },
+      beside: fs.readdirSync(path.dirname(slot)).toSorted(),
+      anchor: fs.readdirSync(anchor).toSorted(),
+      serves: version(slot),
+    });
+    const repaired = await repair();
+    const settled = layout();
+    // A second repair changes nothing: an aborted publication refuses to be reopened.
+    if (repaired.phase === "aborted") {
+      await expect(repair()).rejects.toThrow("Forward publication is disarmed (aborted).");
+    } else {
+      expect(await repair()).toEqual(repaired);
+    }
+    expect(layout()).toEqual(settled);
+    expect(await runPackageActivationRecovery(anchor, "retire", operation)).toMatchObject({
+      phase: "complete",
+    });
+    expect(fs.existsSync(anchor)).toBe(false);
+    expect(() => assertNoPendingPackageActivation(slot)).not.toThrow();
+    return repaired.phase;
+  }
+
+  it.runIf(expectedPathExchangeRoute)(
+    "at every boundary: the package path serves a complete package and recovery settles it",
+    // About forty updaters run one at a time: they share one lease database.
+    { timeout: 300_000 },
+    () =>
+      fixtures.lifetime.run(async () => {
+        const { labels, killed, detail } = await killAtEveryBoundary("journal", undefined, journal);
+
+        expect(killed.filter((run) => run.installed === null).map((run) => run.label)).toEqual([]);
+        // One exchange publishes: the previous package serves until its tool has ended.
+        expect(labels.filter((label) => /^(start|end) /u.test(label))).toHaveLength(2);
+        const ended = labels.findIndex((label) => label.startsWith("end "));
+        const serves = labels.map((_, index) => (index < ended ? "2026.11.3" : "2026.12.1"));
+        expect(killed.map((run) => run.installed)).toEqual(serves);
+        expect(detail).toContain(`published by an atomic exchange (${expectedPathExchangeRoute})`);
+        // The candidate takes the previous name under a recorded publish intent, and
+        // local dist files are preserved before that, while the old package serves.
+        const waiting = labels.indexOf(
+          `rename ${anchored("candidate")} -> ${anchored("previous")}`,
+        );
+        expect(waiting).toBe(ended - 2);
+        expect(read(killed[waiting]!.state.slot)).toMatchObject({
+          phase: "publishing",
+          intent: { kind: "publish" },
+          publications: [],
+        });
+        const preserved = labels.findLastIndex((label) => label.includes("update-recovery"));
+        expect(preserved).toBeGreaterThan(-1);
+        expect(preserved).toBeLessThan(waiting - 1);
+
+        // A run killed before the exchange aborts to the previous package, with the
+        // waiting candidate back under its own name; a later one completes the candidate.
+        const published = labels.findIndex((label) => label.startsWith("renameSync "));
+        const outcomes: Array<string | undefined> = [];
+        for (const run of killed) {
+          outcomes.push(await recover(run.state.slot));
+        }
+        expect(outcomes).toEqual(
+          labels.map((_, index) =>
+            index < published ? undefined : index < ended ? "aborted" : "publication-complete",
+          ),
+        );
+        expect(killed.map((run) => version(run.state.slot))).toEqual(serves);
+      }),
+  );
+
+  it(
+    "without an exchange tool: only the instant between the two moves has no package",
+    {
+      timeout: 300_000,
+    },
+    () =>
+      fixtures.lifetime.run(async () => {
+        const { killed, detail } = await killAtEveryBoundary("journal", "missing", journal);
+        expect(detail).toMatch(/two moves \(atomic exchange unavailable: .*ENOENT/u);
+
+        // The same sweep finds the window that displacing before publishing leaves:
+        // the displacement and the journal commit that records the publish intent.
+        const broken = killed.filter((run) => run.installed === null);
+        expect(broken.map((run) => run.label)).toEqual([
+          `rename lib/node_modules/openclaw -> ${anchored("previous")}`,
+          "journal commit",
+        ]);
+        // Only the recovery command restores an installation there, by publishing forward.
+        for (const run of broken) {
+          expect(() => assertNoPendingPackageActivation(run.state.slot)).toThrow(/incomplete/u);
+          expect(await recover(run.state.slot)).toBe("publication-complete");
+          expect(version(run.state.slot)).toBe("2026.12.1");
+        }
+      }),
+  );
+
+  it.each(expectedPathExchangeRoute ? [undefined, "missing" as const] : ["missing" as const])(
+    "after a failed verification: rollback restores the previous package (exchange tools: %s)",
+    (tools) =>
+      fixtures.lifetime.run(async () => {
+        const state = await runSwitch("complete", "journal", {
+          root: journal.root,
+          tools,
+          verification: "fails",
+          env: journal.env,
+        });
+
+        const outcome = state.events.at(-1);
+        expect(outcome?.detail).toContain(tools ? "by two moves" : "by an atomic exchange");
+        expect(outcome?.rollback).toEqual({ exitCode: 0, error: null });
+        expect(version(state.slot)).toBe("2026.11.3");
+        expect(fs.realpathSync(path.join(state.prefix, "bin", "openclaw"))).toBe(
+          path.join(state.slot, "openclaw.mjs"),
+        );
+        expect(read(state.slot).phase).toBe("rolled-back");
+        // Retirement removes the rejected candidate and the journal's custody.
+        const anchor = resolvePackageActivationAnchor(state.slot);
+        const operation = read(state.slot).descriptor.operationId;
+        expect(await runPackageActivationRecovery(anchor, "retire", operation)).toMatchObject({
+          phase: "complete",
+        });
+        expect(fs.existsSync(anchor)).toBe(false);
+        expect(version(state.slot)).toBe("2026.11.3");
+      }),
   );
 });
