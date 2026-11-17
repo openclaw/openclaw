@@ -1,5 +1,10 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { hasActiveDeliveryOwner, type QueuedDelivery } from "./delivery-queue-types.js";
+import { resolveDeliveryQueueAttemptCount } from "../delivery-queue-sqlite.types.js";
+import {
+  FINAL_TEXT_RECOVERY_MAX_ATTEMPTS,
+  hasActiveDeliveryOwner,
+  type QueuedDelivery,
+} from "./delivery-queue-types.js";
 
 const DEFAULT_MAX_RETRIES = 5;
 const TEXT_FINAL_FIELDS: Record<string, true> = {
@@ -29,8 +34,24 @@ export function isOrdinaryFinalText(
   );
 }
 
-export function canReplayAmbiguousFinalText(entry: QueuedDelivery): boolean {
-  return entry.retryAmbiguousFinalText === true && entry.ambiguousTransportError === true;
+/**
+ * The one rule for unconfirmed sends no adapter can reconcile: an ordinary agent final text is
+ * resent once, accepting a rare duplicate over a lost reply. A crash mid-send leaves
+ * `send_attempt_started`; a live ambiguous transport failure is typed. Other post-send evidence
+ * (accepted chunks, untyped failures) never qualifies, and an adapter's `not_sent` verdict keeps
+ * its own replay rule.
+ */
+export function canReplayAmbiguousFinalText(
+  entry: QueuedDelivery,
+  reconciliation?: { status: string } | null,
+): boolean {
+  return (
+    entry.retryAmbiguousFinalText === true &&
+    reconciliation?.status !== "not_sent" &&
+    (entry.ambiguousTransportError === true || entry.recoveryState === "send_attempt_started") &&
+    resolveDeliveryQueueAttemptCount(entry) <
+      Math.min(FINAL_TEXT_RECOVERY_MAX_ATTEMPTS, resolveMaxRetries(entry))
+  );
 }
 
 export function shouldInspectQueuedDelivery(entry: QueuedDelivery, now: number): boolean {

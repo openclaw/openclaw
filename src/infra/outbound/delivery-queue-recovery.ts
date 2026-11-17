@@ -539,8 +539,7 @@ async function drainQueuedEntry(
     return ownerState;
   }
   if (needsUnknownSendReconciliation(entry)) {
-    // A crash after platform send start cannot be blindly replayed; adapters
-    // must reconcile whether the platform already committed the message.
+    // Unconfirmed sends: adapter reconciliation decides first, then the shared final-text rule.
     const reconciliation =
       entry.legacyUnknownSendReconciliation ??
       (await reconcileUnknownQueuedDelivery({
@@ -595,7 +594,7 @@ async function drainQueuedEntry(
     }
     const reconciliationProvedPreSendFailure =
       reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started";
-    const replayFinalText = !attemptBudgetExhausted && canReplayAmbiguousFinalText(entry);
+    const replayFinalText = canReplayAmbiguousFinalText(entry, reconciliation);
     if (reconciliationProvedPreSendFailure || replayFinalText) {
       reconciledPlatformSendAttemptId = entry.platformSendAttemptId;
       reconciledPlatformSendStartedAt = entry.platformSendStartedAt;

@@ -166,14 +166,7 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  | "deps"
-  | "formatting"
-  | "identity"
-  | "mediaAccess"
-  | "replyToMode"
-  | "retryAmbiguousFinalText"
-  | "silent"
-  | "threadId"
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
   /** Validate the admitted sender or restore its account view from current Gateway config. */
   prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;

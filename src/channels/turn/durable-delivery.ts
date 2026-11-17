@@ -248,7 +248,8 @@ async function deliverAdmittedInboundReply(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
-    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
+    // Only finals reach here; queue admission decides whether the payload is ordinary text.
+    retryAmbiguousFinalText: true,
     ...((params.runId ?? params.executionIdentityToken?.runId)
       ? { runId: params.runId ?? params.executionIdentityToken?.runId }
       : {}),
