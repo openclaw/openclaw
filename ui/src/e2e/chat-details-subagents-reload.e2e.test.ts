@@ -62,7 +62,11 @@ suite.define(() => {
             key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             settings: {
               sessionKey,
-              sidebarPrefs: fixture.paneChromeSettings,
+              sidebarPrefs: {
+                ...fixture.paneChromeSettings,
+                // Details facts use a system-created parent; opt in to inspecting its children.
+                "openclaw:sidebar:sessions:show-system": "true",
+              },
               sidebarSessionLayouts: {
                 [sessionKey]: dashboardLayout("side-panel-column", "dashboard", false),
               },

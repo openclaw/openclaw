@@ -186,8 +186,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   providerUsage?: ProviderUsageDisplayProps;
   contextGateway?: ApplicationGateway;
   onOpenContext?: () => void;
-  /** Opens a process's output in this pane's Processes panel; absent where the pane has none. */
-  onOpenProcesses?: (instanceId?: string) => void;
   /** Present only when this viewer may compact the session; the context popover offers it. */
   onCompact?: () => void | Promise<unknown>;
   compactionStatus?: CompactionStatus | null;
@@ -290,7 +288,7 @@ export type ChatComposerState = {
     queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
-  questionTakeoverActive: boolean;
+  questionFocusActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
@@ -299,6 +297,8 @@ export type ChatComposerState = {
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
+  // The mounted composer's Escape stop policy, for Escape pressed outside the composer.
+  stopRunFromEscape: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;

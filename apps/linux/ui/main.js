@@ -306,7 +306,7 @@ async function connect(action) {
     title: "One moment",
   } : {
     activity: "Checking local services…",
-    description: "Finding your gateway and preparing the Control UI.",
+    description: "Finding your gateway and preparing OpenClaw.",
     title: "Connecting to OpenClaw",
   });
   try {
@@ -482,7 +482,7 @@ async function connectRemoteGateway() {
   remoteConnectionPending = true;
   elements.remoteConnect.disabled = true;
   elements.setupContinue.disabled = true;
-  showRemoteFeedback("Preparing the remote dashboard…", false);
+  showRemoteFeedback("Preparing the remote Gateway…", false);
 
   try {
     await invoke("connect_remote_gateway", {
@@ -497,7 +497,7 @@ async function connectRemoteGateway() {
           : null,
       remotePort: isDirect ? null : remotePort,
     });
-    showRemoteFeedback("Opening the remote dashboard…", false);
+    showRemoteFeedback("Opening the remote Gateway…", false);
   } catch (error) {
     showRemoteFeedback(friendlyError(error), true);
   } finally {
@@ -815,7 +815,7 @@ if (mode === "connectionSettings") {
   render({
     activity: "Retrying every few seconds…",
     description:
-      "The gateway connection dropped. OpenClaw will restore the dashboard automatically.",
+      "The gateway connection dropped. OpenClaw will reconnect automatically.",
     eyebrow: "GATEWAY OFFLINE",
     title: "Reconnecting",
   });

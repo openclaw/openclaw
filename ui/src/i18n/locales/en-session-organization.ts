@@ -95,15 +95,15 @@ const enSessionOrganization = {
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
     searchPlaceholder: "Search sessions…",
-    transcriptSearchTitle: "Search transcripts",
+    transcriptSearchTitle: "Search chats",
     transcriptSearchDescription:
       "Find exact words or phrases in your messages and agent replies across the default agent’s sessions.",
-    transcriptSearchInputLabel: "Search session transcripts",
+    transcriptSearchInputLabel: "Search chats",
     transcriptSearchPlaceholder: "Search exact words or phrases…",
     transcriptSearchAction: "Search",
     transcriptSearchClear: "Clear",
     transcriptSearchRetry: "Retry",
-    transcriptSearchSearching: "Searching transcripts…",
+    transcriptSearchSearching: "Searching chats…",
     transcriptSearchUnavailable: "Reconnect to search messages.",
     transcriptSearchError: "Couldn’t search messages. Try again.",
     transcriptSearchIndexing: "Results may be incomplete. Search again shortly.",
@@ -252,16 +252,6 @@ const enSessionOrganization = {
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       "The connection changed before work stopped on the cloud device for “{session}”. Try again.",
-    deleteSessionTitle: "Delete “{session}”?",
-    deleteSessionConfirm:
-      "This also deletes its transcript. Work on any attached device stops first.",
-    deleteSessionsTitle: "Delete {count} sessions?",
-    deleteSessionsConfirm:
-      "This also deletes their transcripts. Any attached devices will stop working on them first.",
-    deleteSelectedConfirmOne:
-      "Stop work on any attached device, then delete the session entry and archive its transcript.",
-    deleteSelectedConfirm:
-      "Stop work on any attached devices, then delete the session entries and archive their transcripts.",
     archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
       "“{session}” has 1 directly nested session. If you archive only this session, that nested session moves to the top level.",
@@ -274,9 +264,10 @@ const enSessionOrganization = {
     automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
-    automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
-    automationPauseDeleteOther:
-      "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
+    automationDeleteWarningOne:
+      'Automations linked to "{session}" may keep running after deletion. Disable or remove them separately.',
+    automationDeleteWarningOther:
+      "Automations linked to {count} of these conversations may keep running after deletion. Disable or remove them separately.",
     automationPauseUnlisted: "Automation names are unavailable right now.",
     automationPauseMore: "+{count} more",
     archiveAnyway: "Archive anyway",

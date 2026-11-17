@@ -7,7 +7,6 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   applyWorkspaceMigrationReceiptMove,
@@ -21,7 +20,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import { retireWorkspaceFileCache } from "./workspace-file-cache.js";
 import {
   createWorkspaceStateIdentity,
   normalizeWorkspaceIdentityPath,
@@ -313,10 +311,6 @@ export async function rebindRepointedWorkspaceAlias(
       aliases: filesystem.aliases,
       identity: current,
       updatedAtMs: Date.now(),
-    });
-    deferSqlitePostCommitPublication(writeDatabase.db, () => {
-      retireWorkspaceFileCache(stored.workspacePath);
-      retireWorkspaceFileCache(current.workspacePath);
     });
     return "rebound" as const;
   }, options);

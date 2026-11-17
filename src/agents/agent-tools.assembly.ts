@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -77,7 +78,6 @@ import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -292,7 +292,10 @@ export function* assembleOpenClawCodingTools(
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
               approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-              nonInteractiveApproval: options?.swarmCollector,
+              // A hidden fork has nobody to ask; a command that needs approval is denied.
+              nonInteractiveApproval:
+                options?.swarmCollector ||
+                readSessionForkSource(options?.inputProvenance) !== undefined,
               backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
@@ -479,6 +482,8 @@ export function* assembleOpenClawCodingTools(
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             currentChatType: options?.chatType,
+            isTurnTainted: options?.isTurnTainted,
+            preparedModelRuntime: options?.preparedModelRuntime,
             computerTransport:
               options?.computerTransport === null
                 ? null
@@ -631,7 +636,6 @@ export function* assembleOpenClawCodingTools(
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };

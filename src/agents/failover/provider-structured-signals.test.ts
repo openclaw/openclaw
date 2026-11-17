@@ -95,7 +95,7 @@ describe("provider failover hook structured signals", () => {
     ],
     [
       { errorCode: "DEACTIVATED_WORKSPACE" },
-      "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+      "⚠️ The AI service isn't accepting your login. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
     ],
     [{ errorBody: '{"error":{"type":"upstream_error"}}' }, serverCopy],
     [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy, true],

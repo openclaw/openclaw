@@ -53,12 +53,12 @@ import { scheduleNodeConnectionNotification } from "../../node-connection-notifi
 import { resolveOpenClawIdClawOrigin } from "../../openclaw-id/claw-origin.js";
 import {
   resolveGatewayOperatorRoleActor,
+  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "../../operator-role-policy.js";
 import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
   TICK_INTERVAL_MS,
@@ -206,9 +206,12 @@ export async function sendGatewayHello(
           activityClient,
           resolveGatewayOperatorRoleActor(activityClient)?.kind === "system"
             ? undefined
-            : resolveOperatorRolePolicyForProfile(
-                activityClient.authenticatedUserProfile?.profileId,
-                buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
+            : (
+                resolveAdministratorMemberRolePolicy(activityClient, context.configSnapshot) ??
+                resolveOperatorRolePolicyForProfile(
+                  activityClient.authenticatedUserProfile?.profileId,
+                  buildRequestContext().getCommittedRuntimeConfig?.() ?? context.configSnapshot,
+                )
               )?.scopes,
           activityClient.authenticatedUserProfile?.profileId,
         )
@@ -229,12 +232,8 @@ export async function sendGatewayHello(
     features: {
       methods: gatewayMethods.filter(
         (method) =>
-          (method !== "mcp.authLogin" ||
-            Boolean(
-              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
-            )) &&
-          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
-            !method.startsWith("openclawId.")),
+          isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+          !method.startsWith("openclawId."),
       ),
       events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
         ? events

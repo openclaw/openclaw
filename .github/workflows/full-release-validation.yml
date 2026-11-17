@@ -302,6 +302,20 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
+          # Keep admission imports, workspace manifests and patches; omit unrelated trees.
+          sparse-checkout: |
+            /*
+            !/*/
+            /.github/
+            /scripts/
+            /src/
+            /packages/
+            /patches/
+            /extensions/*/package.json
+            /examples/*/package.json
+            /ui/package.json
+            /tools/solid-lint/package.json
+          sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
           submodules: false
@@ -409,7 +423,8 @@ jobs:
           input="${RUNNER_TEMP}/full-release-candidate-request-input.json"
           output="${RUNNER_TEMP}/full-release-candidate-request.json"
           allow_frozen_target_scenario_omissions=false
-          if [[ -n "$TARGET_CONTEXT_REF" && "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+          # P-admitted qualification must cover every required scenario, even when C != Q.
+          if [[ -z "$QUALIFICATION_ADMISSION_JSON" && -n "$TARGET_CONTEXT_REF" && "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
             allow_frozen_target_scenario_omissions=true
           fi
           if [[ -n "$QUALIFICATION_ADMISSION_JSON" && -z "$QUALIFICATION_BASELINES_JSON" ]]; then
@@ -657,6 +672,7 @@ jobs:
         id: frozen_selection
         env:
           ADMISSION_WORKFLOW: parent
+          QUALIFICATION_ADMISSION_JSON: ${{ steps.publication_dispatch.outputs.qualification_admission_json }}
           ADMISSION_INPUTS: ${{ toJSON(inputs) }}
           ADMISSION_SELECTED_ROOT: ${{ github.workspace }}/target
           ADMISSION_SELECTED_SHA: ${{ steps.resolve.outputs.sha }}
@@ -1030,8 +1046,9 @@ jobs:
 
   evidence_reuse:
     name: Check for reusable validation evidence
-    needs: [resolve_target, plugin_compatibility_readiness]
-    if: ${{ always() && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
+    # Read-only lookup can overlap readiness; fanout and final success still require it.
+    needs: [resolve_target]
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     outputs:
@@ -1290,6 +1307,8 @@ jobs:
             .github/workflows
           persist-credentials: false
 
+      - *qualification_evidence_verifier_checkout
+
       - &child_reuse_runtime
         name: Setup child reuse runtime
         if: env.CHILD_EVIDENCE_REUSE == 'true'
@@ -1396,7 +1415,13 @@ jobs:
             local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id run_json child_head_sha child_run_attempt url encoded_workflow_ref current_workflow_sha expected_workflow_id
 
             if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
-              if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
+              local reuse_script=workflow/scripts/find-reusable-release-child.mjs
+              if [[ "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}" == true ]]; then
+                reuse_script=qualification-verifier/scripts/find-reusable-release-child.mjs
+              fi
+              if TARGET_VERSION="${{ needs.resolve_target.outputs.target_version }}" \
+                CHILD_WORKFLOW_DIRECTORY="$GITHUB_WORKSPACE/workflow/.github/workflows" \
+                node "$reuse_script" "$workflow" "$@"; then
                 return 0
               else
                 dispatch_status=$?
@@ -1565,7 +1590,8 @@ jobs:
               args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f phase="$PHASE" -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" -f extension_test_exclude_patterns_json="$EXTENSION_TEST_EXCLUDE_PATTERNS_JSON")
               if [[ -n "${TARGET_CONTEXT_REF:-}" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
-                if [[ "$TARGET_SHA" != "$PARENT_WORKFLOW_SHA" ]]; then
+                # Consume the sealed request, not a fresh C/Q comparison.
+                if [[ "$(jq -r '.allowFrozenTargetScenarioOmissions' <<< "$CANDIDATE_REQUEST_JSON")" == true ]]; then
                   args+=(-f allow_frozen_target_scenario_omissions=true)
                 fi
               fi
@@ -1626,7 +1652,8 @@ jobs:
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
                 args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
-                if [[ "$TARGET_SHA" != "$PARENT_WORKFLOW_SHA" ]]; then
+                # Consume the sealed request, not a fresh C/Q comparison.
+                if [[ "$(jq -r '.allowFrozenTargetScenarioOmissions' <<< "$CANDIDATE_REQUEST_JSON")" == true ]]; then
                   args+=(-f allow_frozen_target_scenario_omissions=true)
                 fi
               fi
@@ -1714,6 +1741,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch plugin prerelease independent phase
@@ -1727,6 +1755,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           CANDIDATE_ARTIFACT_JSON: ""
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
@@ -1746,6 +1775,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch plugin prerelease candidate phase
@@ -1759,6 +1789,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.candidate_acquisition.outputs.candidate_artifact_json }}
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ needs.resolve_target.outputs.extension_test_exclude_patterns_json }}
@@ -1778,6 +1809,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch release checks independent phase
@@ -1804,6 +1836,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           CANDIDATE_ARTIFACT_JSON: ""
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
         run: *full_release_child_dispatch
@@ -1821,6 +1854,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch release checks candidate phase
@@ -1847,6 +1881,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_target.outputs.release_candidate_artifact_required == 'true' && needs.candidate_acquisition.outputs.candidate_artifact_json || '' }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}
         run: *full_release_child_dispatch
@@ -1864,6 +1899,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch npm Telegram E2E
@@ -1892,6 +1928,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch OpenClaw Performance
@@ -2703,7 +2740,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85
     with:
       mode: decision
       runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
@@ -2730,7 +2767,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85
     with:
       mode: drain
       runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
@@ -2749,6 +2786,7 @@ jobs:
     needs:
       [
         resolve_target,
+        plugin_compatibility_readiness,
         evidence_reuse,
         prepare_npm_package,
         qualify_npm_package,
@@ -2776,6 +2814,16 @@ jobs:
       PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
       DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
     steps:
+      - name: Require successful source readiness
+        env:
+          SOURCE_READINESS_RESULT: ${{ needs.plugin_compatibility_readiness.result }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_READINESS_RESULT" == "success" ]] || {
+            echo "Release source readiness must succeed, including when reusing evidence." >&2
+            exit 1
+          }
+
       - name: Require qualified publication artifacts
         if: inputs.rerun_group == 'all'
         env:

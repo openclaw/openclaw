@@ -74,6 +74,11 @@ inside every shard.
   - Live runs copy selected provider overrides from the normal JSON5 OpenClaw
     config. `OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH` overrides
     `OPENCLAW_CONFIG_PATH`; otherwise QA reads `~/.openclaw/openclaw.json`.
+    Selected model credentials also retain their referenced SecretRef provider
+    definitions and source policy. File-provider paths are resolved before the
+    child receives its isolated home. Unrelated resolver definitions, host
+    secret-store data, installed secret plugins, and opaque exec dependencies
+    are not copied; those dependencies must already work in the QA environment.
 - `pnpm openclaw qa coverage --match <query>`
   - Searches scenario IDs, titles, surfaces, coverage IDs, docs refs, code
     refs, plugins, and provider requirements, then prints matching suite

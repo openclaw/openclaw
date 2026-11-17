@@ -1,6 +1,6 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import type { RouteId } from "./app-route-paths.ts";
+import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -310,21 +310,21 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
-  meetings: navigationPresentation("book", "meetings"),
+  meetings: navigationPresentation("meetings", "meetings"),
   apps: navigationPresentation("layoutGrid", "apps"),
-  portals: navigationPresentation("monitor", "portals"),
+  portals: navigationPresentation("portals", "portals"),
   approvals: navigationPresentation("badgeCheck", "approvals"),
-  workboard: navigationPresentation("kanban", "workboard"),
+  workboard: navigationPresentation("workboard", "workboard"),
   worktrees: navigationPresentation("folder", "worktrees"),
   channels: navigationPresentation("link", "channels"),
   connection: navigationPresentation("radio", "connection"),
-  sessions: navigationPresentation("fileText", "sessions"),
-  systems: navigationPresentation("monitor", "systems"),
-  usage: navigationPresentation("coins", "usage"),
-  cron: navigationPresentation("calendarClock", "cron"),
+  sessions: navigationPresentation("sessions", "sessions"),
+  systems: navigationPresentation("systems", "systems"),
+  usage: navigationPresentation("usage", "usage"),
+  cron: navigationPresentation("automations", "cron"),
   skills: navigationPresentation("bookOpenText", "skills"),
   "skill-settings": navigationPresentation("bookOpenText", "skills"),
-  plugins: navigationPresentation("plug", "plugins"),
+  plugins: navigationPresentation("customize", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
   device: navigationPresentation("monitor", "device"),
@@ -334,7 +334,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   chat: navigationPresentation("messageSquare", "chat"),
   terminal: ["terminal", "terminal.title", "terminal.open"],
   dashboard: navigationPresentation("layoutDashboard", "chat"),
-  dashboards: navigationPresentation("layoutDashboard", "dashboards"),
+  dashboards: navigationPresentation("dashboards", "dashboards"),
   custodian: navigationPresentation("lobster", "custodian"),
   config: ["settings", "nav.settings", "subtitles.config"],
   profile: navigationPresentation("circleUser", "profile"),
@@ -368,8 +368,17 @@ export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
-export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
+export function isSettingsTakeover(
+  routeId: RouteId | undefined,
+  tabs?: readonly PluginTab[],
+  location?: { pathname: string; search: string },
+  basePath = "",
+): boolean {
+  return (
+    (routeId !== undefined && isSettingsNavigationRoute(routeId)) ||
+    (routeId === "plugin" &&
+      pluginTabForLocation(tabs, location, basePath)?.placement === "settings")
+  );
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {

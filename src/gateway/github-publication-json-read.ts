@@ -1,3 +1,4 @@
+import { createGitHubPublicationReadEnvironment } from "./github-publication-command-env.js";
 import {
   githubPublicationApiArgs,
   runPublicationCommand,
@@ -14,6 +15,7 @@ export function createGitHubPublicationJsonReader(params: {
   requireSuccess: boolean;
 }) {
   const { host, env, assertCurrent, unavailable, requireSuccess } = params;
+  const prepareEnv = createGitHubPublicationReadEnvironment(env);
   const readFailure = () => {
     const cause = unavailable();
     return new GitHubPublicationReadUnavailableError(cause.message, { cause });
@@ -29,7 +31,7 @@ export function createGitHubPublicationJsonReader(params: {
         ...(query?.jq ? ["--jq", query.jq] : []),
       ],
       {
-        env,
+        prepareEnv,
         ...(query?.query
           ? { input: JSON.stringify({ query: query.query, variables: query.variables }) }
           : {}),

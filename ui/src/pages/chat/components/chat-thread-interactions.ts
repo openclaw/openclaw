@@ -66,6 +66,8 @@ registerChatMessageMetadataEnglish();
 export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>[0] & {
   threadElement?: HTMLElement;
   commentPins?: ChatCommentPinsHandle;
+  observedWorkRun?: { sessionKey: string; runId: string };
+  readerExpandedWork?: { sessionKey: string; keys: ReadonlySet<string> };
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
@@ -298,6 +300,8 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
+    state.observedWorkRun = undefined;
+    state.readerExpandedWork = undefined;
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
@@ -689,6 +693,21 @@ export function handleTranscriptContextMenu(
   }
   menu.style.left = `${Math.max(0, left)}px`;
   menu.style.top = `${Math.max(0, top)}px`;
+  const { signal } = owner.listeners;
+  // Keyboard dismissal is ready before focus enters the menu, independent of paint.
+  listen(
+    document,
+    "keydown",
+    (nextEvent) => {
+      if (nextEvent.key === "Escape") {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
+        removeReplyContextMenu();
+        props.onFocusComposer?.();
+      }
+    },
+    { signal },
+  );
   mounted.firstButton?.focus();
   requestAnimationFrame(() => {
     if (!menu.isConnected || activeReplyContextMenu !== owner) {
@@ -699,18 +718,8 @@ export function handleTranscriptContextMenu(
         removeReplyContextMenu();
       }
     };
-    const handleKeydown = (nextEvent: KeyboardEvent) => {
-      if (nextEvent.key === "Escape") {
-        nextEvent.preventDefault();
-        nextEvent.stopPropagation();
-        removeReplyContextMenu();
-        props.onFocusComposer?.();
-      }
-    };
-    const { signal } = owner.listeners;
     listen(document, "click", handleOutsideEvent, { signal });
     // Capture closes this owner even when the next menu stops event propagation.
     listen(document, "contextmenu", handleOutsideEvent, { capture: true, signal });
-    listen(document, "keydown", handleKeydown, { signal });
   });
 }

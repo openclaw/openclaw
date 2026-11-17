@@ -166,7 +166,7 @@ function SidebarInboxItem(props: {
               get onDismiss() {
                 return props.entry.dismissal ? dismiss : undefined;
               },
-              onNavigate: (route) => props.panel.onNavigate(route),
+              onNavigate: (route, options) => props.panel.onNavigate(route, options),
               onOpen: (item) => props.panel.onOpen(item),
             }}
           />

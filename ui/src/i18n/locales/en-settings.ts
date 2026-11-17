@@ -134,6 +134,7 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -514,6 +515,7 @@ const enSettings = {
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    editInAdvancedRaw: "Edit this setting in the Raw tab of Advanced settings.",
     noSettingsMatch: "No settings match your search.",
     noSettingsInSection: "No settings in this section.",
     sections: {
@@ -1270,6 +1272,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1336,7 +1340,7 @@ const enSettings = {
       check: "Check again",
       checking: "Checking…",
       empty: "No supported coding apps yet.",
-      note: "Update installed agents from Control UI",
+      note: "Update installed agents from the OpenClaw app",
       enabled: "{name} is enabled.",
       sessionExpired:
         "This setup session ended. Close this dialog and check the installed agent status.",
@@ -1346,7 +1350,7 @@ const enSettings = {
       adminRequired: "You can view Models, but only admins can change them.",
     },
     notes: {
-      defaultModel: "Update defaults from Control UI",
+      defaultModel: "Update defaults from the OpenClaw app",
     },
   },
   updates: {
@@ -1372,7 +1376,7 @@ const enSettings = {
     page: {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
-      controlUiCommit: "Control UI commit",
+      controlUiCommit: "Web app commit",
       builtAt: "Built",
       installedAt: "Installed",
       installedAtUnknown: "Unknown",
@@ -1852,6 +1856,8 @@ const enSettings = {
       status: "Status",
       unsubscribe: "Unsubscribe",
       sendTest: "Send test",
+      testAllBrowsers: "Test all browsers",
+      testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
       testError: "Not sent",
@@ -2029,7 +2035,7 @@ const enSettings = {
       devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
-        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+        "Optional CSS width for the centered chat, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
@@ -2051,7 +2057,7 @@ const enSettings = {
       title: "Session observer",
       scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      toggleHint: "Generate live status digests for sessions that are open in the app.",
       resolvedModel: "Resolved small model",
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
@@ -2063,7 +2069,7 @@ const enSettings = {
       modelCatalogUnavailable: "Explicit model catalog unavailable",
       auto: "Auto (provider default)",
       disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
+      toggleNote: "Update the session observer",
       modelNote: "Update the default utility model",
     },
     connection: {
@@ -2106,7 +2112,7 @@ const enSettings = {
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
     rawDraftUnverified: en.configView.rawDraftUnverified,
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don’t remind me again",
+    dismissWarning: "Dismiss warning",
     viewPendingChangesRaw: "View pending changes",
     hideEnvValues: "Hide environment values",
     revealEnvValues: "Reveal environment values",
@@ -2150,8 +2156,8 @@ const enSettings = {
     },
     sessionStorage: {
       title: "Session storage",
-      description: "Transcript counts and disk usage across agent databases.",
-      transcripts: "Transcripts",
+      description: "Chat counts and disk usage across agent databases.",
+      transcripts: "Chats",
       transcriptCounts: "{hot} uncompressed · {cold} archived",
       database: "Databases",
       walSize: "Write-ahead logs: {size}",
@@ -2163,29 +2169,28 @@ const enSettings = {
       agentCounts:
         "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
       worker: "Background maintenance",
-      completed: "Last completed {time} · {count} transcripts archived",
+      completed: "Last completed {time} · {count} chats archived",
       notRun: "No maintenance batches completed yet.",
       running: "Running",
-      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      runningProgress: "{archived} chats archived · {externalized} archives moved to files",
       externalized: "{count} compressed archives moved from the database to files.",
       idle: "Idle",
       failed: "Needs attention",
       adminRequired: "You need admin access to inspect session storage.",
       disconnected: "Reconnect to inspect session storage.",
       automatic: "Automatic archival",
-      enabled: "Archive older transcripts",
+      enabled: "Archive older chats",
       enabledHint:
-        "Inactive transcripts move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
+        "Inactive chats move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
       afterDays: "Archive after (days)",
-      afterDaysHint:
-        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      afterDaysHint: "Days since the chat last changed. Changes apply without a Gateway restart.",
       backupHint:
         "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
       advanced: "Advanced session settings",
       runNow: "Run now",
       runHint: "Start one maintenance batch using the saved, applied policy.",
       runStarted: "Maintenance batch started. You can leave this page while it runs.",
-      runCompleted: "Maintenance batch completed. {count} transcripts archived.",
+      runCompleted: "Maintenance batch completed. {count} chats archived.",
     },
   },
   memoryPage: {

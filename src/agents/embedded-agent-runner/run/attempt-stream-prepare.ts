@@ -28,7 +28,6 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
@@ -42,10 +41,6 @@ import {
   attachActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
-import {
-  requiresCompletionRequiredAsyncTaskWait,
-  type AsyncStartedToolMeta,
-} from "./attempt-async-tasks.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
@@ -325,7 +320,6 @@ function prepareStream(
       undefined,
       registration,
     );
-  let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
@@ -403,22 +397,6 @@ function prepareStream(
       if (deferredLifecycleOwner) {
         return;
       }
-      let requiresTaskWait = false;
-      try {
-        requiresTaskWait = requiresCompletionRequiredAsyncTaskWait({
-          sessionKey: attempt.sessionKey,
-          toolMetas: toolMetasForTerminal,
-          abortSignal: input.runAbortController.signal,
-        });
-      } catch (error) {
-        if (!input.runAbortController.signal.aborted || !isRunnerAbortError(error)) {
-          throw error;
-        }
-        // Cancelling this observation must not defer cleanup past the terminal event.
-      }
-      if (deferredLifecycleOwner || requiresTaskWait) {
-        return;
-      }
       // Clear active-run state before terminal events and post-completion cleanup.
       clearActiveRun();
     },
@@ -442,7 +420,6 @@ function prepareStream(
     return streamSubscription.unsubscribe();
   });
   const subscription = { ...streamSubscription, unsubscribe };
-  toolMetasForTerminal = subscription.toolMetas;
 
   const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
     attempt,
@@ -658,13 +635,6 @@ function prepareStream(
       return {
         model: attempt.model,
         promptCacheKey: attempt.promptCacheKey,
-        systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools,
-        messages: activeSession.messages,
-        projectMessages: input.projectSessionForkMessages,
-        sessionVersion: activeSession.sessionManager.getHeader()?.version,
-        boundary: input.readSessionForkBoundary?.(),
-        blockImages: activeSession.settingsManager.getBlockImages(),
         preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },

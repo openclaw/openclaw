@@ -12,7 +12,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "../../gateway/operator-run-recovery.js";
 import {
   pairedOperator,
   recoveryFixture,
@@ -102,10 +102,9 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
           scopes: ["operator.write"],
         });
         const accepted = expectDefined(
-          await captureGatewayOperatorRunAuthority({
+          await captureGatewayOperatorContinuation({
             client: senderClient,
             context: occurrence.context,
-            independentContinuation: true,
           }),
           "receiver continuation",
         );

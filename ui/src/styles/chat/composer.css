@@ -4046,6 +4046,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   background: var(--menu-selected);
 }
 
+.chat-controls__provider-tab[data-chat-model-provider-toggle="$favorites"]
+  .chat-controls__provider-icon {
+  fill: currentColor;
+}
+
 .chat-controls__provider-tab:not([aria-selected="true"]) .provider-brand-icon {
   color: var(--muted);
 }
@@ -5186,7 +5191,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 
   &:has(> .chat-controls__model-favorite) .chat-controls__inline-select-check {
-    .chat-controls__model-option:hover & {
+    .chat-controls__model-option:hover &,
+    .chat-controls__model-option:focus-within & {
       opacity: 0;
     }
 
@@ -5218,7 +5224,11 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
     fill: none;
   }
 
-  .chat-controls__model-option:hover & {
+  /* At rest, the selected model keeps its check instead of stacking two icons. */
+  .chat-controls__model-option:not(.chat-controls__inline-select-option--selected)
+    &[aria-pressed="true"],
+  .chat-controls__model-option:hover &,
+  .chat-controls__model-option:focus-within & {
     opacity: 1;
   }
 

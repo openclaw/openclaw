@@ -9,6 +9,7 @@ import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
@@ -272,6 +273,45 @@ it("flushes failed candidate services before closing their shared resources", ()
   verifyCandidateResourceCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
+
+it("settles captured rollback custody but cancels before draining the live plugin", async () => {
+  const controller = new AbortController();
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  const dispose = vi.fn(async () => {});
+  const fixture = await createRecoveryFixture({
+    waitForDrain: true,
+    drainSignal: controller.signal,
+  });
+  const old = fixture.previousRegistry.plugins.find((entry) => entry.id === "first")!;
+  bindPluginRuntimeArtifactSelection(old, { runtimeEntry: { source: "first.js", rootDir: "." } });
+  const instance = fixture.instance();
+  const drain = vi.spyOn(instance, "waitForRetainedWork");
+  const idle = vi.spyOn(instance, "waitForIdle");
+  instance.bindModuleLoaderRecovery(async () => {
+    started.resolve();
+    await finish.promise;
+    return { bind() {}, dispose };
+  });
+  const reloading = observeSettlement(fixture.reload());
+  try {
+    expect(await Promise.race([started.promise, reloading.result])).toBeUndefined();
+    controller.abort(new Error("operator cancelled during rollback capture"));
+    finish.resolve();
+    expect(await reloading.result).toMatchObject({
+      cause: controller.signal.reason,
+      details: { phase: "prepare", committed: false },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(drain).not.toHaveBeenCalled();
+    expect(idle).not.toHaveBeenCalled();
+    expect(fixture.firstStop).not.toHaveBeenCalled();
+    expect(instance.run(() => "still live")).toBe("still live");
+  } finally {
+    finish.resolve();
+    await reloading.result;
+  }
+});
 
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",

@@ -1,5 +1,4 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { resolveCompactionRecoveryLifecycleError } from "../../agents/compaction-recovery-lifecycle-error.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../../agents/reply-completion.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveDeferredLifecycleTerminal } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -71,14 +71,14 @@ export async function settleAgentFallbackCycle(params: {
   const hostMissingReplyError = isHostMissingReplyNoticeText(embeddedError?.message)
     ? embeddedError?.message
     : undefined;
-  const compactionRecoveryError = resolveCompactionRecoveryLifecycleError(
+  const deferredTerminal = resolveDeferredLifecycleTerminal(
     runResult,
     deferredLifecycleError,
+    terminalMetadata,
   );
   // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
-    compactionRecoveryError ??
-    deferredLifecycleError ??
+    deferredTerminal.error ??
     (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     hostMissingReplyError ??
     (embeddedError ? "Agent run failed" : undefined);
@@ -170,13 +170,7 @@ export async function settleAgentFallbackCycle(params: {
     ) {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
-    emitSettledLifecycleError(
-      terminalError,
-      compactionRecoveryError
-        ? // The precheck's overflow observation no longer describes this failure.
-          { ...terminalMetadata, errorNotice: compactionRecoveryError, errorObservation: undefined }
-        : terminalMetadata,
-    );
+    emitSettledLifecycleError(terminalError, deferredTerminal.metadata);
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {
