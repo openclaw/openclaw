@@ -223,9 +223,10 @@ export function buildSessionEventContext(params: {
     OriginatingChannel: deliveryContext?.channel,
     OriginatingTo: deliveryContext?.to,
     // Session-event turns ride the same same-conversation authority projection
-    // as inbound messages; without the provider-native chat id that projection
-    // cannot match the conversation and human steering is rejected (#199701).
-    ChatId: deliveryContext?.to,
+    // as inbound messages; it compares the host-captured native conversation
+    // id exactly. Route addresses ("channel:<id>", "user:<id>") are not that
+    // identity, so ChatId comes from the session's captured id only (#199701).
+    ChatId: target.settings?.nativeChannelId,
     AccountId: deliveryContext?.accountId,
     MessageThreadId: deliveryContext?.threadId,
     // Inbound dedupe retains an adopted attempt's id; a policy re-admission is a new dispatch.
