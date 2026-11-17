@@ -64,10 +64,17 @@ export function coerceToolExecutionArguments(
     return args;
   }
   try {
-    return validateToolArguments(
+    const coerced = validateToolArguments(
       { name: tool.name, description: tool.description ?? "", parameters },
       { type: "toolCall", id: tool.name, name: tool.name, arguments: args },
     );
+    if (isRecord(coerced)) {
+      // Coercion clones JSON fields; retain the host's private invocation metadata.
+      for (const symbol of Object.getOwnPropertySymbols(args)) {
+        Object.defineProperty(coerced, symbol, Object.getOwnPropertyDescriptor(args, symbol)!);
+      }
+    }
+    return coerced;
   } catch {
     return args;
   }
