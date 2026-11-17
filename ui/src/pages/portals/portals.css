@@ -26,7 +26,8 @@ main.content:where(.content--portals-page) .portals-empty {
 }
 
 /* The standalone page reads in the standard wide page column, under its header. */
-openclaw-portals-page:not([embedded]) > :is(.portals-empty, .portals-layout) {
+openclaw-portals-page:not([embedded]) > .portals-empty,
+openclaw-portals-page:not([embedded]) > .portals-layout {
   width: 100%;
   max-width: 1120px;
   margin-inline: auto;
