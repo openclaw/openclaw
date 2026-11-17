@@ -1009,7 +1009,7 @@ describe("release CI summary child correlation", () => {
           ? trustedMainNpmFixture()
           : trustedMainPackageFixture({ manifestVersion: version });
       await expect(verifyFixture(fixture)).rejects.toThrow(
-        "Release qualification requires authenticated P admission; obtain new admitted qualification or authenticated receipt recovery",
+        "Release qualification requires authenticated P admission; obtain new admitted qualification",
       );
     },
   );
@@ -1406,6 +1406,21 @@ describe("release CI summary child correlation", () => {
       "advisory jobs differ",
     );
     expect(JSON.stringify(manifest)).toBe(before);
+  });
+
+  it("returns structured CLI failure when the verifier source is unavailable", () => {
+    const result = spawnSync(
+      process.execPath,
+      [SCRIPT, "--validate-run", "1", "--verifier-source-sha", "f".repeat(40), "--json"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      error: "release evidence verifier source blob is unavailable",
+      schema: "openclaw.release-validation-evidence/v4",
+      valid: false,
+    });
   });
 
   it("rejects dirty verifier bytes and a forged verifier source SHA", async () => {

@@ -998,7 +998,7 @@ async function runPreparedNpmCommand(argv) {
             shareAcquisitionReads: true,
           });
     } else if (command === "authorize" || command === "consume") {
-      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
+      // Parent dispatch and direct commands lack a carrier. Share raw reads only
       // within this command; the final sweep still refreshes live authority.
       adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
         shareAcquisitionReads: true,

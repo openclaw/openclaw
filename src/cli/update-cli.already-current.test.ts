@@ -269,14 +269,21 @@ describe("update-cli", () => {
       const earlier = modules.createUpdateRun({ trigger: "cli" }).runId;
       recordUpdateRunOwedStep(earlier, "shell-completion", "EACCES: permission denied");
       recordUpdateRunOwedStep(earlier, "service-definition", "install failed");
+      recordUpdateRunOwedStep(earlier, "plugin-convergence", "plugin registry exploded");
+      recordUpdateRunOwedStep(earlier, "post-plugin-doctor", "state database is locked");
       finishUpdateRun(earlier, { status: "succeeded" });
       setup.mockCompletionCacheRefresh({ code, stderr: "still EACCES" });
 
       await updateCommand({ yes: true, json: true });
 
-      // This command did not refresh the service definition, so that step stays owed.
+      // Completed convergence settles its step. This command neither refreshed the service
+      // definition nor ran Doctor after changing plugins, so those steps stay owed.
       const result = output();
-      const owed = [...completion, { id: "service-definition", reason: "install failed" }];
+      const owed = [
+        ...completion,
+        { id: "service-definition", reason: "install failed" },
+        { id: "post-plugin-doctor", reason: "state database is locked" },
+      ];
       expect(readOwedUpdateSteps()).toEqual(owed.map((step) => ({ ...step, runId: result.runId })));
       // A settled step leaves the earlier run's report. One this run still owes stays on it too,
       // so the earlier run owes it again if this run fails.
@@ -285,7 +292,7 @@ describe("update-cli", () => {
         completion.length > 0,
       );
       expect(earlierReport).toContain("Gateway service definition refresh is owed: install failed");
-      expect(result.status).not.toBe("error");
+      expect(result.status).toBe("skipped");
       expect(
         result.steps.flatMap((step) =>
           step.advisory?.message.includes(" is owed: ") ? [step.name] : [],

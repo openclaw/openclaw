@@ -1461,11 +1461,7 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
-      const receiptRecovery =
-        expected.workflowName === "Full Release Validation" &&
-        info.workflowName === "Full Release Receipt Recovery" &&
-        info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
-      if (info.workflowName !== expected.workflowName && !receiptRecovery) {
+      if (info.workflowName !== expected.workflowName) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );

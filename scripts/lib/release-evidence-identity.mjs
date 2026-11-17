@@ -4,47 +4,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyReleaseQualificationOperators } from "../release-qualification-admission.mjs";
-import {
-  runReleaseToolingGh,
-  verifyReleaseToolingIdentity,
-  verifyReleaseWorkflowRun,
-} from "../release-tooling-identity.mjs";
-
-export const RECEIPT_RECOVERY_WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
-
-export function verifyReceiptRecoveryAuthority(
-  repository,
-  producer,
-  completed = true,
-  runGh = runReleaseToolingGh,
-) {
-  if (producer.fullRef !== "refs/heads/main") {
-    throw new Error("Receipt recovery: recovery must execute trusted P on main");
-  }
-  verifyReleaseToolingIdentity({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-    runGh,
-  });
-  const run = verifyReleaseWorkflowRun({
-    repository,
-    workflowRef: "main",
-    workflowFullRef: producer.fullRef,
-    workflowSha: producer.sha,
-    runId: producer.runId,
-    runAttempt: String(producer.runAttempt),
-    workflowPath: RECEIPT_RECOVERY_WORKFLOW,
-    workflowEvent: "workflow_dispatch",
-    runStatePolicy: completed ? "success" : "active",
-    runGh,
-  });
-  verifyReleaseQualificationOperators(repository, run.actor, run.triggering_actor, runGh);
-  return run;
-}
-
 const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
   /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
@@ -93,25 +52,6 @@ export function normalizeWorkflowPathRef(ref) {
 // This projects an eligible retained producer context. Only the strict FRV
 // verifier authenticates both admissions and the unchanged artifact descriptors.
 export function retainedPublicationArtifactSource(manifest) {
-  const recovery = manifest?.receiptRecovery;
-  if (
-    recovery?.schema === "openclaw.full-release-receipt-recovery/v1" &&
-    recovery.candidateBinding?.request?.targetSha === manifest.targetSha &&
-    /^[a-f0-9]{40}$/u.test(recovery.candidateBinding?.request?.toolingSha ?? "") &&
-    manifest.sourceAdmission?.candidateSha === manifest.targetSha &&
-    String(manifest.sourceAdmission?.runId) === String(manifest.runId)
-  ) {
-    return {
-      runId: recovery.originalParent.runId,
-      candidateSha: manifest.targetSha,
-      workflow: {
-        // A reused normal-CI child can retain a different transport. The npm
-        // artifact owner records the original qualification transport itself.
-        ref: manifest.publicationArtifacts?.npmPreflight?.producer?.workflowRef?.split("@")[1],
-        sha: recovery.candidateBinding.request.toolingSha,
-      },
-    };
-  }
   const reuse = manifest?.evidenceReuse;
   const current = manifest?.sourceAdmission;
   const retained = reuse?.publication?.sourceAdmission;

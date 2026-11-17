@@ -111,7 +111,7 @@ describe("authenticated publication eligibility", () => {
           },
         ),
       ).rejects.toThrow(
-        "Release qualification requires authenticated P admission; obtain new admitted qualification or authenticated receipt recovery",
+        "Release qualification requires authenticated P admission; obtain new admitted qualification",
       );
     },
   );

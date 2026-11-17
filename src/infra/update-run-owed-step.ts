@@ -17,6 +17,15 @@ const UPDATE_OWED_STEPS = {
     retry:
       "Settled when `openclaw update` next refreshes the service definition; `openclaw update repair` rechecks it.",
   },
+  "plugin-convergence": {
+    label: "Plugin convergence",
+    retry: "Retried by the next `openclaw update`; run `openclaw update repair` to retry it now.",
+  },
+  "post-plugin-doctor": {
+    label: "Post-plugin Doctor",
+    retry:
+      "Settled when `openclaw update` next completes Doctor after changing plugins; run `openclaw update repair` to retry it now.",
+  },
 } as const;
 
 /** How many recent runs can still owe a step. */

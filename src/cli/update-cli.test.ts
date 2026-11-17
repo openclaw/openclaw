@@ -736,51 +736,84 @@ describe("update-cli", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("shows the matching-version probe failure when a JSON package update restart stays unhealthy", async () => {
+  it.each([
+    { plugins: "converge", convergenceFailure: undefined },
+    { plugins: "fail to converge", convergenceFailure: "plugin registry exploded" },
+  ])(
+    "shows the matching-version probe failure when a JSON package update restart stays unhealthy and plugins $plugins",
+    async ({ convergenceFailure }) => {
+      setupNpmUpdatedRootRefresh();
+      const earlier = oweEarlier("shell-completion");
+      if (convergenceFailure) {
+        mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(convergenceFailure));
+      }
+      mocks.serviceLoaded.mockResolvedValue(true);
+      mocks.restartHealthTestControl.snapshot = {
+        runtime: { status: "running", pid: mocks.gatewayFixturePid },
+        portUsage: {
+          port: 18789,
+          status: "busy",
+          listeners: [{ pid: mocks.gatewayFixturePid, command: "openclaw-gateway" }],
+          hints: [],
+        },
+        healthy: false,
+        staleGatewayPids: [],
+        gatewayVersion: "2026.4.24",
+        expectedVersion: "2026.4.24",
+        probeError: "timeout",
+        waitOutcome: "timeout",
+        elapsedMs: 60_000,
+      };
+
+      await expect(runUpdate({ yes: true, json: true, timeout: "123" })).rejects.toEqual(
+        new cli.ExitError(1),
+      );
+
+      expect(check.lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
+        ]),
+      });
+      const diagnostics = check.getErrorOutput();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(diagnostics).toContain("Gateway check failed: timeout");
+      // Readiness still fails the update, and a failed update neither settles nor owes a step,
+      // including plugin convergence that threw before the restart.
+      expect(readOwedUpdateSteps()).toEqual([
+        { id: "shell-completion", runId: earlier, reason: "earlier failure" },
+      ]);
+      vi.mocked(mocks.runtimeCapture.log).mockClear();
+      await cli.updateStatusCommand({});
+      expect(check.getLogOutput()).toContain(
+        "Warning: Shell completion refresh is owed: earlier failure. Retried by the next",
+      );
+      expect(diagnostics).toContain("Port 18789 is already in use.");
+      expect(diagnostics).not.toContain("Gateway version mismatch");
+    },
+  );
+  it("keeps a JSON package update whose plugin convergence fails and owes the step", async () => {
     setupNpmUpdatedRootRefresh();
-    const earlier = oweEarlier("shell-completion");
-    mocks.serviceLoaded.mockResolvedValue(true);
-    mocks.restartHealthTestControl.snapshot = {
-      runtime: { status: "running", pid: mocks.gatewayFixturePid },
-      portUsage: {
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: mocks.gatewayFixturePid, command: "openclaw-gateway" }],
-        hints: [],
-      },
-      healthy: false,
-      staleGatewayPids: [],
-      gatewayVersion: "2026.4.24",
-      expectedVersion: "2026.4.24",
-      probeError: "timeout",
-      waitOutcome: "timeout",
-      elapsedMs: 60_000,
-    };
+    const reason = "plugin registry exploded";
+    mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(reason));
 
-    await expect(runUpdate({ yes: true, json: true, timeout: "123" })).rejects.toEqual(
-      new cli.ExitError(1),
-    );
+    await runUpdate({ yes: true, json: true });
 
-    expect(check.lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      steps: expect.arrayContaining([
-        expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
-      ]),
-    });
-    const diagnostics = check.getErrorOutput();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(diagnostics).toContain("Gateway check failed: timeout");
-    // Readiness still fails the update, and a failed update neither settles nor owes a step.
-    expect(readOwedUpdateSteps()).toEqual([
-      { id: "shell-completion", runId: earlier, reason: "earlier failure" },
+    const result = check.lastWriteJsonCall() as UpdateRunResult;
+    expect(result.status).toBe("ok");
+    expect(result.steps.filter((step) => step.advisory?.message.includes(" is owed: "))).toEqual([
+      expect.objectContaining({
+        name: "plugin-convergence",
+        exitCode: 0,
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: `Plugin convergence is owed: ${reason}. Retried by the next \`openclaw update\`; run \`openclaw update repair\` to retry it now.`,
+        },
+      }),
     ]);
-    vi.mocked(mocks.runtimeCapture.log).mockClear();
-    await cli.updateStatusCommand({});
-    expect(check.getLogOutput()).toContain(
-      "Warning: Shell completion refresh is owed: earlier failure. Retried by the next",
-    );
-    expect(diagnostics).toContain("Port 18789 is already in use.");
-    expect(diagnostics).not.toContain("Gateway version mismatch");
+    expect(readOwedUpdateSteps()).toEqual([
+      { id: "plugin-convergence", runId: result.runId, reason },
+    ]);
   });
   it("routes a stored dev channel on package installs to the existing Git checkout", async () => {
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(

@@ -4,7 +4,6 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { canAccess, realpathOrResolve } from "../../infra/path-existence.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -132,21 +131,6 @@ function resolveSessionPathSync<T>(steps: SessionPathResolution<T>): T {
       probe.kind === "realpath"
         ? (safeRealpathSync(probe.path) ?? undefined)
         : fs.existsSync(probe.path)
-          ? probe.path
-          : undefined,
-    );
-  }
-  return step.value;
-}
-
-async function resolveSessionPathAsync<T>(steps: SessionPathResolution<T>): Promise<T> {
-  let step = steps.next();
-  while (!step.done) {
-    const probe = step.value;
-    step = steps.next(
-      probe.kind === "realpath"
-        ? await realpathOrResolve(path.resolve(probe.path))
-        : (await canAccess(probe.path))
           ? probe.path
           : undefined,
     );
@@ -332,50 +316,7 @@ function* resolvePathWithinSessionsDir(
   return path.resolve(realBase, normalized);
 }
 
-function* resolveSessionTranscriptPathInDirSteps(
-  sessionId: string,
-  sessionsDir: string,
-  topicId?: string | number,
-): SessionPathResolution<string> {
-  const safeSessionId = validateSessionId(sessionId);
-  const safeTopicId =
-    typeof topicId === "string"
-      ? encodeURIComponent(topicId)
-      : typeof topicId === "number"
-        ? String(topicId)
-        : undefined;
-  const fileName =
-    safeTopicId !== undefined
-      ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
-      : `${safeSessionId}.jsonl`;
-  if (Buffer.byteLength(fileName, "utf8") > 255) {
-    throw new Error(`Invalid session transcript filename: ${fileName}`);
-  }
-  return yield* resolvePathWithinSessionsDir(sessionsDir, fileName);
-}
-
-export function resolveSessionTranscriptPathInDir(
-  sessionId: string,
-  sessionsDir: string,
-  topicId?: string | number,
-): string {
-  return resolveSessionPathSync(
-    resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir, topicId),
-  );
-}
-
-export function resolveSessionTranscriptPath(
-  sessionId: string,
-  agentId: string,
-  topicId?: string | number,
-): string {
-  return resolveSessionTranscriptPathInDir(
-    sessionId,
-    resolveSessionTranscriptsDirForAgent(agentId),
-    topicId,
-  );
-}
-function* resolveSessionFilePathCoreSteps(
+export function* resolveSessionFilePathCoreSteps(
   sessionId: string,
   entry?: object,
   opts?: SessionFilePathOptions,
@@ -397,7 +338,7 @@ function* resolveSessionFilePathCoreSteps(
       // Keep handlers alive when persisted metadata is stale/corrupt.
     }
   }
-  return yield* resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir);
+  return yield* resolvePathWithinSessionsDir(sessionsDir, `${validateSessionId(sessionId)}.jsonl`);
 }
 
 export function resolveSessionFilePathCore(
@@ -406,14 +347,6 @@ export function resolveSessionFilePathCore(
   opts?: SessionFilePathOptions,
 ): string {
   return resolveSessionPathSync(resolveSessionFilePathCoreSteps(sessionId, entry, opts));
-}
-
-export function resolveSessionFilePathCoreAsync(
-  sessionId: string,
-  entry?: object,
-  opts?: SessionFilePathOptions,
-): Promise<string> {
-  return resolveSessionPathAsync(resolveSessionFilePathCoreSteps(sessionId, entry, opts));
 }
 
 export class SessionStoreAgentIdRequiredError extends Error {
