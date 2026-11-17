@@ -58,6 +58,8 @@ the result and the earlier blocked-delivery notice are kept.
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.
+A required parent completion that expires also records the visible failure notice
+in the requester conversation, so ending delivery is never silent.
 For a retained run, `/subagents info <runId>` shows the captured result, discarded
 delivery status, and original error, even after the run leaves the recent list.
 Inspect that result or available child session history and ask the requester to
