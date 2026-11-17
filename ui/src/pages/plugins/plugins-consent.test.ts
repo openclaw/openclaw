@@ -42,6 +42,7 @@ function createConsentHarness(
     return () => listeners.delete(listener);
   };
   const { gateway: applicationGateway } = createGateway(client);
+  applicationGateway.subscribeEvents = (listener) => client.addEventListener(listener);
   const gateway = new GatewayPageBinding(vi.fn(), { getGateway: () => applicationGateway });
   gateway.connect();
   let result = createResult(available);

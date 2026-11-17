@@ -85,7 +85,7 @@ openclaw-chat-clawhub-card {
 }
 
 .chat-clawhub-card__status-skeleton,
-.chat-clawhub-card__installed {
+.chat-clawhub-card__status-content {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -99,6 +99,7 @@ openclaw-chat-clawhub-card {
 
 .chat-clawhub-card__actions {
   display: flex;
+  flex-wrap: wrap;
   flex-shrink: 0;
   align-items: center;
   justify-content: flex-end;
