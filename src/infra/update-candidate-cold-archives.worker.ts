@@ -13,6 +13,8 @@ import { prepareSqliteReadOnlyLocationInProcess } from "./sqlite-readonly-locati
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import { updateStateDatabaseExists } from "./update-candidate-state.sizes.js";
 
+// Production callers run in update-candidate-state.worker.ts's inventory/snapshot
+// subprocess modes. Direct in-process calls are confined to test fixtures.
 function readColdArchiveNames(database: DatabaseSync): string[] {
   if (!tableExists(database, "session_transcript_cold_archives")) {
     return [];
@@ -61,9 +63,8 @@ export async function measureColdArchiveBytes(
     if (!(await updateStateDatabaseExists(file))) {
       continue;
     }
-    let names = tryInspectSqliteReadOnlyInProcess(file, readColdArchiveNames, {
-      allowClosedWal: true,
-    })?.value;
+    // Preserve incomplete WAL families; opening them directly creates source sidecars.
+    let names = tryInspectSqliteReadOnlyInProcess(file, readColdArchiveNames)?.value;
     if (!names) {
       const prepared = await prepareSqliteReadOnlyLocationInProcess(file, stagingRoot);
       names = await withPreparedSqliteSnapshot(

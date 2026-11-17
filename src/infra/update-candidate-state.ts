@@ -228,7 +228,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
       sharedStatePluginIndex,
       onProgress,
     });
-    const coldArchives = await import("./update-candidate-cold-archives.js");
+    const coldArchives = await import("./update-candidate-cold-archives.worker.js");
     await fs.writeFile(planPath, JSON.stringify(plugins));
     return {
       databases: files,
@@ -544,7 +544,7 @@ export async function snapshotUpdateCandidateState(
   const { inspectSqliteSchemaHeaderInProcess } =
     await import("./sqlite-schema-header-inspection.js");
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
-  const coldArchives = await import("./update-candidate-cold-archives.js");
+  const coldArchives = await import("./update-candidate-cold-archives.worker.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
