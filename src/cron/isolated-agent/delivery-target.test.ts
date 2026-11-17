@@ -198,6 +198,34 @@ describe("resolveDeliveryTarget", () => {
     expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-allowed" });
   });
 
+  it("uses the channel's own default account when the delivery names none", async () => {
+    // A legacy {channel, to} delivery block with only a named account configured (#186043).
+    setPlugins(
+      plugin(
+        "forum",
+        { messaging: forumMessagingForTest },
+        {
+          config: {
+            listAccountIds: () => ["main"],
+            resolveAccount: () => ({}),
+          },
+        },
+      ),
+    );
+
+    const result = await resolveTarget(
+      { channel: "forum", to: "dm:alice" },
+      makeCfg({ session: { store: "/tmp/test-store.json", dmScope: "per-account-channel-peer" } }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      to: "dm:alice",
+      sessionRoute: { sessionKey: "agent:agent-b:forum:main:direct:dm:alice" },
+      accountId: "main",
+    });
+  });
+
   it("falls back to the session for a whitespace-only account", async () => {
     setLastSessionEntry({
       channel: "forum",
