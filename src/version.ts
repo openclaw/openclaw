@@ -145,7 +145,7 @@ function resolveVersionFromRuntimeSources(params: {
 }
 
 export function resolveRuntimeServiceVersion(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  env: RuntimeVersionEnv = process.env,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   return resolveVersionFromRuntimeSources({
@@ -171,7 +171,7 @@ export function resolveRuntimeServiceCommit(): string | null {
 
 // Package cohorts retain the selected release identity, including post-core handoffs.
 export function resolveReleaseHostVersion(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  env: RuntimeVersionEnv = process.env,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   return (
@@ -180,13 +180,13 @@ export function resolveReleaseHostVersion(
       env,
       runtimeVersion: resolveUsableRuntimeVersion(VERSION),
       fallback,
-      preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
+      preference: env === process.env ? "runtime-first" : "env-first",
     })
   );
 }
 
 export function resolveCompatibilityHostVersion(
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  env: RuntimeVersionEnv = process.env,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const releaseVersion = resolveReleaseHostVersion(env, fallback);
