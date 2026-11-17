@@ -1,23 +1,23 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
-import type { installPluginFromClawHub } from "./clawhub.js";
 import { validatePackagePluginInstallSource } from "./install-installed-package.js";
 import { loadPluginInstallRuntime } from "./install-shared.js";
-import type { InstallPluginResult, PluginInstallPolicyRequest } from "./install-types.js";
+import type {
+  InstallPluginResult,
+  PackageInstallCommonParams,
+  PluginInstallPolicyRequest,
+} from "./install-types.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 
 /** Keep retained installs behind the same source policy and installed-package validation. */
 export async function prepareClawHubInstalledRetention(params: {
   install: Pick<
-    Parameters<typeof installPluginFromClawHub>[0],
-    | "spec"
-    | "mode"
-    | "dryRun"
-    | "retainInstalled"
-    | "expectedPluginId"
-    | "onInstallPolicyWarning"
-    | "config"
-    | "logger"
-  >;
+    PackageInstallCommonParams,
+    "mode" | "dryRun" | "expectedPluginId" | "onInstallPolicyWarning" | "config" | "logger"
+  > & {
+    spec: string;
+    retainInstalled?: { record: PluginInstallRecord; installPath: string };
+  };
   officialClawHubPackage: boolean;
   clawhubAuthority: "openclaw" | "third-party";
   canonicalPackageName: string;
