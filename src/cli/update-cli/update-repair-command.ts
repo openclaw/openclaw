@@ -8,7 +8,10 @@ import {
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationRepairLease,
+  settlePendingPackageActivation,
+} from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -146,11 +149,20 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     // Admission keys custody by the canonical installation, not a lexical slot.
     const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
     try {
+      const packageLease = await readPackageActivationRepairLease(root);
       const repair = await (
-        await prepareManagedHandoffLeaseStore()
+        await prepareManagedHandoffLeaseStore(
+          packageLease
+            ? {
+                databasePath: packageLease.databasePath,
+                existingIdentity: packageLease,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+              }
+            : undefined,
+        )
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
+      if (packageLease || repair || !legacy || !fs.existsSync(legacy)) {
         return repair;
       }
       // An earlier macOS Gateway's handoff stays in its own store until repaired.

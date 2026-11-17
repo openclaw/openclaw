@@ -1,0 +1,2 @@
+# Registered CLI dead/live journal-pinned lease-store regressions for #200532.
+81

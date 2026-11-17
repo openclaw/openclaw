@@ -556,6 +556,12 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+Explicit repair uses the package journal's verified historical lease store when
+it still exists, so uncertain-handoff recovery and publication settlement share
+one repair claim even when the default per-user store is empty. Recovery checks
+and ordinary update admission remain unchanged. The repairing CLI must contain
+this fix; no lease schema or update protocol change is required.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`

@@ -1,13 +1,20 @@
 // Register shared mocks before importing the production CLI graph.
 import "./update-repair.test-support.js";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { mockInertSealedHelper } from "../../infra/package-update-activation-lifetime.test-support.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
+import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import * as legacyHandoffStore from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
 import * as handoffScope from "../../infra/update-managed-service-handoff-scope.js";
 import {
@@ -24,6 +31,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
 
 const { createRepairState, mocks } = await import("./update-repair.test-support.js");
 
@@ -340,5 +348,78 @@ it.each([false, true])(
       expectAbsent(first, second);
       expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     }
+  },
+);
+
+it.skipIf(process.platform === "win32").each(["dead", "live"] as const)(
+  "repair checks the journal-pinned store with a %s uncertain triage owner and an empty default store",
+  async (owner) => {
+    mockInertSealedHelper(state.root);
+    const publication = await createInterruptedPackagePublication(
+      state.path("publication"),
+      "publication-complete",
+    );
+    const { packageRoot, record, anchor } = publication;
+    mocks.root.mockResolvedValue(packageRoot);
+    const previous = fixture.seed();
+    handoffDatabase()(true, (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .updateTable("managed_update_handoffs")
+          .set({ install_root: packageRoot })
+          .where("install_root", "=", state.root),
+      ),
+    );
+    // Use real history discovery and recovery checks, with bounded host observations.
+    fixture.repairFacts.mockRestore();
+    vi.spyOn(os, "tmpdir").mockReturnValue(state.root);
+    const run = createUpdateRun({
+      trigger: "cli",
+      origin: { driver: { ...previous.helper, host: os.hostname() } },
+    });
+    finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
+    if (owner === "live") {
+      fixture.births.set(previous.helper.pid, Number(previous.helper.startIdentity));
+    }
+    const rows = fixture.rows();
+    const currentDirectory = state.path("current-handoff");
+    fs.mkdirSync(currentDirectory, { mode: 0o700 });
+    vi.mocked(temporaryRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(currentDirectory);
+    vi.spyOn(
+      legacyHandoffStore,
+      "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+    ).mockReturnValue(undefined);
+    const currentDatabasePath = path.join(currentDirectory, "managed-update-handoffs.sqlite");
+    createManagedHandoffLeaseDatabase(currentDatabasePath)(true, () => undefined);
+    const currentStore = createManagedHandoffLeaseStore({
+      databasePath: currentDatabasePath,
+      serviceManagerEnv: {},
+    });
+    expect(currentStore.read(packageRoot)).toEqual({ kind: "absent" });
+
+    await repair();
+
+    if (owner === "live") {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Handoff owners are live or unverified: PID ${previous.helper.pid}`,
+        ),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(fixture.rows()).toEqual(rows);
+      expect(publication.journal.read()).toEqual(record);
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    } else {
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "ok" }),
+      );
+      expectAbsent(packageRoot);
+      expectSettlement("legacy handoff lease reclaimed");
+      expect(fs.existsSync(`${anchor}.superseded-${record.descriptor.operationId}`)).toBe(true);
+      expect(() => assertNoPendingPackageActivation(packageRoot)).not.toThrow();
+    }
+    expect(currentStore.read(packageRoot)).toEqual({ kind: "absent" });
   },
 );
