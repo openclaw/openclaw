@@ -52,3 +52,33 @@ it.each(["plan", "inventory"] as const)(
     });
   },
 );
+
+it.skipIf(process.platform === "win32")(
+  "rejects unrelated exclusions without repeated path resolution",
+  async () => {
+    await withTempDir("backup-resource-path-work-", async (stateDir) => {
+      const excluded = path.join(stateDir, "tmp");
+      const protectedPath = path.join(excluded, "durable");
+      const plan = await createBackupResourcePlan({
+        stateDir,
+        configPaths: [],
+        oauthDirs: [],
+        workspaceDirs: [protectedPath],
+        excludedWorkspaceDirs: [],
+        agentRoots: [],
+        pluginResources: [],
+        pluginRoots: Array.from({ length: 85 }, (_, i) =>
+          path.join(stateDir, "plugins", String(i)),
+        ),
+      });
+      const included = path.join(stateDir, "workspace", "document.txt");
+      using relative = vi.spyOn(path, "relative");
+      expect(plan.isIncludedByOwner(included)).toBe(true);
+      expect(relative).not.toHaveBeenCalled();
+      expect(plan.isIncludedByOwner(path.join(excluded, "scratch"))).toBe(false);
+      expect(plan.isIncludedByOwner(protectedPath)).toBe(true);
+      expect(plan.isIncludedByOwner(path.join(stateDir, "tmp-sibling", "keep"))).toBe(true);
+      expect(plan.isIncludedByOwner(`${stateDir}/workspace/../tmp/scratch`)).toBe(false);
+    });
+  },
+);

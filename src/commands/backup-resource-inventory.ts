@@ -241,8 +241,15 @@ function createBackupPathPolicy({
   BackupResourcePlan,
   "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
 >): BackupResourcePolicy {
-  const isIncludedByOwner = (candidate: string): boolean => {
-    const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
+  const isIncludedByOwner = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    // Both paths are normalized. Reject unrelated POSIX roots before resolving
+    // their relative path for every file; Windows keeps its case/alias rules.
+    const exclusion = excludedPaths.find(
+      (excludedPath) =>
+        (process.platform === "win32" || candidate.startsWith(excludedPath)) &&
+        isPathInside(excludedPath, candidate),
+    );
     if (!exclusion) {
       return true;
     }
