@@ -257,6 +257,7 @@ export async function installManagedPlugin(
           assertCurrent: beforePersistentApply,
         });
         const catalog = await listManagedPlugins({
+          view: "inventory",
           config: installed.config,
           env,
           officialCatalog,
@@ -482,7 +483,12 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
       reason: params.enabled ? "enable" : "disable",
       assertInvokerOwned: beforePersistentApply,
     });
-    const catalog = await listManagedPlugins({ config: result.config, env, metadata });
+    const catalog = await listManagedPlugins({
+      config: result.config,
+      env,
+      metadata,
+      view: "inventory",
+    });
     const plugin = catalog.plugins.find((entry) => entry.id === result.pluginId);
     if (!plugin) {
       throw new ManagedPluginLifecycleError(
