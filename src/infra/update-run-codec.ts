@@ -11,6 +11,7 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
+import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -204,7 +205,10 @@ function boundedJson(
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
-          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
+          !(
+            typeof item.step === "string" &&
+            (item.step.startsWith("finalize:doctor-lint:") || isUpdateOwedStepRow(item.step))
+          )
             ? {
                 ...item,
                 detail: undefined,
