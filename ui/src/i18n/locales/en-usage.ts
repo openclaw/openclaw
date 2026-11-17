@@ -156,9 +156,10 @@ const enUsage = {
       sessions: "Sessions",
       sessionsInRange: "of {count} in range",
       throughput: "Usage per session-minute",
-      throughputHint: "Tokens and cost divided by summed time from first to last activity in each session. Includes idle time; overlapping spans count separately. Usage without a positive span is included in the totals.",
-      tokensPerMinute: "tok/min",
-      perMinute: "/ min",
+      throughputHint:
+        "Tokens and known cost divided by matching sessions' spans within the report range. Spans include idle time; overlaps count separately. Selected days limit usage, not the full spans of matching sessions. Totals include usage without a positive span. Some cost data may be missing.",
+      tokensPerMinute: "tok/session-min",
+      perMinute: "/ session-min",
       errorRate: "Error rate",
       errorHint: "Errors ÷ total messages.",
       avgSession: "avg session",
