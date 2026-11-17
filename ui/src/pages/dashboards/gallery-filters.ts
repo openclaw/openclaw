@@ -10,6 +10,9 @@ export type DashboardGalleryFilters = DashboardsDisplay & {
 export type DashboardGalleryHandlers = {
   onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
   onNavigate?: ApplicationContext["navigate"];
+  /** Whether the dashboard is pinned to the sidebar rail; reactive. */
+  isPinned?: (sessionKey: string) => boolean;
+  onTogglePin?: (sessionKey: string) => void;
 };
 
 export type DashboardsRouteData = {

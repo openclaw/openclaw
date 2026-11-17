@@ -5,6 +5,7 @@ import {
   defaultControlUiFeatureMethods,
   reconnectMockGateway,
   type MockGatewayControls,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
@@ -77,8 +78,14 @@ async function openPeople(
     const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "People", exact: true });
   await online[touch ? "tap" : "click"]();
+  if (!touch) {
+    // On a desktop People opens Activity; return to the session with the people list open.
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    await page.goBack();
+    await waitForControlUiRoute(page, { routeId: "chat" });
+  }
   return gateway;
 }
 function sessionRow(

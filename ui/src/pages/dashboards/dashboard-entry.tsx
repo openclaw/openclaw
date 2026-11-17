@@ -1,7 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createMemo } from "solid-js";
+import { Show, createMemo, createUniqueId } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
+import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -99,6 +102,41 @@ type DashboardEntryProps = {
   variant: "card" | "row";
   contentRef?: (element: HTMLElement) => void;
 };
+
+/** Actions beside the entry's link: pinning the dashboard to the sidebar rail. */
+function DashboardActions(props: {
+  sessionKey: string;
+  class: string;
+  pinned: boolean;
+  onTogglePin: (sessionKey: string) => void;
+}) {
+  const id = `dashboard-actions-${createUniqueId()}`;
+  const items = createMemo((): MenuEntry[] => [
+    {
+      id: "pin",
+      label: t(props.pinned ? "dashboardsPage.unpinFromSidebar" : "dashboardsPage.pinToSidebar"),
+      icon: <Icon name={props.pinned ? "pinOff" : "pin"} />,
+    },
+  ]);
+  return (
+    <Menu
+      lazy="while-open"
+      id={id}
+      class={props.class}
+      placement="bottom-end"
+      label={t("dashboardsPage.actions")}
+      triggerClass={iconButtonClass({ size: 28 })}
+      triggerAttributes={{ title: t("dashboardsPage.actions") }}
+      trigger={<Icon name="moreHorizontal" />}
+      items={items()}
+      onSelect={(item) => {
+        if (item.id === "pin") {
+          props.onTogglePin(props.sessionKey);
+        }
+      }}
+    />
+  );
+}
 
 /** One dashboard as a grid card or a list row; both share the title, author and time treatment. */
 export function DashboardEntry(props: DashboardEntryProps) {
@@ -234,6 +272,16 @@ export function DashboardEntry(props: DashboardEntryProps) {
           >
             <Content />
           </a>
+        )}
+      </Show>
+      <Show when={props.handlers.onTogglePin}>
+        {(onTogglePin) => (
+          <DashboardActions
+            sessionKey={props.row.key}
+            class={props.variant === "row" ? "dashboard-row__actions" : "dashboard-card__actions"}
+            pinned={props.handlers.isPinned?.(props.row.key) ?? false}
+            onTogglePin={onTogglePin()}
+          />
         )}
       </Show>
     </article>

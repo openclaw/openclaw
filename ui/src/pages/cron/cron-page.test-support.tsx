@@ -164,6 +164,7 @@ export function createContext(
       },
     },
     navigate: vi.fn(),
+    replace: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }

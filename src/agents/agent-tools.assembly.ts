@@ -615,6 +615,7 @@ export function* assembleOpenClawCodingTools(
   const requester = buildHarnessHostRequester(options ?? {});
   const hookContext = {
     awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
+    getRunAbortDeadlineAtMs: options?.getRunAbortDeadlineAtMs,
     agentId: executionAgentId,
     ...(options?.config ? { config: options.config } : {}),
     cwd: codingRoot,

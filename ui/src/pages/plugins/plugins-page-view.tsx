@@ -41,7 +41,7 @@ import {
   renderPluginRowMessage as PluginRowMessageView,
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
@@ -361,7 +361,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+          <div {...pluginsHubPanel("plugins")}>
             <Show when={page().loading && !hasInventory()}>
               <div class="muted" role="status">
                 {t("pluginsPage.loading")}

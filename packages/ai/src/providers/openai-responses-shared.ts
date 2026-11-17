@@ -77,6 +77,13 @@ export function applyResponsesServiceTierPricing(
     multiplier = 0.5;
   } else if (serviceTier === "priority") {
     multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
+  } else if (
+    serviceTier === "ultrafast" &&
+    /^(?:openai\/)?gpt-6\.2-(?:astra|sol)(?:-\d{4}-\d{2}-\d{2})?$/.test(model.id)
+  ) {
+    // GPT-6.2 launch pricing: 3x through February 28, then 6x March 1 Pacific.
+    // https://developers.openai.com/api/docs/models/gpt-6.2-sol (2026-11-17)
+    multiplier = Date.now() < Date.parse("2027-03-01T08:00:00Z") ? 3 : 6;
   }
   if (multiplier === 1) {
     return;

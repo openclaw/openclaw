@@ -7,6 +7,7 @@ import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { formatMs } from "./format.ts";
 import {
   formatCronPayload,
+  formatCronCadence,
   formatCronSchedule,
   formatCronState,
   formatSessionTokens,
@@ -145,4 +146,23 @@ it("formats session detail against its last-run prompt budget", () => {
       contextBudgetStatus: contextBudgetStatusFixture(),
     }),
   ).toBe("160000 / 180000");
+});
+
+describe("formatCronCadence", () => {
+  const cadence = (schedule: CronJob["schedule"]) => formatCronCadence({ schedule });
+  it("reads common cron shapes as words and keeps others as written", () => {
+    const cron = (expr: string) => cadence({ kind: "cron", expr, tz: "UTC" });
+    expect(cron("15 * * * *")).toBe("Hourly");
+    expect(cron("0 7 * * *")).toBe("Daily");
+    expect(cron("30 8 * * 1-5")).toBe("Weekdays");
+    expect(cron("0 9 * * 1")).toBe("Weekly");
+    expect(cron("0 6 1 * *")).toBe("Monthly");
+    expect(cron("0 */6 * * *")).toBe("Every 6 hours");
+    expect(cron("*/20 * * * *")).toBe("Every 20 minutes");
+    expect(cron("*/7 * * * *")).toBe("*/7 * * * *");
+    expect(cron("0 */5 * * *")).toBe("0 */5 * * *");
+    expect(cadence({ kind: "every", everyMs: 5 * 3_600_000 })).toBe("Every 5 hours");
+    expect(cron("0 9 1 1 *")).toBe("0 9 1 1 *");
+    expect(cadence({ kind: "at", at: "2026-11-21T15:00:00.000Z" })).toBe("Once");
+  });
 });

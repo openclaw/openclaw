@@ -109,6 +109,14 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  discoverTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-discover", ...input }),
+    (value) => value.result,
+  ),
+  probeTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-probe", ...input }),
+    (value) => value.result,
+  ),
   readAgentToolUsage: reader(
     (input) => ({ kind: "agent-tool-usage", ...input }),
     (value) => value.status,

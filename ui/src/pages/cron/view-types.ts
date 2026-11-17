@@ -16,6 +16,8 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   Partial<Pick<CronViewProps, OptionalViewProp>> & {
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
+    /** The open Automations sidebar lists every automation, so the page need not. */
+    sidebarListsJobs?: boolean;
     canManageJob?: (job: CronJob) => boolean;
     /** Phone list layout: the toolbar opens with the agent scope and create action. */
     phoneLayout?: boolean;

@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 // Exercise shipped CSS chunks: a cold source-mode route omits cross-page selectors.
 const suite = createControlUiE2eSuite({
@@ -38,6 +38,7 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "cron");
+      await collapseNav(page);
       const rows = page.locator(".cron-table__row");
       const loadMore = page.getByRole("button", { name: "Load more", exact: true });
       await loadMore.click();
@@ -177,6 +178,10 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
+        // Phones show the list without a sidebar beside it.
+        if (viewport.width > 900) {
+          await collapseNav(page);
+        }
         const rows = page.locator(".cron-table__row");
         for (let count = 50; count <= jobs.length; count += 50) {
           await expect.poll(() => rows.first().getAttribute("aria-setsize")).toBe(String(count));

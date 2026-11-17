@@ -53,6 +53,16 @@ backup.
 
 ## Update implementation contract
 
+When a package baseline's final rescan detects stat drift, the update still
+refuses package replacement. Local failure output and `openclaw update status --json`
+diagnostics identify the first entry relative to the package root (`.` for the
+root), changed stat fields, and their before/after values. Public failure reports
+retain only the changed field names. An unavailable original inode still refuses
+inspection, identifying the entry and zero inode locally and only the closed
+unavailable-inode classification publicly. These observations do not identify the writer
+or establish why a Windows update failed. The installed updater must contain this
+diagnostic change; a newer candidate cannot change an older updater's scan.
+
 Candidate Doctor compares pending plugin migration obligations independently of
 plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
@@ -2634,6 +2644,14 @@ including root, does not block cleanup without positive OpenClaw or runtime-path
 evidence. Unknown process ownership stays conservative. The Doctor performing
 cleanup must contain this fix; it can reclaim runtimes left by older updaters
 without changing their markers or requiring privileged process inspection.
+
+Running node hosts (`openclaw node run`, including the CLI process their
+launcher starts), the macOS app, and its node worker never create updater
+runtimes, so they do not block reclamation on any platform unless they reference
+a runtime. On macOS, helpers that inherit the Gateway's service environment,
+such as credential agents or `adb`, are not OpenClaw processes. A CLI process
+whose title hides its command still preserves runtimes unless its launcher shows
+a command that never updates.
 
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes

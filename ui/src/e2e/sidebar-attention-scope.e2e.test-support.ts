@@ -149,9 +149,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("08a-desktop-inbox-row-click-result.png");
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     await captureProof("08b-desktop-inbox-row-navigation.png");
-    await page.goBack();
-    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
-
+    // Sessions returns to the conversation with its list and agent switcher.
+    await sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
@@ -165,6 +164,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const pages = await openSidebarPages(page);
     await pages.getByRole("link", { name: "Automations", exact: true }).click();
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    // The page offers its agent scope with the Automations sidebar closed.
+    await sidebar.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope

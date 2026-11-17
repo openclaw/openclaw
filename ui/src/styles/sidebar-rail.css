@@ -102,10 +102,40 @@
   border-radius: var(--radius-md);
 }
 
+/* Separates native section pins and the Pages control from plugin and personal pins. */
+.sidebar-rail__separator {
+  flex: 0 0 1px;
+  width: 24px;
+  background: var(--border);
+}
+
+/* While a pin is dragged, a faint fill marks the zone and a short line marks where it lands. */
 .sidebar-rail__pins--drag-active {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: -1px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before,
+.sidebar-rail__pin.sidebar-zone-entry--drop-after {
+  box-shadow: none;
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before::before,
+.sidebar-rail__pin.sidebar-zone-entry--drop-after::before {
+  content: "";
+  position: absolute;
+  inset-inline: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before::before {
+  top: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-after::before {
+  bottom: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
 }
 
 .sidebar-rail__monogram {
@@ -151,7 +181,7 @@
     background-color 150ms ease,
     border-color 150ms ease;
 
-  &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
+  &:not(:disabled, [aria-disabled="true"]) {
     &[aria-expanded="true"] {
       --sidebar-rail-control-surface: color-mix(
         in srgb,
@@ -213,38 +243,6 @@
   }
 }
 
-/* The accent fill is the only thing that sets New session apart: it keeps the
-   rail's control size and 8px pitch so the column reads as one stack. */
-.sidebar-rail__create {
-  display: flex;
-  flex: 0 0 auto;
-  justify-content: center;
-  width: var(--sidebar-rail-control-size);
-}
-
-.sidebar-rail__create .sidebar-new-session {
-  background: var(--sidebar-rail-action-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--sidebar-rail-action-hover-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
-  background: var(--sidebar-rail-action-active-bg);
-  color: var(--sidebar-rail-action-foreground);
-}
-
-.sidebar-rail__create .sidebar-new-session:focus-visible {
-  outline-color: var(--ring);
-}
-
-.sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
-  cursor: not-allowed;
-}
-
 .sidebar-rail
   :is(
     .sidebar-rail__button > svg,
@@ -279,10 +277,6 @@
     .session-glyph__icon > svg
   ) {
   stroke-width: 2px;
-}
-
-.sidebar-rail__create .sidebar-new-session > svg {
-  stroke-width: var(--sidebar-rail-action-stroke-width, 2px);
 }
 
 .sidebar-rail .nav-item__text,
@@ -400,11 +394,24 @@
   user-select: none;
 }
 
-/* Page entries paint around the link and pin. Session rows extend their own
-   surface across the pin slot so tags and multi-selection keep one owner. */
+/* The rail's "more" menu lists pages with the Pages row styles beside the rail. */
+.sidebar-pages-menu-popover {
+  width: 260px;
+  max-height: min(72vh, 560px);
+  padding: 6px;
+  overflow: auto;
+}
+
+.sidebar-pages-menu__separator {
+  display: block;
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+/* Page entries paint around the link and pin. */
 .sidebar-pages__entry {
   --sidebar-pages-pin-width: 28px;
-  --sidebar-session-row-min-height: 30px;
 
   display: flex;
   align-items: center;
@@ -456,11 +463,7 @@
   letter-spacing: -0.008em;
 }
 
-.sidebar-pages__entry:hover :is(.nav-item:not(.nav-item--active)),
-.sidebar-pages__entry:hover
-  :is(
-    .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
-  ) {
+.sidebar-pages__entry:hover .nav-item:not(.nav-item--active) {
   color: var(--text);
 }
 
@@ -471,23 +474,6 @@
 .sidebar-pages__entry > .sidebar-zone-entry {
   flex: 1;
   min-width: 0;
-}
-
-.sidebar-pages__entry .sidebar-recent-session::after {
-  inset-block: 0;
-  inset-inline-end: calc(-1 * var(--sidebar-pages-pin-width));
-}
-
-.sidebar-pages__entry:hover .sidebar-recent-session {
-  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
-}
-
-.sidebar-pages__entry:hover .sidebar-recent-session--active {
-  --session-row-bg: var(--surface-selected-hover);
-}
-
-.sidebar-pages__entry:hover .sidebar-recent-session--selected {
-  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .sidebar-pages__pin {
@@ -607,13 +593,6 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
   border-radius: calc(10px * var(--openclaw-corner-radius-scale, 1));
 }
 
-.shell--mobile-nav .sidebar-rail__create {
-  margin-block-end: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
-  padding-bottom: var(--sidebar-rail-block-gap);
-  border-bottom: var(--shell-divider-size) solid
-    var(--sidebar-rail-divider-color, var(--resize-handle-rest-color));
-}
-
 .shell--mobile-nav .sidebar-rail__pins {
   align-self: flex-start;
   width: calc(var(--sidebar-rail-control-size) + 4px);
@@ -664,6 +643,16 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
     .sidebar-shell {
       display: none;
+    }
+
+    /* A peek floats the hovered section's sidebar over the content beside the rail. */
+    .shell-nav:has(openclaw-app-sidebar[data-peek]) {
+      clip-path: none;
+      box-shadow: var(--shadow-lg);
+
+      .sidebar-shell {
+        display: flex;
+      }
     }
   }
 

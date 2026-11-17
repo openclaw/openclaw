@@ -2301,6 +2301,100 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
+/* Automations section: New automation, then grouped rows with a byline. */
+.sidebar-automations {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-automations__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-block-start: 14px;
+}
+
+/* Rows start where the group chevron does: a title in the text color over a quieter byline. */
+.sidebar-automations__row {
+  align-items: center;
+  gap: 8px;
+  height: auto;
+  padding: 6px 8px 6px calc(var(--sidebar-inset) + 2px);
+}
+
+.sidebar-automations__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-automations__name,
+.sidebar-automations__byline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-automations__name {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.sidebar-automations__byline {
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* A failed or auto-disabled automation carries a dot instead of a word. */
+.sidebar-automations__failed {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* Customize section: the hub's pages, then the installed plugins. */
+.sidebar-customize {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-customize__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-block-start: 10px;
+}
+
+.sidebar-customize__heading {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* The people list's heading matches the Sessions group headings, without a toggle. */
+.sidebar-online__heading {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding-inline: calc(var(--sidebar-inset) + 2px) 8px;
+}
+
+/* Activity heads the Users section above its people. */
+.sidebar-online__overview {
+  margin-block-end: 6px;
+}
+
 /* Share the counter track so missing or shorter counts never move person actions. */
 .sidebar-online__list {
   display: grid;
@@ -2893,26 +2987,6 @@ a:is(
   color: var(--navigation-selected-icon, var(--accent));
 }
 
-/* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
-   meta) while retaining session actions. The title deliberately opts out and
-   keeps the list's --text: a session name is content in both zones, and pinning
-   a row must not make it read as dimmer than the same row further down. */
-.sidebar-zone-entry .sidebar-recent-session {
-  --session-row-bg: var(--session-row-tint, transparent);
-
-  padding-block: 0;
-  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 11px;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-}
-
-.sidebar-zone-entry .sidebar-recent-session__link {
-  gap: var(--sidebar-row-gap);
-  padding: 3px 0;
-}
-
 @media (hover: none), (pointer: coarse) {
   .sidebar-shell {
     --sidebar-session-row-floor: 44px;
@@ -2937,19 +3011,6 @@ a:is(
   }
 }
 
-.sidebar-zone-entry .sidebar-recent-session:hover,
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--menu-open {
-  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
-
-  color: var(--text);
-}
-
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
-  --session-row-bg: var(--surface-selected);
-
-  color: var(--text-strong);
-}
-
 .sidebar-recent-session.sidebar-recent-session--active:hover,
 .sidebar-recent-session.sidebar-recent-session--active.sidebar-recent-session--menu-open {
   --session-row-bg: var(--surface-selected-hover);
@@ -2967,10 +3028,6 @@ a:is(
   );
 }
 
-.sidebar-pages__entry:hover
-  .sidebar-recent-session--colored.sidebar-recent-session--active:not(
-    .sidebar-recent-session--selected
-  ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
   ):hover,
@@ -2986,15 +3043,10 @@ a:is(
 
 /* Multi-select overrides both tag and active fills, including pinned rows. */
 .sidebar-recent-session.sidebar-recent-session--selected,
-.sidebar-recent-session.sidebar-recent-session--selected:hover,
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--selected {
+.sidebar-recent-session.sidebar-recent-session--selected:hover {
   --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 
   color: var(--text-strong);
-}
-
-.sidebar-zone-entry .sidebar-recent-session__aside {
-  padding-right: 0;
 }
 
 .sidebar-workspace-header {
@@ -4062,8 +4114,7 @@ html.openclaw-native-web-chrome
   flex: 0 0 16px;
 }
 
-.sidebar-recent-sessions .sidebar-session-indicator,
-.sidebar-zone-entry .sidebar-session-indicator {
+.sidebar-recent-sessions .sidebar-session-indicator {
   width: var(--sidebar-lead);
   flex-basis: var(--sidebar-lead);
 }
@@ -4431,13 +4482,7 @@ html.openclaw-native-web-chrome
   height: 26px;
 }
 
-/* While connecting, the rail's create and current controls step back to placeholders. */
-.sidebar:has(.sidebar-connection-skeleton) .sidebar-rail__create .sidebar-new-session {
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  color: var(--sidebar-rail-control-color);
-  opacity: 1;
-}
-
+/* While connecting, the rail's current controls step back to placeholders. */
 .sidebar:has(.sidebar-connection-skeleton)
   .sidebar-rail__button:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
   background: color-mix(in srgb, var(--sidebar-rail-selected-surface) 50%, transparent);
