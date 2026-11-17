@@ -91,6 +91,17 @@ export function createSubmittedModelNoticeProjector() {
   return Object.assign(project, { state });
 }
 
+const pendingEndCauseKeys: Readonly<Partial<Record<string, string>>> = {
+  "user-stop": "chat.pendingInputs.endCause.userStop",
+  delete: "chat.pendingInputs.endCause.delete",
+  reset: "chat.pendingInputs.endCause.reset",
+  revoked: "chat.pendingInputs.endCause.revoked",
+  "restart-unrecoverable": "chat.pendingInputs.endCause.restartUnrecoverable",
+  overflow: "chat.pendingInputs.endCause.overflow",
+  "policy-refused": "chat.pendingInputs.endCause.policyRefused",
+  failed: "chat.pendingInputs.endCause.failed",
+};
+
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
@@ -122,13 +133,19 @@ export function projectChatSystemNotice(
   }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
+  const cancelled = pending?.status === "cancelled";
+  const causeKey =
+    cancelled && pending.endCause && Object.hasOwn(pendingEndCauseKeys, pending.endCause)
+      ? pendingEndCauseKeys[pending.endCause]
+      : undefined;
   const pendingText =
-    pending && pending.status !== "queued"
+    pending && pending.status !== "queued" && !(cancelled && pending.endCause === "user-stop")
       ? t(
-          agentUpdate && pending.status === "cancelled"
-            ? "chat.pendingInputs.agentUpdate.cancelled"
-            : `chat.pendingInputs.${pending.status}`,
-        ) + (pending.endCause ? ` (${pending.endCause})` : "")
+          causeKey ??
+            (agentUpdate && cancelled
+              ? "chat.pendingInputs.agentUpdate.cancelled"
+              : `chat.pendingInputs.${pending.status}`),
+        )
       : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
