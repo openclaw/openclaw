@@ -105,7 +105,7 @@ enum ChatToolActivity {
                 activity: message.activity?.first,
                 activityPrepared: message.activity != nil)]
         }
-        guard message.role.lowercased() == "assistant" else { return [] }
+        guard message.role.lowercased() == "assistant" || message.isNestedToolActivity else { return [] }
         return self.items(
             calls: message.content.filter(\.isToolCall),
             results: message.content.filter(\.isToolResult),

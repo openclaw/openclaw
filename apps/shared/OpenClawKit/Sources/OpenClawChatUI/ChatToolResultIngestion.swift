@@ -2,10 +2,12 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatMessage {
-    /// Normalize embedded assistant results and expand user result carriers from CLI history.
+    /// Normalize embedded tool results and expand user result carriers from CLI history.
     /// Expand those rows before they reach turn ownership or presentation.
     var ingestedMessages: [OpenClawChatMessage] {
-        if self.role.lowercased() == "assistant", self.content.contains(where: \.isToolResult) {
+        if self.role.lowercased() == "assistant" || self.isNestedToolActivity,
+           self.content.contains(where: \.isToolResult)
+        {
             var message = self
             message.content = self.content.map { block in
                 guard block.isToolResult, block.text == nil else { return block }
