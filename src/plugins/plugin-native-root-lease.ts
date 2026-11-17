@@ -1,10 +1,6 @@
 import { snapshotOwners } from "./plugin-native-admission-state.js";
-export type PluginNativeCaptureRoot = {
-  directory: string;
-  commit(): void | Promise<void>;
-  dispose(): void;
-  disposeAsync(): Promise<void>;
-};
+import type { PluginNativeCaptureRoot } from "./plugin-native-root.types.js";
+
 const leases = new WeakMap<object, { root: PluginNativeCaptureRoot; release(): void }>();
 
 /** Only leases made by the custody owner may cross the preparation transport. */

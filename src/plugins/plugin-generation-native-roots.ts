@@ -2,8 +2,8 @@ import { snapshotOwners } from "./plugin-native-admission-state.js";
 import {
   retainPluginNativeRoot,
   snapshotPluginNativeRootLease,
-  type PluginNativeCaptureRoot,
 } from "./plugin-native-root-lease.js";
+import type { PluginNativeCaptureRoot } from "./plugin-native-root.types.js";
 
 /** Host leases retain the capture owner; execution workers only borrow paths. */
 export function createPluginGenerationNativeRoots() {
