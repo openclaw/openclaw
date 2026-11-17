@@ -715,13 +715,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       const result = resolveEvidence(record, options);
       expect(result.status).toBe(0);
       expect(parseOutput(result.stdout)).toMatchObject({ reuse: "true", evidence_run_id: "111" });
-
-      const missingAdmission = resolveEvidence(record, {
-        ...options,
-        qualificationAdmission: undefined,
-        qualificationInputs: undefined,
-      });
-      expect(parseOutput(missingAdmission.stdout)).toMatchObject({ reuse: "false" });
     },
   );
 
@@ -765,32 +758,10 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it.each([
-    "manifest-v3-branch",
-    "manifest-v3-sha-pinned-main-ancestry",
-    "manifest-v3-protected-tag-exact-sha",
-    "manifest-v3-protected-tag-tooling-lineage",
-  ])("rejects retired historical workflow proof: %s", (workflowRefProof) => {
+  it("rejects reuse without current qualification admission", () => {
     const { priorSha } = getSharedRepo();
-    const protectedTag = workflowRefProof.includes("protected-tag");
-    const trustedWorkflowRef = protectedTag
-      ? "release-publish/" + VERIFIER_SHA.slice(0, 12) + "-456"
-      : "main";
-    const record = normalizedEvidence({ targetSha: priorSha, trustedWorkflowRef });
-    delete record.qualificationAdmission;
-    record.producerOnTrustedMainLineage = !protectedTag;
-    for (const parent of [record.current, record.root]) {
-      parent.producerOnTrustedMainLineage = !protectedTag;
-      parent.workflowRefProof = workflowRefProof;
-      if (workflowRefProof === "manifest-v3-branch") {
-        parent.workflowRef = "main";
-        parent.workflowFullRef = "refs/heads/main";
-        parent.workflowQualifiedPath = parent.workflowPath + "@refs/heads/main";
-        parent.workflowRunPath = parent.workflowPath;
-      }
-    }
+    const record = normalizedEvidence({ targetSha: priorSha });
     const result = resolveEvidence(record, {
-      trustedWorkflowRef,
       qualificationAdmission: undefined,
       qualificationInputs: undefined,
     });

@@ -41,6 +41,8 @@ export function candidatePublicationFixture(
     candidateSha?: string;
     qualificationSha?: string;
     candidateVersion?: string;
+    targetContextRef?: string;
+    qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
@@ -70,10 +72,13 @@ export function candidatePublicationFixture(
   const purpose = options.purpose ?? "publish";
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
-  const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
+  const qualificationBaselines =
+    options.qualificationBaselines ?? JSON.parse(qualificationBaselinesJson);
+  const laneInputs = { qualification_baselines_json: JSON.stringify(qualificationBaselines) };
   const selection: PublicationSelection = {
     route: options.publicationRoute ?? "normal",
-    npmDistTag: beta ? "beta" : "latest",
+    npmDistTag:
+      options.publicationRoute === "extended-stable" ? "extended-stable" : beta ? "beta" : "latest",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -85,7 +90,7 @@ export function candidatePublicationFixture(
   Object.assign(inputs, {
     ref: c,
     expected_sha: c,
-    target_context_ref: "release/" + version.split("-")[0],
+    target_context_ref: options.targetContextRef ?? "release/" + version.split("-")[0],
     release_profile: beta ? "beta" : "stable",
     rerun_group: "all",
     mode: "both",
@@ -123,7 +128,7 @@ export function candidatePublicationFixture(
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: c,
-      PUBLICATION_COVERAGE_POLICY: beta ? "npm-beta-v1" : "npm-stable-v1",
+      PUBLICATION_COVERAGE_POLICY: fixture.manifest.validationInputs.coveragePolicy ?? "",
       PUBLICATION_SKIP_TELEGRAM: String(beta),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
@@ -201,7 +206,6 @@ export function candidatePublicationFixture(
   };
   const plan = Object.assign(mapped(fixture.executionPlan), admissionFields);
   plan.children = plan.children.filter((child) => child.selected);
-  const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
     upgradeBaseline: qualificationBaselines.upgradeBaseline,
     upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
@@ -242,6 +246,9 @@ export function candidatePublicationFixture(
     ),
     publicationIntentInputs(source),
   );
+  if (!fixture.manifest.validationInputs.coveragePolicy) {
+    delete manifest.validationInputs.coveragePolicy;
+  }
   manifest.validationInputs.targetContextRef = expectDefined(
     inputs.target_context_ref,
     "normalized target context ref",

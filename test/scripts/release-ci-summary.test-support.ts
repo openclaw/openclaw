@@ -7,6 +7,7 @@ import {
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({
@@ -353,11 +354,16 @@ export function trustedMainNpmFixture(
 ) {
   const fixture = trustedMainFullFixture(options.targetSha);
   const beta = releaseProfile === "beta";
-  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
   const targetVersion = options.targetVersion ?? (beta ? "2026.8.28-beta.1" : "2026.8.28");
+  const parsedVersion = parseReleaseVersion(targetVersion);
+  const coveragePolicy = beta
+    ? "npm-beta-v1"
+    : parsedVersion && classifyReleaseTrain(parsedVersion) === "stable"
+      ? "npm-stable-v1"
+      : undefined;
   Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
   Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy,
+    ...(coveragePolicy ? { coveragePolicy } : {}),
     skipPackageTelegramE2e: String(beta),
     targetContextRef: "release/" + targetVersion.split("-")[0],
     targetVersion,
@@ -455,7 +461,8 @@ export function trustedMainNpmFixture(
   const client = {
     ...fixture.client,
     getJobLog: vi.fn(
-      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+      (jobId: number) =>
+        `${originalLog(jobId)}\nCI_RELEASE_SCOPE: ${coveragePolicy ? `npm-${releaseProfile}` : "full"}`,
     ),
     getRunAttemptJobs: vi.fn((runId: string) =>
       jobsForChild(
