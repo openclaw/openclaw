@@ -23,6 +23,7 @@ import {
 } from "../agent-settings.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { clearCliSessionInStore } from "../cli-session-store.js";
+import { exceedsContextWindow } from "../context-pressure.js";
 import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
@@ -424,7 +425,11 @@ export async function runCliTurnCompactionLifecycle(
           nativeOutcome = await compactNativeHarnessCliTranscript();
           if (nativeOutcome.compacted) {
             compactionKind = "native-harness";
-          } else if (!nativeOutcome.fallbackToContextEngine && nativeOutcome.failureReason) {
+          } else if (
+            !nativeOutcome.fallbackToContextEngine &&
+            nativeOutcome.failureReason &&
+            exceedsContextWindow(currentTokenCount, contextTokenBudget)
+          ) {
             throw new Error(
               `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
             );
@@ -574,7 +579,12 @@ export async function runCliTurnCompactionLifecycle(
           const contextOutcome = await compactCliTranscript();
           contextCompactionOutcome = contextOutcome;
           compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
-          if (!compactionKind && contextOutcome.failureReason) {
+          // Post-turn maintenance fails the command only when the next prompt cannot fit.
+          if (
+            !compactionKind &&
+            contextOutcome.failureReason &&
+            exceedsContextWindow(currentTokenCount, contextTokenBudget)
+          ) {
             throw new Error(
               `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
             );

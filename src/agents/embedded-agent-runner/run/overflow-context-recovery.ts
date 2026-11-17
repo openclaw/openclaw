@@ -7,6 +7,7 @@ import type { AssistantMessage } from "../../../llm/types.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../../../shared/assistant-error-format.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { declineBoundaryMaintenance } from "../../context-pressure.js";
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
@@ -68,27 +69,63 @@ type EmbeddedRunOverflowRecoveryOutcome =
       userText: string;
     };
 
+type EmbeddedRunOverflowRecoveryInput = EmbeddedRunCompactionRecoveryInput & {
+  aborted: boolean;
+  signalOwnedInterruption: boolean;
+  promptError: unknown;
+  assistantErrorText?: string;
+  assistantOverflowCandidate?: {
+    message: AssistantMessage;
+    classification: FailoverClassification | null;
+  };
+  attemptCompactionCount: number;
+  prepareCurrentTranscriptRetry: () => void;
+  markOwnedTranscriptRetry: () => void;
+  /** Waits out a transient provider failure; false when the retry policy declines. */
+  retryTransientCompactionFailure: (failure: {
+    reason: FailoverReason;
+    code?: string;
+    message?: string;
+    retryAfterMs?: number;
+  }) => Promise<boolean>;
+};
+
+/** Soft pressure stopped this attempt at a safe boundary; it must never fail the turn. */
+function isBoundaryMaintenance(input: EmbeddedRunOverflowRecoveryInput): boolean {
+  return (
+    input.attempt.preflightRecovery?.pressure === "maintenance" &&
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "precheck"
+  );
+}
+
 export async function recoverEmbeddedRunOverflow(
-  input: EmbeddedRunCompactionRecoveryInput & {
-    aborted: boolean;
-    signalOwnedInterruption: boolean;
-    promptError: unknown;
-    assistantErrorText?: string;
-    assistantOverflowCandidate?: {
-      message: AssistantMessage;
-      classification: FailoverClassification | null;
-    };
-    attemptCompactionCount: number;
-    prepareCurrentTranscriptRetry: () => void;
-    markOwnedTranscriptRetry: () => void;
-    /** Waits out a transient provider failure; false when the retry policy declines. */
-    retryTransientCompactionFailure: (failure: {
-      reason: FailoverReason;
-      code?: string;
-      message?: string;
-      retryAfterMs?: number;
-    }) => Promise<boolean>;
-  },
+  input: EmbeddedRunOverflowRecoveryInput,
+): Promise<EmbeddedRunOverflowRecoveryOutcome> {
+  const maintenance = isBoundaryMaintenance(input);
+  const outcome = await recoverContextPressure(input, maintenance);
+  if (!maintenance || outcome.action === "retry") {
+    return outcome;
+  }
+  // Maintenance could not reduce context. The request still fits, so send it and
+  // leave further reduction to the window guard for the rest of this run.
+  declineBoundaryMaintenance(input.runParams.runId);
+  log.warn(
+    `[context-maintenance] declined for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
+      `continuing the turn without maintenance reason=${outcome.action === "surface" ? truncateUtf16Safe(outcome.errorText, 200) : "recovery_unavailable"}`,
+  );
+  input.markOwnedTranscriptRetry();
+  if (
+    input.attempt.preflightRecovery?.source === "mid-turn" ||
+    !isCurrentAttemptReplaySafe(input.attempt)
+  ) {
+    input.prepareCurrentTranscriptRetry();
+  }
+  return { action: "retry" };
+}
+
+async function recoverContextPressure(
+  input: EmbeddedRunOverflowRecoveryInput,
+  maintenance: boolean,
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const assistant = input.assistantOverflowCandidate?.message;
   const classification = input.assistantOverflowCandidate?.classification;
@@ -97,7 +134,7 @@ export async function recoverEmbeddedRunOverflow(
       ? (() => {
           if (input.promptError) {
             const errorText = formatErrorMessage(input.promptError);
-            if (isLikelyContextOverflowError(errorText)) {
+            if (maintenance || isLikelyContextOverflowError(errorText)) {
               return { text: errorText, source: "promptError" as const };
             }
             // A non-overflow prompt failure must not inherit a stale assistant
@@ -377,6 +414,10 @@ export async function recoverEmbeddedRunOverflow(
       const compactionOutcome = noReduction
         ? "auto-compaction removed nothing"
         : "auto-compaction succeeded";
+      if (maintenance && noReduction) {
+        // Repeating maintenance that removes nothing would stop every later request.
+        declineBoundaryMaintenance(runParams.runId);
+      }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {
