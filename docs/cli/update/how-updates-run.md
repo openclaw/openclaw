@@ -1800,6 +1800,22 @@ is itself a link to a checkout keep the two moves and do not attempt the
 exchange. The next update from that checkout restores a package link that a
 killed update left under the backup name.
 
+After the new package is verified, the updater removes that backup link without
+following it. If the filesystem refuses the removal and the link is unchanged,
+the update keeps the new package and exits 0. It records a
+`package-backup-retention` warning that names the link and any launcher backups
+or database snapshots left beside it, because cleanup stops at the link.
+Historical package backups from earlier updates also wait for a later update.
+The link still names your checkout, which the updater does not modify. After
+checking the installation, remove the link itself and not what it names: use
+`rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a
+recursive delete. The other named paths are ordinary directories. A later update
+that swaps the package in place also removes the link with the other historical
+package backups once that update is verified, unless the filesystem refuses
+again. A backup link that was replaced or cannot be read still fails the update,
+because the updater can no longer show that the entry is the link it moved
+aside.
+
 Rollback after a failed verification still restores with two moves. A restore
 killed between them leaves the package path missing and the previous package
 under the backup name; rename it back to the directory it was taken from.
