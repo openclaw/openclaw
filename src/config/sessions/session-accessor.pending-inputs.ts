@@ -391,21 +391,21 @@ async function stagePreparedPendingInput(
     // Pre-end_cause rows encoded intentional retirement only in their message.
     const old =
       existing?.state === "cancelled" && existing.end_cause == null
-        ? asOptionalRecord(parseSessionPendingInputMessage(existing.message_json))
+        ? parseSessionPendingInputMessage(existing.message_json)
         : undefined;
-    const legacyOk = old && old.pendingInputCancelledByUser !== true && old.display !== false;
+    const reopen = old && old.display !== false && !old["__openclaw"]?.pendingInputCancelledByUser;
     const reclaimsCancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&
       existing?.state === "cancelled" &&
-      (legacyOk ||
+      (reopen ||
         existing.end_cause === "failed" ||
         existing.end_cause === "restart-unrecoverable") &&
       existing.consumed_event_id == null &&
       existing.request_hash === requestHash;
     const reopensCancelled =
       (options.retryCancelled === true &&
-        (legacyOk ||
+        (reopen ||
           (previous && existing?.state === "cancelled" && existing.end_cause === "failed"))) ||
       reclaimsCancelledSourceTurn;
     if (existing) {

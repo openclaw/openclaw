@@ -384,7 +384,7 @@ it("lets a channel redelivery reopen its own cancelled attempt under a fresh run
   expect(await readPending(first.inputId)).toBeUndefined();
 });
 
-it.each([{ pendingInputCancelledByUser: true }, { display: false }])(
+it.each([{ __openclaw: { pendingInputCancelledByUser: true } }, { display: false }])(
   "seals pre-end_cause retirement markers: %j",
   async (marker) => {
     const sourceTurn: PersistedUserTurnMessage = {
