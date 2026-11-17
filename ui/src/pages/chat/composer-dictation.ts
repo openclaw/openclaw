@@ -51,7 +51,7 @@ export class ComposerDictationOwner extends EventTarget {
   private suppressedPointerId: number | null = null;
   private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   // Loaded with capture, before the first transcript or stopped recording exists.
-  private capture: typeof import("./composer-dictation-session.ts") | undefined;
+  private place: typeof placeComposerDictation | undefined;
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
 
@@ -92,7 +92,7 @@ export class ComposerDictationOwner extends EventTarget {
   placeTranscript(
     ...args: Parameters<typeof placeComposerDictation>
   ): ReturnType<typeof placeComposerDictation> | undefined {
-    return this.capture?.placeComposerDictation(...args);
+    return this.place?.(...args);
   }
 
   get inputLevel(): RealtimeTalkLevelSignal | undefined {
@@ -333,9 +333,13 @@ export class ComposerDictationOwner extends EventTarget {
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
-      const capture = (this.capture ??= await import("./composer-dictation-session.ts"));
-      const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
-        capture;
+      const {
+        ComposerDictationSession,
+        ComposerDictationCommits,
+        describeDictationStartError,
+        placeComposerDictation: placeTranscript,
+      } = await import("./composer-dictation-session.ts");
+      this.place = placeTranscript;
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
