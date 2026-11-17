@@ -6,8 +6,9 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
+import { runPreparedCliAgent as runPreparedCliAgentImpl } from "../cli-runner.js";
+import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
-import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
   createManagedRun,
   createSuccessfulProcessExit,
@@ -16,7 +17,7 @@ import {
 } from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+const runPreparedCliAgent = wrapPreparedCliRunWithTestAdmission(runPreparedCliAgentImpl);
 
 // mock-isolation: The supervisor fixture owns execution; never spawn host CLI processes.
 vi.mock("../../process/supervisor/adapters/child.js", () => ({
@@ -84,7 +85,7 @@ describe("CLI stream-json output limit", () => {
         return managedRun;
       });
 
-      const run = executePreparedCliRun(buildClaudeStreamJsonRunContext(`run-limit-${when}`));
+      const run = runPreparedCliAgent(buildClaudeStreamJsonRunContext(`run-limit-${when}`));
       if (when === "after") {
         await waiting.promise;
         spawnInput?.onStdout?.(oversizedLine);
@@ -106,8 +107,10 @@ describe("CLI stream-json output limit", () => {
     },
   );
 
-  it("ends a plugin-owned turn with the output limit error once the budget is spent", async () => {
+  it("ends a plugin-owned turn at the output limit and keeps its first-turn native session", async () => {
     const context = buildClaudeStreamJsonRunContext("run-limit-plugin");
+    context.params.persistStoppedFirstCliSession = vi.fn();
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockResolvedValue(true);
     const record = { type: "system", subtype: "fixture_padding", padding: "x".repeat(1024 * 1024) };
     const recordChars = JSON.stringify(record).length + 1;
     let yielded = 0;
@@ -122,6 +125,7 @@ describe("CLI stream-json output limit", () => {
           aborted = true;
         });
         try {
+          yield { type: "system", subtype: "init", session_id: "native-first-turn" };
           // The baseline keeps pulling these records after the turn is already lost.
           while (yielded < 12) {
             yielded += 1;
@@ -134,11 +138,15 @@ describe("CLI stream-json output limit", () => {
       },
     };
 
-    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
+    await expect(runPreparedCliAgent(context)).rejects.toMatchObject({
       name: "FailoverError",
       reason: "format",
       message: `CLI JSONL output exceeded ${maxTurnRawChars} characters; refusing to parse output.`,
     });
+    // The fallback retry resumes this refused first turn's native session.
+    expect(context.params.persistStoppedFirstCliSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "native-first-turn" }),
+    );
     // The record that crosses the budget is the last one pulled from the CLI.
     expect(yielded).toBe(Math.floor(maxTurnRawChars / recordChars) + 1);
     expect(aborted).toBe(true);
