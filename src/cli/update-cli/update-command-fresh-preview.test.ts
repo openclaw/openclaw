@@ -607,34 +607,48 @@ it("requires confirmation for an inspected older artifact without a TTY", async 
 
 registerOriginalCaptureTests({ fixture, dirs });
 
-it("continues a completed update when original-state capture fails", async () => {
-  try {
-    prepareCurrentUpdate();
-    const cause = "SQLite file generation changed while reading: /fixture/state/openclaw.sqlite";
-    vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
-      new Error("Original update capture failed; evidence retained at /fixture/capture", {
-        cause: new Error(cause),
-      }),
-    );
+it.each([
+  "SQLite file generation changed while reading",
+  "State schema inventory failed (output-limit)",
+])(
+  "reports a warning and continues a completed update after capture failure: %s",
+  async (failure) => {
+    try {
+      prepareCurrentUpdate();
+      const cause = `${failure}: /fixture/state/openclaw.sqlite`;
+      vi.spyOn(recoveryBaseline, "captureUpdateRecoveryBaseline").mockRejectedValue(
+        new Error("Original update capture failed; evidence retained at /fixture/capture", {
+          cause: new Error(cause),
+        }),
+      );
 
-    await expect(runUpdate()).resolves.toBeUndefined();
+      await expect(runUpdate()).resolves.toBeUndefined();
 
-    const [finished] = history.listUpdateRuns();
-    expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
-    const warning = finished?.steps.find(
-      (step) => step.step === "warning:original-state-capture:1",
-    )?.detail;
-    assert(warning);
-    expect(warning).toMatch(
-      /^Original state capture is unavailable; the update continues without it\. A running Gateway or another active writer changing state during capture is expected to cause this\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
-    );
-    expect(warning).toContain(cause);
-    expect(warning).not.toContain("retry");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
-  }
-});
+      const [finished] = history.listUpdateRuns();
+      expect(finished).toMatchObject({ status: "skipped", reason: "already-current" });
+      const warning = finished?.steps.find(
+        (step) => step.step === "warning:original-state-capture:1",
+      )?.detail;
+      assert(warning);
+      expect(warning).toMatch(
+        /^NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable\. The update continues without a complete pre-update recovery copy\. Database rollback uses the pre-migration snapshots taken after the Gateway stops\. A completed update does not need to be restarted because of this warning\. Cause: Original update capture failed; evidence retained at /,
+      );
+      expect(warning).toContain(cause);
+      expectJson({
+        status: "skipped",
+        run: expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "warning:original-state-capture:1", detail: warning }),
+          ]),
+        }),
+      });
+      expect(warning).not.toContain("retry");
+      expect(defaultRuntime.error).toHaveBeenCalledWith(`Warning: ${warning}`);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
+);
 
 it("Doctor sees an already-current update's completed history after original-state capture", async () => {
   try {

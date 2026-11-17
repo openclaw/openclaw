@@ -30,6 +30,10 @@ import {
   withUpdateStateInspectionWork,
 } from "./update-candidate-state.process.js";
 import {
+  createUpdateStateResultPath,
+  readUpdateStateResult,
+} from "./update-candidate-state.result.js";
+import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
@@ -94,6 +98,7 @@ export async function runUpdateStateInspectionWorker(params: {
     retryAdvice: params.retryAdvice,
     onProgress: params.onProgress,
   });
+  const resultPath = createUpdateStateResultPath(params.stagingRoot);
   try {
     const timeoutMs = Math.max(
       params.timeoutMs ?? 0,
@@ -114,6 +119,7 @@ export async function runUpdateStateInspectionWorker(params: {
             ? undefined
             : JSON.stringify({
                 ...params.input,
+                resultPath,
                 includeLocalStoreVersions: true,
                 includeClientCredentialStoreVersion: true,
                 env: {
@@ -165,7 +171,18 @@ export async function runUpdateStateInspectionWorker(params: {
       });
     });
     const result = await work;
-    return { ...result, stderr: inspection.stderr(), inspection };
+    return {
+      ...result,
+      stdout:
+        !params.readOnlySource &&
+        result.code === 0 &&
+        result.termination === "exit" &&
+        !result.outputLimitExceeded
+          ? await readUpdateStateResult(result.stdout, resultPath)
+          : result.stdout,
+      stderr: inspection.stderr(),
+      inspection,
+    };
   } catch (error) {
     if (!hasCommandProcessCleanupError(error)) {
       params.signal?.throwIfAborted();
