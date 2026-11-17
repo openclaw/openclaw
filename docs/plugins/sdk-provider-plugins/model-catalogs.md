@@ -104,6 +104,10 @@ Rows without capability metadata follow the filtering rule for unknown rows abov
 Provider-specific capability trees, such as Anthropic's Messages thinking and
 effort metadata, are translated by the provider projection before shared admission.
 
+Generated catalogs use effective bundled and hosted descriptions only for matching
+APIs and endpoints; a model on another physical route keeps its discovered metadata
+even when its ID matches.
+
 Passive model-list reads that wait for a configuration replacement resume against
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.

@@ -555,7 +555,7 @@ suite.define(() => {
     const name = "desktop";
     const key = "agent:main:daybreak-" + name;
     programs = ["standard", "daybreak_blue", "daybreak_red"];
-    reasoningEfforts = ["medium"];
+    reasoningEfforts = ["medium", "max"];
     proof.initialCatalog = await call("models.list", { agentId: "main", refresh: true });
     expect(proof.initialCatalog).toMatchObject({
       providerOutcomes: expect.arrayContaining([
@@ -822,7 +822,7 @@ suite.define(() => {
         };
         const slider = picker.locator("[data-chat-thinking-slider]");
         await expect.poll(() => slider.inputValue()).toBe("0");
-        expect(await slider.getAttribute("data-chat-thinking-values")).toBe("medium,ultra");
+        expect(await slider.getAttribute("data-chat-thinking-values")).toBe("medium,max,ultra");
         await expect.poll(() => slider.getAttribute("aria-valuetext")).toMatch(/^Default \(.+\)$/);
         proof[name + "-narrowed-effort"] = await slider.evaluate((input: HTMLInputElement) => ({
           values: input.dataset.chatThinkingValues,
@@ -886,14 +886,14 @@ suite.define(() => {
           await expect.poll(async () => Boolean((await row()).hasActiveRun)).toBe(false);
           proof[name + "-queued-" + (target || "cleared")] = receipts.slice(first, first + 2);
         }
-        reasoningEfforts = ["low", "medium", "high"];
+        reasoningEfforts = ["low", "medium", "high", "max"];
         await call("models.list", { agentId: "main", refresh: true });
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await open();
         await expect
           .poll(() => slider.getAttribute("data-chat-thinking-values"))
-          .toBe("low,medium,high,ultra");
+          .toBe("low,medium,high,max,ultra");
         await slider.press("Home");
         await expect.poll(async () => (await row()).thinkingLevel).toBe("low");
         await slider.press("ArrowRight");
@@ -903,11 +903,11 @@ suite.define(() => {
         await snapshot("multilevel-medium");
         const bounds = await slider.boundingBox();
         expect(bounds).not.toBeNull();
-        await slider.click({ position: { x: (bounds!.width * 2) / 3, y: bounds!.height / 2 } });
+        await slider.click({ position: { x: bounds!.width / 2, y: bounds!.height / 2 } });
         await expect.poll(async () => (await row()).thinkingLevel).toBe("high");
         await slider.press("End");
         await expect.poll(async () => (await row()).thinkingLevel).toBe("ultra");
-        await expect.poll(() => slider.inputValue()).toBe("3");
+        await expect.poll(() => slider.inputValue()).toBe("4");
         await expect.poll(() => slider.getAttribute("aria-valuetext")).toBe("Ultra");
         await call("sessions.patch", { key, thinkingLevel: "medium" });
         reasoningEfforts = ["medium"];

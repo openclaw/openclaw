@@ -32,7 +32,7 @@ describe("ModelRegistry generated catalog description", () => {
     compat: { supportsReasoningEffort: true },
   });
 
-  it("describes listed IDs with hosted rows and never publishes unlisted ones", () => {
+  it("describes listed IDs only from matching routes and never publishes unlisted ones", () => {
     const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -55,7 +55,17 @@ describe("ModelRegistry generated catalog description", () => {
           [provider]: {
             baseUrl,
             api: "openai-completions",
-            models: [hostedRow("hosted-listed"), hostedRow("hosted-unlisted")],
+            models: [
+              hostedRow("hosted-listed"),
+              hostedRow("hosted-unlisted"),
+              {
+                ...hostedRow("subscription-listed"),
+                compat: {
+                  supportsReasoningEffort: true,
+                  supportedReasoningEfforts: ["low", "medium", "high", "max"],
+                },
+              },
+            ],
           },
         },
         pricing: {},
@@ -76,7 +86,21 @@ describe("ModelRegistry generated catalog description", () => {
                     [provider]: {
                       baseUrl,
                       api: "openai-completions",
-                      models: [discovered("hosted-listed"), discovered("unknown-listed")],
+                      models: [
+                        discovered("hosted-listed"),
+                        discovered("unknown-listed"),
+                        {
+                          ...discovered("subscription-listed"),
+                          api: "openai-chatgpt-responses",
+                          baseUrl: "https://subscription.example.test/backend-api",
+                          reasoning: true,
+                          contextTokens: 128_000,
+                          compat: {
+                            supportsReasoningEffort: true,
+                            supportedReasoningEfforts: ["medium"],
+                          },
+                        },
+                      ],
                     },
                   },
                 }),
@@ -98,6 +122,16 @@ describe("ModelRegistry generated catalog description", () => {
       baseUrl,
     });
     expect(registry.find(provider, "hosted-listed")).not.toHaveProperty("inference.chatEvidence");
+    expect(registry.find(provider, "subscription-listed")).toMatchObject({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://subscription.example.test/backend-api",
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["medium"],
+      },
+    });
     expect(registry.find(provider, "hosted-unlisted")).toBeUndefined();
     expect(registry.find(provider, "unknown-listed")).toMatchObject({
       contextWindow: 128_000,
