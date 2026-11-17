@@ -201,7 +201,7 @@ export async function readMemoryForgetIndexInWorker(
             .where(
               "id",
               "in",
-              result.value.chunks.map((chunk) => chunk.id),
+              sqliteStringSet(result.value.chunks.map((chunk) => chunk.id)),
             ),
         ).rows[0]!.count;
       },
