@@ -27,6 +27,7 @@ import {
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createDeviceMail, readOwnerApprovalContext, type DeviceMail } from "./device-mail.ts";
+import type { OpenClawIdRecoveryUse } from "./types.ts";
 
 type Attempt = {
   start: SasStart;
@@ -105,7 +106,7 @@ export function createOwnerApproval(
   client: GatewayBrowserClient,
   onRequest: (request: OwnerApprovalRequest) => void,
   onKitUsed: (device: string | undefined) => void = () => {},
-  onMemberDeviceAdded: () => void = () => {},
+  onMemberDeviceAdded: (recoveryUse: OpenClawIdRecoveryUse | undefined) => void = () => {},
 ) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
@@ -310,7 +311,14 @@ export function createOwnerApproval(
         const ctx = await readOwnerApprovalContext(client);
         onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
       } else if (p.event === "member_device_added") {
-        onMemberDeviceAdded();
+        // History is append-ordered and survives revocation; current admission owns provenance.
+        const ctx = await readOwnerApprovalContext(client);
+        abort.signal.throwIfAborted();
+        const use = ctx.link.recoveryUses?.findLast((entry) => entry.peerFp === p.ref);
+        const device = ctx.link.members
+          ?.find((member) => member.accountId === use?.accountId)
+          ?.devices?.find((entry) => entry.peerKey === use?.peerKey);
+        onMemberDeviceAdded(device?.approvedBy?.kind === "member_recovery_kit" ? use : undefined);
       }
       return;
     }

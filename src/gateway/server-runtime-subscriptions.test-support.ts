@@ -10,8 +10,6 @@ import { registerChatAbortController } from "./chat-abort.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
 
-export { waitForFast } from "../../test/helpers/vitest-wait.js";
-
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
   const log = createMockSubsystemLogger("gateway-test", { isEnabled: () => true, warn });

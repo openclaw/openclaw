@@ -439,17 +439,6 @@ export async function executeSessionsSend(
         /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-      if (
-        opts?.expectedTargetLifecycleRevision !== undefined &&
-        (targetSessionEntry?.lifecycleRevision ?? null) !== opts.expectedTargetLifecycleRevision
-      ) {
-        return sendFailure(
-          "error",
-          "Target session lifecycle changed before retained send.",
-          displayKey,
-          runId,
-        );
-      }
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,

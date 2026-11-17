@@ -776,6 +776,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           fixture.targetVersion,
           "The selected release was not updated",
         );
+        // A release behind its link is replaced without a journal. The image has a
+        // system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The in-place replacement did not use the atomic exchange",
+        );
         assert.match(
           fs.readFileSync(path.join(artifacts, "follow-up-update.stdout"), "utf8") +
             fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),

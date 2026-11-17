@@ -135,6 +135,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/eager-import-closure.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
+    // Bundles each standalone worker at test time: one new edge can pull the Gateway graph
+    // into a private worker build, which only release packaging measures otherwise.
+    "test/scripts/runtime-process-build-graph.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     sourceOnly: true,

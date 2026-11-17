@@ -361,15 +361,6 @@ const enCron = {
       deliveryNote: "Delivery: {error}",
       showDetails: "Show details",
       hideDetails: "Hide details",
-      transcript: "Conversation",
-      viewTranscript: "View chat",
-      transcriptScope:
-        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
-      transcriptEmpty: "No messages in this conversation yet.",
-      transcriptMissingMetadata:
-        "Couldn’t open this conversation. Its session information is missing.",
-      transcriptUnavailable:
-        "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
     },
     events: {
