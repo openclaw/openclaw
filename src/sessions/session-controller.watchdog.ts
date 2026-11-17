@@ -1,9 +1,9 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   createWatchdogAssessment,
   type WatchdogAssessmentBackend,
 } from "./session-controller.watchdog-assessment.js";
+import { SessionWatchdogError } from "./session-controller.watchdog-error.js";
 import {
   decideSessionWatchdog,
   SESSION_WATCHDOG_ABORT_FLOOR_MS,
@@ -435,19 +435,23 @@ export function createSessionControllerWatchdog(params: {
           wait.kind === "retry" && wait.rateLimitStopMessage !== undefined && live(wait.isCurrent),
       )?.rateLimitStopMessage;
       const result = assessment.result();
+      const staleReason = rateLimitMessage === undefined ? "no_activity" : "rate_limited";
+      const stoppedAtMs = now();
+      const pendingTools = [...tools].slice(0, 5).map(({ toolName, toolCallId, startedAtMs }) => ({
+        toolName,
+        toolCallId,
+        elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
+      }));
       return {
-        staleReason: rateLimitMessage === undefined ? "no_activity" : "rate_limited",
-        error: Object.assign(
-          createAbortError(
-            rateLimitMessage ??
-              (result?.state === "closed"
-                ? "Reply backend closed before completing"
-                : "Reply operation stalled"),
-          ),
-          {
-            code: "OPENCLAW_SESSION_WATCHDOG",
-            ...(result ? { assessment: result } : {}),
-          },
+        staleReason,
+        error: new SessionWatchdogError(
+          rateLimitMessage ??
+            (result?.state === "closed"
+              ? "Reply backend closed before completing"
+              : "Reply operation stalled"),
+          staleReason,
+          pendingTools,
+          result,
         ),
       };
     },

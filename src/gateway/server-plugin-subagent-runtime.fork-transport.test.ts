@@ -3,10 +3,12 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import "../agents/ai-transport-runtime-host.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -97,6 +99,9 @@ it("sends no request for another operator's session but forks for its owner at t
           });
         }),
     });
+    // The fork runs the parent's turn setup, which acquires the session MCP runtime the
+    // Gateway would bind.
+    await bindSessionMcpRuntimeTestScheduler();
     const lifetime = new AbortController();
     try {
       await withEnvAsync(
@@ -124,7 +129,8 @@ it("sends no request for another operator's session but forks for its owner at t
             api: "anthropic-messages",
             baseUrl,
             reasoning: true,
-            contextWindow: 8192,
+            // The fork runs the parent's full turn setup, so it needs a real turn's window.
+            contextWindow: 200_000,
             maxTokens: 4096,
           });
           const config: OpenClawConfig = {
@@ -212,6 +218,8 @@ it("sends no request for another operator's session but forks for its owner at t
               100,
             );
             await appendUser("OUTSIDE_HISTORY_WINDOW_1672", 2);
+            // A completed parent turn: the run appends its user message, then its prompt
+            // checkpoint, then the reply. A running parent is replayed from its live request.
             await appendUser("Parent question", 3);
             await transcript.appendCustomEntryAsync("openclaw.system-prompt", {
               prefix: "Stable parent instructions",
@@ -227,6 +235,15 @@ it("sends no request for another operator's session but forks for its owner at t
               historyId: compactionId,
               tools: [],
             });
+            await transcript.appendMessageAsync(
+              makeAgentAssistantMessage({
+                api: "anthropic-messages",
+                provider: model.provider,
+                model: model.id,
+                content: [{ type: "text", text: "Parent answer" }],
+                timestamp: 4,
+              }),
+            );
 
             const forkAs = (profileId: string) =>
               withPluginRuntimeGatewayRequestScope(
@@ -255,13 +272,31 @@ it("sends no request for another operator's session but forks for its owner at t
               body: {
                 model: "fork-model",
                 thinking: { type: "enabled" },
-                system: [{ type: "text", text: "Stable parent instructions" }],
+                // The session's pinned prefix, not a prompt rebuilt for the fork.
+                system: [expect.objectContaining({ text: "Stable parent instructions" })],
                 messages: [
                   user(
                     "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
                   ),
-                  user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),
-                  { role: "user", content: "Review the parent" },
+                  { role: "user", content: "[Thu 1970-01-01 00:00 UTC] Parent question" },
+                  { role: "assistant", content: [{ type: "text", text: "Parent answer" }] },
+                  // The question is a real turn on that prefix, sent like the parent's turns.
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringMatching(/\] Review the parent$/),
+                      }),
+                    ],
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringContaining("OpenClaw runtime context"),
+                      }),
+                    ],
+                  },
                 ],
               },
             });

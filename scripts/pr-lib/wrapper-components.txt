@@ -1140,6 +1140,7 @@ src/infra/home-display.ts
 src/infra/host-env-security-policy.js
 src/infra/host-env-security-policy.json
 src/infra/host-env-security.ts
+src/infra/host-memory.ts
 src/infra/http-body.ts
 src/infra/http-request-lifecycle.ts
 src/infra/http-response-body-timeout.ts
@@ -1241,6 +1242,7 @@ src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
+src/infra/runtime-worker-loader.mjs
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -1470,6 +1472,7 @@ src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-cause.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-owed-step.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
@@ -1751,6 +1754,9 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-native-resource.client.ts
+src/plugins/plugin-capture-native-resource.ts
+src/plugins/plugin-capture-native-resource.types.ts
 src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
@@ -1786,6 +1792,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-recovery-source-copy.ts
 src/plugins/plugin-replacement-operation.ts
 src/plugins/plugin-replacement-watchers.ts
 src/plugins/plugin-lifecycle-trace.ts
@@ -1930,6 +1937,7 @@ src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
 src/process/spawn-broker/context.ts
+src/process/spawn-broker/context-state.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-output.ts
 src/process/spawn-broker/file-reads.ts
@@ -2014,6 +2022,7 @@ src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
+src/shared/assertion.ts
 src/shared/assistant-error-format.ts
 src/shared/async-context.ts
 src/shared/async-store.ts

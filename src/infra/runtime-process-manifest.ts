@@ -17,6 +17,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
   return {
+    workerThreadLoader: loaderFreeEntrypoint("infra/runtime-worker-loader"),
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
@@ -246,6 +247,10 @@ export const pluginRuntimeProcessManifest = {
   browserRelayDaemon: {
     ...pluginRuntimeProcess("browser", "native-host-entry", "relay-daemon-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "relay-daemon-entry.js" },
+  },
+  browserProfileFilesystem: {
+    ...pluginRuntimeProcess("browser", "profile-filesystem", "profile-filesystem.worker"),
+    package: { name: "@openclaw/browser-plugin", distWorkerPath: "profile-filesystem.worker.js" },
   },
   browserSetup: {
     ...pluginRuntimeProcess("browser", "setup-entry", "setup-entry"),

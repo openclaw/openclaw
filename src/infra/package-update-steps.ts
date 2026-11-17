@@ -380,7 +380,6 @@ export async function runGlobalPackageUpdateSteps(params: {
     });
 
     steps.push(updateStep);
-    let finalInstallStep = updateStep;
     if (updateStep.exitCode !== 0) {
       if (
         updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON) ||
@@ -432,18 +431,20 @@ export async function runGlobalPackageUpdateSteps(params: {
             : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
           : ["--omit=optional"],
       );
-      if (preferOnline && !isFailedUpdateStep(fallbackStep)) {
-        updateStep.advisory = {
-          kind: "recoverable-maintenance",
-          message: `Repaired stale package cache for ${npm?.packageSpec}: install succeeded after refreshing registry metadata.`,
-        };
-      }
       steps.push(fallbackStep);
-      finalInstallStep = fallbackStep;
+      if (isFailedUpdateStep(fallbackStep)) {
+        return await packageUpdateFailure(fallbackStep, steps);
+      }
+      updateStep.advisory = {
+        kind: "recoverable-maintenance",
+        message: preferOnline
+          ? `Repaired stale package cache for ${npm?.packageSpec}: install succeeded after refreshing registry metadata.`
+          : "Package install succeeded with optional dependencies omitted.",
+      };
     }
 
-    if (isFailedUpdateStep(finalInstallStep)) {
-      return await packageUpdateFailure(finalInstallStep, steps);
+    if (isFailedUpdateStep(updateStep)) {
+      return await packageUpdateFailure(updateStep, steps);
     }
 
     if (stagedInstall.native && params.installTarget.pnpmIsolated) {
@@ -680,8 +681,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       afterVersion = await readPackageVersionIfPresent(activePackageRoot);
     }
 
-    const failedStep =
-      steps.find((step) => step !== updateStep && isFailedUpdateStep(step)) ?? null;
+    const failedStep = steps.find(isFailedUpdateStep) ?? null;
 
     if (failedStep) {
       return await packageUpdateFailure(failedStep, steps);

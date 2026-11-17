@@ -501,6 +501,36 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
     ).toBe(true);
   });
 
+  it.each([0, 7])("retains complete OpenClawKit output and exit code %i", (exitCode) => {
+    const root = fixture();
+    const result = run(
+      root,
+      `
+swift() {
+  printf '%10000s' output
+  printf 'package stderr\\n' >&2
+  return ${exitCode}
+}
+export -f swift
+${ciStep("macos-swift-packages", "OpenClawKit tests").run}
+`,
+      { OPENCLAWKIT_SCRATCH: root, OPENCLAWKIT_TEST_EXECUTION: "serial" },
+    );
+    expect(result.status, result.stderr).toBe(exitCode);
+    const log = readFileSync(path.join(root, "openclaw-native-test-logs/openclawkit.log"), "utf8");
+    expect(log).toBe(`${" ".repeat(9994)}outputpackage stderr\n`);
+    expect(result.stdout.length).toBeLessThan(9000);
+    const upload = ciStep("macos-swift-packages", "Upload macOS native test logs");
+    for (const [phase, name] of [
+      ["packages", "macos-package-test-logs"],
+      ["tests", "macos-native-test-logs"],
+    ]) {
+      const context = { failed: exitCode !== 0, matrix: { phase } };
+      expect(evaluateWorkflowExpression(upload.if, context)).toBe(true);
+      expect(evaluateWorkflowExpression(upload.with?.name, context)).toBe(name);
+    }
+  });
+
   it.each([
     { phase: "mlx-settings", nativeOwner: false, filters: [] },
     {

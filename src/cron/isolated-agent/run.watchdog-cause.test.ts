@@ -155,6 +155,10 @@ describe("runCronIsolatedAgentTurn watchdog cause", () => {
   it("persists the controller's recovery classification instead of the generic stall text", async () => {
     stopOwnOperation((operation) => {
       operation.recoveryClassification = "blocked_tool_call";
+      operation.watchdog.attachAttempt({ assertCurrent() {} }).beginTool({
+        toolName: "hang_forever",
+        toolCallId: "host-call-1",
+      });
       operation.abortForStall();
     });
 
@@ -162,7 +166,9 @@ describe("runCronIsolatedAgentTurn watchdog cause", () => {
 
     expect(result).toMatchObject({
       status: "error",
-      error: "blocked_tool_call",
+      error: expect.stringMatching(
+        /^blocked_tool_call staleReason=no_activity pendingTools=\[\{"toolName":"hang_forever","toolCallId":"host-call-1","elapsedMs":\d+\}\]$/,
+      ),
       errorClassification: { kind: "reason", reason: "timeout" },
       failureNotificationDetail: { kind: "agent-stall", classification: "blocked_tool_call" },
     });
