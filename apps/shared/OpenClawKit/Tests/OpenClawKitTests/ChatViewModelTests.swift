@@ -13339,11 +13339,13 @@ struct ChatViewModelTests {
         await refresh.value
         FileHandle.standardError.write(Data("[thinking-refresh] refresh settled\n".utf8))
 
-        #expect(await MainActor.run {
+        let level = await MainActor.run {
             FileHandle.standardError.write(Data("[thinking-refresh] level actor entry\n".utf8))
             defer { FileHandle.standardError.write(Data("[thinking-refresh] level actor exit\n".utf8)) }
             return vm.thinkingLevel
-        } == "high")
+        }
+        FileHandle.standardError.write(Data("[thinking-refresh] level result received\n".utf8))
+        #expect(level == "high")
         FileHandle.standardError.write(Data("[thinking-refresh] level assertion complete\n".utf8))
         #expect(await MainActor.run {
             FileHandle.standardError.write(Data("[thinking-refresh] sessions actor entry\n".utf8))
