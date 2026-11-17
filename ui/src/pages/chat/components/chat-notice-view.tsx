@@ -54,7 +54,7 @@ function FailureNotice(props: ChatNoticeProps) {
 
 export function ChatNotice(props: ChatNoticeProps) {
   return (
-    <Show when={props.item.runError} fallback={<ChatNoticeDetails {...props} />}>
+    <Show when={props.item.runError?.runId} keyed fallback={<ChatNoticeDetails {...props} />}>
       <FailureNotice item={props.item} recovery={props.recovery} />
     </Show>
   );

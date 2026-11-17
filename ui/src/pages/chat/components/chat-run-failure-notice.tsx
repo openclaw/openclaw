@@ -197,7 +197,7 @@ export function ChatRunFailureNotice(props: {
             <PluginSurface
               surface="run-failure-feedback"
               props={feedback()}
-              renderDefault={() => <ReportIssueLink />}
+              renderDefault={ReportIssueLink}
             />
           )}
         </Show>
