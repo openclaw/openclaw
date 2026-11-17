@@ -14,7 +14,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronRuns } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronRuns } from "./cron-fixtures.test-support.ts";
 import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -273,6 +273,9 @@ suite.define(() => {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
+        if (route === "cron") {
+          await collapseNav(page);
+        }
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
         await Promise.all([header.waitFor(), content.waitFor()]);
@@ -749,12 +752,7 @@ suite.define(() => {
   });
 
   it("keeps Automations search above one tab-and-action row", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: createCronLayoutMethodResponses(),
@@ -763,6 +761,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}automations`);
       await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+      await collapseNav(page);
       for (const viewport of responsiveViewports) {
         await page.setViewportSize(viewport);
 

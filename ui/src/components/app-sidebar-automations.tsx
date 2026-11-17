@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { formatCompactMs } from "../lib/format.ts";
@@ -12,6 +13,7 @@ import { formatCronSchedule } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createSectionSidebarPresence, sectionLocation } from "../lib/section-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 
@@ -56,10 +58,32 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     }).catch(() => null);
     return result?.jobs ?? [];
   });
+  createSectionSidebarPresence("automations", () => props.host.navigationCollapsed);
+  // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
+  const shown = createMemo(() => {
+    const filter = automationsFilter();
+    const order = (job: CronCompactJob) =>
+      filter.sort === "nextRunAtMs"
+        ? (job.nextRunAtMs ?? Number.POSITIVE_INFINITY)
+        : -(job.updatedAtMs ?? 0);
+    return jobs()
+      .filter(
+        (job) =>
+          filter.lastRun === "all" ||
+          (filter.lastRun === "error" ? job.lastRunStatus === "error" : job.lastRunStatus === "ok"),
+      )
+      .toSorted((left, right) =>
+        filter.sort === "name"
+          ? (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
+          : order(left) - order(right),
+      );
+  });
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // The sidebar learns the route, not its query, so it keeps the job it last opened.
   const [selected, setSelected] = createSignal(
-    new URLSearchParams(window.location.search).get("job"),
+    new URLSearchParams(
+      window.location.search || sectionLocation(app.gateway, "automations")?.options.search,
+    ).get("job"),
   );
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {
@@ -99,11 +123,19 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         </span>
         <span class="nav-item__text">{t("cron.list.newTask")}</span>
       </a>
-      <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.active")}>
-        <span class="sidebar-automations__heading">{t("cron.tabs.active")}</span>
-        <For each={jobs().filter((job) => job.enabled)}>{(job) => <Row job={job} />}</For>
-      </div>
-      <Show when={jobs().some((job) => !job.enabled)}>
+      <Show when={automationsFilter().status !== "paused"}>
+        <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.active")}>
+          <span class="sidebar-automations__heading">{t("cron.tabs.active")}</span>
+          <For each={shown().filter((job) => job.enabled)}>{(job) => <Row job={job} />}</For>
+        </div>
+      </Show>
+      <Show when={automationsFilter().status === "paused"}>
+        <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.paused")}>
+          <span class="sidebar-automations__heading">{t("cron.tabs.paused")}</span>
+          <For each={shown().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
+        </div>
+      </Show>
+      <Show when={automationsFilter().status === "all" && shown().some((job) => !job.enabled)}>
         <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.paused")}>
           <button
             type="button"
@@ -115,7 +147,7 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
             {t("cron.tabs.paused")}
           </button>
           <Show when={pausedOpen()}>
-            <For each={jobs().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
+            <For each={shown().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
           </Show>
         </div>
       </Show>

@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -206,6 +207,7 @@ suite.define(() => {
       });
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       expect(response?.status()).toBe(200);
       await jobTitle(page, "Digest every minute").waitFor({ timeout: 10_000 });
       await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
@@ -261,6 +263,7 @@ suite.define(() => {
       );
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
       await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
       expect(
@@ -311,6 +314,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await page.getByRole("tab", { name: "Activity history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
@@ -378,6 +382,7 @@ suite.define(() => {
       const gateway = await installCronGateway(page);
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
       await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
 
@@ -433,6 +438,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await expectRunCount(page, "Initial history", 1);
 
@@ -482,6 +488,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
 
       await page.getByRole("tab", { name: "Activity history", exact: true }).click();
@@ -536,6 +543,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
 
       await page.locator('[data-test-id="cron-new-task"]').click();
@@ -576,7 +584,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-tab-all"]').waitFor();
+      await page.locator(".cron-overview-empty").waitFor();
 
       await page.keyboard.press("Tab");
       await expect
@@ -587,6 +595,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("control-ui-main");
 
+      await collapseNav(page);
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
       const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
       await tasksTab.focus();

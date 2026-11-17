@@ -10,6 +10,11 @@ import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import {
+  rememberSectionLocation,
+  sectionLocation,
+  sectionSidebarShown,
+} from "../../lib/section-navigation.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { buildCronViewProps } from "./view-props.ts";
@@ -110,6 +115,14 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
+          sidebarListsJobs={!pageHeader().filtered && sectionSidebarShown("automations")}
+          onClosePanel={() => {
+            // Closing the automation leaves Automations on its empty state for this tab.
+            viewProps().onClosePanel();
+            const context = props.page.context();
+            rememberSectionLocation(context.gateway, "automations", null);
+            context.replace("cron", { search: "" });
+          }}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
@@ -129,12 +142,33 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => props.host,
   );
   // Route changes retarget Gateway job queries.
+  // While the next route loads its search is unknown, not empty, so nothing acts on it.
+  // Effects never compare, and route data republishes the same search, so a memo lets only a
+  // real change through; a stale repeat would otherwise re-record an automation just forgotten.
+  const routeSearch = createMemo(() => props.routeSearch);
   createEffect(
-    () => props.routeSearch ?? "",
+    () => routeSearch(),
     (search) => {
+      if (search === undefined) {
+        return;
+      }
+      const route = resolveCronRouteData(search);
+      // Returning to Automations in this tab reopens the automation left open.
+      const opened = sectionLocation(context.gateway, "automations");
+      if (!search && opened) {
+        context.replace(opened.route, opened.options);
+        return;
+      }
+      rememberSectionLocation(
+        context.gateway,
+        "automations",
+        route.jobId
+          ? { route: "cron", options: { search: `?job=${encodeURIComponent(route.jobId)}` } }
+          : null,
+      );
       page.setRouteSearch(search);
       // `?new` is the sidebar's New automation entry.
-      if (resolveCronRouteData(search).create) {
+      if (route.create) {
         page.actions.onOpenCreate();
       }
     },
@@ -154,7 +188,7 @@ function CronPage(props: { routeSearch?: string }) {
 export function renderSolid(props: SolidRouteProps) {
   return (
     <Loading>
-      <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />
+      <CronPage routeSearch={typeof props.data === "string" ? props.data : undefined} />
     </Loading>
   );
 }

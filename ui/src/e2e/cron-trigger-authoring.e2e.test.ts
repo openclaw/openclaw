@@ -4,7 +4,7 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -60,6 +60,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await newTask(page, "Conditional interval", "Run when the condition matches");
       await selectSeconds(page);
       await field(page, "every-amount").fill("5");
@@ -113,6 +114,7 @@ suite.define(() => {
         methodResponses: cronMethodResponses([scriptJob]),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       const existingRow = page.locator('[data-test-id="cron-row-existing-script-automation"]');
       await existingRow.waitFor();
       await newTask(page, "Malformed condition", "Run when the condition matches");

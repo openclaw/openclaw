@@ -439,6 +439,13 @@
   gap: 6px;
 }
 
+/* With no automation open, the page centers its New automation prompt. */
+.cron-overview-empty {
+  display: grid;
+  place-items: center;
+  min-height: min(60vh, 520px);
+}
+
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;

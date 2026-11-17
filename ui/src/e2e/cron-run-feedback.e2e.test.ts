@@ -8,7 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation run feedback ownership",
@@ -50,6 +50,7 @@ suite.define(() => {
           : "Run queued. Run ID: synthetic-run-alpha";
       const role = reason === "error" ? "alert" : "status";
       await page.goto(suite.server.baseUrl + "cron");
+      await collapseNav(page);
       await gateway.deferNext("cron.run", { id: alpha.id, mode: "force" });
       await page.locator('[data-test-id="cron-row-run-feedback-alpha"]').click();
       expect((await gateway.waitForRequest("cron.run")).params).toMatchObject({
@@ -100,6 +101,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await page.locator(`[data-test-id="cron-row-${alpha.id}"] .cron-table__name`).click();
       await page.locator('[data-test-id="cron-run-now"]').click();
       const notice = page.getByRole("status").filter({ hasText: "Run queued" });

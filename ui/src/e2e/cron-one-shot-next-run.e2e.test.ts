@@ -7,7 +7,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "One-shot runtime schedule",
@@ -45,6 +45,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
+        await collapseNav(page);
         await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
