@@ -345,7 +345,6 @@ const enCron = {
       saving: "Saving…",
       saveChanges: "Save changes",
       createTask: "Create automation",
-      createAndRun: "Create and run now",
       cancel: "Cancel",
     },
     jobState: {

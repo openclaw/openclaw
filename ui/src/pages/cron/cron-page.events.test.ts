@@ -66,7 +66,6 @@ it("blocks saves until discovery and schema validation finish, then submits the 
     expect(page.querySelector("#cron-error-eventArguments")?.textContent).toContain("input schema"),
   );
   expect(button("submit").disabled).toBe(true);
-  expect(page.querySelector('[data-test-id="cron-submit-run"]')).toBeNull();
   const args = getElement(page, "#cron-event-arguments", HTMLTextAreaElement);
   args.value = '{"project":"website"}';
   args.dispatchEvent(new Event("input", { bubbles: true }));

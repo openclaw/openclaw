@@ -84,7 +84,7 @@ it("allows offline drafting but disables submission without a live connection", 
     await page.settle();
     expect(page.cron.cronFieldErrors).toEqual({});
     expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(false);
-    for (const id of ["cron-submit", "cron-submit-run"]) {
+    for (const id of ["cron-submit"]) {
       const button = page.querySelector<HTMLButtonElement>(dom.testId(id))!;
       expect(button.disabled, id).toBe(true);
       button.click();
@@ -387,95 +387,6 @@ it.each([
         delivery: { mode: "none" },
       }),
     );
-  },
-);
-
-it.each([
-  { destination: "another page", accepted: true },
-  { destination: "another automation", accepted: true },
-  { destination: "another automation", accepted: false },
-  { destination: "the submitted editor", accepted: false },
-] as const)(
-  "settles create-and-run at $destination (accepted: $accepted)",
-  async ({ destination, accepted }) => {
-    const addRequested = createDeferred();
-    const added = createDeferred<{ id: string }>();
-    const selected = createCronViewJob("selected-job", { name: "Selected automation" });
-    const request = cronRpc(
-      {
-        "cron.add": () => {
-          addRequested.resolve();
-          return added.promise;
-        },
-        "cron.list": () => harness.cronListResponse([]),
-        "cron.get": () => selected,
-        "cron.runs": () => cronRunsResponse(),
-        "cron.run": () => ({ ok: true, enqueued: true, runId: "run-fresh" }),
-        "models.list": () => ({ models: [] }),
-      },
-      () => ({}),
-    );
-    const { page, gateway } = mountCronPage(request, { scopeId: "writer" });
-    let currentPage = page;
-    try {
-      (await dom.waitForElement(page, dom.testId("cron-new-task"))).click();
-      await dom.waitForElement(page, "#cron-payload-text");
-      dom.fillInput(page, "#cron-name", "Repo pulse");
-      dom.fillInput(page, "#cron-payload-text", "Review overnight activity");
-      await page.settle();
-      (await dom.waitForElement(page, dom.testId("cron-submit-run"))).click();
-      await addRequested.promise;
-      const submittedState = page.cron;
-      if (destination === "another page") {
-        page.remove();
-        currentPage = harness.createPage(harness.createContext(gateway, "writer"));
-      }
-      if (destination === "another automation") {
-        page.routeSearch = `?job=${selected.id}`;
-        await waitFor(() => expect(dom.text(page, ".cron-detail-title")).toBe(selected.name));
-      }
-      await currentPage.settle();
-      if (accepted) {
-        added.resolve({ id: "job-fresh" });
-      } else {
-        added.reject(new Error("Creation rejected"));
-      }
-      await waitFor(() => expect(submittedState.cronBusy).toBe(false));
-      await currentPage.settle();
-      if (destination === "another automation") {
-        expect.soft(currentPage.cron).toMatchObject({
-          cronEditingJob: { id: selected.id },
-          cronRunsJobId: selected.id,
-          cronRunsScope: "job",
-        });
-        expect.soft(dom.text(currentPage, ".cron-detail-title")).toBe(selected.name);
-      }
-      if (!accepted) {
-        expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
-        expect(currentPage.cron.cronError).toBe(
-          destination === "the submitted editor" ? "Creation rejected" : null,
-        );
-        expect(currentPage.cron.cronCreateOpen).toBe(destination === "the submitted editor");
-        return;
-      }
-      await waitFor(() => {
-        const methods = request.mock.calls.map((call) => call[0]);
-        expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
-      });
-      expect(request).toHaveBeenCalledWith(
-        "cron.add",
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-      await waitFor(() => expect(submittedState.cronCreateOpen).toBe(false));
-      if (destination === "another page") {
-        expect(currentPage.cron).not.toBe(submittedState);
-        expect(currentPage.cron.cronError).toBeNull();
-      }
-    } finally {
-      added.resolve({ id: "job-fresh" });
-      currentPage.remove();
-    }
   },
 );
 

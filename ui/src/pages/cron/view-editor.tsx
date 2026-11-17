@@ -83,17 +83,6 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
       </button>
       {props.canManage ? (
         <>
-          {props.mode === "create" && props.form.scheduleKind !== "event" ? (
-            <button
-              type="button"
-              class="btn"
-              data-test-id="cron-submit-run"
-              disabled={props.busy || !props.canSubmit}
-              onClick={() => props.onSubmitRunNow()}
-            >
-              {t("cron.form.createAndRun")}
-            </button>
-          ) : undefined}
           <button
             type="button"
             class="btn primary"
