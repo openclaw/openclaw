@@ -143,7 +143,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-async function withInProcessGatewayDispatch<T>(
+export async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
@@ -457,6 +457,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             privateCompletion: options?.privateCompletion,
             replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
+            subagentCompletions: options?.subagentCompletions,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,

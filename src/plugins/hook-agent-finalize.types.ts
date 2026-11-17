@@ -1,4 +1,5 @@
 // Terminal agent-run hook payloads: finalize review and the observed run outcome.
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 
 export type PluginHookAgentEndEvent = {
   runId?: string;
@@ -18,6 +19,8 @@ export type PluginHookAgentEndEvent = {
 
 export type PluginHookBeforeAgentFinalizeEvent = {
   runId?: string;
+  /** True only when this finalization path carries accepted presentation to ordinary delivery. */
+  supportsFinalPresentation?: true;
   sessionId: string;
   sessionKey?: string;
   turnId?: string;
@@ -31,6 +34,8 @@ export type PluginHookBeforeAgentFinalizeEvent = {
 };
 
 export type PluginHookBeforeAgentFinalizeResult = {
+  /** Optional presentation for this candidate only; discarded when finalization requests revision. */
+  finalPresentation?: ReplyPayload["presentation"];
   /**
    * continue: accept normal finalization.
    * revise: block finalization and ask the harness for another model pass.

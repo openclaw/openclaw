@@ -6,12 +6,12 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
@@ -211,7 +211,7 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   completionRetention?: DeliveryQueueCompletionRetention;
   /** @internal Producer-specific durable recovery attempt budget. */
   maxRetries?: number;
-  /** @internal Only the ordinary inbound final dispatcher grants bounded text replay. */
+  /** @internal Marks an ordinary agent final; the channel's durableFinal adapter grants bounded text replay. */
   retryAmbiguousFinalText?: true;
   /** @internal Retry this producer's pending intent only when no platform send began. */
   reusePendingDeliveryIntent?: boolean;
@@ -235,12 +235,8 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   transcriptDeliveryId?: string;
   /** @internal State root captured for this delivery; history never follows a later ambient root. */
   transcriptStateDir?: string;
-  /** Pins destination history to the conversation generation the caller observed. */
-  transcriptExpectedGeneration?: {
-    sessionKey?: string;
-    sessionId: string;
-    lifecycleRevision?: string;
-  };
+  /** Pins destination history to the caller's conversation when several share an address. */
+  transcriptExpectedGeneration?: { sessionKey?: string };
   /** Background producer recorded on destination history rows. */
   transcriptProvenance?: BackgroundSessionResultProvenance;
   /** Receives warnings when a confirmed send could not be added to history. */
@@ -280,7 +276,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
   /** Host-captured session generation retained independently by this delivery intent. */
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

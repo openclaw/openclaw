@@ -272,7 +272,7 @@ export async function measurePlannerStage(options: {
   };
 }
 
-export async function runPlannerFlow(workload: string, name: string, signal?: AbortSignal) {
+async function runPlannerFlow(workload: string, name: string, signal?: AbortSignal) {
   const selection = cases.find((entry) => entry.name === name);
   if (!selection) {
     throw new Error(`Unknown planner case: ${name}`);

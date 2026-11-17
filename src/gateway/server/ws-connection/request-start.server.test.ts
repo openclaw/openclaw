@@ -403,7 +403,9 @@ describe("authenticated operator request starts", () => {
     },
   );
 
-  it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
+  it("keeps local frames raw and compresses remote frames both ways without stalling", async ({
+    signal,
+  }) => {
     await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
     const registry = createEmptyPluginRegistry();
     let responseStream: IncomingMessage["socket"] | undefined;
@@ -440,7 +442,10 @@ describe("authenticated operator request starts", () => {
         context.broadcast("presence", { presence: listSystemPresence() });
       }
     };
-    registry.gatewayHandlers["test.segments"] = async ({ respond }) => {
+    registry.gatewayHandlers["test.segments"] = async ({ req, respond, context }) => {
+      if (req.id === "segments-again") {
+        context.broadcast("presence", { presence: listSystemPresence() });
+      }
       respond(true, { messages: new SerializedJsonArray(sharedBytes) });
     };
     registerMethods(registry, ["test.segments", "test.echo"]);
@@ -517,17 +522,28 @@ describe("authenticated operator request starts", () => {
       // A worker's window-15 cache must not bypass this peer's window-10 limit.
       // The second response reuses the same segment with a fresh RPC envelope.
       for (const id of ["segments-first", "segments-again"]) {
-        const response = once(socket, "message");
+        const response = on(socket, "message", { signal });
         const before = stream.bytesWritten;
-        socket.send(rpc(id, "test.segments"));
-        const [data] = await response;
         const expected = JSON.stringify({
           type: "res",
           id,
           ok: true,
           payload: { messages: sharedMessages },
         });
-        expect(rawDataToString(data)).toBe(expected);
+        try {
+          socket.send(rpc(id, "test.segments"));
+          for await (const [data] of response) {
+            const text = rawDataToString(data);
+            const frame = JSON.parse(text);
+            if (frame.type !== "res" || frame.id !== id) {
+              continue;
+            }
+            expect(text).toBe(expected);
+            break;
+          }
+        } finally {
+          await response.return?.();
+        }
         expect(stream.bytesWritten - before).toBeLessThan(Buffer.byteLength(expected) / 4);
       }
       // Live session/tool events stay raw below the threshold.

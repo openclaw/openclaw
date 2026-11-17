@@ -65,7 +65,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "socket.drain",
 ]);
 
-type EncodedSessionPayload = readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+type EncodedSessionPayload = readonly Buffer[];
 type FramePayload = string | Buffer | EncodedSessionPayload;
 type RecipientFrames = Map<string | undefined, Map<number, SerializedGatewayFrame>>;
 
@@ -73,13 +73,13 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
 function serializeFrameField(
   name: "payload",
   value: unknown,
-  serializeSession: (() => string) | undefined,
+  serializeSession: (() => Buffer) | undefined,
   serializeMessage?: () => Buffer,
 ): string | EncodedSessionPayload;
 function serializeFrameField(
   name: "payload" | "stateVersion",
   value: unknown,
-  serializeSession?: () => string,
+  serializeSession?: () => Buffer,
   serializeMessage?: () => Buffer,
 ): string | EncodedSessionPayload {
   // The projection owns a fresh envelope; encode its large fields separately.
@@ -87,7 +87,7 @@ function serializeFrameField(
   const envelope = serializeSession ? (value as Record<string, unknown>) : undefined;
   const projected =
     envelope && !("toJSON" in envelope) && !("toJSON" in Object.prototype) ? envelope : undefined;
-  const sessionJSON = projected ? serializeSession?.() : undefined;
+  const sessionBytes = projected ? serializeSession?.() : undefined;
   const messageBytes = projected ? serializeMessage?.() : undefined;
   const session = projected?.session;
   const message = projected?.message;
@@ -108,14 +108,13 @@ function serializeFrameField(
       }
     }
   }
-  if (projected) {
+  if (projected && sessionBytes) {
     const separator = fieldJSON.endsWith("{}}") ? "" : ",";
     const prefix = `,${fieldJSON.slice(1, -2)}${separator}`;
-    const suffix = `"session":${sessionJSON}}`;
     // Keep the message's byte identity so compression can reuse its deflated segment.
     return messageBytes
-      ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
-      : [Buffer.from(`${prefix}${suffix}`)];
+      ? [Buffer.from(prefix), messageBytes, sessionBytes]
+      : [Buffer.from(prefix), sessionBytes];
   }
   const fragment = fieldJSON.startsWith(`{"${name}":`) ? `,${fieldJSON.slice(1, -1)}` : "";
   return serializeSession ? [Buffer.from(fragment)] : fragment;
@@ -157,15 +156,7 @@ function frameWithSequence(
     return new SerializedGatewayFrame([base.prefix, payload, suffix]);
   }
   const chunks = typeof payload === "string" ? ([Buffer.from(payload)] as const) : payload;
-  if (chunks.length === 1) {
-    return new SerializedGatewayFrame([base.prefix, chunks[0], suffix]);
-  }
-  // Preserve compression boundaries while copying the already encoded recipient envelope.
-  return new SerializedGatewayFrame([
-    Buffer.concat([base.prefix, chunks[0]]),
-    chunks[1],
-    Buffer.concat([chunks[2], suffix]),
-  ]);
+  return new SerializedGatewayFrame([base.prefix, ...chunks, suffix]);
 }
 
 export function createGatewayBroadcaster(params: {

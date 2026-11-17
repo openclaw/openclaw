@@ -36,8 +36,32 @@ node scripts/bench-ci-planner.mts --workload ../installed-workload --output /tmp
 The workload must also be clean and separately installed. The command never
 installs dependencies or fetches source. `--workload-sha <full-sha>` selects an
 explicit alternative workload; record that change when comparing reports.
-`--case main|cron|discord` and `--repetitions 1..5` support focused verification;
-only the defaults produce the fifteen-flow baseline.
+`--case all|main|cron|discord` and `--repetitions 1..5` support focused verification;
+all three cases and five repetitions are required for a fifteen-flow baseline.
+
+The hosted workflow exposes `workload_sha`, `case`, and `repetitions`, but limits
+workloads to these reviewed canonical repository commits:
+
+- Historical default: `79f5aeb133830a1db60b55cff3cf7a617086aa07`.
+- Reviewed landed workload: `ba284782cf1705d7e5f1f085b9cdefbb55932af6`.
+
+Defaults remain the historical workload, `all`, and `5`. Runtime validation rejects
+all other SHAs, including well-formed ones, before either checkout. Two mutually
+exclusive checkout steps use literal commit refs; the selected checkout identity
+is verified before installation. Adding a hosted workload requires a reviewed
+workflow change. The local CLI remains general and accepts `--workload-sha`.
+Both checkouts must declare the same complete integrity-pinned pnpm 12.15.0 version
+before either frozen install runs.
+
+The action-level cache switches remain off, but they do not revoke the runner's
+cache tokens. The fixed reviewed source choices restrict execution authority;
+input syntax checks alone do not establish that trust.
+
+For the first single-flow qualification, select the reviewed landed workload,
+`main`, and `1` to exercise the main-planning admission. A successful single flow proves
+that selected planning path works; it is not a fifteen-flow baseline or a repeatability result. The
+historical default main case can fail the frozen planner's job-cap admission;
+selecting a different workload or case does not change that planner policy.
 
 Each of five repetitions runs these cases in order, without overlap:
 
@@ -78,8 +102,10 @@ isolated hosted runner is the final cleanup boundary; do not run this tool again
 a shared service host. Failed stages retain their status, diagnostics and available
 metrics. Unavailable metrics are `null`, never invented zeros.
 
-Accept a baseline only when all fifteen flows have the expected identities and
+Accept a report only when every requested flow has the expected identities and
 valid protocol, cleanup and resource accounting, with unchanged workload source.
+A fifteen-flow baseline additionally requires all three cases and five repetitions;
+shorter runs remain focused qualifications.
 The artifact is capped at 16 MiB and retained for seven days. Keep raw repetitions;
 do not compare summaries across changed workload, toolchain, runner, environment,
 or measurement boundaries without explaining those differences. Normal CI proves

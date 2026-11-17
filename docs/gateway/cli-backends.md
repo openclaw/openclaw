@@ -936,8 +936,9 @@ that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for clean
 triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
-exceeds its deadline, OpenClaw refuses replacement, including from a later run.
-Check the cleanup error and the backend's remaining processes before retrying.
+exceeds its deadline, the run waiting for it fails with the cleanup error. The
+next run starts a new process; check `openclaw logs` and the backend's remaining
+processes if the error repeats.
 Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process reads and refreshes its own native

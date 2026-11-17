@@ -372,8 +372,17 @@ export async function verifyPriorCiSecurity({
       return list(path);
     },
   };
+  const membershipApi = {
+    request: async (path) => {
+      requireEvidence(
+        path.startsWith(`/orgs/${owner}/teams/openclaw-secops/memberships/`),
+        "security admission only reads this repository’s SecOps membership",
+      );
+      return read(path);
+    },
+  };
   const proof = await revalidatePublishedSecurityClearance(
-    { api, owner, repo, pullRequest, pullPath, issuePath: `${prefix}/issues/${pr}` },
+    { api, membershipApi, owner, repo, pullRequest, pullPath, issuePath: `${prefix}/issues/${pr}` },
     statuses,
     {
       url: combined.target_url,

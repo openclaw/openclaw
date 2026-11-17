@@ -3,14 +3,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity, summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import { inlineActivityDisclosureCalls } from "./chat-activity-segments.ts";
+import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
-import { resetToolStream } from "./tool-stream-state.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 import {
   agentEvent,
   createHost,
@@ -99,7 +99,7 @@ it.each(["live", "history"] as const)(
     expect(entry?.output).toBe("Legacy progress");
     host.settings = { chatInlineCommands: true };
     expect(handleAgentEvent(host, progress, "history")).toBe(false);
-    host.inlineCommandPresentation = { inlineActivityDisclosureCalls };
+    host.inlineCommandPresentation = { readInlineToolExpansion };
     expect(handleAgentEvent(host, progress, "history")).toBe(true);
     expect(entry?.output).toBe("Optional stdout");
     vi.advanceTimersByTime(80);
@@ -164,6 +164,34 @@ it.each(["live", "history"] as const)(
     resetToolStream(host);
   },
 );
+
+it("keeps every operation in a long live run until that run is reconciled", () => {
+  useToolStreamFakeTimers();
+  const host = createHost({ chatRunId: "run-1" });
+  const callIds = Array.from({ length: 60 }, (_, index) => `call-${index}`);
+  for (const [index, toolCallId] of callIds.entries()) {
+    emitEvent(host, "run-1", index * 2 + 1, "tool", {
+      phase: "start",
+      name: "read",
+      toolCallId,
+      args: { path: `file-${index}.ts` },
+    });
+    emitEvent(host, "run-1", index * 2 + 2, "tool", {
+      phase: "result",
+      name: "read",
+      toolCallId,
+      result: `Contents of file ${index}`,
+    });
+  }
+  expect(
+    host.chatToolMessages.flatMap((message) =>
+      extractToolCardsCached(message).map((card) => card.callId),
+    ),
+  ).toEqual(callIds);
+  resetToolStreamRun(host, "run-1");
+  expect(host.chatToolMessages).toEqual([]);
+  resetToolStream(host);
+});
 
 it("clears partial stdout when a structured command receipt has empty text", () => {
   const host = createHost({ chatRunId: "run-1" });
@@ -269,7 +297,7 @@ describe("status text truncation", () => {
       phase: "retrying",
       message: input,
     });
-    expect(startupLabel(host)).toBe("Retrying…");
+    expect(startupLabel(host)).toBe("Retrying");
     emitEvent(host, "run-1", 2, "notice", {
       phase: "provider_policy",
       category: "cyber",
@@ -330,7 +358,7 @@ describe("app-tool-stream approval lifecycle", () => {
       const activity = messages.flatMap(readPreparedActivity);
       expect(activity).toEqual([completed]);
       expect(summarizeToolGroup(activity)).toBe(
-        withResult ? "1 other operation" : "1 other operation · 1 unknown",
+        withResult ? "Called Process" : "Called Process · Outcome unknown",
       );
       expect(activity[0]).not.toHaveProperty("diagnostic");
       expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });
@@ -414,6 +442,7 @@ describe("app-tool-stream approval lifecycle", () => {
           type: "toolresult",
           name: "read",
           text: "",
+          timestamp: TOOL_STREAM_TEST_NOW,
         });
       }
     } finally {
@@ -471,13 +500,8 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(card).toMatchObject({
       completed: true,
       live: true,
-      preview: {
-        kind: "browser-tab",
-        profile: "managed",
-        target: "host",
-        targetId: "tab-1",
-        title: "Example",
-      },
+      browserTab: { profile: "managed", target: "host", targetId: "tab-1" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -514,7 +538,7 @@ describe("app-tool-stream approval lifecycle", () => {
       completed: true,
       outputText: "CLI result",
       browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
-      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+      preview: undefined,
     });
     resetToolStream(host);
   });
@@ -917,7 +941,7 @@ it("shows a fallback attempt in the claw until same-run output resumes", () => {
     fallbackStepToModel: "example/backup",
     fallbackStepFinalOutcome: "next_fallback",
   });
-  expect(startupLabel(host)).toBe("Trying fallback model…");
+  expect(startupLabel(host)).toBe("Trying fallback model");
   emitEvent(host, "run-1", 12, "assistant", { text: "Recovered" });
   expect(startupLabel(host)).toBeUndefined();
 });

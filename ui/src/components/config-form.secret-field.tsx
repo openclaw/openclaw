@@ -193,17 +193,15 @@ function HeldSecretToggle(props: {
   return (
     <Show when={props.hold.text() !== undefined} fallback={props.fallback}>
       <Show when={props.hidesText}>
-        <openclaw-tooltip prop:content={label()}>
-          <button
-            type="button"
-            class="settings-secret__toggle"
-            aria-label={label()}
-            aria-pressed={props.hold.revealed() ? "true" : "false"}
-            onClick={() => props.hold.toggleRevealed()}
-          >
-            <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
-          </button>
-        </openclaw-tooltip>
+        <button
+          type="button"
+          class="settings-secret__toggle"
+          aria-label={label()}
+          aria-pressed={props.hold.revealed() ? "true" : "false"}
+          onClick={() => props.hold.toggleRevealed()}
+        >
+          <Icon name={props.hold.revealed() ? "eye" : "eyeOff"} />
+        </button>
       </Show>
     </Show>
   );

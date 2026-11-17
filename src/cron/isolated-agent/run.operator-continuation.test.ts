@@ -155,6 +155,7 @@ it.each([
   "current tool deny",
   "role revoked",
   "role revoked during merge",
+  "session edited",
   "session replaced",
   "queued owner payload edit",
   "queued manager rename",
@@ -489,15 +490,13 @@ it.each([
     setRuntimeConfigSnapshot(config);
   } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
-  } else if (scenario === "session replaced") {
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement",
-      },
-    );
+  } else if (scenario === "session edited" || scenario === "session replaced") {
+    // A message edit rotates only the session id; a reset also rotates the revision.
+    await accessor.replaceSessionEntry(target, {
+      ...entry,
+      sessionId: "replacement-session",
+      ...(scenario === "session replaced" ? { lifecycleRevision: "replacement" } : {}),
+    });
   }
 
   // Publication creation/storage and actual GitHub credentials are outside this regression.
@@ -506,7 +505,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
-  const receipt = vi
+  const sharedPublication = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });
   vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -518,9 +517,9 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
+      // Match the subprocess boundary: rejected attempts execute no GitHub I/O.
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -549,7 +548,8 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
@@ -864,7 +864,6 @@ it.each([
     }
     if (
       roleRevoked ||
-      scenario === "session replaced" ||
       scenario === "principal ingress revoked" ||
       scenario === "principal ingress replaced" ||
       scenario === "principal access revoked"
@@ -898,6 +897,9 @@ it.each([
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
+        // The continuation's conversation is linked by key: an edit or reset keeps it.
+        scenario === "session edited" ||
+        scenario === "session replaced" ||
         ownerEdit ||
         recurring
       ) {
@@ -909,7 +911,7 @@ it.each([
           { details: { state: "merged", mergeCommit: "b".repeat(40) } },
         ]);
         expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-        expect(receipt).toHaveBeenCalled();
+        expect(sharedPublication).toHaveBeenCalled();
         if (scenario === "paused force run") {
           expect(execution.getJob(job.id)).toMatchObject({
             enabled: false,
@@ -931,7 +933,6 @@ it.each([
             ? "missing scope: operator.write"
             : "require full operator write permission",
         );
-        expect(results).toEqual([]);
       }
     }
     if (
@@ -942,13 +943,16 @@ it.each([
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
+      scenario !== "session edited" &&
+      scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
-      expect(receipt).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
+      // Local publication lookup may precede the guard; denied actions disclose no result.
+      expect(results).toEqual([]);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");

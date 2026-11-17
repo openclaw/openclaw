@@ -190,12 +190,18 @@ describe("cancelled pending input dismissal", () => {
 
   it("hides a dismissed row at once and keeps it hidden after the Gateway confirms", async () => {
     const reply = createDeferred<ChatPendingInputsDismissResult>();
-    const view = await setup(() => reply.promise);
+    const requested = createDeferred();
+    const view = await setup(() => {
+      requested.resolve();
+      return reply.promise;
+    });
     view.rowButton(firstLabel).click();
     view.rerender();
     expect(view.hasRow("first-input")).toBe(false);
     expect(view.hasRow("cancelled-input")).toBe(true);
-    await vi.waitFor(() => view.expectDismiss(["first-input"]));
+    // Wait for RPC admission after the cold action import, independently of its load time.
+    await requested.promise;
+    view.expectDismiss(["first-input"]);
     reply.resolve(dismissed(["first-input"]));
     await view.refreshed();
     applyChatPendingInputs(view.historyState, page);

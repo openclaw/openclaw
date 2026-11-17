@@ -14,7 +14,6 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
-import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -66,7 +65,6 @@ export function createActivityPageState(context: ApplicationContext) {
   let active = true;
   let publish = () => {};
   const sessionActivity = createSessionActivity(reconcileSessions);
-  const liveActivity = createLiveActivity(context.gateway, context.sessions);
   const projection = projectMutableSource(context, () => ({
     context,
     routeLocation,
@@ -82,9 +80,6 @@ export function createActivityPageState(context: ApplicationContext) {
     if (!active) {
       return;
     }
-    liveActivity.syncSessions(
-      routeData?.mode === "live" ? (sessionActivity.result?.sessions ?? []) : [],
-    );
     const canonical = routeLocation
       ? sessionActivity.canonicalLocation(
           routeLocation,
@@ -376,16 +371,12 @@ export function createActivityPageState(context: ApplicationContext) {
   );
   onCleanup(() => {
     active = false;
-    liveActivity.dispose();
     stopGateway();
     stopEvents();
     cancelInspectorRequest();
     sessionActivity.dispose();
   });
   return {
-    liveActivity: projectOwner(liveActivity, (source) => source.snapshot),
-    retryLiveActivity: () => liveActivity.retry(),
-    clearLiveActivity: () => liveActivity.clear(),
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,

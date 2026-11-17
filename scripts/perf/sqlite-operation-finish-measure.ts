@@ -47,13 +47,29 @@ function queueReceipt(admission: ReturnType<typeof create>) {
     );
   }
 }
+async function joinFinishes(pending: Promise<void>[]) {
+  const results = await Promise.allSettled(pending);
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
+const warmupFinishes: Promise<void>[] = [];
 for (let i = 0; i < warmup; i++) {
   const admission = prepare();
   queueReceipt(admission);
-  admission.finish();
+  const pending = admission.finish();
+  if (pending) {
+    warmupFinishes.push(pending);
+  }
+}
+if (warmupFinishes.length > 0) {
+  await joinFinishes(warmupFinishes);
 }
 await setImmediate();
 const admissions = Array.from({ length: operations }, prepare);
+const pendingFinishes: Promise<void>[] = [];
 globalThis.gc();
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
@@ -72,7 +88,14 @@ const hostLoad = loadavg();
 const cpu = process.threadCpuUsage();
 const started = performance.now();
 for (const admission of admissions) {
-  admission.finish();
+  const pending = admission.finish();
+  if (pending) {
+    pendingFinishes.push(pending);
+  }
+}
+// Start every finish before joining, preserving synchronous receipt-drain order.
+if (pendingFinishes.length > 0) {
+  await joinFinishes(pendingFinishes);
 }
 const elapsedMs = performance.now() - started;
 const usage = process.threadCpuUsage(cpu);

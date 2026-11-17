@@ -107,10 +107,7 @@ it(
         });
         replaceSessionEntrySync(target, {
           ...loadExactSessionEntry(target)!.entry,
-          resumeAfterRestart: {
-            queuedInputIds: [],
-            ...(status === "done" ? { hadBackgroundExec: true } : {}),
-          },
+          resumeAfterRestart: { queuedInputIds: [] },
         });
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
         return target;

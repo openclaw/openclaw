@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
+  bindSynchronousSessionSource,
   composeSessionSourceAssertion,
   releaseSessionSourceAuthorities,
 } from "../config/sessions/session-source-authority.js";
@@ -29,6 +30,7 @@ import {
 } from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import {
   captureGatewayOperatorRunAuthority,
@@ -161,7 +163,9 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Without roles a profile carries no authority of its own; only the person's recorded
     // authenticated source for this session, revalidated on every use, supplies it.
     const scopes =
-      !cfg.gateway?.roles && recorded
+      recorded &&
+      (recorded.authority.openclawIdPrincipal?.kind === "member" ||
+        !isNamedOperatorRoleEnforcementEnabled(cfg))
         ? currentRecordedScopes(recorded.authority)
         : resolveOperatorRolePolicyForAssignment(
             params.profileId,
@@ -178,22 +182,22 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Fresh role-based principals keep their existing admission semantics. A
     // restart may additionally transfer the original authenticated custody;
     // source-less legacy sessions remain non-durable when roles authorize them.
-    if (
-      params.profileId !== GATEWAY_OWNER_PROFILE_ID &&
-      (params.preserveRecordedSource || !getConfig().gateway?.roles)
-    ) {
+    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        memberOnly:
+          !params.preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
         assertCurrent: () => params.assertCurrent?.(),
       });
     }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
+      openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
     });
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
@@ -207,20 +211,25 @@ async function prepareSessionPrincipalRunAccess(params: {
       internal: {
         syntheticClient: true,
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
+        openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
       },
     };
-    const assertPrincipalCurrent = () => {
-      params.assertCurrent?.();
-      access?.signal.throwIfAborted();
-      access?.assertCurrent();
-      if (params.preserveRecordedSource) {
-        recorded?.authority.assertCurrent();
-      }
-      // readScopes validates the retained identity before consuming its current role.
-      if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-        throw new Error("Session principal has no current run authority.");
-      }
-    };
+    const assertPrincipalCurrent = composeSessionSourceAssertion(
+      [params.assertCurrent],
+      (assertParent) => {
+        assertParent();
+        access?.signal.throwIfAborted();
+        access?.assertCurrent();
+        if (params.preserveRecordedSource) {
+          recorded?.authority.assertCurrent();
+        }
+        // readScopes validates the retained identity before consuming its current role.
+        if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
+          throw new Error("Session principal has no current run authority.");
+        }
+      },
+      params.preserveRecordedSource ? undefined : { synchronousCheck: true },
+    );
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client,
       context: params.context,
@@ -249,12 +258,13 @@ async function prepareSessionPrincipalRunAccess(params: {
     if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
       throw new Error("Session is unavailable for this principal.");
     }
+    const sharingSource = sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent;
+    // This synthetic principal's sharing owner has no caller-supplied policy callbacks.
+    bindSynchronousSessionSource(sharingSource);
     const assertCurrent = composeSessionSourceAssertion(
-      [sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent],
-      (assertSource) => {
-        assertPrincipalCurrent();
-        assertSource();
-      },
+      [assertPrincipalCurrent, sharingSource],
+      undefined,
+      { synchronousCheck: true },
     );
     assertCurrent();
     const signals = [access?.signal, recorded?.authority.signal].filter(
@@ -409,6 +419,8 @@ export async function resolveSessionMutationAuthorizationAsync(
         }
       };
       const readSource = initialFacts.readSource;
+      let previousFacts: typeof initialFacts | undefined;
+      let preparedRead: import("./session-sharing-read.js").PreparedMutationSharing;
       preparedTargets.push({
         ...target,
         storageTarget: retained.storageTarget,
@@ -418,7 +430,11 @@ export async function resolveSessionMutationAuthorizationAsync(
         prepareRead: retained.prepareRead,
         read: () => {
           const facts = readCurrent();
-          return {
+          if (facts === previousFacts) {
+            return preparedRead;
+          }
+          previousFacts = facts;
+          return (preparedRead = {
             target: facts.target && { ...facts.target, readSource },
             storageTarget: retained.storageTarget,
             members: [],
@@ -426,7 +442,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             assertCurrent: () => {
               readCurrent();
             },
-          };
+          });
         },
       });
     }

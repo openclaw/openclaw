@@ -141,7 +141,7 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
       if (!mirrored && params.mirror.sourceReplyFinal === true) {
         params.context.logGateway?.warn?.(
-          "Final source reply was delivered but could not be mirrored to the session transcript.",
+          "Final source reply was delivered but could not be mirrored to the chat history.",
           {
             channel: params.mirror.channel,
             sessionKey: params.mirror.sessionKey,

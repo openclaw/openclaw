@@ -41,6 +41,7 @@ import {
   captureManagedWorktreeSnapshot,
   verifyManagedWorktreeExactSnapshot,
 } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeRunEndCleanup,
@@ -71,7 +72,7 @@ export async function removeSettledManagedWorktree(
     snapshotRetentionMs: number;
   },
   timing: ReturnType<typeof startGitOperationTiming>,
-  prepareArchive?: (snapshot: string) => Promise<void>,
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>,
 ): Promise<RemoveManagedWorktreeResult> {
   const { env, getConfig, snapshotRetentionMs } = context;
   let params = input;
@@ -161,6 +162,7 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
+    const archive = await prepareArchive?.();
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;
@@ -248,7 +250,11 @@ export async function removeSettledManagedWorktree(
     if (
       (await checkHead()) !== head ||
       (snapshot &&
-        (await git.require(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions)) !== head)
+        (await git.require(
+          record.repoRoot,
+          ["rev-parse", worktreeSnapshotBase(snapshotRef!, snapshot)],
+          gitOptions,
+        )) !== head)
     ) {
       throw new Error(
         "Worktree HEAD changed after snapshot preparation; checkout and branch preserved.",
@@ -282,7 +288,7 @@ export async function removeSettledManagedWorktree(
       }
     }
     if (snapshot) {
-      await prepareArchive?.(snapshot);
+      await archive?.(snapshot);
     }
     // Pin the completed capture before deletion. Failed or interrupted deletion
     // must never replace it with a snapshot of a partially removed checkout.
@@ -375,6 +381,7 @@ export async function removeSettledManagedWorktree(
         }
         throw error;
       }
+      timing?.recordRecovery(snapshotRef);
       return {
         removed: true,
         ...(snapshotRef ? { snapshotRef } : {}),

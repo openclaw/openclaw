@@ -2,6 +2,7 @@
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { listChatRunningSessions } from "../../agents/bash-tools.exec-notify.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -62,6 +63,7 @@ export function resolveCronRecoveryClassification(
 }
 
 export async function finalizeCronRun(params: {
+  runId: string;
   prepared: PreparedCronRunContext;
   automationResult?: AutomationResult;
   execution: CronExecutionResult;
@@ -282,7 +284,25 @@ export async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
-  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
+  // Subagents are awaited: their output is this run's output. Background commands are neither
+  // awaited nor stopped, since they may be services; name the ones still running.
+  const runningCommandIds = listChatRunningSessions({
+    agentId: prepared.agentId,
+    sessionKey: prepared.runSessionKey,
+  })
+    .filter((session) => session.backgrounded)
+    .map((session) => session.id);
+  const runDiagnostics = mergeCronRunDiagnostics(
+    prepared.preflightDiagnostics,
+    agentDiagnostics,
+    runningCommandIds.length > 0
+      ? createCronRunDiagnosticsFromError(
+          "exec",
+          `Background commands still running after the run ended: ${runningCommandIds.join(", ")}. Inspect them with process log.`,
+          { severity: "info" },
+        )
+      : undefined,
+  );
   const resolveRunOutcome = (
     result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
   ) => {

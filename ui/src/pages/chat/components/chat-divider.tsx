@@ -145,7 +145,7 @@ function InlineNotice(props: ChatNoticeProps) {
         <span class="chat-notice-inline__icon" aria-hidden="true">
           <Icon name={props.item.icon ?? "cpu"} />
         </span>
-        <strong class="chat-notice-inline__label">{props.item.label}</strong>
+        <span class="chat-notice-inline__label">{props.item.label}</span>
         <Show when={props.item.showTimestamp}>
           <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
         </Show>

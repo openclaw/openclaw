@@ -26,7 +26,7 @@ import type {
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
-import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import type { SystemAgentOperatorProposal } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
@@ -152,7 +152,7 @@ export type GatewaySystemAgentSession = {
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
-    getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
+    getPendingOperatorProposal: () => SystemAgentOperatorProposal | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
@@ -625,12 +625,12 @@ export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
 
 export type SessionEventProjection = {
   payload: unknown;
-  /** Certifies a publication-owned envelope and stable row bytes; identical envelopes share encoding. */
-  serializeSession?: () => string;
+  /** Delivery-owned UTF-8 session field, including the closing payload brace. */
+  serializeSession?: () => Buffer;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  /** Producer-owned payload fragment; three segments preserve the shared message compression boundary. */
-  serializePayload?: () => readonly [Buffer] | readonly [Buffer, Buffer, Buffer];
+  /** Producer-owned payload fragments preserve shared message and session byte identity. */
+  serializePayload?: () => readonly Buffer[];
   delivered?: (client: GatewayClient) => void;
 };
 

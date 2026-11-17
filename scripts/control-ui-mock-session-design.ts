@@ -79,7 +79,7 @@ import type {
   ControlUiMockGateway,
   ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiMockSessionRow as sessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiMockSessionRow as sessionRow } from "../ui/src/test-helpers/control-ui-mock-session-row.ts";
 import { cronListResponseFixture } from "../ui/src/test-helpers/cron.ts";
 
 type SessionGitHubStatusParams = Static<typeof SessionGitHubStatusParamsSchema>;

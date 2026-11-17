@@ -139,6 +139,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         url: URL,
         auth: DashboardWindowAuth,
         websiteDataStore: WKWebsiteDataStore,
+        isolatesReadingTabs: Bool = false,
+        cookieRule: WKContentRuleList? = nil,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
@@ -170,6 +172,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             tlsParams: tlsParams,
             browserSessionLease: browserSessionLease)
         { controller in
+            if let cookieRule { controller.add(cookieRule) }
             for name in [
                 Self.linkMessageHandlerName,
                 Self.notificationsMessageHandlerName,
@@ -198,8 +201,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.documentHost = documentHost
         self.webView = documentHost.webView
 
-        let readingDataStore = browserSessionLease?.session == nil ? websiteDataStore : WKWebsiteDataStore
-            .nonPersistent()
+        let readingDataStore = browserSessionLease?.session == nil && !isolatesReadingTabs
+            ? websiteDataStore : WKWebsiteDataStore.nonPersistent()
         let dashboardPane = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
         self.nativeBrowser = DashboardNativeBrowserHost(
             dashboardWebView: self.webView,
@@ -765,7 +768,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.showDashboardFailure(
             error,
             message: error.localizedDescription,
-            detail: String(localized: "Choose Reload to try loading the dashboard again."))
+            detail: String(localized: "Choose Reload to try again."))
     }
 
     private func showDashboardFailure(_ error: Error, message: String, detail: String) {
@@ -778,7 +781,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(
-            title: String(localized: "Dashboard unavailable"),
+            title: String(localized: "OpenClaw unavailable"),
             message: message,
             detail: detail,
             url: self.currentURL)
@@ -818,6 +821,11 @@ extension DashboardWindowController {
             DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
             present: present,
             preservingPendingCommands: preservingPendingCommands)
+    }
+
+    func showRemoval(_ removal: MacOpenClawIDRemoval, present: Bool = true) {
+        self.signedOut = nil
+        self.showFailureHTML(DashboardFailurePage.html(removal: removal), present: present)
     }
 
     func showSignedOut(_ page: DashboardFailurePage.SignedOut, present: Bool, autoStart: Bool) {
@@ -1549,8 +1557,8 @@ extension DashboardWindowController {
             // A failure page instead of reload: a crash that recurs on load would loop.
             self.showDashboardFailure(
                 URLError(.networkConnectionLost),
-                message: String(localized: "The dashboard page stopped unexpectedly."),
-                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+                message: String(localized: "The page stopped unexpectedly."),
+                detail: String(localized: "Choose Reload to try again."))
         } else if self.nativeBrowser.owns(webView) {
             self.nativeBrowser.webContentProcessDidTerminate(webView)
         }
@@ -1593,7 +1601,7 @@ extension DashboardWindowController {
                     format: String(localized: "The Gateway returned HTTP %ld (%@)."),
                     response.statusCode,
                     HTTPURLResponse.localizedString(forStatusCode: response.statusCode).capitalized),
-                detail: String(localized: "Choose Reload to try loading the dashboard again."))
+                detail: String(localized: "Choose Reload to try again."))
             return
         }
         guard let tab = self.nativeBrowser.browserTab(for: webView) else {

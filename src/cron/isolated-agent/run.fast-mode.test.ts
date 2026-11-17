@@ -372,7 +372,10 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       }
       expectCall(h.dispatchCronDeliveryMock, {
         sourceSessionKey: source.sessionKey,
-        sourceSessionGeneration: sourceGeneration,
+        // A stored creating conversation is key-linked: its revision is not forwarded.
+        sourceSessionGeneration: isolated
+          ? { sessionId: sourceGeneration.sessionId, lifecycleRevision: undefined }
+          : sourceGeneration,
       });
     },
   );

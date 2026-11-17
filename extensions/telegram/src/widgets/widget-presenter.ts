@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTelegramAccount } from "../accounts.js";
 import { parseTelegramTarget } from "../targets.js";
+import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
   measureTelegramWidgetHtml,
   TELEGRAM_WIDGET_DATA_MAX_BYTES,
@@ -68,16 +70,23 @@ function resolveTelegramWidgetRoute(
     return undefined;
   }
   const target = parseTelegramTarget(to);
-  // Taps are routed back without a thread, so topics (bot-created or DM topics) stay unrouted.
-  const threadId = context.deliveryContext?.threadId;
+  // Private-chat topics are supported: taps return to the topic recorded with the sent widget.
+  const deliveryThread = context.deliveryContext?.threadId;
+  const deliveryThreadId =
+    deliveryThread == null || String(deliveryThread) === ""
+      ? undefined
+      : parseStrictPositiveInteger(deliveryThread);
   if (
     target.chatType !== "direct" ||
     target.directMessagesTopicId !== undefined ||
-    target.messageThreadId !== undefined ||
-    (threadId !== undefined && threadId !== null && String(threadId) !== "")
+    (deliveryThread != null && String(deliveryThread) !== "" && deliveryThreadId === undefined) ||
+    (target.messageThreadId !== undefined &&
+      deliveryThreadId !== undefined &&
+      target.messageThreadId !== deliveryThreadId)
   ) {
     return undefined;
   }
+  const messageThreadId = target.messageThreadId ?? deliveryThreadId;
   const account = resolveTelegramAccount({
     cfg,
     accountId: context.accountId ?? context.deliveryContext?.accountId,
@@ -86,7 +95,18 @@ function resolveTelegramWidgetRoute(
   if (!account.enabled || account.tokenStatus !== "available" || account.config.widgets !== true) {
     return undefined;
   }
-  return { cfg, accountId: account.accountId, to, chatId: target.chatId };
+  return {
+    cfg,
+    accountId: account.accountId,
+    chatId: target.chatId,
+    to:
+      messageThreadId === undefined
+        ? to
+        : buildTelegramConversationId({
+            chatId: target.chatId,
+            thread: { scope: "forum", id: messageThreadId },
+          }),
+  };
 }
 
 function widgetReceipt(messageId: number | string) {

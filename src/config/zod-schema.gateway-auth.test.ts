@@ -177,7 +177,6 @@ test.each([
 
 test.each([
   [{ default: "missing", definitions: { guest: validRole } }, "default"],
-  [{ definitions: { guest: validRole } }, "default"],
   [{ definitions: {} }, "definitions"],
 ] as const)("requires a role %s", (roles, field) => {
   expectSchemaIssue({ gateway: { roles } }, ["gateway", "roles", field]);
@@ -295,4 +294,18 @@ test("validates the realtime input transcription model as an optional string", (
     { talk: { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } } },
     ["talk", "realtime", "providers", "openai", "inputTranscriptionModel"],
   );
+});
+
+test("accepts role definitions without enabling named-role enforcement", () => {
+  expect(accepts({ gateway: { roles: { definitions: { guest: validRole } } } })).toBe(true);
+});
+
+test("requires a default for GitHub role assignments, including an empty mapping", () => {
+  for (const byGithubLogin of [{ octocat: "guest" }, {}]) {
+    expectSchemaIssue(
+      { gateway: { roles: { definitions: { guest: validRole }, assignments: { byGithubLogin } } } },
+      ["gateway", "roles", "assignments", "byGithubLogin"],
+      "gateway.roles.default",
+    );
+  }
 });
