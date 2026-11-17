@@ -20,7 +20,10 @@ import {
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../runtime-api.js";
@@ -371,6 +374,23 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           "channel-list",
         ],
         describeMessageTool: describeMSTeamsMessageTool,
+        prepareSendPayload: ({ ctx, payload, replyToIdSource }) => {
+          if (ctx.params.topLevel !== true && ctx.params.threadId !== null) {
+            return normalizeMessagePresentation(payload.presentation) ? payload : null;
+          }
+          if (replyToIdSource === "explicit") {
+            throw new Error(
+              "A new Teams post cannot be combined with replyTo. Use threadId to reply.",
+            );
+          }
+          return {
+            ...payload,
+            channelData: {
+              ...payload.channelData,
+              msteams: { ...asOptionalRecord(payload.channelData?.msteams), topLevel: true },
+            },
+          };
+        },
         extractToolSendResult: ({ result }) => extractMSTeamsToolSendResult(result),
         requiresTrustedRequesterSender: ({ action, toolContext }) =>
           normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() ===

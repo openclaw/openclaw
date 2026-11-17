@@ -12,6 +12,17 @@ function requireMentionEntity(result: ReturnType<typeof buildMSTeamsMessageActiv
 }
 
 describe("MSTeams message mentions", () => {
+  it("includes both native mention entities in a single activity", () => {
+    const result = buildMSTeamsMessageActivity(
+      "@[First Reviewer](29:first) @[Second Reviewer](29:second)",
+    );
+
+    expect(result.entities?.filter(({ type }) => type === "mention")).toMatchObject([
+      { mentioned: { id: "29:first", name: "First Reviewer" } },
+      { mentioned: { id: "29:second", name: "Second Reviewer" } },
+    ]);
+  });
+
   it.each([
     {
       label: "escaped brackets and backslash",

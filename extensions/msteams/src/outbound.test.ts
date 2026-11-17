@@ -7,11 +7,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
+  isMSTeamsNewChannelPost: vi.fn(),
   sendAdaptiveCardMSTeams: vi.fn(),
   sendMessageMSTeams: vi.fn(),
   sendPollMSTeams: vi.fn(),
   createPoll: vi.fn(),
   createMSTeamsPollStoreState: vi.fn(),
+}));
+
+// mock-isolation: supply conversation classification without reading the account's store.
+vi.mock("./send-context.js", () => ({
+  isMSTeamsNewChannelPost: mocks.isMSTeamsNewChannelPost,
 }));
 
 vi.mock("./send.js", () => ({
@@ -53,6 +59,7 @@ const render = (payload: Parameters<typeof renderPresentation>[0]["payload"]) =>
 
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
+    mocks.isMSTeamsNewChannelPost.mockReset().mockResolvedValue(true);
     mocks.sendMessageMSTeams.mockReset();
     mocks.sendAdaptiveCardMSTeams.mockReset();
     mocks.sendPollMSTeams.mockReset();
@@ -65,6 +72,68 @@ describe("msteamsOutbound cfg threading", () => {
     });
     mocks.sendAdaptiveCardMSTeams.mockResolvedValue(sendResult("msg-card-1", "conv-card-1"));
     mocks.createPoll.mockResolvedValue(undefined);
+  });
+
+  it("passes placement through the canonical message send payload", async () => {
+    const prepare = msteamsPlugin.actions!.prepareSendPayload!;
+    const text = "website update";
+    const payload = await prepare({
+      ctx: { cfg, channel: "msteams", action: "send", params: { topLevel: true } },
+      to: defaultTarget.to,
+      payload: { text },
+    });
+    assert(payload);
+
+    await sendPayload({ ...defaultTarget, text, payload });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text, topLevel: true }),
+    );
+  });
+
+  it("rejects a new post that would send multiple text chunks", async () => {
+    const text = "long post ".repeat(500);
+
+    await expect(
+      sendPayload({
+        ...defaultTarget,
+        text,
+        payload: { text, channelData: { msteams: { topLevel: true } } },
+      }),
+    ).rejects.toThrow("Text exceeds the single Teams post limit");
+
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal text chunking for a non-channel destination", async () => {
+    mocks.isMSTeamsNewChannelPost.mockResolvedValue(false);
+    const text = "long chat message ".repeat(350);
+    await sendPayload({
+      ...defaultTarget,
+      text,
+      payload: { text, channelData: { msteams: { topLevel: true } } },
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends long new-post presentations as one card", async () => {
+    const text = "long post ".repeat(500).trim();
+    const rendered = await render({
+      channelData: { msteams: { topLevel: true } },
+      presentation: { blocks: [{ type: "text", text }] },
+    });
+    assert(rendered);
+
+    await sendPayload({ ...defaultTarget, text: "", payload: rendered });
+
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        topLevel: true,
+        card: expect.objectContaining({ body: [{ type: "TextBlock", text, wrap: true }] }),
+      }),
+    );
   });
 
   it("caps lightweight and runtime outbound at 4000 characters", () => {

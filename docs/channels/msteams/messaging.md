@@ -84,6 +84,14 @@ If you set `requireMention: false` globally without an explicit `replyStyle`, me
 
 For proactive sends into a stored channel conversation (queued tool-call replies, long-running agents), the same team/channel resolution applies; group chats and personal (DM) conversations always resolve to `top-level` for proactive sends regardless of `replyStyle`.
 
+For a proactive message-tool send, set `topLevel: true` to start a new channel
+post while keeping the configured policy for ordinary replies. A destination
+that explicitly addresses a thread still takes precedence. Do not combine
+`topLevel` with `replyTo`. A new post must fit in one message. Use a presentation
+if its text would otherwise need to be split. New channel posts cannot combine
+text and an inline image because Teams delivers those as two separate
+activities. The placement option has no effect on private or group chats.
+
 ### Thread context preservation
 
 When `replyStyle: "thread"` is in effect and the bot was @mentioned from inside a channel thread, OpenClaw re-attaches the original thread root to the outbound conversation reference (`19:...@thread.tacv2;messageid=<root>`) so the reply lands inside the same thread. This holds for both live (in-turn) sends and proactive sends made after the Bot Framework turn context has expired (e.g., long-running agents, queued tool-call replies via `mcp__openclaw__message`).

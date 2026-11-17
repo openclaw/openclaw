@@ -145,6 +145,21 @@ beforeEach(() => {
 });
 
 describe("sendMessageMSTeams", () => {
+  it("rejects captioned inline images before creating multiple new channel posts", async () => {
+    mockContext({ conversationType: "channel" });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+      fileName: "image.png",
+      kind: "image",
+    });
+
+    await expect(sendFile({ topLevel: true, mediaUrl: "file:///tmp/image.png" })).rejects.toThrow(
+      "cannot combine text with an inline image",
+    );
+    expect(mockState.sendMSTeamsMessages).not.toHaveBeenCalled();
+  });
+
   it.each(["success", "observer failure", "persistence failure"] as const)(
     "settles an accepted consent card after %s",
     async (outcome) => {

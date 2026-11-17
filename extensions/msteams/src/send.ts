@@ -43,6 +43,7 @@ import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-
 import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
 
 type MSTeamsSendOptions = MSTeamsSendHandoff & {
+  topLevel?: boolean;
   onDeliveryResult?: (result: SendMSTeamsMessageResult) => Promise<void> | void;
 };
 
@@ -193,6 +194,7 @@ export async function sendMessageMSTeams(
     cfg,
     accountId,
     to,
+    ...(params.topLevel ? { topLevel: true } : {}),
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
@@ -332,6 +334,18 @@ async function sendTextWithMedia(
     mediaMaxBytes,
     replyStyle,
   } = ctx;
+  if (
+    options.topLevel &&
+    ctx.conversationType === "channel" &&
+    replyStyle === "top-level" &&
+    text &&
+    mediaUrl
+  ) {
+    throw new PlatformMessageNotDispatchedError(
+      "A new Teams channel post cannot combine text with an inline image.",
+      { cause: undefined, retryable: false },
+    );
+  }
   const messages =
     text && mediaUrl ? [{ text }, { mediaUrl }] : [{ text: text || undefined, mediaUrl }];
 
@@ -469,6 +483,7 @@ export async function sendAdaptiveCardMSTeams(
     cfg,
     accountId,
     to,
+    ...(params.topLevel ? { topLevel: true } : {}),
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
   const { conversationId } = ctx;

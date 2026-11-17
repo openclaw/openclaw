@@ -36,10 +36,65 @@ type MSTeamsProactiveReplyTarget =
 
 export type MSTeamsProactiveContext = Awaited<ReturnType<typeof resolveMSTeamsSendContext>>;
 
+function parseMSTeamsSendRecipient(to: string): {
+  type: "conversation" | "user";
+  id: string;
+  threadId?: string;
+} {
+  const trimmed = to.trim();
+  const finalize = (type: "conversation" | "user", id: string) => {
+    const normalized = id.trim();
+    if (!normalized) {
+      throw new Error(`Invalid target value: missing ${type} id`);
+    }
+    if (type === "conversation") {
+      const threadId = extractMSTeamsConversationMessageId(normalized);
+      const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
+      const slashIndex = normalizedConversationId.indexOf("/");
+      const graphChannelId =
+        slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
+      return {
+        type,
+        id:
+          graphChannelId && (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
+            ? graphChannelId
+            : normalizedConversationId,
+        ...(threadId ? { threadId } : {}),
+      };
+    }
+    return { type, id: normalized };
+  };
+  if (trimmed.startsWith("conversation:")) {
+    return finalize("conversation", trimmed.slice("conversation:".length));
+  }
+  if (trimmed.startsWith("user:")) {
+    return finalize("user", trimmed.slice("user:".length));
+  }
+  if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
+    return finalize("conversation", trimmed);
+  }
+  return finalize("user", trimmed);
+}
+
+/** Check placement limits without authenticating or opening a personal chat. */
+export async function isMSTeamsNewChannelPost(params: {
+  accountId: string;
+  to: string;
+}): Promise<boolean> {
+  const recipient = parseMSTeamsSendRecipient(params.to);
+  if (recipient.type !== "conversation" || recipient.threadId) {
+    return false;
+  }
+  const store = createMSTeamsConversationStoreState({ accountId: params.accountId });
+  const ref = await store.get(recipient.id);
+  return normalizeLowercaseStringOrEmpty(ref?.conversation?.conversationType) === "channel";
+}
+
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
+  topLevel?: boolean;
   /** Delivery authority for a Connector request this resolution makes itself. */
   assertDirectAdapterHandoff?: MSTeamsSendHandoff["assertDirectAdapterHandoff"];
 }) {
@@ -70,42 +125,7 @@ export async function resolveMSTeamsSendContext(params: {
 
   const store = createMSTeamsConversationStoreState({ accountId });
 
-  const recipient = ((): { type: "conversation" | "user"; id: string; threadId?: string } => {
-    const trimmed = params.to.trim();
-    const finalize = (type: "conversation" | "user", id: string) => {
-      const normalized = id.trim();
-      if (!normalized) {
-        throw new Error(`Invalid target value: missing ${type} id`);
-      }
-      if (type === "conversation") {
-        const threadId = extractMSTeamsConversationMessageId(normalized);
-        const normalizedConversationId = normalizeMSTeamsConversationId(normalized);
-        const slashIndex = normalizedConversationId.indexOf("/");
-        const graphChannelId =
-          slashIndex > 0 ? normalizedConversationId.slice(slashIndex + 1) : undefined;
-        return {
-          type,
-          id:
-            graphChannelId &&
-            (graphChannelId.startsWith("19:") || graphChannelId.includes("@thread"))
-              ? graphChannelId
-              : normalizedConversationId,
-          ...(threadId ? { threadId } : {}),
-        };
-      }
-      return { type, id: normalized };
-    };
-    if (trimmed.startsWith("conversation:")) {
-      return finalize("conversation", trimmed.slice("conversation:".length));
-    }
-    if (trimmed.startsWith("user:")) {
-      return finalize("user", trimmed.slice("user:".length));
-    }
-    if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
-      return finalize("conversation", trimmed);
-    }
-    return finalize("user", trimmed);
-  })();
+  const recipient = parseMSTeamsSendRecipient(params.to);
   const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
   const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
   const found = await (async (): Promise<{
@@ -237,7 +257,7 @@ export async function resolveMSTeamsSendContext(params: {
       ? { replyStyle: "thread", threadActivityId: recipient.threadId }
       : ((): MSTeamsProactiveReplyTarget => {
           const threadRootId = safeRef.threadId ?? safeRef.activityId;
-          if (conversationType !== "channel" || !threadRootId) {
+          if (params.topLevel || conversationType !== "channel" || !threadRootId) {
             return { replyStyle: "top-level" };
           }
           const routeConfig = resolveMSTeamsRouteConfig({
