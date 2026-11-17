@@ -49,6 +49,8 @@ export async function runDistArtifactChild(
           ...options,
           cwd: options.cwd ?? rootDir,
           args: distArtifactEntryArgs(script, args, options),
+          // This is node.exe, not a command shim; preserve file URLs without cmd expansion.
+          shell: false,
         });
       }
       const claim = `child-${randomUUID()}`;
