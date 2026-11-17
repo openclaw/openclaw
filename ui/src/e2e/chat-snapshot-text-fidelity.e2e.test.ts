@@ -17,7 +17,7 @@ function installTranscriptScrollWriteProbe() {
     before: number;
     after: number;
     failed: boolean;
-    stack: string[];
+    trace?: Error;
   }> = [];
   let armed = false;
   let dropped = 0;
@@ -28,15 +28,9 @@ function installTranscriptScrollWriteProbe() {
     }
     records.push(record);
   };
-  const selected = (element: Element) =>
-    armed && element.matches(".chat-pane-cache__pane--active .chat-thread");
-  const invoke = (element: Element, kind: string, call: () => unknown) => {
-    if (!selected(element)) {
-      return call();
-    }
-    const before = element.scrollTop;
-    const atMs = performance.now();
-    const stack = (new Error().stack ?? "")
+  // Format captured call sites only after the geometry observation finishes.
+  const readStack = (trace?: Error) =>
+    (trace?.stack ?? "")
       .split("\n")
       .flatMap((line) => {
         const frame = line.match(
@@ -45,6 +39,15 @@ function installTranscriptScrollWriteProbe() {
         return frame ? [`${frame[1]}:${frame[2]}:${frame[3]}`] : [];
       })
       .slice(0, 6);
+  const selected = (element: Element) =>
+    armed && element.matches(".chat-pane-cache__pane--active .chat-thread");
+  const invoke = (element: Element, kind: string, call: () => unknown) => {
+    if (!selected(element)) {
+      return call();
+    }
+    const before = element.scrollTop;
+    const atMs = performance.now();
+    const trace = new Error();
     let failed = false;
     try {
       return call();
@@ -52,7 +55,7 @@ function installTranscriptScrollWriteProbe() {
       failed = true;
       throw error;
     } finally {
-      remember({ atMs, kind, before, after: element.scrollTop, failed, stack });
+      remember({ atMs, kind, before, after: element.scrollTop, failed, trace });
     }
   };
   const top = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
@@ -89,7 +92,6 @@ function installTranscriptScrollWriteProbe() {
         before: offset,
         after: offset,
         failed: false,
-        stack: [],
       });
     }
   };
@@ -98,7 +100,17 @@ function installTranscriptScrollWriteProbe() {
     arm: () => {
       armed = true;
     },
-    read: () => ({ records, dropped }),
+    read: () => ({
+      records: records.map(({ atMs, kind, before, after, failed, trace }) => ({
+        atMs,
+        kind,
+        before,
+        after,
+        failed,
+        stack: readStack(trace),
+      })),
+      dropped,
+    }),
     stop: () => {
       armed = false;
       document.removeEventListener("scroll", scroll, true);
