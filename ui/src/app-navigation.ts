@@ -1,6 +1,6 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import type { RouteId } from "./app-route-paths.ts";
+import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -368,8 +368,17 @@ export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
-export function isSettingsTakeover(routeId: RouteId | undefined): boolean {
-  return routeId !== undefined && isSettingsNavigationRoute(routeId);
+export function isSettingsTakeover(
+  routeId: RouteId | undefined,
+  tabs?: readonly PluginTab[],
+  location?: { pathname: string; search: string },
+  basePath = "",
+): boolean {
+  return (
+    (routeId !== undefined && isSettingsNavigationRoute(routeId)) ||
+    (routeId === "plugin" &&
+      pluginTabForLocation(tabs, location, basePath)?.placement === "settings")
+  );
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {

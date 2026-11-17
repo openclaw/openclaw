@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { page, server, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -22,6 +22,8 @@ const getSearch = () => container.querySelector<HTMLInputElement>(modelControlSe
 const option = (value: string) =>
   container.querySelector<HTMLButtonElement>(modelControlSelector("option", value))!;
 let dispose: (() => void) | undefined;
+// Keep cold Vite compilation outside interaction readiness checks on concurrent shards.
+beforeAll(() => import("./chat-model-picker-panel.tsx"));
 afterEach(() => {
   dispose?.();
   container.replaceChildren();
@@ -139,10 +141,37 @@ it("centers provider icons with their model labels in search results", async () 
   for (const value of ["openai/sol", "clawrouter/astra"]) {
     const row = option(value);
     const icon = row.querySelector<HTMLElement>(".provider-brand-icon")!.getBoundingClientRect();
-    const name = row
-      .querySelector<HTMLElement>(".chat-controls__model-option-name")!
-      .getBoundingClientRect();
-    expect(Math.abs(icon.y + icon.height / 2 - name.y - name.height / 2)).toBeLessThan(0.5);
+    const label = row.querySelector<HTMLElement>(".chat-controls__model-option-name")!;
+    const name = label.getBoundingClientRect();
+    try {
+      expect(Math.abs(icon.y + icon.height / 2 - name.y - name.height / 2)).toBeLessThan(0.5);
+    } catch (error) {
+      // Preserve the failing sample; collect extra layout state only after the assertion fails.
+      const style = getComputedStyle(label);
+      const surface = row.closest<HTMLElement>(".chat-picker-overlay")!;
+      console.error(
+        "Model picker alignment diagnostics",
+        JSON.stringify({
+          value,
+          browser: server.browser,
+          devicePixelRatio: window.devicePixelRatio,
+          fontsStatus: document.fonts.status,
+          icon: icon.toJSON(),
+          name: name.toJSON(),
+          lineHeight: style.lineHeight,
+          fontFamily: style.fontFamily,
+          rowAlignItems: getComputedStyle(row).alignItems,
+          overlayPhase: surface.dataset.phase,
+          overlayTransform: getComputedStyle(surface).transform,
+          overlayAnimations: surface.getAnimations().map((animation) => ({
+            playState: animation.playState,
+            currentTime: animation.currentTime,
+            timing: animation.effect?.getComputedTiming(),
+          })),
+        }),
+      );
+      throw error;
+    }
     expect(name.x - icon.right).toBeGreaterThanOrEqual(6);
   }
 });
@@ -468,7 +497,7 @@ it.each([
 });
 
 it.each(["trigger", "Escape", "selection"])(
-  "retains provider toggles after closing through %s",
+  "reopens on the selected model's provider after closing through %s",
   async (close) => {
     const { picker, trigger, toggle, open, update, params } = mountPicker();
     await open();
@@ -501,16 +530,14 @@ it.each(["trigger", "Escape", "selection"])(
     expect(search.value).toBe("");
     update();
     await toggle(() => userEvent.click(trigger));
-    expect(option("example/beta")).toBeNull();
-    expectExpanded();
-    await vi.waitFor(() => {
-      const visible = option("other/gamma");
-      expect(visible).toMatchObject({ hidden: false });
-      expect(visible.checkVisibility()).toBe(true);
-    });
-    trigger.focus();
-    await toggle(() => userEvent.keyboard("1"));
-    expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
+    // A provider tab without the selected model never survives closing.
+    await vi.waitFor(() =>
+      expect([
+        providerToggle("example").ariaSelected,
+        providerToggle("other").ariaSelected,
+      ]).toEqual(["true", "false"]),
+    );
+    expect(option("other/gamma")).toBeNull();
   },
 );
 

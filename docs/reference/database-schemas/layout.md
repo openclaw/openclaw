@@ -104,6 +104,15 @@ system input admitted under the owning session's current principal. Finished row
 their logs follow the registry's bounded result retention and explicit removal. A
 session reset invalidates completion eligibility through the recorded session ID.
 
+The same table also holds a best-effort row with `kind: "ordinary"` for each running
+ordinary (non-durable) background command whose exit would wake its conversation,
+except in incognito sessions. It carries the same bounded fields, with the generic
+command summary, no unit, and a `sandboxed` flag for sandbox commands. The registry writes it when the command is backgrounded and deletes it when
+the command exits while the Gateway runs. On startup the registry reports each remaining
+row as lost through the same completion path, then deletes it. The Gateway boot record
+tells it whether the previous Gateway shut down or crashed while the command ran. An older binary reads such a row as a durable process with a missing unit
+and reports it as lost, which remains accurate.
+
 ### Linux database page cache
 
 After readiness, the Gateway samples Linux file-cache residency and checks it again

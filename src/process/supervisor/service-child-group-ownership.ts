@@ -1,9 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import fs from "node:fs/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import {
+  isPidDefinitelyDead,
+  isPidDefinitelyDeadAsync,
+  parseLinuxProcessStat,
+} from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
+import type { ReleasedProcess } from "./types.js";
 
 export type ProcessCommand =
   | {
@@ -96,6 +102,31 @@ export function killOwnedProcessGroupMembers(): void {
   }
 }
 
+type ProcessGroupMember = {
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+};
+
+function parseLinuxProcessGroupMember(pid: number, stat: string) {
+  const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
+  if (!match || Number(match[1]) !== pid) {
+    throw new Error("Process group census is unavailable");
+  }
+  return { pid, ppid: Number(match[3]), pgid: Number(match[4]), state: match[2]! };
+}
+
+/** Membership and birth come from one row, immediately before a caller's signal. */
+export async function readLinuxProcessGroupMemberAsync(pid: number) {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+  return {
+    ...parseLinuxProcessGroupMember(pid, stat),
+    startedAt: parseLinuxProcessStat(pid, stat)?.startedAt ?? null,
+  };
+}
+
 /** The caller supplies command inspection; group cleanup only reads native topology. */
 export function* readProcessGroupMembers(
   timeoutMs: number,
@@ -105,13 +136,7 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<{
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-}> {
+): Generator<ProcessGroupMember> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -158,8 +183,8 @@ export function* readProcessGroupMembers(
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
       // A task reaped during do_task_stat can retain the kernel's pgid=-1 sentinel.
-      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
-      if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
+      const member = parseLinuxProcessGroupMember(pid, stat);
+      if (Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }
       if (argv?.length === 0) {
@@ -181,12 +206,12 @@ export function* readProcessGroupMembers(
       }
       yield {
         pid,
-        pgid: Number(match[4]),
-        state: match[2]!,
+        pgid: member.pgid,
+        state: member.state,
         ...(argv
-          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          ? { command: { ppid: member.ppid, argv, ...(uid === undefined ? {} : { uid }) } }
           : opaqueForeignOwner && uid !== undefined
-            ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
+            ? { command: { ppid: member.ppid, argvUnavailable: true, uid } }
             : {}),
       };
     }
@@ -300,6 +325,73 @@ export function isProcessGroupGoneByCensus(pgid: number): boolean {
   }
 }
 
+/** Runtime group cleanup needs topology; command inspection retains its synchronous contract. */
+export async function* readLinuxProcessGroupMembersAsync(
+  timeoutMs: number,
+): AsyncGenerator<ReturnType<typeof parseLinuxProcessGroupMember>> {
+  if (process.platform !== "linux") {
+    throw new Error("Asynchronous Linux process census requires Linux");
+  }
+  const deadline = Date.now() + timeoutMs;
+  for (const name of await fs.readdir("/proc")) {
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    if (!/^\d+$/.test(name)) {
+      continue;
+    }
+    const pid = Number(name);
+    let stat: string;
+    try {
+      stat = await fs.readFile(`/proc/${name}/stat`, "utf8");
+    } catch (error) {
+      // Foreign processes may disappear between enumeration and their stat read.
+      if (pid !== process.pid && ["ENOENT", "ESRCH"].includes(extractErrorCode(error) ?? "")) {
+        continue;
+      }
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    yield parseLinuxProcessGroupMember(pid, stat);
+  }
+  if (Date.now() >= deadline) {
+    throw new Error("Process group census exceeded its deadline");
+  }
+}
+
+export async function isOwnProcfsAsync(): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return (await fs.readlink("/proc/self")) === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/** Runtime denied-probe observation; no synchronous procfs fallback. */
+export async function isProcessGroupGoneByCensusAsync(pgid: number): Promise<boolean> {
+  if (!(await isOwnProcfsAsync())) {
+    return false;
+  }
+  try {
+    for await (const member of readLinuxProcessGroupMembersAsync(1_000)) {
+      if (
+        member.pgid === pgid &&
+        (!member.state.startsWith("Z") || !(await isPidDefinitelyDeadAsync(member.pid)))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Advisory retirement timing only; the host owns kernel group-disappearance proof. */
 export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | undefined {
   let observedOwner = false;
@@ -320,4 +412,128 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
     return undefined;
   }
   return observedOwner ? false : undefined;
+}
+
+const MAX_RELEASED_COMMAND_CHARS = 200;
+
+type ProcessRow = { pid: number; ppid: number; pgid: number; live: boolean; command?: string };
+
+function readLinuxProcessRow(pid: number): ProcessRow | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean)
+      .join(" ");
+    return {
+      pid,
+      ppid: Number(fields[1]),
+      pgid: Number(fields[2]),
+      live: fields[0] !== "Z" && fields[0] !== "X",
+      command: command || undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readProcessRows(): ProcessRow[] {
+  if (process.platform === "linux") {
+    return readdirSync("/proc")
+      .filter((name) => /^\d+$/.test(name))
+      .flatMap((name) => readLinuxProcessRow(Number(name)) ?? []);
+  }
+  const listing = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,command="], {
+    encoding: "utf8",
+    timeout: 1_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (listing.status !== 0 || listing.error) {
+    throw listing.error ?? new Error(`ps exited with status ${String(listing.status)}`);
+  }
+  return listing.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            ppid: Number(match[2]),
+            pgid: Number(match[3]),
+            live: !match[4]!.startsWith("Z"),
+            command: match[5]!.trim() || undefined,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * Name every live process a command left behind: members of the owner's group,
+ * caller-observed children (adopted orphans), and all of their descendants, even
+ * those that started a new session. The owner's own helpers (its direct children
+ * other than the command root) and their descendants are not the command's.
+ * Undefined when the process table cannot be read: the caller must then stop the
+ * tree instead of releasing processes it cannot account for.
+ */
+export function describeReleasedProcesses(
+  rootPid: number | undefined,
+  adoptedPids: readonly number[] = [],
+): ReleasedProcess[] | undefined {
+  let rows: ProcessRow[];
+  try {
+    rows = readProcessRows();
+  } catch {
+    return undefined;
+  }
+  if (rows.length === 0) {
+    return undefined;
+  }
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    const siblings = children.get(row.ppid);
+    if (siblings) {
+      siblings.push(row);
+    } else {
+      children.set(row.ppid, [row]);
+    }
+  }
+  const closure = (seeds: Iterable<number>) => {
+    const found = new Set<number>();
+    const queue = [...seeds];
+    for (let pid = queue.pop(); pid !== undefined; pid = queue.pop()) {
+      if (found.has(pid)) {
+        continue;
+      }
+      found.add(pid);
+      queue.push(...(children.get(pid) ?? []).map((child) => child.pid));
+    }
+    return found;
+  };
+  // Only children the owner itself started are helpers (a source loader's compiler, for
+  // example). Orphans the Linux subreaper adopted are the command's, not the owner's.
+  const helpers = closure(
+    (children.get(process.pid) ?? [])
+      .filter((row) => row.pid !== rootPid && !adoptedPids.includes(row.pid))
+      .map((row) => row.pid),
+  );
+  const seeds = rows
+    .filter((row) => adoptedPids.includes(row.pid) || row.pgid === process.pid)
+    .map((row) => row.pid)
+    .filter((pid) => pid !== process.pid && !helpers.has(pid));
+  const released = closure(seeds);
+  return rows
+    .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
+    .toSorted((left, right) => left.pid - right.pid)
+    .map(({ pid, command }) =>
+      command === undefined
+        ? { pid }
+        : {
+            pid,
+            command:
+              command.length > MAX_RELEASED_COMMAND_CHARS
+                ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
+                : command,
+          },
+    );
 }

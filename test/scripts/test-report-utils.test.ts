@@ -13,11 +13,15 @@ const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
 }));
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  spawnSyncMock.mockImplementation(actual.spawnSync);
   return {
     ...actual,
-    spawnSync: spawnSyncMock.mockImplementation(actual.spawnSync),
+    default: { ...actual.default, spawnSync: spawnSyncMock },
+    spawnSync: spawnSyncMock,
   };
 });
 

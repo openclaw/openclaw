@@ -12,6 +12,7 @@ import {
   registerEmbeddingCapabilityCliTests,
 } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import { registerMediaPathCapabilityCliTests } from "./capability-cli.media-paths.test-support.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -1521,27 +1522,7 @@ describe("capability cli", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["audio", "transcribe", "memo.wav"],
-    ["video", "describe", "clip.mp4"],
-  ] as const)("reads the selected %s through a symlink parent", async (kind, action, name) => {
-    const root = await fs.realpath(tempDirs.make("infer-media-parent-"));
-    const physical = path.join(root, "physical");
-    const selected = path.join(physical, name);
-    await fs.mkdir(path.join(physical, "nested"), { recursive: true });
-    await fs.symlink(path.join(physical, "nested"), path.join(root, "link"), "dir");
-    await fs.writeFile(path.join(physical, "payload.bin"), "selected input bytes");
-    await fs.symlink("payload.bin", selected);
-    await fs.writeFile(path.join(root, name), "lexical decoy bytes");
-    const runtime = kind === "audio" ? mocks.transcribeAudioFile : mocks.describeVideoFile;
-    runtime.mockImplementationOnce(async ({ filePath }) => ({
-      text: await fs.readFile(filePath, "utf8"),
-    }));
-    await runCap("infer", kind, action, "--file", `${root}/link/../${name}`, "--json");
-    expect(firstJsonOutput()).toMatchObject({
-      outputs: [{ path: selected, text: "selected input bytes" }],
-    });
-  });
+  registerMediaPathCapabilityCliTests({ mocks, tempDirs, firstJsonOutput });
   it("reports actual audio attribution and forwards request hints", async () => {
     const hints = { language: "en", prompt: "Focus on names" };
     mocks.transcribeAudioFile.mockResolvedValueOnce({
@@ -1993,23 +1974,19 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([undefined, "firecrawl"])(
-    "rejects disabled web fetch with provider %s",
-    async (provider) => {
-      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
-
-      const args = [
-        "--url",
-        "https://example.com",
-        ...(provider ? ["--provider", provider] : []),
-        "--json",
-      ];
-      await expect(runCapability("web", "fetch", ...args)).rejects.toThrow("exit 1");
-
-      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { enabled: false, provider: undefined },
+    { enabled: false, provider: "firecrawl" },
+    { enabled: true, provider: "nosuch" },
+  ])("rejects fetch preflight ($enabled, $provider)", async ({ enabled, provider }) => {
+    mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled } } } });
+    const args = cliOptions({ url: "https://example.com", provider, json: true });
+    const run = runCapability("web", "fetch", ...args);
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow(enabled ? "not available" : "tools.web.fetch.enabled");
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
 
   it.each([
     {

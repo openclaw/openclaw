@@ -424,6 +424,7 @@ describe("public ClawHub Template catalog", () => {
     expect(detail).toMatchObject({
       packageName: personalPackageName,
       version,
+      agentId: "research-briefing",
       agentName: "Research Briefing",
       channel: "community",
       official: false,
@@ -438,6 +439,39 @@ describe("public ClawHub Template catalog", () => {
         automations: [{ name: "Daily briefing", enabled: false }],
       },
     });
+  });
+
+  it("reports the exact release's audit, publication date and categories for the detail rail", async () => {
+    mocks.detail.mockResolvedValue({
+      package: { ...officialPackage(), createdAt: 1, categories: ["research", ""] },
+      owner: { handle: "openclaw", official: true },
+    });
+    mocks.security.mockResolvedValue(matchingSecurity);
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(mocks.security).toHaveBeenCalledWith(
+      expect.objectContaining({ name: packageName, version }),
+    );
+    expect(detail).toMatchObject({
+      createdAtMs: 1,
+      categories: ["research"],
+      security: { verdict: "benign", auditUrl: matchingSecurity.securityAuditUrl },
+    });
+  });
+
+  it.each([
+    ["another release", { ...matchingSecurity, release: { version: "0.9.0" } }],
+    ["a failed audit read", new Error("audit unavailable")],
+  ])("keeps the detail and shows no audit for %s", async (_name, security) => {
+    if (security instanceof Error) {
+      mocks.security.mockRejectedValue(security);
+    } else {
+      mocks.security.mockResolvedValue(security);
+    }
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(detail.version).toBe(version);
+    expect(detail).not.toHaveProperty("security");
   });
 
   it("discloses and previews bundled skills only from the verified artifact", async () => {
@@ -525,6 +559,28 @@ describe("public ClawHub Template catalog", () => {
       },
     });
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
+  });
+
+  it("lists a binary workspace file without an excerpt and declines its preview", async () => {
+    await fs.rm(path.join(fixtureRoot, "BOOTSTRAP.md"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      packageJson(packageName, version, "CLAW.md"),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "icon.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: travel }\nworkspace:\n  files:\n    - { source: icon.png, path: assets/icon.png }\n---\n# Travel planner\n",
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(detail.contents.instructions).toContainEqual({
+      name: "assets/icon.png",
+      source: "icon.png",
+    });
+    await expectCode(previewContent("instruction", "assets/icon.png"), "clawhub_preview_not_text");
   });
 
   it("starts exact-release reads together and reuses their artifact metadata", async () => {
@@ -828,6 +884,24 @@ describe("verified ClawHub Template source", () => {
     mocks.download.mockClear();
     await expectCode(resolveRef("@mallory/research-briefing"), "clawhub_identity_mismatch");
     expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("previews a publisher-qualified reference to a Template stored under an unscoped name", async () => {
+    await selectPackage({ ...communityPackage(), name: "research-briefing" });
+    const preview = (ref: string) =>
+      readClawHubTemplatePreview({
+        packageName: ref,
+        version,
+        kind: "instruction",
+        name: "USER.md",
+      });
+
+    await expect(preview(personalPackageName)).resolves.toEqual({
+      kind: "instruction",
+      name: "USER.md",
+      content: "# Reader preferences\n",
+    });
+    await expectCode(preview("@mallory/research-briefing"), "clawhub_identity_mismatch");
   });
 
   it("requires personal-release risk acknowledgement and never persists denied content", async () => {

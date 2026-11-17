@@ -19,7 +19,6 @@ import {
   isOperatorAuthorityUnavailable,
 } from "../infra/operator-authority-error.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   intersectOperatorScopes,
   resolveMissingOperatorScope,
@@ -31,6 +30,7 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  bindGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -76,19 +76,6 @@ type OperatorSourceBucket = {
   entries: Set<OperatorSource>;
 };
 const operatorSources = new WeakMap<object, OperatorSourceBucket>();
-const continuationAuthorities = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
-  () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
-);
-
-/** Accepted continuations retain policy custody independently of a recovered work claim. */
-export function bindGatewayOperatorContinuationAuthority(
-  work: AdmittedRunOperatorAuthority,
-  source: AdmittedRunOperatorAuthority,
-): void {
-  continuationAuthorities.set(work, source);
-}
-
 function getOperatorSources(owner: object): OperatorSourceBucket {
   let sources = operatorSources.get(owner);
   if (!sources) {
@@ -294,8 +281,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  /** Only an accepting work owner may outlive the original scheduling claim. */
-  independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -316,25 +301,21 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmittedRunOperatorAuthority(inherited);
     inherited.assertCurrent();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
-    const continuation = continuationAuthorities.get(inherited);
-    const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
     const authority = roleScopesAllow({
       role: "operator",
-      requestedScopes: source.scopes,
+      requestedScopes: inherited.scopes,
       allowedScopes: scopes,
     })
-      ? source
+      ? inherited
       : createAdmittedRunOperatorAuthority({
-          ...source,
+          ...inherited,
           scopes,
           get modelPolicy() {
-            return source.modelPolicy;
+            return inherited.modelPolicy;
           },
         });
-    if (continuation && !params.independentContinuation && authority !== inherited) {
-      continuationAuthorities.set(authority, continuation);
-    }
-    return { authority, release: source.retain?.() ?? (() => {}) };
+    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
+    return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
@@ -482,11 +463,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const assertSourceCurrent = composeSessionSourceAssertion(
     sourceAuthorities.map((authority) =>
-      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
-        authority?.signal?.throwIfAborted();
-        assertSource();
-        authority?.signal?.throwIfAborted();
-      }),
+      composeSessionSourceAssertion(
+        [authority?.assertCurrent],
+        (assertSource) => {
+          authority?.signal?.throwIfAborted();
+          assertSource();
+          authority?.signal?.throwIfAborted();
+        },
+        { synchronousCheck: true },
+      ),
     ),
     (assertSources) => {
       if (revoked || references === 0) {
@@ -522,18 +507,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
         );
       }
     },
+    { synchronousCheck: true },
   );
-  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    try {
-      assertSource();
-      assertRoleCurrent();
-    } catch (error) {
-      if (!isOperatorAuthorityUnavailable(error)) {
-        revoked = true;
+  const assertCurrent = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      try {
+        assertSource();
+        assertRoleCurrent();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoke(error);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+    { synchronousCheck: true },
+  );
   const releaseHold = () => {
     let released = false;
     return () => {
@@ -705,6 +695,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&

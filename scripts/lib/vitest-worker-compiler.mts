@@ -19,6 +19,7 @@ import {
 } from "./runtime-process-core-build-entries.mts";
 import { createSqliteSchemaAssetsPlugin } from "./sqlite-schema-assets.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
+import { isCiLikeEnv } from "./vitest-local-scheduling.mts";
 import {
   hashVitestWorkerArtifact,
   verifyVitestWorkerArtifacts,
@@ -61,10 +62,14 @@ async function compileVitestWorkerArtifacts(
     );
   }
   if (restored) {
-    await writeVitestWorkerManifest(directory, restored.inputs, restored.outputs, started, {
-      restored: true,
-      cacheSignature: restored.cacheSignature,
-    });
+    const manifest = await prepareVitestWorkerManifest(
+      directory,
+      restored.inputs,
+      restored.outputs,
+      started,
+      { restored: true, cacheSignature: restored.cacheSignature },
+    );
+    fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
     console.error("[vitest-workers] reused local compiler outputs");
     return;
   }
@@ -167,7 +172,7 @@ async function compileVitestWorkerArtifacts(
         load(id) {
           recordInput(id);
           // Keep schema loading in this callback instead of crossing into JS twice per input.
-          return schemaPlugin.load.call(
+          return schemaPlugin.load.handler.call(
             {
               addWatchFile: (file) => {
                 recordInput(file);
@@ -476,7 +481,13 @@ async function compileVitestWorkerArtifacts(
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (preset === "runtime") {
     await compileShared();
-  } else if (preset === "full" && cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  } else if (
+    preset === "full" &&
+    cache &&
+    !isCiLikeEnv(process.env) &&
+    process.availableMemory() >= 8 * 1024 ** 3
+  ) {
+    // CI cache opt-in must not also enable the larger overlapping compiler graphs.
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
@@ -509,17 +520,19 @@ async function compileVitestWorkerArtifacts(
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
-  const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started);
+  const manifest = await prepareVitestWorkerManifest(directory, inputs, outputs, started);
   reportPhase("compiler outputs verified");
   if (cache) {
     manifest.cacheSignature = await cache.seal(manifest);
     reportPhase("compiler cache inputs sealed");
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`);
+  fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
+    flag: "wx",
+  });
 }
 
-async function writeVitestWorkerManifest(
+async function prepareVitestWorkerManifest(
   directory: string,
   inputs: Record<string, string>,
   outputs: Record<string, string>,
@@ -551,11 +564,6 @@ async function writeVitestWorkerManifest(
     await verifyVitestWorkerArtifacts(directory, manifest);
   }
   manifest.durationMs = performance.now() - started;
-  fs.writeFileSync(
-    path.join(directory, "manifest.json"),
-    `${JSON.stringify(manifest)}\n`,
-    restored ? {} : { flag: "wx" },
-  );
   return manifest;
 }
 

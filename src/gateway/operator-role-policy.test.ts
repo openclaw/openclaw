@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertOperatorModelAllowed,
@@ -13,6 +13,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
@@ -33,7 +34,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
@@ -169,6 +170,45 @@ function expectRole(
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("operator role policy", () => {
+  it("indexes frozen login assignments and rescans mutable maps for live guest restrictions", () => {
+    const cfg = roleConfig();
+    const roles = cfg.gateway!.roles!;
+    roles.default = "maintainer";
+    const assignments = { " Mixed-Case ": "guest", " MIXED-CASE ": "maintainer" };
+    roles.assignments = { byGithubLogin: freezeJsonSnapshot(assignments) };
+    const keys = vi.spyOn(Object, "keys");
+    try {
+      for (let i = 0; i < 3; i++) {
+        expect(resolveOperatorRoleSelection("person", null, cfg, "mixed-case")).toEqual({
+          effectiveRole: "guest",
+          roleSource: "githubLogin",
+        });
+        expect(resolveOperatorRoleSelection("person", null, cfg, "missing")).toEqual({
+          effectiveRole: "maintainer",
+          roleSource: "default",
+        });
+      }
+      expect(keys.mock.calls.filter(([value]) => value === assignments)).toHaveLength(1);
+      const mutable: Record<string, string> = {};
+      roles.assignments.byGithubLogin = mutable;
+      setRuntimeConfigSnapshot(cfg);
+      expect(resolveOperatorRolePolicyForAssignment("person", null, cfg, "mixed-case")).toEqual(
+        roles.definitions.maintainer,
+      );
+      mutable[" Mixed-Case "] = "guest";
+      expect(resolveOperatorRolePolicyForAssignment("person", null, cfg, "mixed-case")).toEqual(
+        guestRole,
+      );
+      delete mutable[" Mixed-Case "];
+      expect(resolveOperatorRoleSelection("person", null, cfg, "mixed-case").effectiveRole).toBe(
+        "maintainer",
+      );
+    } finally {
+      keys.mockRestore();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("resolves verified GitHub login assignments with explicit precedence and live config", () =>
     inState(async () => {
       const person = github(42, "Release-Operator");
@@ -191,9 +231,27 @@ describe("operator role policy", () => {
       roles.assignments.byGithubLogin = {};
       publishOperatorRoleConfigChange({});
       expectRole(person.id, cfg, guestRole);
-      roles.assignments.byGithubLogin = { "release-operator": "maintainer" };
+      let enumerations = 0;
+      roles.assignments.byGithubLogin = new Proxy(
+        {
+          ...Object.fromEntries(
+            Array.from({ length: 2_000 }, (_value, i) => [`person-${i}`, "guest"]),
+          ),
+          "release-operator": "maintainer",
+        },
+        {
+          ownKeys(target) {
+            enumerations += 1;
+            return Reflect.ownKeys(target);
+          },
+        },
+      );
       publishOperatorRoleConfigChange({});
       expectRole(person.id, cfg, roles.definitions.maintainer);
+      roles.assignments.byGithubLogin["release-operator"] = "guest";
+      expectRole(person.id, cfg, guestRole);
+      roles.assignments.byGithubLogin["release-operator"] = "maintainer";
+      expect(enumerations).toBe(0);
       const access = resolveGatewayOperatorAccessAuthority(person.id, cfg);
       expect(access?.gatewayAccessGrant).toBeNull();
       expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);

@@ -1,11 +1,11 @@
 import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { bindInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -42,7 +42,7 @@ export async function runSessionsSendA2AFlow(params: {
   requesterSessionKey?: string;
   requesterAgentId?: string;
   requesterSession?: AgentStepSession;
-  requesterDeliveryGeneration?: SessionDeliveryGeneration;
+  requesterDeliveryGeneration?: ChatRef;
   requesterOrigin?: DeliveryContext;
   requester?: Parameters<typeof runAgentStep>[0]["requester"];
   requesterChannel?: string;

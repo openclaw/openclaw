@@ -56,9 +56,9 @@ struct AgentProTab: View {
 
     var body: some View {
         self.destination(for: self.directRoute)
-            .toolbar(
-                self.directRoute != .agents && self.headerSidebarAction != nil ? .hidden : .visible,
-                for: .navigationBar)
+            .modifier(OpenClawSidebarRevealToolbarVisibility(action: self.headerSidebarAction) { isRevealShown in
+                self.directRoute != .agents && isRevealShown ? .hidden : .visible
+            })
             .task(id: self.rosterTaskID) {
                 await self.refreshAgents()
             }

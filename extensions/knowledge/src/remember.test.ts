@@ -99,6 +99,21 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   const { evidence } = await f.record(replay.items[0]!.id);
   expect(evidence!.map((e) => e.verified)).toStrictEqual([true]);
   expect((await f.service.remember(input, f.owner)).items).toStrictEqual(replay.items);
+  for (const change of [
+    { excerpt: "A different supporting excerpt." },
+    { attribution: "Another synthetic speaker" },
+    { items: [{ ...items[0]!, text: "  PREFERS short replies. " }] },
+    { items: [{ ...items[0]!, origin: "user_belief" as const }] },
+    { items: [{ ...items[0]!, occurred_at: "2026-10-18" }] },
+    { items: [{ ...items[0]!, about: "Different context" }] },
+  ]) {
+    await expect(f.service.remember({ ...input, ...change }, f.owner)).rejects.toThrow(
+      /different payload/,
+    );
+  }
+  expect(
+    (await f.service.mutation({ requestId, includeFiles: false }, f.owner)).receipt,
+  ).toStrictEqual(replay.receipt);
   await expect(
     f.service.remember(
       { ...input, items: [...items, { text: "Ships Friday.", kind: "commitment" }] },
@@ -119,6 +134,52 @@ it("remember replays an accepted request once and rejects changed payloads", asy
   const none = await f.remember(items);
   expect(none.receipt).toBe(null);
   expect(none.items[0]!.status).toBe("duplicate");
+});
+
+it("remember preserves different assertion dates and origins within calls and against saved claims", async () => {
+  const f = await fixture();
+  const pairs: [
+    string,
+    Partial<RememberInput["items"][number]>,
+    Partial<RememberInput["items"][number]>,
+  ][] = [
+    ["occurrence", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-02" }],
+    ["due", { due_at: "2026-11-02" }, { due_at: "2026-11-04T09:00:00+11:00" }],
+    ["validity", { valid_from: "2020-01-01T00:00:00Z" }, { valid_from: "2021-01-01T00:00:00Z" }],
+    ["expiry", { expires_at: "2098-01-01T00:00:00Z" }, { expires_at: "2099-01-01T00:00:00Z" }],
+    ["origin", { origin: "source" }, { origin: "user_belief" }],
+    ["precision", { occurred_at: "2026-11-01" }, { occurred_at: "2026-11-01T00:00:00Z" }],
+    ["unknown occurrence", {}, { occurred_at: "2026-11-01" }],
+    ["unknown due", {}, { due_at: "2026-11-02" }],
+  ];
+  const items: RememberInput["items"] = pairs.flatMap(([name, left, right]) =>
+    [left, right].map((fields) =>
+      Object.assign({ text: "Historical " + name + ".", kind: "commitment" as const }, fields),
+    ),
+  );
+  items.push(
+    { text: "Default source origin.", kind: "fact" },
+    { text: "default SOURCE origin.", kind: "fact", origin: "source" },
+  );
+  const saved = await f.remember(items);
+  for (let n = 0; n < pairs.length * 2; n++) {
+    expect(saved.items[n]!.status).toBe("inserted");
+    const metadata = (await f.record(saved.items[n]!.id)).record!.metadata!;
+    const { origin, ...dates } = items[n]!;
+    for (const field of ["occurred_at", "due_at", "valid_from", "expires_at"] as const) {
+      expect(metadata[field]).toBe(dates[field]);
+    }
+    expect(metadata.assertion_origin).toBe(origin ?? "source");
+    if (n % 2 === 1) {
+      expect(saved.items[n]!.id).not.toBe(saved.items[n - 1]!.id);
+    }
+  }
+  expect(saved.items.at(-1)!.status).toBe("duplicate");
+  expect(saved.items.at(-1)!.id).toBe(saved.items.at(-2)!.id);
+  const repeated = await f.remember(items);
+  expect(repeated.receipt).toBe(null);
+  expect(repeated.items.map((i) => i.status)).toStrictEqual(items.map(() => "duplicate"));
+  expect(repeated.items.map((i) => i.id)).toStrictEqual(saved.items.map((i) => i.id));
 });
 
 it("remember rejects agent inference, oversized excerpts and missing request IDs outside a flush", async () => {

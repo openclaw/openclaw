@@ -55,6 +55,14 @@ project and admitted host checkouts retain their existing diff behavior.
 
 ## Managed project workspaces
 
+File tools serialize operations on the same physical file. Stopping a run cancels
+its queued file operations and signals active sandbox filesystem commands to stop.
+An operation waiting behind another file operation fails after three minutes with
+a busy-file error and the earlier operation's running time. Retry later or work on
+another file; if the file stays busy, ask the operator to restart the Gateway.
+The earlier operation retains its file reservation until it actually finishes,
+so a canceled or timed-out waiter cannot cause overlapping writes.
+
 A sandboxed session with a session-owned managed worktree uses a private Git
 checkout on Docker and Podman. A registered project may be outside the agent's
 configured workspace when it is selected with `worktree: true`. This authorizes
@@ -73,6 +81,12 @@ package lifecycle scripts still run.
 
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
+
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
 
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing
@@ -358,7 +372,9 @@ waits remain in the existing `workspaceWait` field. These timings include work
 performed while guests run;
 they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
-through settlement. New shell calls and command preparation wait for an active
+through settlement. A conflict-free retry whose file edits are already applied
+accepts the remaining receipt without writing another recovery journal. Conflicted
+results retain their durable acceptance marker. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
@@ -374,8 +390,12 @@ Ordinary reconciliation also uses the btrfs capture for guest exports. Once an
 immutable result owns the source bytes, staged-file materialization, Git patch
 preparation, and temporary-file cleanup run with the guest resumed. Imports pause
 again before confirming the target and applying changes; edits made during
-preparation cause a visible conflict and remain saved. Pending base refreshes
-retain their pause until both workspaces accept the transfer.
+preparation cause a visible conflict and remain saved. Base refreshes also prepare
+canonical merge trees, temporary checkouts, and patches with the guest running.
+The target is checked again under pause before application; concurrent guest
+writes are preserved as conflicts. Successful two-sided transfers resume before
+temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations
+still keeps the guest paused until both workspaces accept the transfer.
 
 GitHub PR preparation and base refresh download commit history and missing objects
 with the guest running. After those downloads finish, OpenClaw checks the guest's
@@ -392,7 +412,12 @@ and stopped containers do not increment it; counters restart with the Gateway.
 Release records `Local workspace unpause` with the same `reason`, elapsed
 `durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
-shorter phases are omitted. Resume inspection, generation validation, and unpause
+shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
+verification, pristine source checks, canonical snapshot preparation, and commit
+bookkeeping during base refresh. These use the same exclusive timing field;
+they include awaited worker and Git work, not
+just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine
 execution. All runtime targets are inspected before the first runtime is paused;
@@ -401,6 +426,22 @@ each runtime's live authority is still checked immediately before pausing.
 runtime and cannot measure the earlier owner's interval; `durationScope=owner`
 covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
 removed runtime. Failed resumes retain custody and do not log a successful release.
+Workspace mutations above 1 MiB use the existing compressed worker transport when
+it reduces their size; persisted checkpoint and rollback-journal bytes do not change.
+The `agents/worktrees` warning `Local workspace oversized mutation` samples at most
+once per minute per process. It reports serialized and wire bytes, top-level field
+bytes, fingerprint blob count and bytes, and journal entry/directory counts and tree
+reference bytes. Field string sizes are UTF-8 bytes; fingerprint bytes count the
+base64 strings. Journal samples include 16-hex SHA-256 prefixes of the exact pack
+and JSON bytes. Correlation fields contain hashed workspace and durable plan IDs,
+an attempt UUID, 12-hex base/target Git commit IDs, target side, and lifecycle reason.
+Each reconciliation apply attempt logs one start and finish with that correlation;
+outcomes are `applied`, `replayed` (no file mutations), `conflict`, or `aborted`
+(the attempt threw; this does not prove rollback or absence of committed effects).
+The plan stays the same across retries and both sides of a base refresh; the attempt
+changes. A missing finish indicates an interrupted process. These logs contain no
+paths, raw workspace identifiers, or document contents. Prepared
+mutations report their already-compressed wire size and available publication fields.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner

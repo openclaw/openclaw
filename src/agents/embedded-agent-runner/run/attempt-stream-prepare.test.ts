@@ -106,6 +106,62 @@ async function useRealSubscription() {
 }
 
 describe("prepareEmbeddedAttemptStream", () => {
+  it.each(["accepted", "revise", "cancel", "unsubscribe"])(
+    "retains presentation only for the current accepted candidate (%s)",
+    async (outcome) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const presentation = { blocks: [{ type: "text" as const, text: "Summary" }] };
+      mocks.runBeforeFinalizeHook.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return outcome === "revise"
+          ? { action: "revise", reason: "Correct the answer" }
+          : { action: "continue", finalPresentation: presentation };
+      });
+      const controller = new AbortController();
+      const prepared = prepareCatalogExecutor({
+        runAbortController: controller,
+        hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      });
+      const event = {
+        ...createBeforeFinalizeEvent(),
+        lastAssistant: makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Draft answer" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      };
+      const subscription = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+        onBeforeTerminalDelivery: (event: unknown) => Promise<unknown>;
+      };
+      const decision = subscription.onBeforeTerminalDelivery(event);
+      try {
+        await entered.promise;
+        expect(mocks.runBeforeFinalizeHook.mock.calls[0]?.[0].event).toMatchObject({
+          supportsFinalPresentation: true,
+        });
+        if (outcome === "cancel") {
+          controller.abort();
+        } else if (outcome === "unsubscribe") {
+          prepared.subscription.unsubscribe();
+        }
+        release.resolve();
+        await decision;
+        expect(prepared.getFinalPresentation(event.lastAssistant)).toEqual(
+          outcome === "accepted" ? presentation : undefined,
+        );
+        expect(prepared.getFinalPresentation({ ...event.lastAssistant })).toBeUndefined();
+        await subscription.onBeforeTerminalDelivery({ ...event, isError: true });
+        expect(prepared.getFinalPresentation(event.lastAssistant)).toBeUndefined();
+      } finally {
+        release.resolve();
+        await decision;
+        prepared.subscription.unsubscribe();
+      }
+    },
+  );
+
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
     testing.resetActiveEmbeddedRuns();
@@ -388,43 +444,6 @@ describe("prepareEmbeddedAttemptStream", () => {
   });
 
   registerReplyPromotionTests();
-
-  it("borrows live fork history until the fork owner creates an isolated context", async () => {
-    const { session } = await createTestSession();
-    const model = session.model!;
-    const content = [{ type: "text" as const, text: "parent history" }];
-    const message = createAssistant(model, content);
-    session.agent.state.messages = [message];
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      attempt: { model, sessionFile: "agent:main:main" },
-    });
-    expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
-
-    const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
-    const { context } = await prepareEmbeddedSessionForkContext({
-      target: {
-        agentId: "main",
-        sessionId: "session-output-schema",
-        sessionKey: "agent:main:main",
-      },
-      sessionFile: "agent:main:main",
-      model,
-      workspaceDir: "/synthetic/fork",
-      agentDir: "/synthetic/fork/agent",
-      agentId: "main",
-      assertCurrent() {},
-    });
-    expect(context.messages).toEqual([message]);
-    const forkContent = context.messages[0]?.content;
-    if (!Array.isArray(forkContent) || forkContent[0]?.type !== "text") {
-      throw new Error("expected fork text content");
-    }
-    forkContent[0].text = "child edit";
-    context.messages.push({ role: "user", content: "child turn", timestamp: 2 });
-    expect(session.messages).toEqual([message]);
-    expect(content[0]?.text).toBe("parent history");
-  });
 
   it.each([
     ["replacement", "steering"],
@@ -854,18 +873,17 @@ describe("prepareEmbeddedAttemptStream", () => {
     }
   });
 
-  it.each(["ordinary", "deferred cancellation", "pending task"] as const)(
+  it.each(["ordinary", "deferred cancellation"] as const)(
     "publishes terminal activity under %s ownership",
     async (scenario) => {
       const result = await observeTerminalRunActivity(scenario, (subscribe) =>
         mocks.subscribe.mockImplementation(subscribe),
       );
       const deferred = scenario === "deferred cancellation";
-      const active = deferred || scenario === "pending task";
       expect(result).toEqual({
         activeBefore: true,
-        terminalEvents: [{ phase: deferred ? "finishing" : "end", active }],
-        activeAfter: active,
+        terminalEvents: [{ phase: deferred ? "finishing" : "end", active: deferred }],
+        activeAfter: deferred,
       });
     },
   );

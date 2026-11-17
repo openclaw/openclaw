@@ -225,7 +225,7 @@ async function runChannelProviderLogin(
   const sendReply = commandParams.opts?.onBlockReply;
   if (!sendReply) {
     return {
-      text: `${choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send \`${formatProviderLoginCommand(choice.command)}\` again.`,
+      text: `${choice.providerLabel} login needs a live private response path so the code can be shown before it expires. Use the OpenClaw app or a private chat and send \`${formatProviderLoginCommand(choice.command)}\` again.`,
     };
   }
 
@@ -260,7 +260,7 @@ async function runChannelProviderLogin(
       sendMessage: (text) => emitLoginMessage(commandParams, text),
       sendReply,
       unsupportedPromptMessage:
-        "This provider needs input that chat cannot collect. Open Control UI → Models and choose Sign in.",
+        "This provider needs input that chat cannot collect. Open Models in the OpenClaw app and choose Sign in.",
     });
     flowSignal.throwIfAborted();
     const nextProfileId = loginResult.profiles.find(

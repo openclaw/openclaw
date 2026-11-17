@@ -96,7 +96,8 @@ const enSkillLibrary = {
       transfer: "Transfer {slug} to team ownership?",
     },
     confirmBody: {
-      remove: "New sessions can’t attach it.",
+      remove:
+        "This skill can no longer be added to sessions. Sessions already using it keep their saved version.",
       transfer: "Team admins will manage it.",
     },
     receipt: {
