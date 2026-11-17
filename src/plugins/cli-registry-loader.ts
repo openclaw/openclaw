@@ -17,8 +17,11 @@ import { listDatabaseEngineStores } from "../infra/database-engine/registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
+import { bindPluginCliProgram } from "./cli-callback-binding.js";
 import { pluginCliGatewayNodesRuntime } from "./cli-gateway-nodes-runtime.js";
+import { withPluginCliServiceScheduler } from "./cli-service-scheduler.js";
 import { resolvePluginControlPlaneWorkspace } from "./control-plane-workspace.js";
+import { loadPluginDoctorRecoveryCliRegistrar } from "./doctor-contract-registry.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   acquirePluginRegistryForInspection,
@@ -26,12 +29,14 @@ import {
   loadPluginRegistryHandle,
 } from "./loader.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import {
   resolvePluginMetadataEnvFingerprint,
   resolvePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
+import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   type PluginRuntimeLoadContext,
@@ -254,6 +259,102 @@ async function loadPluginCliMetadataRegistryWithContext(
         )
       : loadOpenClawPluginCliRegistry(options);
   }));
+  return prepared.withCache(() => appendPluginRecoveryCliRegistrars(prepared, registry));
+}
+
+/** Recovery uses Doctor's selected source, never the withheld runtime or metadata entrypoint. */
+async function appendPluginRecoveryCliRegistrars(
+  prepared: PreparedPluginCliLoad,
+  registry: PluginRegistry,
+): Promise<PluginRegistry> {
+  const { context } = prepared;
+  for (const record of registry.plugins) {
+    if (
+      !record.enabled ||
+      !registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === record.id && diagnostic.code === "plugin-state-migration",
+      )
+    ) {
+      continue;
+    }
+    const manifest = context.manifestRegistry?.plugins.find(
+      (candidate) =>
+        candidate.id === record.id &&
+        candidate.source === record.source &&
+        candidate.rootDir === record.rootDir,
+    );
+    const paths = manifest?.doctorContract?.recoveryCli;
+    if (!manifest || !paths?.length) {
+      continue;
+    }
+    // The migration gate precedes quarantine in runtime loading; recovery must honor both.
+    const degraded = findActiveDegradedPlugin(record.id);
+    if (degraded && degradedPluginMatchesRoot(degraded, manifest.rootDir)) {
+      continue;
+    }
+    // This release's Doctor loader captures and owns the selected source synchronously.
+    prepared.assertCurrent();
+    const register = loadPluginDoctorRecoveryCliRegistrar(manifest);
+    if (!register) {
+      continue;
+    }
+    const instance = getPluginValueInstance(register);
+    if (!instance) {
+      throw new Error(`Plugin ${record.id} recovery CLI has no prepared source owner`);
+    }
+    for (const descriptor of manifest.cliCommands ?? []) {
+      const subtrees = paths.filter((segments) => segments[0] === descriptor.name);
+      if (
+        !subtrees.length ||
+        registry.cliRegistrars.some((entry) => pluginCliRegistrarOwnsRoot(entry, descriptor.name))
+      ) {
+        continue;
+      }
+      registry.cliRegistrars.push({
+        pluginId: record.id,
+        source: record.source,
+        rootDir: record.rootDir,
+        parentPath: [],
+        commands: [descriptor.name],
+        descriptors: [descriptor],
+        register: async ({ program, config }) => {
+          const [{ createPluginDoctorStateMigrationContext }, { toPluginCommandFailure }] =
+            await Promise.all([
+              import("../infra/state-migrations.plugin-doctor-context.js"),
+              import("../cli/failure-output.js"),
+            ]);
+          const { openPluginStateKeyedStore } = createPluginDoctorStateMigrationContext({
+            pluginId: record.id,
+            config,
+            env: context.env,
+          });
+          const root = program.command(descriptor.name).description(descriptor.description);
+          for (const commandPath of subtrees) {
+            let target = root;
+            for (const segment of commandPath.slice(1)) {
+              target =
+                target.commands.find((child) => child.name() === segment) ??
+                target.command(segment);
+            }
+            await instance.run(() =>
+              withPluginCliServiceScheduler(instance, () => {
+                bindPluginCliProgram(target, toPluginCommandFailure);
+                return register({
+                  program: target,
+                  parentPath: commandPath,
+                  config,
+                  env: context.env,
+                  stateDir: resolveStateDir(context.env),
+                  context: { openPluginStateKeyedStore },
+                });
+              }),
+            );
+          }
+        },
+      });
+    }
+  }
   return registry;
 }
 
@@ -298,10 +399,13 @@ async function loadPluginCliCommandRegistryWithContext(params: {
     runtimeOptions: { nodes: pluginCliGatewayNodesRuntime },
   });
   const resources = params.prepared.resources;
-  return params.prepared.withCache(() =>
+  const registry = await params.prepared.withCache(() =>
     resources
       ? resources.acquire(() => acquirePluginRegistryForInspection(options))
       : loadPluginRegistryHandle(options),
+  );
+  return params.prepared.withCache(() =>
+    appendPluginRecoveryCliRegistrars(params.prepared, registry),
   );
 }
 

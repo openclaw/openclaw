@@ -28,8 +28,10 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import { loadLegacyChannelStateMigrationDetector } from "./doctor-contract-legacy-setup.js";
 import {
   coercePluginDoctorContractModule,
+  declaresPluginDoctorContractSurface,
   type PluginDoctorCompatibilityNormalizer,
   type PluginDoctorContractModule,
+  type PluginDoctorContractSurface,
   type PluginDoctorStateMigrationEntry,
 } from "./doctor-contract-module.js";
 import {
@@ -42,7 +44,6 @@ import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestRegistry } from "./manifest-registry.types.js";
-import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { PluginDependencyLinkError } from "./plugin-instance-error.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -69,16 +70,6 @@ export function isPluginDoctorMigrationDeferred(pluginId: string): boolean {
   return [...(deferredPluginMigrations.getStore() ?? [])].some(
     (id) => id === pluginId || normalizePluginPolicyId(id) === policyId,
   );
-}
-
-type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
-
-function declaresPluginDoctorContractSurface(
-  declaration: PluginManifestDoctorContract | undefined,
-  surface: PluginDoctorContractSurface,
-): boolean {
-  const value = declaration?.[surface];
-  return value === true || (surface === "stateMigrations" && Array.isArray(value));
 }
 
 export type {
@@ -192,6 +183,17 @@ function loadPluginDoctorContractEntry(
     );
     return error instanceof PluginDependencyLinkError ? error : null;
   }
+}
+
+/** The CLI owner supplies the exact enabled artifact withheld for a pending migration. */
+export function loadPluginDoctorRecoveryCliRegistrar(record: PluginManifestRegistryRecord) {
+  if (!declaresPluginDoctorContractSurface(record.doctorContract, "recoveryCli")) {
+    return undefined;
+  }
+  const entry = loadPluginDoctorContractEntry(record, "recoveryCli");
+  return entry && !(entry instanceof PluginDependencyLinkError)
+    ? entry.registerRecoveryCli
+    : undefined;
 }
 
 function resolvePluginDoctorManifestRecords(
