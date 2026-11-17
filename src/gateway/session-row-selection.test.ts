@@ -470,6 +470,7 @@ it("filters active sentinels only after selecting their physical store winner", 
       return rows.filter((row) => keys.has(row.key));
     };
     projection.state.scope = () => ({
+      targets: rows.map((row) => row.storeTarget),
       paths: new Map([
         ["primary", 0],
         ["fallback", 1],

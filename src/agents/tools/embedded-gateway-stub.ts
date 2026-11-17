@@ -3,6 +3,7 @@ import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validateSessionsSearchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
@@ -83,6 +84,19 @@ async function handleSessionsSearch(params: Record<string, unknown>) {
   }
   if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
     throw new Error(`query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`);
+  }
+  if (params.recall) {
+    if (!validateSessionsSearchParams(params)) {
+      throw new Error("Invalid sessions.search parameters");
+    }
+    const { searchRecallSessionTranscripts } =
+      await import("../../gateway/server-methods/sessions-search-recall.js");
+    return searchRecallSessionTranscripts({
+      query,
+      limit: readPositiveIntegerParam(params, "limit"),
+      recall: params.recall!,
+      projection: await borrowSessionRowProjection(),
+    });
   }
   if (params.agentId !== undefined && params.sessionKeys === undefined) {
     throw new Error("agentId requires sessionKeys");

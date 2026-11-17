@@ -1,6 +1,9 @@
 import type { TextQuery } from "../../infra/database-engine/text-contract.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
 
 export const SESSION_SEARCH_SNIPPET_TOKENS = 48;
 const SEARCH_SNIPPET_MAX_CHARS = 500;
@@ -46,4 +49,21 @@ export function boundSessionTranscriptSearchSnippet(snippet: string): string {
   return snippet.length > SEARCH_SNIPPET_MAX_CHARS
     ? `${truncateUtf16Safe(snippet, SEARCH_SNIPPET_MAX_CHARS)}…`
     : snippet;
+}
+
+type OrderedSearchHit = Pick<
+  SessionTranscriptSearchResult["hits"][number],
+  "score" | "timestamp" | "sessionKey"
+> & { messageId?: string };
+
+export function compareSessionTranscriptSearchHits(
+  left: OrderedSearchHit,
+  right: OrderedSearchHit,
+): number {
+  return (
+    right.score - left.score ||
+    right.timestamp - left.timestamp ||
+    left.sessionKey.localeCompare(right.sessionKey) ||
+    (left.messageId ?? "").localeCompare(right.messageId ?? "")
+  );
 }

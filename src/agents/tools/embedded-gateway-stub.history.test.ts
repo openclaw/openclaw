@@ -119,6 +119,32 @@ describe("embedded session history anchors", () => {
     },
   );
 
+  it.each(["quasar"])(
+    "searches %s without inventory paging and excludes another agent's matches",
+    async (query) => {
+      const hidden = { agentId: "main", sessionKey: "agent:main:hidden", sessionId: "hidden" };
+      replaceSessionEntrySync(hidden, { sessionId: hidden.sessionId, updatedAt: Date.now() });
+      await append("hidden-message", { role: "user", content: "quasar" }, hidden);
+      await append("visible", { role: "user", content: "quasar" });
+      const methods: string[] = [];
+      const search = createSessionsSearchTool({
+        config,
+        agentId: scope.agentId,
+        agentSessionKey: "agent:work:main",
+        callGateway: async (request) => {
+          methods.push(request.method);
+          expect(request.method).not.toBe("sessions.list");
+          return callGateway(request);
+        },
+      });
+      const result = await search.execute("bounded-search", { query, limit: 1 });
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ sessionKey: scope.sessionKey, messageId: "visible" })],
+      });
+      expect(methods).toEqual(["sessions.search"]);
+    },
+  );
+
   it("returns no history for a missing anchor", async () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],

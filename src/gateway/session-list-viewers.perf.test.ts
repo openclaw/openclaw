@@ -1,8 +1,19 @@
 import { expect, test, vi } from "vitest";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "../agents/tools/embedded-gateway-stub.js";
+import { createSessionsSearchTool } from "../agents/tools/sessions-search-tool.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -409,6 +420,164 @@ test("shares concurrent list selection across row modes and refilters only publi
     } finally {
       projection.dispose();
       release();
+    }
+  });
+});
+
+test("indexed recall reaches an old match without paging the unrelated inventory", async () => {
+  await withStateDirEnv("openclaw-recall-bounded-", async () => {
+    const cfg = initialize({
+      agents: { entries: { main: {} } },
+      tools: { sessions: { visibility: "all" } },
+    });
+    const key = "agent:main:old-match";
+    writeResidentEntries(
+      Object.fromEntries(
+        Array.from({ length: 205 }, (_, index) => [
+          "agent:main:unrelated-" + index,
+          { sessionId: "unrelated-" + index, updatedAt: index + 2 },
+        ]),
+      ),
+    );
+    writeListEntry(key, { sessionId: "old-match", updatedAt: 1 });
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionKey: key, sessionId: "old-match" },
+      {
+        cwd: "/fixture",
+        updateMode: "none",
+        messages: [{ message: { role: "user", content: "recallneedle" }, now: 1 }],
+      },
+    );
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
+    const gateway = createEmbeddedCallGateway();
+    let listed = 0;
+    try {
+      const tool = createSessionsSearchTool({
+        config: cfg,
+        agentId: "main",
+        agentSessionKey: "agent:main:requester",
+        callGateway: async <T>(request: Parameters<typeof gateway>[0]) => {
+          const result = await gateway<T>(request);
+          if (request.method === "sessions.list") {
+            listed += (result as { sessions: unknown[] }).sessions.length;
+          }
+          return result;
+        },
+      });
+      const result = await tool.execute("recall", { query: "recallneedle" });
+      expect(result.details).toMatchObject({
+        results: [{ sessionKey: key, snippet: "recallneedle" }],
+      });
+      expect(listed).toBe(0);
+    } finally {
+      unbind();
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+test("indexed recall preserves pinned visibility without inventory paging", async () => {
+  await withStateDirEnv("openclaw-search-selection-", async () => {
+    const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
+    const requester = "agent:main:dashboard:requester";
+    const archived = "agent:main:dashboard:archived";
+    const child = "agent:main:subagent:child";
+    const foreign = "agent:work:dashboard:foreign";
+    const foreignChild = "agent:work:subagent:child";
+    writeResidentEntries({
+      [requester]: { sessionId: "requester", updatedAt: 6 },
+      [archived]: { sessionId: "archived", updatedAt: 5, archivedAt: 10 },
+      [child]: { sessionId: "child", updatedAt: 4, spawnedBy: requester },
+      [foreign]: { sessionId: "foreign", updatedAt: 3 },
+      [foreignChild]: { sessionId: "foreign-child", updatedAt: 2, spawnedBy: requester },
+    });
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          archivedAt: 10,
+        },
+      );
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
+      { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
+    );
+    for (const [agentId, sessionKey, sessionId] of [
+      ["main", requester, "requester"],
+      ["main", archived, "archived"],
+      ["main", child, "child"],
+      ["work", foreign, "foreign"],
+      ["work", foreignChild, "foreign-child"],
+      ["main", "global", "main-global"],
+      ["work", "global", "work-global"],
+      ["main", "agent:main:dashboard:incognito-hidden", "private"],
+    ] as const) {
+      await persistSessionTranscriptTurn(
+        { agentId, sessionKey, sessionId },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "synthetic" }, now: Date.now() }],
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
+    const gateway = createEmbeddedCallGateway();
+    const own = [requester, archived, child, "global"];
+    try {
+      for (const scope of ["all", "self", "tree", "agent"] as const) {
+        for (const enabled of [true, false]) {
+          for (const sandboxed of [false, true]) {
+            const tool = createSessionsSearchTool({
+              // The Gateway remains permissive; the tool's pinned restrictions must survive RPC.
+              config: {
+                ...cfg,
+                tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                agents: {
+                  ...cfg.agents,
+                  defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+                },
+              },
+              agentId: "main",
+              agentSessionKey: requester,
+              sandboxed,
+              callGateway: async (request) => {
+                expect(request.method).not.toBe("sessions.list");
+                return gateway(request);
+              },
+            });
+            const result = await tool.execute("visibility", { query: "synthetic", limit: 25 });
+            const expected = sandboxed
+              ? [requester, child, foreignChild]
+              : scope === "self"
+                ? [requester]
+                : scope === "tree"
+                  ? [requester, child, foreignChild]
+                  : scope === "agent"
+                    ? own
+                    : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+            const keys = (result.details as { results: { sessionKey: string }[] }).results.map(
+              (hit) => hit.sessionKey,
+            );
+            expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+              expected.toSorted(),
+            );
+          }
+        }
+      }
+    } finally {
+      unbind();
+      projection.dispose();
+      release();
+      memorySessionActorOwners.reset();
     }
   });
 });

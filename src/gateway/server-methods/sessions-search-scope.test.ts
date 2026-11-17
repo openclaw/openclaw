@@ -12,6 +12,7 @@ import {
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
+import * as sessionTargets from "../../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -117,6 +118,106 @@ const paletteScope = {
   excludeCron: true,
   excludeSystem: true,
 };
+
+test.each(["needle"])("agent recall applies operator privacy before limiting %s", async (query) => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("recall-viewer@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      tools: { sessions: { visibility: "all" } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const visible = await seed("main", "allowed-recall", viewer, `needle ${"context ".repeat(30)}`);
+    for (let index = 0; index < 27; index++) {
+      await seed("main", `hidden-recall-${index}`, "foreign", "needle");
+    }
+    const client = identifiedClient(viewer);
+    client.connect.scopes = ["operator.read"];
+    const result = await search(requestContext(cfg), client, {
+      query,
+      limit: 1,
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
+    expect(result.payload).not.toHaveProperty("truncated");
+  });
+});
+
+test.each([false, true])(
+  "agent recall retains child-only visibility (sandboxed: %s)",
+  async (sandboxed) => {
+    await withSearchState(async () => {
+      const owner = ensureProfileForEmail("recall-tree@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        },
+        tools: { sessions: { visibility: sandboxed ? "all" : "tree" } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const requesterSessionKey = "agent:main:requester";
+      const child = await seed("main", "subagent:child", owner, "needle", {
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+      });
+      await seed("main", "other", owner, "needle");
+      const result = await search(requestContext(cfg), identifiedClient(owner), {
+        query: "needle",
+        recall: {
+          requesterAgentId: "main",
+          requesterSessionKey,
+          sandboxed,
+          visibility: "all",
+          agentToAgent: { enabled: true },
+        },
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([child]);
+    });
+  },
+);
+
+test("agent recall searches only the requester's global transcript", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-global@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, work: {} } },
+      tools: { sessions: { visibility: "all" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    for (const agentId of ["work", "main"]) {
+      const target = { agentId, sessionKey: "global", sessionId: `${agentId}-global` };
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: Date.now(),
+        createdActor: { type: "human", source: "profile", id: owner },
+      });
+      await persistSessionTranscriptTurn(target, {
+        cwd: "/fixture",
+        updateMode: "none",
+        messages: [{ message: { role: "user", content: "globalword" }, now: Date.now() }],
+      });
+    }
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "globalword",
+      recall: { requesterAgentId: "work", requesterSessionKey: "agent:work:requester" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results).toEqual([
+      expect.objectContaining({ sessionKey: "global", sessionId: "work-global" }),
+    ]);
+  });
+});
 
 test("scope search reaches beyond 200 sessions and four agents with bounded matched snapshots", async () => {
   await withSearchState(async () => {
@@ -275,6 +376,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
         defaults: { sessionStore: { agentId: "main" } },
       },
       session: { store: storePath },
+      tools: { sessions: { visibility: "agent" } },
     };
     setRuntimeConfigSnapshot(cfg);
     await seed("main", "physical-owner", owner, undefined, {}, storePath);
@@ -300,6 +402,16 @@ test("scope search preserves physical shared-store ownership, agent filters, and
     );
     expect(result.payload).toHaveProperty("truncated", true);
     expect(result.payload).not.toHaveProperty("indexing");
+    const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsAsync");
+    const recall = await search(context, client, {
+      query: "needle",
+      limit: 25,
+      recall: { requesterAgentId: "work_team", requesterSessionKey: "agent:work_team:main" },
+    });
+    expect(recall.ok, recall.error?.message).toBe(true);
+    expect(recall.payload?.results).toEqual(result.payload?.results);
+    expect(recall.payload).toHaveProperty("truncated", true);
+    expect(discovery).not.toHaveBeenCalled();
     const key = "agent:work_team:match-0";
     expect(
       await search(context, client, { query: "needle", scope: { search: key } }),

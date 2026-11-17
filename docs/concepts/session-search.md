@@ -48,6 +48,11 @@ returns at most 25 hits. The tool trims each excerpt to 300 UTF-16 code units
 plus an ellipsis when needed, within a 32 KiB result budget. Query words are
 literal text; punctuation does not become database query syntax.
 
+Broad searches query the transcript indexes directly, including archived sessions.
+Matching session keys pass the current visibility checks before result limits are
+applied. Searches do not page through the session inventory or retain an authorization
+snapshot between requests. Passing `sessionKey` restricts the search to that session.
+
 Each transcript search request allows up to 90 seconds, leaving dispatch and
 authorization headroom around the reader's 60-second budget, including worker admission.
 If it times out, retry `sessions_search` with a `sessionKey` to search one session

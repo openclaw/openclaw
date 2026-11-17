@@ -314,6 +314,7 @@ export function prepareSessionRowScopes(
         ),
       );
       return {
+        targets: resolved.durableTargets,
         paths: new Map(paths.map((pathname, index) => [pathname, index])),
         path: paths.length === 1 ? (filenames.get(paths[0]!) ?? paths[0]!) : "(multiple)",
         configuredAgentIds: resolved.configuredAgentIds,
@@ -352,6 +353,7 @@ export function prepareSessionRowScopes(
       : undefined;
     const scope = requestedAgentId
       ? (agents.get(requestedAgentId) ?? {
+          targets: [],
           paths: new Map<string, number>(),
           path: "(multiple)",
           agentId: requestedAgentId,
