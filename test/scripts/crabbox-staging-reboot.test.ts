@@ -7,7 +7,11 @@ import {
   processDomain,
   type ProcessProvenance,
 } from "../../scripts/crabbox-staging-provenance.mts";
-import { createStaging, runStagingCommand } from "../../scripts/crabbox-staging.mts";
+import {
+  createMirrorStaging,
+  createStaging,
+  runStagingCommand,
+} from "../../scripts/crabbox-staging.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
@@ -18,6 +22,8 @@ const injected = vi.hoisted(() => ({
   recoveryLocksCreated: 0,
   userFailure: "",
   witnessFailure: "",
+  claimFailure: "",
+  onClaims: undefined as (() => void) | undefined,
   onUsers: undefined as (() => void | Promise<void>) | undefined,
   onRevalidate: undefined as (() => void) | undefined,
   beforeRemove: undefined as ((path: string) => void) | undefined,
@@ -36,7 +42,12 @@ vi.mock("../../scripts/crabbox-staging-users.mts", async (importOriginal) => ({
 }));
 vi.mock("../../scripts/crabbox-staging-claims.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-claims.mts")>()),
-  verifyNoStagingClaims: async () => ({ ok: true }),
+  verifyNoStagingClaims: async () => {
+    injected.onClaims?.();
+    return injected.claimFailure
+      ? { ok: false, reason: injected.claimFailure, matchingLeaseIds: ["tbx_fixture"] }
+      : { ok: true };
+  },
 }));
 vi.mock("../../scripts/crabbox-staging-witness.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/crabbox-staging-witness.mts")>()),
@@ -118,7 +129,8 @@ beforeEach(() => {
   injected.bootTimeNs = BigInt(Date.now() + 86_400_000) * 1_000_000n;
   injected.volume = oldHost.hostId;
   injected.recoveryLocksCreated = 0;
-  injected.userFailure = injected.witnessFailure = "";
+  injected.userFailure = injected.witnessFailure = injected.claimFailure = "";
+  injected.onClaims = undefined;
   injected.onUsers = undefined;
   injected.onRevalidate = undefined;
   injected.beforeRemove = undefined;
@@ -130,9 +142,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function stage(legacy = false) {
+function stage(legacy = false, mirrored = false) {
   const syncRoot = temporary.make("openclaw-staging-reboot-copy-");
-  const owner = createStaging(syncRoot, repository);
+  const mirror = mirrored ? createMirrorStaging(syncRoot, repository) : undefined;
+  if (mirrored) {
+    expect(mirror).toBeDefined();
+  }
+  const owner = mirror?.staging ?? createStaging(syncRoot, repository);
   expect(owner.recorded).toBe(true);
   fs.mkdirSync(join(owner.payload, "source"));
   owner.prepared(
@@ -155,6 +171,7 @@ function stage(legacy = false) {
   return {
     syncRoot,
     owner,
+    mirror,
     receiptPath,
     id: String(receipt.id),
     read: () => fs.readFileSync(receiptPath, "utf8"),
@@ -164,6 +181,27 @@ function stage(legacy = false) {
   };
 }
 type Fixture = ReturnType<typeof stage>;
+function diagnosticStage(mirrored = false) {
+  const fixture = stage(false, mirrored);
+  const source = join(fixture.owner.payload, "source");
+  fs.mkdirSync(join(source, ".crabbox/runs/fixture"), { recursive: true });
+  fs.writeFileSync(join(source, ".crabbox/runs/fixture/failure.log"), "original failure\n");
+  fixture.owner.admitted(JSON.parse(fixture.read()).claims, ["tbx_fixture"]);
+  return fixture;
+}
+function admittedStage(mirrored = false) {
+  const fixture = diagnosticStage(mirrored);
+  fixture.owner.hold("writers");
+  injected.provenance = newHost;
+  return fixture;
+}
+function preservedDiagnostic(fixture: Fixture) {
+  const receipt = JSON.parse(fixture.read());
+  const evidence = JSON.parse(
+    fs.readFileSync(fixture.file(`artifacts-${receipt.artifactManifest}.json`), "utf8"),
+  );
+  return join(evidence.destination.path, "runs/fixture/failure.log");
+}
 function digest(bytes: string) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -241,6 +279,257 @@ posixIt("records provenance; same-host reboot recovery never probes reused PID",
   const kill = vi.spyOn(process, "kill").mockReturnValue(true);
   expect(await command(fixture, ["recover", fixture.id])).toMatchObject({ recovered: true });
   expect(kill.mock.calls.filter(([, signal]) => signal === 0)).toEqual([]);
+  expect(fs.existsSync(fixture.owner.root)).toBe(false);
+});
+
+posixIt(
+  "retires prior-boot writers only after preserving diagnostics, without recording settlement",
+  async () => {
+    const fixture = admittedStage();
+    const before = fixture.read();
+    const stat = fixture.stat();
+    await refused(fixture, ["inspect", fixture.id], /Diagnostic preservation was not recorded/);
+    expectRetained(fixture, before, 0);
+    expect(fixture.stat().mtimeNs).toBe(stat.mtimeNs);
+    let saved = "";
+    injected.beforeRemove = (path) => {
+      if (path === fixture.owner.payload) {
+        expect(JSON.parse(fixture.read())).toMatchObject({
+          users: "admitted",
+          state: "removing",
+          hold: "writers",
+          ownerProvenance: oldHost,
+        });
+        saved = preservedDiagnostic(fixture);
+        expect(fs.readFileSync(saved, "utf8")).toBe("original failure\n");
+      }
+    };
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    expect(await command(fixture, ["recover", fixture.id])).toMatchObject({
+      recovered: true,
+      reason: expect.stringContaining("Same-host reboot retired admitted writers"),
+    });
+    expect(kill.mock.calls.filter(([, signal]) => signal === 0)).toEqual([]);
+    expect(fs.existsSync(fixture.owner.root)).toBe(false);
+    expect(fs.readFileSync(saved, "utf8")).toBe("original failure\n");
+  },
+);
+
+posixIt.each(["live", "absent"])(
+  "does not retire same-boot writers with a %s producer PID",
+  async (pid) => {
+    const fixture = admittedStage();
+    injected.provenance = oldHost;
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      if (pid === "absent") {
+        throw Object.assign(new Error("fixture absent"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    const before = fixture.read();
+    await refused(fixture, ["recover", fixture.id], /PID|Writer settlement/);
+    expectRetained(fixture, before, 0);
+  },
+);
+
+posixIt.each([
+  ["host", { ...newHost, hostId: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee" }],
+  [
+    "platform",
+    { platform: "linux", hostId: "1".repeat(32), bootId: newHost.bootId, pidNamespace: "pid:[1]" },
+  ],
+  ["unavailable", undefined],
+] satisfies [string, ProcessProvenance | undefined][])(
+  "protects admitted writers with %s provenance",
+  async (_name, provenance) => {
+    const fixture = admittedStage();
+    injected.provenance = provenance;
+    const before = fixture.read();
+    await refused(fixture, ["recover", fixture.id], /host|namespace/);
+    expectRetained(fixture, before, 0);
+  },
+);
+
+posixIt.each([
+  ["preparing", { state: "preparing" }, /Writer settlement/],
+  ["worktree", { kind: "worktree" }, /Full-worktree/],
+  ["registration", { hold: "registration" }, /Writer settlement/],
+  ["artifacts", { hold: "artifacts" }, /Writer settlement/],
+  ["claims", { hold: "claims" }, /Writer settlement/],
+  ["nondurable", { durable: false }, /durable recovery metadata/],
+  ["inconsistent domain", { ownerDomain: "0".repeat(64) }, /host|namespace/],
+  ["missing provenance", { ownerProvenance: undefined }, /host|namespace/],
+  ["missing witness", { witness: undefined }, /retained Git ref/],
+] as const)("protects %s writer metadata after reboot", async (_name, changed, reason) => {
+  const fixture = admittedStage();
+  rewriteReceipt(fixture, (receipt) => Object.assign(receipt, changed));
+  const before = fixture.read();
+  await refused(fixture, ["recover", fixture.id], reason);
+  expectRetained(fixture, before, 0);
+});
+
+posixIt.each([
+  ["users", 1],
+  ["users", 2],
+  ["claims", 1],
+  ["claims", 2],
+] as const)(
+  "checks current %s at boundary %i without clearing writer custody",
+  async (guard, boundary) => {
+    const fixture = admittedStage();
+    let calls = 0;
+    const failure = `fixture ${guard} still active`;
+    const probe = () => {
+      if (++calls === boundary) {
+        injected[guard === "users" ? "userFailure" : "claimFailure"] = failure;
+      }
+    };
+    if (guard === "users") {
+      injected.onUsers = probe;
+    } else {
+      injected.onClaims = probe;
+    }
+    await refused(fixture, ["recover", fixture.id], new RegExp(failure));
+    expect(JSON.parse(fixture.read())).toMatchObject({
+      state: "admitted",
+      users: "admitted",
+      hold: "writers",
+      ownerProvenance: oldHost,
+    });
+    expect(
+      fs.readFileSync(
+        join(fixture.owner.payload, "source/.crabbox/runs/fixture/failure.log"),
+        "utf8",
+      ),
+    ).toBe("original failure\n");
+    expect(fs.existsSync(fixture.file("recovery.lock"))).toBe(false);
+  },
+);
+
+posixIt(
+  "retains rebooted writer state across failed source proof and interrupted removal",
+  async () => {
+    const fixture = admittedStage();
+    injected.witnessFailure = "fixture retained source unavailable";
+    await refused(fixture, ["recover", fixture.id], injected.witnessFailure);
+    const preserved = fixture.read();
+    const saved = preservedDiagnostic(fixture);
+    expect(JSON.parse(preserved)).toMatchObject({
+      state: "admitted",
+      users: "admitted",
+      hold: "writers",
+    });
+    injected.witnessFailure = "";
+    expect(await command(fixture, ["inspect", fixture.id])).toMatchObject({
+      eligible: true,
+      inspectionOnly: true,
+    });
+    expect(fixture.read()).toBe(preserved);
+    injected.beforeRemove = (path) => {
+      if (path === fixture.owner.payload) {
+        throw new Error("fixture interrupted removal");
+      }
+    };
+    await refused(fixture, ["recover", fixture.id], "fixture interrupted removal");
+    expect(JSON.parse(fixture.read())).toMatchObject({
+      state: "removing",
+      users: "admitted",
+      hold: "writers",
+    });
+    fs.writeFileSync(saved, "damaged diagnostic\n");
+    injected.beforeRemove = undefined;
+    await refused(fixture, ["recover", fixture.id], /artifact/);
+    expectRetained(fixture);
+    fs.writeFileSync(saved, "original failure\n");
+    expect(await command(fixture, ["recover", fixture.id])).toMatchObject({ recovered: true });
+    expect(fs.readFileSync(saved, "utf8")).toBe("original failure\n");
+  },
+);
+
+posixIt.each(
+  ["writers", "settled"].flatMap((kind) =>
+    ["source", "destination"].map((changed) => ({ kind, changed })),
+  ),
+)(
+  "preserves recorded $kind diagnostic identity after $changed corruption on a source-proof retry",
+  async ({ kind, changed }) => {
+    const fixture = kind === "writers" ? admittedStage() : diagnosticStage();
+    if (kind === "settled") {
+      fixture.owner.settled();
+      injected.provenance = newHost;
+    }
+    injected.witnessFailure = "fixture retained source unavailable";
+    await refused(fixture, ["recover", fixture.id], injected.witnessFailure);
+    const preserved = fixture.read();
+    expect(JSON.parse(preserved)).toMatchObject({
+      state: kind === "writers" ? "admitted" : "preserved",
+      users: kind === "writers" ? "admitted" : "settled",
+    });
+    const saved = preservedDiagnostic(fixture);
+    const source = join(fixture.owner.payload, "source/.crabbox/runs/fixture/failure.log");
+    const target = changed === "source" ? source : saved;
+    const metadata = fs.readdirSync(fixture.owner.root).toSorted();
+    const destinations = join(repository, ".crabbox/wrapper-artifacts");
+    const copies = fs.readdirSync(destinations).toSorted();
+    injected.witnessFailure = "";
+    fs.writeFileSync(target, "changed diagnostic\n");
+    await refused(fixture, ["recover", fixture.id], /artifact/);
+    expectRetained(fixture, preserved);
+    expect(fs.readdirSync(fixture.owner.root).toSorted()).toEqual(metadata);
+    expect(fs.readdirSync(destinations).toSorted()).toEqual(copies);
+    expect(fs.readFileSync(source, "utf8")).toBe(
+      changed === "source" ? "changed diagnostic\n" : "original failure\n",
+    );
+    expect(fs.readFileSync(saved, "utf8")).toBe(
+      changed === "destination" ? "changed diagnostic\n" : "original failure\n",
+    );
+    fs.writeFileSync(target, "original failure\n");
+    expect(await command(fixture, ["recover", fixture.id])).toMatchObject({ recovered: true });
+    expect(fs.readFileSync(saved, "utf8")).toBe("original failure\n");
+  },
+);
+
+posixIt.each(["dirty source", "missing source", "invalid diagnostic", "replaced repository"])(
+  "preserves the raw capsule when reboot retirement finds %s",
+  async (defect) => {
+    const fixture = admittedStage();
+    const source = join(fixture.owner.payload, "source");
+    if (defect === "dirty source") {
+      fs.writeFileSync(join(source, "unexpected.txt"), "unretained bytes");
+    } else if (defect === "missing source") {
+      fs.renameSync(source, join(fixture.owner.payload, "missing-source"));
+    } else if (defect === "invalid diagnostic") {
+      const diagnostic = join(source, ".crabbox/runs/fixture/failure.log");
+      fs.renameSync(diagnostic, diagnostic + ".original");
+      fs.symlinkSync("failure.log.original", diagnostic);
+    } else {
+      rewriteReceipt(fixture, (receipt) => {
+        receipt.repositoryIdentity = JSON.parse(fixture.read()).payloadIdentity;
+      });
+    }
+    await refused(fixture, ["recover", fixture.id], /artifact|ENOENT|staging contents|directory/);
+    expectRetained(fixture);
+    expect(JSON.parse(fixture.read())).toMatchObject({
+      state: "admitted",
+      users: "admitted",
+      hold: "writers",
+    });
+  },
+);
+
+posixIt("requires the exact mirror slot and its exclusive lock for reboot retirement", async () => {
+  const fixture = admittedStage(true);
+  try {
+    await refused(fixture, ["recover", fixture.id], /active lock owner/);
+  } finally {
+    fixture.mirror!.finish();
+  }
+  const receipt = JSON.parse(fixture.read());
+  const slot = join(fixture.syncRoot, "mirrors", receipt.mirror.key);
+  fs.writeFileSync(join(slot, "stage"), "aaaaaaaa-bbbb-4ccc-8ddd-333333333333\n");
+  await refused(fixture, ["recover", fixture.id], /ownership changed/);
+  fs.writeFileSync(join(slot, "stage"), fixture.id + "\n");
+  expect(await command(fixture, ["recover", fixture.id])).toMatchObject({ recovered: true });
   expect(fs.existsSync(fixture.owner.root)).toBe(false);
 });
 
@@ -375,18 +664,21 @@ posixIt.each(legacyRefusals)(
   },
 );
 
-posixIt("rejects receipt changes during awaited user inspection", async () => {
-  const fixture = stage(true);
-  const args = confirmationArgs(fixture);
-  let changedBytes: string | undefined;
-  injected.onUsers = async () => {
-    await Promise.resolve();
-    changedBytes = changeOwner(fixture);
-  };
-  await refused(fixture, args, "staging receipt changed during live-user inspection");
-  expectRetained(fixture, changedBytes, 0);
-  expect(JSON.parse(changedBytes!)).not.toHaveProperty("operatorConfirmation");
-});
+posixIt.each(["legacy", "writers"])(
+  "rejects %s receipt changes during awaited user inspection",
+  async (kind) => {
+    const fixture = kind === "legacy" ? stage(true) : admittedStage();
+    const args = kind === "legacy" ? confirmationArgs(fixture) : ["recover", fixture.id];
+    let changedBytes: string | undefined;
+    injected.onUsers = async () => {
+      await Promise.resolve();
+      changedBytes = changeOwner(fixture);
+    };
+    await refused(fixture, args, "staging receipt changed during live-user inspection");
+    expectRetained(fixture, changedBytes, 0);
+    expect(JSON.parse(changedBytes!)).not.toHaveProperty("operatorConfirmation");
+  },
+);
 
 posixIt("retains the pre-boot timestamp across confirmed recovery retries", async () => {
   const fixture = stage(true);
@@ -410,14 +702,18 @@ posixIt("retains the pre-boot timestamp across confirmed recovery retries", asyn
   expect(fs.existsSync(fixture.owner.root)).toBe(false);
 });
 
-posixIt.each(["inspect", "recover"])(
-  "refuses an unchanged receipt touched into the current boot during %s's user probe",
-  async (operation) => {
-    const fixture = stage(true);
+posixIt.each(
+  ["inspect", "recover"].flatMap((operation) =>
+    ["legacy", "writers"].map((kind) => ({ operation, kind })),
+  ),
+)(
+  "refuses an unchanged $kind receipt touched into the current boot during $operation's user probe",
+  async ({ operation, kind }) => {
+    const fixture = kind === "legacy" ? stage(true) : admittedStage();
     const bootTimeNs = preBoot(fixture);
     const before = fixture.read();
     const originalDigest = digest(fixture.read());
-    const args = inspectionArgs(fixture, operation);
+    const args = kind === "legacy" ? inspectionArgs(fixture, operation) : [operation, fixture.id];
     injected.onUsers = async () => {
       await Promise.resolve();
       fixture.touch(new Date("2002-01-01T00:00:00.000Z"));
@@ -431,16 +727,23 @@ posixIt.each(["inspect", "recover"])(
   },
 );
 
-posixIt.each([
-  { operation: "inspect", changed: "receipt" },
-  { operation: "inspect", changed: "lock" },
-  { operation: "recover", changed: "receipt" },
-  { operation: "recover", changed: "lock" },
-])(
-  "rechecks $changed custody after final source revalidation during $operation",
-  async ({ operation, changed }) => {
-    const fixture = stage(true);
-    const args = inspectionArgs(fixture, operation);
+posixIt.each(
+  [
+    { operation: "inspect", changed: "receipt" },
+    { operation: "inspect", changed: "lock" },
+    { operation: "recover", changed: "receipt" },
+    { operation: "recover", changed: "lock" },
+  ].flatMap((test) => ["legacy", "writers"].map((kind) => ({ ...test, kind }))),
+)(
+  "rechecks $kind $changed custody after final source revalidation during $operation",
+  async ({ operation, changed, kind }) => {
+    const fixture = kind === "legacy" ? stage(true) : admittedStage();
+    if (kind === "writers" && operation === "inspect") {
+      injected.witnessFailure = "fixture preserve before inspection";
+      await refused(fixture, ["recover", fixture.id], injected.witnessFailure);
+      injected.witnessFailure = "";
+    }
+    const args = kind === "legacy" ? inspectionArgs(fixture, operation) : [operation, fixture.id];
     const lock = fixture.file("recovery.lock");
     let revalidated = false;
     let changedBytes: string | undefined;
