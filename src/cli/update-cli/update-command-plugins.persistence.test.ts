@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
+import { ConfigReadOnlyError } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -10,6 +11,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../../infra/install-package-dir.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
@@ -18,6 +20,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../plugins/test-helpers/managed-npm-plugin.js";
 import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -226,13 +229,34 @@ it("retains published artifacts when install commit cleanup fails", async () => 
 });
 
 it.each([
-  { shape: "a cohort whose rollback restores the package", owed: true },
-  { shape: "a cohort whose rollback fails", rollbackFails: true },
-  { shape: "a cohort that also restores channel config for this update", configChanged: true },
-  { shape: "no cohort", cohort: false },
+  { outcome: "owes the step", shape: "a cohort whose rollback restores the package" },
+  { outcome: "fails", shape: "a cohort whose rollback fails", rollbackFails: true },
+  { outcome: "fails", shape: "a cohort that also restores channel config", configChanged: true },
+  {
+    outcome: "fails",
+    shape: "a cohort and a refused config write",
+    failure: new ConfigReadOnlyError(),
+  },
+  {
+    outcome: "fails",
+    shape: "a cohort and a revoked requester",
+    failure: new UpdateRequesterRevokedError(),
+  },
+  {
+    outcome: "fails",
+    shape: "a cohort and an unsettled child",
+    failure: new CommandProcessCleanupError(),
+  },
+  { outcome: "fails", shape: "no cohort", cohort: false },
 ])(
-  "owes convergence that throws after replacing a package only with $shape",
-  async ({ owed = false, rollbackFails = false, configChanged = false, cohort = true }) => {
+  "$outcome when convergence throws after replacing a package with $shape",
+  async ({
+    outcome,
+    rollbackFails = false,
+    configChanged = false,
+    failure = new Error("plugin registry exploded"),
+    cohort = true,
+  }) => {
     await withOpenClawTestState({ label: "updater-plugin-work-failed" }, async (state) => {
       const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
       const originalConfig = await fs.readFile(state.configPath, "utf8");
@@ -275,40 +299,38 @@ it.each([
       });
       const installedVersion = async () =>
         JSON.parse(await fs.readFile(`${installPath}/package.json`, "utf8")).version;
-      const failure = new Error("plugin registry exploded");
+      const replaced: { deferred?: boolean; version?: string } = {};
       mocks.convergence.mockImplementationOnce(async (owner) => {
         const sink = resolvePluginInstallTransactionRequest(owner)?.transactionSink;
-        expect(sink !== undefined).toBe(cohort);
-        if (!sink) {
-          throw failure;
-        }
-        // The package directory owner replaces the first plugin in place and keeps its backup.
+        replaced.deferred = sink !== undefined;
+        // The package directory owner replaces the plugin in place. Only a cohort defers the
+        // commit and keeps the backup; without one the replacement is final here.
+        const install = {
+          sourceDir: next,
+          targetDir: installPath,
+          mode: "update" as const,
+          timeoutMs: 10_000,
+          copyErrorPrefix: "Failed to publish fixture plugin",
+          hasDeps: false,
+          depsLogMessage: "",
+        };
         const published = await installPackageDir(
-          requestDeferredPackageDirInstall({
-            sourceDir: next,
-            targetDir: installPath,
-            mode: "update" as const,
-            timeoutMs: 10_000,
-            copyErrorPrefix: "Failed to publish fixture plugin",
-            hasDeps: false,
-            depsLogMessage: "",
-          }),
+          sink ? requestDeferredPackageDirInstall(install) : install,
         );
+        replaced.version = await installedVersion();
         const transaction = resolvePackageDirInstallTransaction(published);
-        if (!transaction) {
-          throw new Error(`Fixture plugin was not published: ${JSON.stringify(published)}`);
+        if (sink && transaction) {
+          sink.push(
+            rollbackFails
+              ? {
+                  commit: () => transaction.commit(),
+                  rollback: async () => {
+                    throw new Error("backup is gone");
+                  },
+                }
+              : transaction,
+          );
         }
-        expect(await installedVersion()).toBe("2.0.0");
-        sink.push(
-          rollbackFails
-            ? {
-                commit: () => transaction.commit(),
-                rollback: async () => {
-                  throw new Error("backup is gone");
-                },
-              }
-            : transaction,
-        );
         throw failure;
       });
       const update = updatePluginsAfterCoreUpdate({
@@ -318,7 +340,7 @@ it.each([
         configWriteOptions: {},
         ...(cohort ? { cohort: { runId, env: state.env, fence } } : {}),
       });
-      if (owed) {
+      if (outcome === "owes the step") {
         await expect(update).resolves.toMatchObject({
           status: "warning",
           changed: false,
@@ -335,8 +357,10 @@ it.each([
       } else {
         await expect(update).rejects.toBe(failure);
       }
-      // An owed step leaves the previous package, record and config: never a half-installed plugin.
-      expect(await installedVersion()).toBe(rollbackFails ? "2.0.0" : "1.0.0");
+      expect(replaced).toEqual({ deferred: cohort, version: "2.0.0" });
+      // An owed step leaves the previous package, record and config. Without a cohort the new
+      // package stays under the old record, which is why that shape keeps failing.
+      expect(await installedVersion()).toBe(rollbackFails || !cohort ? "2.0.0" : "1.0.0");
       expect(
         await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
       ).toEqual(records);

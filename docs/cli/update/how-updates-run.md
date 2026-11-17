@@ -533,8 +533,9 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
-A plugin convergence failure, or an updater failure around a started Doctor, is
-recorded as an [owed step](#owed-steps) under the same conditions.
+A plugin convergence failure, or an updater failure around a started Doctor, can
+instead be recorded as an [owed step](#owed-steps), under the conditions listed
+there.
 
 Offline Doctor cron inspection reuses its admitted maintenance reader after the
 backup boundary instead of creating another disposable SQLite snapshot. If optional
@@ -917,8 +918,9 @@ rolled-back update owes nothing, including a step recorded before it failed.
 A plugin or Doctor failure is owed only when the updater can show what it left
 behind. These failures still fail the command, and roll back a replaced core:
 
-- plugin convergence that throws on an already-current core or in
-  `openclaw update repair`, where plugin installs are not restored together
+- plugin convergence that throws where plugin installs are not restored
+  together: on an already-current core, in `openclaw update repair`, and in an
+  update whose updater did not retain the plugin set before activation
 - plugin convergence that throws while it must also restore channel config that
   Doctor dropped during this update
 - a refused config write, or an unexpected failure while plugin records and
@@ -967,10 +969,11 @@ See
 An updater records and retries owed steps only when its own version supports
 them. On the first update to a version that does, the previously installed
 updater runs these steps and still drops a failed shell completion refresh
-without a record. That first update also still rolls back when plugin
-convergence or the post-plugin Doctor pass fails: the previously installed updater
-runs the Doctor pass itself, and it did not keep the plugin set that convergence
-needs to restore.
+without a record. It records no plugin step either. Plugin convergence runs in
+the new version's own process, which keeps that first update only when the
+previously installed updater retained the plugin set before activation, and
+otherwise fails as before. The post-plugin Doctor pass behaves as it did in the
+previously installed updater whenever that updater runs the pass itself.
 
 <a id="durable-serving-recovery" />
 
