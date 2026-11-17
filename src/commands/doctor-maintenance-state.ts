@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";

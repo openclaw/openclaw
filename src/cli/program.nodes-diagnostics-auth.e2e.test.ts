@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushTestResult } from "../../packages/gateway-protocol/src/index.js";
+import { ExitError } from "../runtime.js";
 import {
   createNodesProgram,
   gatewayRequests,
@@ -285,20 +286,21 @@ describe("cli program (nodes push)", () => {
     async ({ environment, json }) => {
       mockPushResult(pushResult());
       const invalidEnvironment = "invalid --environment (use sandbox|production)";
+      if (json) {
+        // The JSON failure owner only takes over from the exit the real runtime throws.
+        runtime.exit.mockImplementationOnce((code) => {
+          throw new ExitError(code as number);
+        });
+      }
       await expect(
         runPush(["--environment", environment, ...(json ? ["--json"] : [])]),
       ).rejects.toThrow(json ? invalidEnvironment : "exit");
       expect(programGatewayCallMock).not.toHaveBeenCalled();
       expect(getRuntimeOutput()).toBe("");
-      if (json) {
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(`nodes push failed: ${invalidEnvironment}`),
-        );
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-      }
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`nodes push failed: ${invalidEnvironment}`),
+      );
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     },
   );
 

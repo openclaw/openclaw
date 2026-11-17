@@ -647,6 +647,7 @@ describe("CI changed Node test plan", () => {
       "test/scripts/eager-import-closure.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      "test/scripts/runtime-process-build-graph.test.ts",
       lintSuppressionInventory,
     ];
     expect(resolvePolicyTestTargets([source], { cwd })).toEqual([

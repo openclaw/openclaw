@@ -1,7 +1,4 @@
-import {
-  adoptReleasedProcess,
-  killReleasedProcess,
-} from "../process/supervisor/released-processes.js";
+import { adoptReleasedProcess } from "../process/supervisor/released-processes.js";
 import type { ReleasedProcess } from "../process/supervisor/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createProcessSessionId } from "./bash-process-id.js";
@@ -14,7 +11,7 @@ import {
   type ProcessSession,
 } from "./bash-process-registry.js";
 
-/** Services are admitted, never evicted: background sessions plus adopted survivors. */
+/** Declared services (`background: true`) are admitted, never evicted. Survivors are tracked, not counted. */
 const MAX_SERVICES_PER_SESSION = 16;
 const MAX_SERVICES_PER_GATEWAY = 64;
 
@@ -27,7 +24,9 @@ const reservations = resolveGlobalSingleton(
 
 /** Explain the limit when a new service would cross it; undefined when there is room. */
 function serviceCapacityError(scopeKey: string | undefined): string | undefined {
-  const running = listRunningSessions().filter((session) => !session.exited);
+  const running = listRunningSessions().filter(
+    (session) => session.independentService === true && !session.exited,
+  );
   const reserved = [...reservations];
   const inSession =
     running.filter((session) => session.scopeKey === scopeKey).length +
@@ -65,10 +64,6 @@ export function reserveServiceSlot(
 
 function formatProcess({ pid, command }: ReleasedProcess): string {
   return command ? `pid ${pid} (${command})` : `pid ${pid}`;
-}
-
-function formatProcessList(survivors: readonly ReleasedProcess[]): string {
-  return survivors.map(formatProcess).join(", ");
 }
 
 function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
@@ -129,53 +124,21 @@ function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
 }
 
 /**
- * Account for every process a completed command left running: adopt each as a
- * tracked background session up to the service limit, and stop the rest by
- * identity. A process whose stop is unconfirmed stays tracked, over the limit,
- * so nothing escapes custody. Returns the lines for the tool result.
+ * Adopt every process a completed command left running as a tracked background
+ * session of its session. Capacity belongs to declared services only
+ * (`reserveServiceSlot`): a survivor neither counts nor is stopped for capacity,
+ * so nothing escapes custody and no helper is killed. Returns the lines for the tool result.
  */
-export async function adoptExecSurvivors(
+export function adoptExecSurvivors(
   parent: ProcessSession,
   survivors: readonly ReleasedProcess[],
-): Promise<string[]> {
-  const lines: string[] = [];
-  const overflow: ReleasedProcess[] = [];
-  let capacityError: string | undefined;
-  for (const survivor of survivors) {
-    capacityError ??= serviceCapacityError(parent.scopeKey);
-    if (capacityError) {
-      overflow.push(survivor);
-      continue;
-    }
+): string[] {
+  return survivors.flatMap((survivor) => {
     const session = adoptSurvivor(parent, survivor);
-    if (session) {
-      lines.push(
-        `${formatProcess(survivor)} keeps running as background session ${session.id}: process list shows it and process kill ${session.id} stops it. Its later output to this command's stdout/stderr is discarded; redirect it to a file to keep it.`,
-      );
-    }
-  }
-  if (overflow.length === 0) {
-    return lines;
-  }
-  const outcomes = await Promise.all(overflow.map(killReleasedProcess));
-  const stopped = overflow.filter((_, index) => outcomes[index]!.status === "stopped");
-  if (stopped.length > 0) {
-    lines.push(
-      `Stopped ${stopped.length} process${stopped.length === 1 ? "" : "es"} the command left running, over the service limit: ${formatProcessList(stopped)}. ${capacityError}`,
-    );
-  }
-  overflow.forEach((survivor, index) => {
-    const outcome = outcomes[index]!;
-    if (outcome.status === "stopped") {
-      return;
-    }
-    const session = adoptSurvivor(parent, survivor);
-    if (session) {
-      session.cleanupUncertain = true;
-    }
-    lines.push(
-      `Could not confirm that ${formatProcess(survivor)} stopped (${outcome.reason}); it may still be running${session ? ` and stays tracked as background session ${session.id}` : ""}.`,
-    );
+    return session
+      ? [
+          `${formatProcess(survivor)} keeps running as background session ${session.id}: process list shows it and process kill ${session.id} stops it. Its later output to this command's stdout/stderr is discarded; redirect it to a file to keep it.`,
+        ]
+      : [];
   });
-  return lines;
 }

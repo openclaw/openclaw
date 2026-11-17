@@ -392,6 +392,43 @@ describe("scheduled authenticated operator source", () => {
       }),
   );
 
+  it("gives sibling continuations of one requester one source and keeps them after it settles", () =>
+    withRecovery(async (fixture) => {
+      const restored = expectDefined(await fixture.restore(), "recovered requester authority");
+      const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: fixture.client.authenticatedUserProfile,
+        operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+        operatorRunAuthority: restored.authority,
+        scopes: ["operator.write"],
+      });
+      const capture = () =>
+        withPluginRuntimeGatewayRequestScope(
+          { client, context: fixture.context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
+              async () => await captureOperatorToolGatewayContinuationContext(),
+            ),
+        );
+      const first = expectDefined(await capture(), "first child authority");
+      const second = expectDefined(await capture(), "second child authority");
+      try {
+        expect(first.operatorAuthority?.source).toBe(restored.authority.source);
+        expect(second.operatorAuthority?.source).toBe(restored.authority.source);
+        fixture.retire();
+        restored.release();
+        expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+        expect(first.assertCurrent).not.toThrow();
+        expect(second.assertCurrent).not.toThrow();
+        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+        expect(first.assertCurrent).toThrow();
+      } finally {
+        first.release();
+        second.release();
+        restored.release();
+      }
+    }));
+
   it.each(["current", "owner closed", "device revoked"] as const)(
     "checks independently owned continuation custody after preparation: %s",
     (change) =>
@@ -549,6 +586,31 @@ describe("scheduled authenticated operator source", () => {
       "slack",
     );
   });
+
+  it("keeps key-linked authority current when an unrelated session is created", () =>
+    withRecovery(async (fixture) => {
+      const { agentId, sessionKey, storePath } = fixture.target;
+      const restored = await restoreGatewayOperatorSource({
+        snapshot: fixture.snapshot,
+        target: { agentId, sessionKey },
+        context: fixture.context,
+        assertCurrent: () => {},
+      });
+      using _ = { [Symbol.dispose]: restored.release };
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(
+        { agentId, sessionKey: `agent:${agentId}:unrelated`, storePath },
+        { sessionId: "unrelated-session", updatedAt: 1 },
+      );
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        sessionId: "replacement-session",
+      });
+      expectRevoked(restored.authority);
+    }));
 
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {

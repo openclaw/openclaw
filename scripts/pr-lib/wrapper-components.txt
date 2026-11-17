@@ -1193,6 +1193,7 @@ src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
+src/infra/package-release-slot-path.ts
 src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts
 src/infra/package-update-activation-immutable.ts
@@ -1232,6 +1233,7 @@ src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
+src/infra/runtime-process-dependency-manifest.ts
 src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
