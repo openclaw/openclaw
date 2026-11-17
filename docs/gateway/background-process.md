@@ -318,6 +318,9 @@ When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
 the Gateway's page tables for each command. The broker belongs to the Gateway's
 lifetime, so detached work also uses it after leaving a request's async context.
+Asynchronous child-runtime probes, including readiness and health observations,
+also launch through the broker when available. Each observation still launches
+the runtime to detect removed executables and shared-library loader failures.
 Explicit native-only scopes still keep their local transport. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
