@@ -1,10 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
+import * as pathExchange from "./path-exchange.js";
 
 export const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
+
+/**
+ * Publish with the backup and activation moves of a platform that has no atomic
+ * exchange, such as Windows. The caller restores mocks.
+ */
+export const publishWithoutPathExchange = () =>
+  vi.spyOn(pathExchange, "supportsPathExchange").mockReturnValue(false);
 
 export async function expectVersion(root: string, version: string) {
   expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);

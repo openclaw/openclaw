@@ -8,6 +8,7 @@ import { collectPackageReleases, listPackageReleases } from "./package-release-r
 import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { capturePackageReleaseSlot, switchPackageReleaseLink } from "./package-release-slot.js";
 import { stagePackageRelease } from "./package-update-release-switch.test-support.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { expectedPathExchangeRoute } from "./path-exchange.test-support.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -24,18 +25,33 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-type ChildEvent = { cut?: string; label?: string; status?: string; detail?: string };
+type ChildEvent = {
+  cut?: string;
+  boundary?: number;
+  label?: string;
+  status?: string;
+  detail?: string;
+  rollback?: { exitCode: number | null; error?: string | null };
+};
+type Tools = "missing" | undefined;
 
-/** Run one switch in a child on its own prefix; `cut` says where it is killed. */
+/** Run one installation in a child on its own prefix; `cut` says where it is killed. */
 async function runSwitch(
   cut: string,
-  layout: "linked" | "plain",
-  options: { root?: string; tools?: "missing" } = {},
+  layout: "linked" | "plain" | "swap",
+  options: { root?: string; tools?: Tools; verification?: "fails" } = {},
 ) {
   const root = options.root ?? dir;
   const proc = spawn(
     process.execPath,
-    [...resolveRuntimeWorkerArgv(pathToFileURL(child)), cut, root, layout, options.tools ?? ""],
+    [
+      ...resolveRuntimeWorkerArgv(pathToFileURL(child)),
+      cut,
+      root,
+      layout,
+      options.tools ?? "",
+      options.verification ?? "",
+    ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
   let stdout = "";
@@ -58,6 +74,7 @@ async function runSwitch(
   const globalRoot = path.join(prefix, "lib", "node_modules");
   return {
     events,
+    root,
     prefix,
     slot: path.join(globalRoot, "openclaw"),
     globalRoot,
@@ -72,19 +89,19 @@ const version = (root: string) =>
   JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
 
 /**
- * Switch a plain package directory to a new release once to the end, then once
- * per boundary of that run with the updater killed there. `installed` is the
- * version the package path serves afterwards, or null when it serves nothing.
+ * Replace a plain package directory once to the end, then once per boundary of
+ * that run with the updater killed there. `installed` is the version the
+ * package path serves afterwards, or null when it serves nothing.
  */
-async function killAtEveryBoundary(tools?: "missing") {
-  const complete = await runSwitch("complete", "plain", {
+async function killAtEveryBoundary(layout: "plain" | "swap", tools?: Tools) {
+  const complete = await runSwitch("complete", layout, {
     root: path.join(dir, "complete"),
     tools,
   });
   const labels = complete.events.flatMap((event) => event.label ?? []);
   const killed = await Promise.all(
     labels.map(async (label, index) => {
-      const state = await runSwitch(`boundary:${index + 1}`, "plain", {
+      const state = await runSwitch(`boundary:${index + 1}`, layout, {
         root: path.join(dir, `killed-${index + 1}`),
         tools,
       });
@@ -99,16 +116,23 @@ async function killAtEveryBoundary(tools?: "missing") {
   );
   // Every killed run died right after the boundary the completed run names at that position.
   expect(killed.map((run) => run.state.events.at(-2)?.label)).toEqual(labels);
+  expect(complete.events.at(-1)?.status).toBe("committed");
+  return { labels, killed, complete, detail: complete.events.at(-1)?.detail ?? "" };
+}
+
+/** The same sweep over the switch that adopts a plain package directory as a release. */
+async function adoptAtEveryBoundary(tools?: Tools) {
+  const sweep = await killAtEveryBoundary("plain", tools);
+  const { complete } = sweep;
   // The completed run leaves the old tree as a release behind the switched link.
   const retained = fs
     .readdirSync(path.join(complete.prefix, "releases"))
     .filter((id) => id.startsWith("2026.11.3-"))
     .map((id) => path.join(complete.prefix, "releases", id, "lib", "node_modules", "openclaw"));
-  expect(complete.events.at(-1)?.status).toBe("committed");
   expect(readPackageReleaseSlotSync(complete.slot)?.releaseRoot).toBe(complete.candidate);
   expect(retained.map(version)).toEqual(["2026.11.3"]);
   expect(fs.readdirSync(complete.globalRoot)).toEqual(["openclaw"]);
-  return { labels, killed, detail: complete.events.at(-1)?.detail ?? "" };
+  return sweep;
 }
 
 describe.skipIf(process.platform === "win32")("release switch killed by SIGKILL", () => {
@@ -161,7 +185,7 @@ describe.skipIf(process.platform === "win32")("release switch killed by SIGKILL"
   it.runIf(expectedPathExchangeRoute)(
     "at every boundary of an adoption: the package path serves a complete package",
     async () => {
-      const { labels, killed, detail } = await killAtEveryBoundary();
+      const { labels, killed, detail } = await adoptAtEveryBoundary();
 
       expect(killed.filter((run) => run.installed === null).map((run) => run.label)).toEqual([]);
       // The old package serves until the link switch, the new one after it.
@@ -176,7 +200,7 @@ describe.skipIf(process.platform === "win32")("release switch killed by SIGKILL"
   );
 
   it("without an exchange tool: only the instant between the two renames has no package", async () => {
-    const { killed, detail } = await killAtEveryBoundary("missing");
+    const { killed, detail } = await adoptAtEveryBoundary("missing");
     expect(detail).toMatch(/two renames \(atomic exchange unavailable: .*ENOENT/u);
 
     const broken = killed.filter((run) => run.installed === null);
@@ -230,4 +254,115 @@ describe.skipIf(process.platform === "win32")("release switch killed by SIGKILL"
     expect(collected.removed).toContain(path.join(releases, leftover));
     expect(fs.existsSync(path.join(releases, leftover))).toBe(false);
   });
+});
+
+describe.skipIf(process.platform === "win32")("package swap killed by SIGKILL", () => {
+  const backups = (globalRoot: string) =>
+    fs
+      .readdirSync(globalRoot)
+      .filter((name) => name.startsWith(".openclaw.package-backup-"))
+      .map((name) => path.join(globalRoot, name));
+  const launcherTarget = (prefix: string) => fs.realpathSync(path.join(prefix, "bin", "openclaw"));
+
+  it.runIf(expectedPathExchangeRoute)(
+    "at every boundary: the package path serves a complete package",
+    async () => {
+      const { labels, killed, complete, detail } = await killAtEveryBoundary("swap");
+
+      expect(killed.filter((run) => run.installed === null).map((run) => run.label)).toEqual([]);
+      // One exchange publishes: the old package serves until its tool has ended.
+      // The fixture cuts before it starts the tool, so no tool outlives a killed run.
+      expect(labels.filter((label) => /^(start|end) /u.test(label))).toHaveLength(2);
+      const started = labels.findIndex((label) => label.startsWith("start "));
+      const ended = labels.findIndex((label) => label.startsWith("end "));
+      expect(killed.map((run) => run.installed)).toEqual(
+        labels.map((_, index) => (index < ended ? "2026.11.3" : "2026.12.1")),
+      );
+      expect(detail).toContain(`by an atomic exchange (${expectedPathExchangeRoute})`);
+      // Local dist files are preserved from the old package while it still serves.
+      const preserved = labels.findLastIndex((label) => label.includes("update-recovery"));
+      expect(preserved).toBeGreaterThan(-1);
+      expect(preserved).toBeLessThan(started);
+      const recovery = path.join(complete.root, "state", "update-recovery");
+      const [bundle] = fs.readdirSync(recovery);
+      expect(
+        fs.readFileSync(path.join(recovery, bundle!, "files", "dist", "build-info.json"), "utf8"),
+      ).toContain("build-old");
+      // The old package is retained under the backup name for the update run's rollback.
+      expect(backups(complete.globalRoot).map(version)).toEqual(["2026.11.3"]);
+    },
+  );
+
+  it.runIf(expectedPathExchangeRoute)(
+    "before the exchange: the old package serves and the next verified swap removes the leftover",
+    async () => {
+      const complete = await runSwitch("complete", "swap", { root: path.join(dir, "complete") });
+      const staged = complete.events.find((event) =>
+        event.label?.endsWith("-> lib/node_modules/.openclaw.package-backup"),
+      );
+      // Killed with the new package under the backup name and the exchange not yet made.
+      const state = await runSwitch(`boundary:${staged?.boundary}`, "swap");
+      expect(version(state.slot)).toBe("2026.11.3");
+      expect(backups(state.globalRoot).map(version)).toEqual(["2026.12.1"]);
+
+      const next = await stagePackageRelease(
+        { prefix: state.prefix, globalRoot: state.globalRoot, slot: state.slot },
+        "2026.12.2",
+        undefined,
+        path.join(state.globalRoot, ".openclaw.update-stage-next"),
+      );
+      let transaction: PackageUpdateTransaction | undefined;
+      const result = await swapStagedPackageInstall({
+        ...next,
+        onTransaction: (issued) => {
+          transaction = issued;
+        },
+      });
+      if (result.status !== "committed" || !transaction) {
+        throw new Error(`expected a committed swap with a transaction: ${result.status}`);
+      }
+      // Verified completion retires this update's backup and the historical one.
+      expect(await transaction.complete({ activationVerified: true }, () => {})).toBeUndefined();
+      expect(version(state.slot)).toBe("2026.12.2");
+      expect(backups(state.globalRoot)).toEqual([]);
+    },
+  );
+
+  it("without an exchange tool: only the instant between the two renames has no package", async () => {
+    const { killed, detail } = await killAtEveryBoundary("swap", "missing");
+    expect(detail).toMatch(/two moves \(atomic exchange unavailable: .*ENOENT/u);
+
+    // The same sweep finds the window that publishing after the backup rename leaves.
+    const broken = killed.filter((run) => run.installed === null);
+    expect(broken.map((run) => run.label)).toEqual([
+      "rename lib/node_modules/openclaw -> lib/node_modules/.openclaw.package-backup",
+    ]);
+    const state = broken[0]!.state;
+    expect(fs.lstatSync(state.slot, { throwIfNoEntry: false })).toBeUndefined();
+    // The documented recovery: rename the backup onto the package path.
+    fs.renameSync(backups(state.globalRoot)[0]!, state.slot);
+    expect(version(state.slot)).toBe("2026.11.3");
+    expect(launcherTarget(state.prefix)).toBe(path.join(state.slot, "openclaw.mjs"));
+  });
+
+  it.each(expectedPathExchangeRoute ? [undefined, "missing" as const] : ["missing" as const])(
+    "after a failed verification: rollback restores the previous package (exchange tools: %s)",
+    async (tools) => {
+      const state = await runSwitch("complete", "swap", { tools, verification: "fails" });
+
+      const outcome = state.events.at(-1);
+      expect(outcome?.detail).toContain(tools ? "by two moves" : "by an atomic exchange");
+      expect(outcome?.rollback).toEqual({ exitCode: 0, error: null });
+      expect(version(state.slot)).toBe("2026.11.3");
+      expect(fs.readFileSync(path.join(state.slot, "dist", "build-info.json"), "utf8")).toContain(
+        "build-old",
+      );
+      expect(launcherTarget(state.prefix)).toBe(path.join(state.slot, "openclaw.mjs"));
+      // Neither the backup nor the rejected candidate is left beside the package.
+      expect(fs.readdirSync(state.globalRoot).toSorted()).toEqual([
+        ".openclaw.update-stage-fixture",
+        "openclaw",
+      ]);
+    },
+  );
 });

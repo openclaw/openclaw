@@ -12,7 +12,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import { captureSwap } from "../../infra/package-update-swap.assertions.test-support.js";
+import {
+  captureSwap,
+  publishWithoutPathExchange,
+} from "../../infra/package-update-swap.assertions.test-support.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -155,6 +158,8 @@ async function scenario(
   if (kind === "unverified-completion") {
     const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
+    // The denied move is the backup move of a publication without an exchange.
+    const exchange = publishWithoutPathExchange();
     const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (String(args[0]) === fixture.packageRoot) {
         setupInjected = true;
@@ -166,6 +171,7 @@ async function scenario(
       swap = await publishSwap(fixture, "failed");
     } finally {
       effect.mockRestore();
+      exchange.mockRestore();
     }
   } else if (["link-retained", "link-changed", "transient-read"].includes(kind)) {
     const fixture = await createPackageSwapFixture(base);

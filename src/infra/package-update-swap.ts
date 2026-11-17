@@ -10,8 +10,6 @@ import {
 import { encodePackageActivationLauncher } from "./package-update-activation-journal.js";
 import { preparePackageActivation } from "./package-update-activation.js";
 import {
-  activateStagedNpmPackageRoot,
-  backupNpmPackageRoot,
   capturePackageLaunchers,
   type PackageLauncherBackup,
   discardPackageLauncherBackup,
@@ -42,6 +40,10 @@ import {
   type StagedPackageSwapResult,
   type StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
+import {
+  canExchangeStagedPackageRoot,
+  publishStagedPackageRoot,
+} from "./package-update-swap-publish.js";
 import { createPackageSwapResults } from "./package-update-swap-results.js";
 import {
   captureLegacyPackageBackupRetirement,
@@ -105,6 +107,9 @@ async function swapStagedPackageDirectory(
   let previousIdentity: PackageDirectoryIdentity | undefined;
   let rootLink: Awaited<ReturnType<typeof createNpmPackageRootLinkLifecycle>> | undefined;
   let packageBackedUp = false;
+  let publishByExchange = false;
+  let publicationUncertain = false;
+  let publication: string | null = null;
   let displacedCandidateRoot: string | undefined;
   const baseline = createPackageIntegrityReader(params.timeoutMs);
   const launchers: PackageLauncherBackup = { entries: [] };
@@ -127,6 +132,14 @@ async function swapStagedPackageDirectory(
     if (preparationCustody && !activation) {
       return [
         "Preparation custody is retained by the package recovery journal; run its repair command.",
+      ];
+    }
+    if (publicationUncertain) {
+      // Another writer changed the package path or its backup name mid-exchange:
+      // neither can be claimed, restored, or retired as this update's own.
+      packageRollbackVerified = false;
+      return [
+        `Package publication ended in an unknown state; inspect ${targetSwapRoot} and ${backupRoot} before restarting.`,
       ];
     }
     const messages: string[] = [];
@@ -307,12 +320,18 @@ async function swapStagedPackageDirectory(
         (await readPackageDistInventoryIfPresent(params.installTarget.packageRoot!)) ??
         (await collectPackageDistInventory(params.installTarget.packageRoot!));
     }
+    // One atomic exchange replaces a package directory with a staged one. The old
+    // tree then never leaves the package path before publication, so local
+    // overrides are captured from it there. A package link keeps the two moves:
+    // its ownership is proven on the moved entry.
+    publishByExchange =
+      hadPackage && !rootLink && (await canExchangeStagedPackageRoot(stagedSwapRoot));
     replayLocalOverrides = await preparePackageSwapLocalOverrides({
       ...params,
       hadPackage,
       rootLinked: Boolean(rootLink),
       targetSwapRoot,
-      backupRoot,
+      backupRoot: publishByExchange ? targetSwapRoot : backupRoot,
     });
     packageRollbackVerified = hadPackage && previousVersion !== null;
   };
@@ -626,44 +645,27 @@ async function swapStagedPackageDirectory(
           previousRoot?.kind === "directory" ||
           previousIdentity !== undefined;
       };
-      if (hadPackage) {
-        if (native) {
-          await movePackageRoot(targetSwapRoot, backupRoot, {
-            operation: "backup",
-            assertCaller: assertForwardCurrent,
-            warn: (message) => warnings.push(message),
-            onPublished: () => {
-              // A published copy owns compensation even if source cleanup is refused.
-              recordPackageBackup();
-              rollback.push(restorePackage);
-              assertForwardCurrent();
-            },
-          });
-        } else if (rootLink) {
-          assertForwardCurrent();
-          const acquisition = await rootLink.acquire();
-          if (!acquisition.acquired) {
-            activePackageRoot = null;
-            throw new Error(acquisition.error);
-          }
-        } else {
-          await backupNpmPackageRoot(targetSwapRoot, backupRoot, assertForwardCurrent, warnings);
-        }
-        if (!native) {
-          recordPackageBackup();
-        }
-      }
-      if (!native || !hadPackage) {
-        rollback.push(restorePackage);
-      }
-      await replayLocalOverrides?.();
-      await activateStagedNpmPackageRoot(stagedSwapRoot, targetSwapRoot, undefined, {
+      publication = await publishStagedPackageRoot({
+        stagedRoot: stagedSwapRoot,
+        liveRoot: targetSwapRoot,
+        backupRoot,
+        hadPackage,
+        native: native !== undefined,
+        rootLink,
+        exchange: publishByExchange,
         assertCaller: assertForwardCurrent,
+        warnings,
+        replayLocalOverrides,
+        onBackedUp: recordPackageBackup,
+        onRollbackOwed: () => rollback.push(restorePackage),
         onPublished: () => {
           activePackageRoot = targetPackageRoot;
           projectActivated = true;
         },
-        warnings,
+        onUnpublished: (uncertain) => {
+          activePackageRoot = null;
+          publicationUncertain ||= uncertain;
+        },
       });
       for (const shim of shims) {
         // Register before copying: replacing an entry can fail after removing it.
@@ -701,7 +703,12 @@ async function swapStagedPackageDirectory(
             : null,
           !retained ? await discardPackageLauncherBackup(launchers, targetLayout.globalRoot) : null,
         ];
-    return results.committed(activePackageRoot, hadPackage, cleanup, postVerifyStep);
+    return results.committed(
+      activePackageRoot,
+      hadPackage,
+      [publication, ...cleanup],
+      postVerifyStep,
+    );
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
