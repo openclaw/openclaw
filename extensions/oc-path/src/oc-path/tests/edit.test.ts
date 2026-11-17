@@ -40,33 +40,63 @@ describe("setOcPath", () => {
     expect(result.raw).toBe("## Tools\n- name: changed\n- name: second\n");
   });
 
-  it("keeps item positions and explicit values through multiline edits and insertion", () => {
-    let ast = parseMd(
-      "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- ```\n  name: decoy\n  ```\n\n  name: second\n",
-    );
-    for (const [address, value] of [
-      ["[frontmatter]/description", "short"],
-      ["tools/#0/name", "first\n- name: literal"],
-      ["tools/$last/name", "second changed"],
-      ["[frontmatter]/+added", "1.10"],
-      ["tools/+", "name: appended"],
-      ["tools/#2/name", "appended changed"],
-    ] as const) {
-      const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/${address}`), value);
-      if (result.kind !== "md") {
-        throw new Error(`expected Markdown edit at ${address} to succeed`);
+  it.each(["\n", "\r\n", "\r"])(
+    "keeps item positions through multiline edits and insertion with %j",
+    (ending) => {
+      let ast = parseMd(
+        "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- ```\n  name: decoy\n  ```\n\n  name: second\n".replaceAll(
+          "\n",
+          ending,
+        ),
+      );
+      for (const [address, value] of [
+        ["[frontmatter]/description", "short"],
+        ["tools/#0/name", "first\n- name: literal"],
+        ["tools/$last/name", "second changed"],
+        ["[frontmatter]/+added", "1.10"],
+        ["tools/+", "name: appended"],
+        ["tools/#2/name", "appended changed"],
+      ] as const) {
+        const result = setOcPath(ast, parseOcPath(`oc://AGENTS.md/${address}`), value);
+        if (result.kind !== "md") {
+          throw new Error(`expected Markdown edit at ${address} to succeed`);
+        }
+        ast = result;
       }
-      ast = result;
+      expect(ast.raw).toBe(
+        '---\ndescription: short\nadded: "1.10"\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- ```\n  name: decoy\n  ```\n\n  name: second changed\n- name: appended changed\n'.replaceAll(
+          "\n",
+          ending,
+        ),
+      );
+      expect(parseYaml(ast.raw.replace(/\r\n?/g, "\n").split(/^---$/m)[1] ?? "").added).toBe(
+        "1.10",
+      );
+      expect(ast.blocks[1]?.items.map((item) => item.kv?.value)).toEqual([
+        "first\n- name: literal",
+        "second changed",
+        "appended changed",
+      ]);
+    },
+  );
+
+  it("preserves mixed line endings and a BOM outside the selected field", () => {
+    const raw =
+      "\uFEFF## Intro\r\n- keep: stable\n## Tools\r- name: before\r## End\n- keep: unchanged\r\n";
+    const ast = parseMd(raw);
+    expect(ast.blocks[1]?.bodyText).toBe("- name: before");
+    expect(edit(raw, "tools/name/name", "after").raw).toBe(raw.replace("before", "after"));
+  });
+
+  it.each(["\r", "\r\r", "\r\n\r\n"])("separates an appended section after %j", (tail) => {
+    const raw = `## Intro${tail}`;
+    const result = edit(raw, "+", "Added");
+    const ending = tail.includes("\n") ? "\r\n" : "\r";
+    expect(result.raw).toBe(`## Intro${ending}${ending}## Added${ending}`);
+    if (result.kind !== "md") {
+      throw new Error("expected Markdown edit");
     }
-    expect(ast.raw).toBe(
-      '---\ndescription: short\nadded: "1.10"\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- ```\n  name: decoy\n  ```\n\n  name: second changed\n- name: appended changed\n',
-    );
-    expect(parseYaml(ast.raw.split(/^---$/m)[1] ?? "").added).toBe("1.10");
-    expect(ast.blocks[1]?.items.map((item) => item.kv?.value)).toEqual([
-      "first\n- name: literal",
-      "second changed",
-      "appended changed",
-    ]);
+    expect(result.blocks[1]?.line).toBe(3);
   });
 
   it("preserves literal dollar replacement text", () => {
