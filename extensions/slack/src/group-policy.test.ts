@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setSlackChannelPolicyBindings } from "./channel-policy-state.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
+import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 
 type PolicyContext = Parameters<typeof resolveSlackGroupRequireMention>[0];
 type ToolPolicy = ReturnType<typeof resolveSlackGroupToolPolicy>;
@@ -103,10 +104,24 @@ describe("slack group policy", () => {
       denied,
     ],
     [
-      "whole entry hides wildcard",
+      // Tools use whole-entry selection; mention inherits the wildcard like message ingress.
+      "whole entry hides wildcard tools but not wildcard mention",
       {
         cfg: channelConfig({ partial: {}, "*": { requireMention: false, tools: denied } }),
         groupId: "partial",
+      },
+      false,
+      undefined,
+      undefined,
+    ],
+    [
+      "wildcard mention before the root default",
+      {
+        cfg: channelConfig(
+          { "*": { requireMention: true }, C01234567: { enabled: true } },
+          { requireMention: false },
+        ),
+        groupId: "C01234567",
       },
       true,
       undefined,
@@ -169,6 +184,28 @@ describe("slack group policy", () => {
       ).toBe(expected);
     },
   );
+
+  it.each([
+    ["no channel entry", undefined],
+    [
+      "exact entry without a value",
+      { "*": { requireMention: true }, C01234567: { enabled: true } },
+    ],
+    ["exact entry value", { "*": { requireMention: true }, C01234567: { requireMention: false } }],
+    ["wildcard only", { "*": { requireMention: false } }],
+  ] as const)("matches message ingress mention policy for %s", (_name, channels) => {
+    for (const rootMention of [false, true, undefined]) {
+      const policyCfg = channelConfig(structuredClone(channels), { requireMention: rootMention });
+      const ingress = resolveSlackChannelConfig({
+        channelId: "C01234567",
+        channels: policyCfg.channels?.slack?.channels,
+        defaultRequireMention: rootMention,
+      });
+      expect(resolveSlackGroupRequireMention({ cfg: policyCfg, groupId: "C01234567" })).toBe(
+        ingress?.requireMention,
+      );
+    }
+  });
 
   it.each(["c01234567", "C01234567"])("prefers exact case for %s", (groupId) => {
     const policyCfg = channelConfig({
