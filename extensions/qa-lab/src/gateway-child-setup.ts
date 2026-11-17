@@ -32,7 +32,7 @@ import {
   type QaCliBackendAuthMode,
 } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
-import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
+import { readQaLiveProviderConfig } from "./providers/live-config.js";
 import {
   QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV,
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
@@ -240,9 +240,10 @@ export async function prepareQaGatewayChild(
           )
           .filter((providerId): providerId is string => Boolean(providerId))
       : [];
-  const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
-    providerIds: liveProviderIds,
-  });
+  const { providers: liveProviderConfigs, secrets: liveSecretsConfig } =
+    await readQaLiveProviderConfig({
+      providerIds: liveProviderIds,
+    });
   const liveOwnerPluginIds =
     liveProviderIds.length > 0
       ? await resolveQaOwnerPluginIdsForProviderIds({
@@ -290,6 +291,9 @@ export async function prepareQaGatewayChild(
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
     let cfg = buildGatewayConfig(gatewayPort);
+    if (liveSecretsConfig) {
+      cfg = { ...cfg, secrets: liveSecretsConfig };
+    }
     cfg = await stageQaLiveApiKeyProfiles({
       cfg,
       stateDir,

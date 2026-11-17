@@ -23,7 +23,6 @@ import {
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
 import { projectClawHubPluginInspection } from "./catalog-discovery.js";
-import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
@@ -91,8 +90,6 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
-import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
-import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { projectPluginInstallHealth } from "./status-snapshot.js";
 
 const CLAWHUB_CATEGORY_BATCH_LIMIT = 200;
@@ -183,29 +180,7 @@ export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
   },
 );
 
-/** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
-export function resolveManagedSetupCatalogIconUrl(params: {
-  config: OpenClawConfig;
-  iconUrl: string;
-}): string | undefined {
-  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
-  if (!requested) {
-    return undefined;
-  }
-  const allowedUrls = [
-    ...resolveManifestProviderAuthChoices({
-      config: params.config,
-      includeUntrustedWorkspacePlugins: false,
-      includeWorkspacePlugins: false,
-    }).map((choice) => choice.icon),
-    ...listRecommendedToolInstalls().map((install) => install.icon),
-  ];
-  return allowedUrls.some(
-    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
-  )
-    ? requested
-    : undefined;
-}
+export { resolveManagedSetupCatalogIconUrl } from "./management-catalog.js";
 
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */
 export const listManagedPlugins = withManagedPluginCache(
@@ -216,6 +191,8 @@ export const listManagedPlugins = withManagedPluginCache(
     metadata?: PluginMetadataSnapshot;
     /** Serve prepared remote presentation facts without waiting for enrichment. */
     cachedCatalogOnly?: boolean;
+    /** Lifecycle confirmations need inventory even when presentation hides a plugin. */
+    view?: "catalog" | "inventory";
   }): Promise<PluginsListResult> => {
     // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
     // Retain the paired source before hosted catalog I/O can publish another generation.
@@ -541,7 +518,10 @@ export const listManagedPlugins = withManagedPluginCache(
       });
     }
     return {
-      plugins: plugins.filter(idFeatureVisible(params.config)).toSorted(compareCatalogEntries),
+      plugins: (params.view === "inventory"
+        ? plugins
+        : plugins.filter(idFeatureVisible(params.config))
+      ).toSorted(compareCatalogEntries),
       diagnostics,
       mutationAllowed: !resolveIsConfigReadOnly(env),
     };

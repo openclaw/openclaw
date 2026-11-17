@@ -334,11 +334,11 @@ export async function prepareAgentRunUserTurn(params: {
           config: params.cfgForAgent ?? params.cfg,
         };
       };
-      const privateTarget = params.privateCompletion ? await resolveTarget() : undefined;
+      const completionTarget = trackRequesterCompletion ? await resolveTarget() : undefined;
       const senderFields = gatewayClientSenderFields(params.client);
-      if (privateTarget) {
+      if (completionTarget) {
         const submitted = await readSessionSubmittedInput(
-          privateTarget,
+          completionTarget,
           buildRunUserTurnIdempotencyKey(params.runId),
         );
         params.assertCurrent();
@@ -387,10 +387,10 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: params.privateCompletion
+        target: trackRequesterCompletion
           ? () => {
               params.assertCurrent();
-              return privateTarget;
+              return completionTarget;
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",

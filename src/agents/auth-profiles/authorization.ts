@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -14,7 +13,10 @@ import { enrollOwnedAuthProfileAuthorization } from "./authorization-enrollment-
 import { readAuthProfileAuthorizationLifetime } from "./authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./authorization-observation.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
-import { assertAuthProfileMigrationCandidates } from "./legacy-source-diagnostic.js";
+import {
+  assertAuthProfileMigrationStateAtDatabasePath,
+  prepareAuthProfileMigrationCandidates,
+} from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
@@ -27,7 +29,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   getScopedAuthProfileEnv,
   getScopedSharedAuthStore,
@@ -103,15 +105,11 @@ export async function captureAuthProfileAuthorization(params: {
       agentId?: string;
       agentDir?: string;
       observation: ReturnType<typeof retainAuthProfileAuthorizationObservation>;
-      reader?: ReturnType<typeof prepareAgentAuthProfileRowsRead>;
+      reader?: Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>;
       incarnation?: string;
     };
     const targets: Target[] = paths.map((databasePath) => ({
       databasePath,
-      agentId:
-        databasePath === sharedPath && ownership.location === "state-db"
-          ? undefined
-          : resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
       agentDir: databasePath === sharedPath ? undefined : agentDir,
       observation: retainAuthProfileAuthorizationObservation(databasePath, profileId),
     }));
@@ -156,36 +154,42 @@ export async function captureAuthProfileAuthorization(params: {
       const publishers = targets.map((target) => target.observation.prepareRead());
       const rows = await Promise.all(
         targets.map(async (target) => {
-          if (target.agentId === undefined) {
+          if (target.databasePath === sharedPath && ownership.location === "state-db") {
             return readSharedAuthProfileRows(context, undefined, "canonical");
           }
-          target.reader ??= prepareAgentAuthProfileRowsRead({
+          target.reader ??= await prepareAgentAuthProfileRowsRead({
             databasePath: target.databasePath,
             agentId: target.agentId,
             env,
             // Runtime credential projections omit private authorization incarnations.
             source: "canonical",
           });
+          target.agentId = target.reader.agentId;
           return target.reader.read();
         }),
       );
       assertOwners();
-      const stores = rows.map((row, index) => {
+      const stores = [];
+      for (const [index, row] of rows.entries()) {
         const target = targets[index]!;
         const store = loadPersistedAuthProfileStoreFromRows(row, target.databasePath) ?? {
           version: AUTH_STORE_VERSION,
           profiles: {},
         };
-        assertAuthProfileMigrationCandidates({
+        await prepareAuthProfileMigrationCandidates({
           databasePath: target.databasePath,
           candidates: resolveLegacyAuthProfileSourceCandidates({ agentDir: target.agentDir, env }),
-          hasCredentials: () => Object.keys(store.profiles).length > 0,
-          provider: store.profiles[profileId]?.provider,
-          config: cfg,
+          hasCredentials: Object.keys(store.profiles).length > 0,
+          assertCurrent: assertOwners,
         });
+        assertAuthProfileMigrationStateAtDatabasePath(
+          target.databasePath,
+          store.profiles[profileId]?.provider,
+          cfg,
+        );
         publishers[index]!(row.store.status === "readable" ? row.store.raw : undefined);
-        return store;
-      });
+        stores.push(store);
+      }
       const local = stores[0]!;
       const shared = stores[paths.indexOf(sharedPath)]!;
       const effective = mergeLocalAuthProfileStoreWithInheritedStore(

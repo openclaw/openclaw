@@ -177,3 +177,10 @@ export function createCaptureRuntime(): CaptureRuntime {
     read: () => lines.join("\n").trim(),
   };
 }
+
+/** Only the terminal chat uses /openclaw for navigation; web chat stays in place. */
+export function agentHandoffReturnHint(surface?: "cli" | "gateway"): string {
+  return surface === "gateway"
+    ? "You can return through Settings → Ask OpenClaw."
+    : "Use /openclaw to come back.";
+}
