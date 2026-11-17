@@ -605,10 +605,12 @@ it("keeps escaped legacy IDs distinct from SQLite replacement strings", async ({
       .prepare("SELECT COUNT(*) AS count FROM transcript_event_identities WHERE session_id = ?")
       .get(scope.sessionId),
   ).toEqual({ count: 0 });
-  expect(historyEvent(scope, "\ud800", { currentOnly: true })?.event).toEqual(escaped);
-  expect(historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true })?.event).toEqual(
-    replacement,
+  expect(historyEvent(scope, "\ud800", { currentOnly: true, maxBytes: 1024 })?.event).toEqual(
+    escaped,
   );
+  expect(
+    historyEvent(scope, "\ufffd\ufffd\ufffd", { currentOnly: true, maxBytes: 1024 })?.event,
+  ).toEqual(replacement);
 });
 
 it("selects imported headers and retention anchors before later indexed duplicates", async ({

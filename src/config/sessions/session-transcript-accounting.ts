@@ -41,9 +41,9 @@ function readAccountingTail(
           );
           // SQLite treats literal NUL as an end marker, but JSON.parse rejects it.
           // Do not let compact projection hide corrupted identity bytes from accounting.
-          return (
+          return [
             isPostgresSqlConnection(projection.database.db)
-              ? navigation
+              ? navigation.as("navigation")
               : eb
                   .case()
                   .when(
@@ -57,7 +57,8 @@ function readAccountingTail(
                   .then(null)
                   .else(navigation)
                   .end()
-          ).as("navigation");
+                  .as("navigation"),
+          ];
         })
         .limit(SQLITE_USAGE_TAIL_MAX_EVENTS),
     ),
