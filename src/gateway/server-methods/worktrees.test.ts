@@ -114,7 +114,21 @@ it("routes checkout operations through the managed worktree service", async () =
     id: record.id,
     reason: "manual-delete",
     allowSnapshotLoss: true,
+    retryPreserved: undefined,
   });
+  const preserved = {
+    state: "preserved",
+    reason: "nested-repository",
+    attempts: 1,
+    nextAttemptAt: null,
+  };
+  remove.mockResolvedValue({ removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id }), { removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id, retryPreserved: true }), {
+    removed: false,
+    preserved,
+  });
+  expect(remove).toHaveBeenLastCalledWith(expect.objectContaining({ retryPreserved: true }));
 });
 
 it("lists branches for admin clients and configured workspaces only", async () => {

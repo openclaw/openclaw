@@ -26,6 +26,7 @@ import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
+import * as snapshotHost from "./snapshot-host.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -201,6 +202,33 @@ it("records nested repositories as terminal preserved checkouts across restart",
   expect(gc.failedCount).toBe(0);
   expect(gc.issues.some((issue) => issue.reason.includes("automatic retries stopped"))).toBe(true);
   expect(retryState(env, record!.id)?.attempts).toBe(1);
+  expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
+  const snapshot = vi.spyOn(snapshotHost, "captureManagedWorktreeSnapshot");
+  const gitCommands = vi.spyOn(gitExec, "executeGitCommandBuffered");
+  const service = makeService(env);
+  const result = await service.remove({ id: record!.id, reason: "manual-delete" });
+  expect(result).toMatchObject({
+    removed: false,
+    preserved: {
+      state: "preserved",
+      reason: expect.stringContaining("nested-repository"),
+      attempts: 1,
+      nextAttemptAt: null,
+    },
+  });
+  expect(
+    await service.remove({ id: record!.id, reason: "manual-delete", allowSnapshotLoss: true }),
+  ).toEqual(result);
+  expect(snapshot).not.toHaveBeenCalled();
+  expect(gitCommands).not.toHaveBeenCalled();
+  expect((await service.list()).find((item) => item.id === record!.id)?.cleanup).toEqual(
+    result.preserved,
+  );
+  await expect(
+    service.remove({ id: record!.id, reason: "manual-delete", retryPreserved: true }),
+  ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
+  expect(snapshot).toHaveBeenCalledOnce();
+  expect(retryState(env, record!.id)?.attempts).toBe(2);
   expect(await read(nested, "valuable.txt")).toBe("uncommitted inner work\n");
 });
 

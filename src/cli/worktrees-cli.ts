@@ -226,6 +226,12 @@ export function registerWorktreesCli(program: Command): void {
     .argument("<id>", "Managed worktree id")
     .option("--force", "Remove even if snapshot creation fails", false)
     .addOption(
+      new Option(
+        "--retry-preserved",
+        "Retry a preserved checkout after repairing its cause",
+      ).conflicts("ifLossless"),
+    )
+    .addOption(
       new Option("--if-lossless", "Remove without force only when clean and published").conflicts(
         "force",
       ),
@@ -240,7 +246,12 @@ export function registerWorktreesCli(program: Command): void {
     .action(
       async (
         id: string,
-        opts: JsonOption & { force?: boolean; ifLossless?: boolean; exactState?: string },
+        opts: JsonOption & {
+          force?: boolean;
+          ifLossless?: boolean;
+          exactState?: string;
+          retryPreserved?: boolean;
+        },
       ) => {
         const exactState = await readExactStateRequest(opts.exactState);
         const result = await mutateWorktree<
@@ -248,7 +259,13 @@ export function registerWorktreesCli(program: Command): void {
         >(
           "worktrees.remove",
           GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
-          { id, force: opts.force, ifLossless: opts.ifLossless, exactState },
+          {
+            id,
+            force: opts.force,
+            ifLossless: opts.ifLossless,
+            exactState,
+            retryPreserved: opts.retryPreserved,
+          },
           async (service, guard) => {
             if (opts.ifLossless) {
               const removed = await service.removeIfLossless(id, guard);
@@ -263,9 +280,22 @@ export function registerWorktreesCli(program: Command): void {
               ...(exactState ? { exactState } : {}),
               reason: "manual-delete",
               allowSnapshotLoss: opts.force,
+              retryPreserved: opts.retryPreserved,
             });
           },
         );
+        if (result.preserved) {
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+          } else {
+            defaultRuntime.log(
+              terminalText`Preserved ${id}: ${result.preserved.reason}. After repair, retry with --retry-preserved.`,
+            );
+          }
+          const { exitCliAfterOutput } = await import("./one-shot-exit.js");
+          exitCliAfterOutput(defaultRuntime, 1);
+          return;
+        }
         if (opts.ifLossless) {
           const { removed, cleanup } = result;
           if (opts.json) {

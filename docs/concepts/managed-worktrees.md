@@ -1068,7 +1068,7 @@ lists each required capability, refusal state, and retained writer boundary.
 ```bash
 openclaw worktrees list [--json]
 openclaw worktrees create <repo-root> [--name <name>] [--base-ref <ref>] [--source-profile <name>]... [--json]
-openclaw worktrees remove <id> [--force | --if-lossless | --exact-state <file>] [--json]
+openclaw worktrees remove <id> [--force | --if-lossless | --exact-state <file>] [--retry-preserved] [--json]
 openclaw worktrees restore <id> [--recover-exact-state <file>] [--json]
 openclaw worktrees gc [--retry-deferred] [--json]
 openclaw worktrees gc --job <id> [--json]
@@ -1079,6 +1079,21 @@ openclaw worktrees retire-snapshot <id> --expected-ref <ref> --expected-oid <oid
 The Control UI **Worktrees** page under Settings provides creation with a base-branch picker, ordinary removal and restoration, and garbage collection. It shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 Leave **Base branch** empty to fetch and use the remote default branch, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Automatic selection also fast-forwards a clean, strictly older local default branch. For repositories with `origin`, failed fetches use the cached remote default with a warning; unavailable remote defaults require repairing `origin` or choosing an explicit ref.
+
+`worktrees list --json` includes optional `cleanup` metadata for a recorded removal
+failure: `state` is `preserved` (automatic retries stopped) or `retrying` (retry
+scheduled), `reason` explains the refusal, `attempts` counts failed attempts, and
+`nextAttemptAt` is Unix milliseconds or `null` for terminal preservation. An absent
+`cleanup` means no current removal retry receipt. Automated sweeps can skip rows
+where `cleanup.state === "preserved"`.
+
+Removing a preserved worktree exits with code 1 immediately, without snapshot or
+object hydration work. JSON output is `{ "removed": false, "preserved": { ... } }`,
+where `preserved` carries the same metadata as the list's `cleanup`. After repairing
+the cause, run `openclaw worktrees remove <id> --retry-preserved` to explicitly retry.
+The flag also works with `--force` or `--exact-state`, but not `--if-lossless`.
+It does not bypass preservation checks or authorize deleting unpreserved content.
+`gc --retry-deferred` remains the explicit retry for a cleanup sweep.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The qualified Gateway removal contract preserves this outcome.
 
@@ -1157,14 +1172,14 @@ Owner-routed requests require `operator.admin` and the corresponding
 [capability](/gateway/protocol/versioning#local-state-owner-routing). Their wire
 fields and results are:
 
-| Method                     | Request beyond `expectedOwnerId`                                                                                          | Result                                                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch. |
-| `worktrees.remove`         | `id`; optional, mutually exclusive `force`, `ifLossless`, or `exactState`                                                 | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, and lossless `cleanup`.   |
-| `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                        | Full restored worktree record.                                                                                         |
-| `worktrees.gc`             | Optional `jobId` to poll; `retryDeferred: true` when queuing                                                              | Job receipt.                                                                                                           |
-| `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                      | `removed: true`, optional `snapshotRef`.                                                                               |
-| `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid` | `retired: true`, `id`.                                                                                                 |
+| Method                     | Request beyond `expectedOwnerId`                                                                                            | Result                                                                                                                                              |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `worktrees.create`         | `repoRoot`; optional `name`, `baseRef`, `profiles`, `expectedRepoIdentity`                                                  | Full worktree record, including any `gcProtection`. The CLI captures the physical repository identity before dispatch.                              |
+| `worktrees.remove`         | `id`; optional `retryPreserved` (incompatible with `ifLossless`); mutually exclusive `force`, `ifLossless`, or `exactState` | `removed`, optional `snapshotRef`, `snapshotError`, `recoveryPath`, `recoveryRetainedUntil`, lossless `cleanup`, and terminal `preserved` metadata. |
+| `worktrees.restore`        | `id`; optional `recoverExactState`                                                                                          | Full restored worktree record.                                                                                                                      |
+| `worktrees.gc`             | Optional `jobId` to poll; `retryDeferred: true` when queuing                                                                | Job receipt.                                                                                                                                        |
+| `worktrees.recoverRemoval` | `id`, `snapshot` (the expected pending snapshot OID)                                                                        | `removed: true`, optional `snapshotRef`.                                                                                                            |
+| `worktrees.retireSnapshot` | `id`, `expectedSnapshotRef`, `expectedSnapshotOid`, `expectedRemovedAt`, `retainedSourceRef`, `expectedRetainedSourceOid`   | `retired: true`, `id`.                                                                                                                              |
 
 `exactState` and `recoverExactState` carry the validated JSON object, not a file
 path: `ownerKind` (`manual`, `session`, or `workboard`), optional `ownerId`,
@@ -1199,7 +1214,7 @@ inspection when starting a new job; it does not restart an in-flight job.
 
 Old RPC clients that omit `expectedOwnerId` retain the public record without
 `gcProtection`, the original removal fields (`removed`, `snapshotRef`,
-`snapshotError`). For those clients, a snapshot failure returns `removed: false`
+`snapshotError`), plus terminal `preserved` metadata. For those clients, a snapshot failure returns `removed: false`
 and `snapshotError`. Owner-routed removal instead reports a snapshot failure as
 an error. Garbage collection uses the background receipt for **all** clients,
 including clients that omit `expectedOwnerId`; it no longer holds a request until
