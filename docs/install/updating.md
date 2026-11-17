@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Service reconciliation recognizes a deleted pnpm store generation only when it
+belongs to the same global root as a verified active pnpm install. This repairs
+older service definitions without adopting another global installation. The
+candidate also retains the post-activation predicate imported by supported
+2026.9 extended-stable updaters.
+
 Candidate Doctor compares pending plugin migration obligations independently of
 plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
