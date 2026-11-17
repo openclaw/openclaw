@@ -173,6 +173,52 @@ describe("native lifecycle admission and cancellation", () => {
     detachActiveEmbeddedRun(sessionId, handle, sessionKey);
   });
 
+  it("preserves the previous attachment when replacement registration is rejected", async () => {
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    const previous = createEmbeddedRunHandle({ runId: "previous-native-run" });
+    const replacement = createEmbeddedRunHandle({ runId: "rejected-native-run" });
+    attachActiveEmbeddedRun(sessionId, previous, sessionKey, undefined, undefined, operation);
+
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            acceptsRequesterOrigin: () => false,
+            project: () => undefined,
+            projectAsync: async () => undefined,
+            assertRegistrationActive: () => {
+              throw new Error("registration revoked");
+            },
+            assertActive: () => {},
+          }),
+        },
+        () =>
+          expect(() =>
+            attachActiveEmbeddedRun(
+              sessionId,
+              replacement,
+              sessionKey,
+              undefined,
+              undefined,
+              operation,
+            ),
+          ).toThrow("registration revoked"),
+      );
+
+      expect(getEmbeddedRunAttachment(previous)?.handle).toBe(previous);
+      expect(getActiveNativeAttempt(sessionId)).toBe(previous);
+      expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+      expect(getEmbeddedRunAttachment(replacement)).toBeUndefined();
+    } finally {
+      detachActiveEmbeddedRun(sessionId, previous, sessionKey);
+      detachActiveEmbeddedRun(sessionId, replacement, sessionKey);
+      operation.complete();
+    }
+  });
+
   it.each(["owned", "preparing", "detached"] as const)(
     "preserves typed single-session restart cancellation for %s work",
     (kind) => {

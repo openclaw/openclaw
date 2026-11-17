@@ -874,7 +874,12 @@ export function attachActiveEmbeddedRun(
   const previousAttachment = operation
     ? getControllerEmbeddedAttachment(operation)
     : getDetachedNativeAttachment(sessionId);
-  const wasActive = previousAttachment !== undefined;
+  try {
+    toolAuthority?.assertRegistrationActive();
+  } catch (error) {
+    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
+    throw error;
+  }
   if (previousAttachment) {
     const previousHandle = previousAttachment.handle;
     previousAttachment.watchdogAttempt?.close();
@@ -885,12 +890,6 @@ export function attachActiveEmbeddedRun(
     clearActiveEmbeddedRunFiles(previousAttachment);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(previousAttachment);
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
-  }
-  try {
-    toolAuthority?.assertRegistrationActive();
-  } catch (error) {
-    revokeCompletionClaim(sessionId, handle.runId, completionTarget);
-    throw error;
   }
   clearEmbeddedRunAbandonment(
     operation ? getSessionControllerEntryForOperation(operation) : sessionId,
@@ -1002,7 +1001,7 @@ export function attachActiveEmbeddedRun(
   logSessionStateChange({
     ...sessionIdentity,
     state: "processing",
-    reason: wasActive ? "run_replaced" : "run_started",
+    reason: previousAttachment ? "run_replaced" : "run_started",
   });
   markDiagnosticEmbeddedRunStarted({
     sessionId,
