@@ -1,10 +1,12 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
@@ -191,7 +193,55 @@ function FilterDropdown<T extends string>(props: {
     </div>
   );
 }
-export function RunsSection(props: CronRunsSectionProps) {
+/** True when a run filter or the sort differs from the default view. */
+function hasActiveRunFilters(filters: CronRunsSectionProps) {
+  return (
+    filters.runsQuery.trim().length > 0 ||
+    filters.runsStatuses.length > 0 ||
+    filters.runsDeliveryStatuses.length > 0 ||
+    filters.runsSortDir === "asc"
+  );
+}
+/** A titled run list whose filters sit behind one button beside the heading. */
+export function RunHistory(
+  props: CronRunsSectionProps & {
+    title: string;
+    showJobName?: boolean;
+  },
+) {
+  const filtersId = createUniqueId();
+  // Filters already narrowing the list stay in view; otherwise the heading carries one button.
+  const [filtersOpen, setFiltersOpen] = createSignal(hasActiveRunFilters(props));
+  return (
+    <section class="settings-section cron-history">
+      <SettingsSectionHeader
+        title={props.title}
+        actions={
+          <button
+            type="button"
+            class={iconButtonClass({ size: 28, glyph: "row" })}
+            data-test-id="cron-runs-filters-toggle"
+            aria-label={t("cron.list.filters")}
+            title={t("cron.list.filters")}
+            aria-expanded={filtersOpen() ? "true" : "false"}
+            aria-controls={filtersId}
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            <Icon name="listFilter" />
+          </button>
+        }
+      />
+      <RunsSection {...props} filtersId={filtersId} filtersOpen={filtersOpen()} />
+    </section>
+  );
+}
+export function RunsSection(
+  props: CronRunsSectionProps & {
+    showJobName?: boolean;
+    filtersId?: string;
+    filtersOpen?: boolean;
+  },
+) {
   const formatTimestamp = createMemo(() => createCompactMsFormatter(undefined, t("common.na")));
   const runs = createMemo(() => {
     const ascending = props.runsSortDir === "asc";
@@ -220,7 +270,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           </button>
         </div>
       ) : undefined}
-      <div class="cron-run-filters">
+      <div id={props.filtersId} class="cron-run-filters" hidden={props.filtersOpen === false}>
         <div class="cron-search-box cron-run-filter-search">
           <span class="cron-search-box__icon" aria-hidden="true">
             <Icon name="search" />
@@ -354,6 +404,7 @@ export function RunsSection(props: CronRunsSectionProps) {
                 entry={entry()}
                 formatTimestamp={formatTimestamp()}
                 highlightedRunId={props.highlightedRunId}
+                showJobName={props.showJobName}
                 onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
               />
             )}
@@ -407,14 +458,28 @@ function RunError(props: { error: string }) {
     </div>
   );
 }
+/** The dot beside a run's status: success, failure, or neither. */
+function runTone(entry: CronRunLogEntry, conditionFailed: boolean): "ok" | "danger" | "muted" {
+  if (conditionFailed || entry.status === "error") {
+    return "danger";
+  }
+  return entry.status === "ok" && entry.completionStatus !== "failed" ? "ok" : "muted";
+}
+function isInteractiveTarget(target: EventTarget | null) {
+  return (
+    target instanceof Element && target.closest("a, button, summary, input, textarea") !== null
+  );
+}
 function Run(props: {
   entry: CronRunLogEntry;
   formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
   highlightedRunId?: string | null;
+  showJobName?: boolean;
   onRunMount?: (
     ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
   ) => (() => void) | undefined;
 }) {
+  const detailsId = createUniqueId();
   // A failed run whose condition never fired is a condition-script failure: no task ran.
   const conditionFailed = () =>
     props.entry.status === "error" && props.entry.triggerFired === false;
@@ -440,6 +505,11 @@ function Run(props: {
           })
         : null;
   });
+  const duration = () =>
+    props.entry.durationMs !== undefined
+      ? (formatDurationCompact(props.entry.durationMs) ??
+        formatDurationHuman(props.entry.durationMs, t("common.na")))
+      : null;
   const error = () => formatUiExternalText(props.entry.error);
   // Older history copied the run error into the delivery error; show each error once.
   const deliveryError = () => {
@@ -449,6 +519,7 @@ function Run(props: {
   const suppressionReason = () => formatUiExternalText(props.entry.deliverySuppressionReason);
   const facts = createMemo(() =>
     [
+      duration(),
       delivery(),
       suppressionReason()
         ? t("cron.runEntry.deliverySuppression", { reason: suppressionReason() })
@@ -463,6 +534,10 @@ function Run(props: {
       ? props.highlightedRunId
       : null,
   );
+  // A run reads as two lines; the rest of its record opens on demand. A linked run opens expanded.
+  // oxlint-disable-next-line solid/reactivity -- A linked run opens expanded once; the reader toggles it after.
+  const [expanded, setExpanded] = createSignal(Boolean(highlighted()));
+  const toggle = () => setExpanded((value) => !value);
   let row!: HTMLDivElement;
   onSettled(() => props.onRunMount?.(row, () => props.entry));
   return (
@@ -470,36 +545,48 @@ function Run(props: {
       ref={(element) => {
         row = element;
       }}
-      class={["cron-run-entry", { "cron-run-entry--highlighted": Boolean(highlighted()) }]}
+      class={[
+        "cron-run-entry",
+        {
+          "cron-run-entry--highlighted": Boolean(highlighted()),
+          "cron-run-entry--expanded": expanded(),
+        },
+      ]}
+      data-tone={runTone(props.entry, conditionFailed())}
+      onClick={(event) => {
+        // The block opens on a click, but links, buttons and text selections keep their own job.
+        if (
+          event.currentTarget !== event.target &&
+          (isInteractiveTarget(event.target) || Boolean(window.getSelection()?.toString()))
+        ) {
+          return;
+        }
+        toggle();
+      }}
     >
-      <div class="cron-run-entry__header">
-        <div class="cron-run-entry__main">
-          <div class="cron-run-entry__title">
-            {props.entry.jobName ?? props.entry.jobId}
-            <span class="muted"> · {status()}</span>
-          </div>
-          <div class="cron-run-entry__facts muted">{facts().join(" · ")}</div>
-        </div>
-        <div class="cron-run-entry__meta">
-          <div>{props.formatTimestamp(props.entry.ts)}</div>
-          {props.entry.runAtMs !== undefined ? (
-            <div class="muted">
-              {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
-            </div>
+      <button
+        type="button"
+        class="cron-run-entry__header"
+        aria-expanded={expanded() ? "true" : "false"}
+        aria-controls={detailsId}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggle();
+        }}
+      >
+        <span class="cron-run-entry__dot" aria-hidden="true" />
+        <span class="cron-run-entry__title">
+          {props.showJobName ? (
+            <>
+              <span class="cron-run-entry__job">{props.entry.jobName ?? props.entry.jobId}</span>
+              {" · "}
+            </>
           ) : undefined}
-          <div class="muted">
-            {props.entry.durationMs !== undefined
-              ? (formatDurationCompact(props.entry.durationMs) ??
-                formatDurationHuman(props.entry.durationMs, t("common.na")))
-              : t("common.na")}
-          </div>
-          {props.entry.nextRunAtMs !== undefined ? (
-            <div class="muted">
-              {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
-            </div>
-          ) : undefined}
-        </div>
-      </div>
+          <span class="cron-run-entry__status">{status()}</span>
+        </span>
+        <span class="cron-run-entry__facts">{facts().join(" · ")}</span>
+        <span class="cron-run-entry__time">{props.formatTimestamp(props.entry.ts)}</span>
+      </button>
       <Show
         when={props.entry.summary || !error()}
         fallback={
@@ -510,23 +597,42 @@ function Run(props: {
       >
         <SanitizedHtml
           tag="div"
-          class="cron-run-entry__body chat-text"
+          class={[
+            "cron-run-entry__body cron-run-entry__summary chat-text",
+            { "cron-run-entry__summary--empty": !props.entry.summary },
+          ]}
           html={toSanitizedMarkdownHtml(props.entry.summary || t("cron.runEntry.noSummary"))}
         />
         <Show when={error()}>
           <RunError error={error()} />
         </Show>
       </Show>
-      <Show when={deliveryError()}>
-        <div class="muted cron-run-entry__delivery-error">
-          {t(
-            props.entry.deliveryStatus === "not-delivered"
-              ? "cron.runEntry.deliveryFailed"
-              : "cron.runEntry.deliveryNote",
-            { error: deliveryError() },
-          )}
-        </div>
-      </Show>
+      <div id={detailsId} class="cron-run-entry__details" hidden={!expanded()}>
+        {props.entry.runAtMs !== undefined || props.entry.nextRunAtMs !== undefined ? (
+          <div class="cron-run-entry__meta">
+            {props.entry.runAtMs !== undefined ? (
+              <span>
+                {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
+              </span>
+            ) : undefined}
+            {props.entry.nextRunAtMs !== undefined ? (
+              <span>
+                {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
+              </span>
+            ) : undefined}
+          </div>
+        ) : undefined}
+        <Show when={deliveryError()}>
+          <div class="cron-run-entry__delivery-error">
+            {t(
+              props.entry.deliveryStatus === "not-delivered"
+                ? "cron.runEntry.deliveryFailed"
+                : "cron.runEntry.deliveryNote",
+              { error: deliveryError() },
+            )}
+          </div>
+        </Show>
+      </div>
     </div>
   );
 }

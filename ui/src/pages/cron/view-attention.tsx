@@ -1,5 +1,6 @@
+import { createSignal, createUniqueId, Show, untrack } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -11,6 +12,9 @@ export function FailureDetails(props: {
   fullCause?: boolean;
   onReviewRun?: () => void;
 }) {
+  const causeId = createUniqueId();
+  // Raw errors are diagnostics: collapsed unless the reader asks for them.
+  const [open, setOpen] = createSignal(untrack(() => props.fullCause === true));
   const formatTimestamp = () => createMsFormatter(undefined, t("common.na"));
   const cause = () => {
     const error = formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));
@@ -31,36 +35,52 @@ export function FailureDetails(props: {
       : t("cron.attention.noNextRun");
   };
   return (
-    <InlineAlert tone="danger" class="cron-failure-details">
-      <div>
-        <strong>
-          {t(
-            props.job.state.autoDisabled
-              ? "cron.attention.autoDisabledTitle"
-              : "cron.attention.title",
-          )}
-        </strong>
-        {" · "}
-        {outcome()}
-        {props.onReviewRun ? (
-          <>
-            {" "}
-            <button
-              type="button"
-              class="settings-row__desc-action"
-              data-test-id="cron-review-failed-run"
-              onClick={() => props.onReviewRun?.()}
-            >
-              {t("cron.attention.reviewRun")}
-            </button>
-          </>
-        ) : undefined}
+    <div class="cron-failure-details" role="alert">
+      <div class="cron-failure-details__line">
+        <span class="cron-failure-details__dot" aria-hidden="true" />
+        <span class="cron-failure-details__copy">
+          <strong>
+            {t(
+              props.job.state.autoDisabled
+                ? "cron.attention.autoDisabledTitle"
+                : "cron.attention.title",
+            )}
+          </strong>
+          <span class="cron-failure-details__outcome">
+            {" · "}
+            {outcome()}
+          </span>
+          {props.onReviewRun ? (
+            <>
+              {" "}
+              <button
+                type="button"
+                class="settings-row__desc-action"
+                data-test-id="cron-review-failed-run"
+                onClick={() => props.onReviewRun?.()}
+              >
+                {t("cron.attention.reviewRun")}
+              </button>
+            </>
+          ) : undefined}
+        </span>
+        <button
+          type="button"
+          class="cron-failure-details__toggle"
+          data-test-id="cron-failure-details-toggle"
+          aria-expanded={open() ? "true" : "false"}
+          aria-controls={causeId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          {t("cron.attention.errorDetails")}
+          <Icon name="chevronDown" />
+        </button>
       </div>
-      {/* Raw errors are diagnostics: collapsed unless the reader asks for them. */}
-      <details class="cron-error-details" open={props.fullCause}>
-        <summary>{t("cron.attention.errorDetails")}</summary>
-        <pre class="cron-error-details__text">{cause()}</pre>
-      </details>
-    </InlineAlert>
+      <Show when={open()}>
+        <pre id={causeId} class="cron-error-details__text">
+          {cause()}
+        </pre>
+      </Show>
+    </div>
   );
 }

@@ -19,12 +19,6 @@
   }
 }
 
-/* Popover menus (run filters) must escape the group surface;
-   .settings-group clips overflow by default. */
-.cron-page .settings-group:has(> * > .cron-runs) {
-  overflow: visible;
-}
-
 .cron-admin-note {
   display: inline-flex;
   align-items: center;
@@ -45,8 +39,22 @@
 .cron-tab-panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-7);
   min-width: 0;
+}
+
+/* The automation page reads as one column: head, prompt, then its results. */
+.cron-page .settings-page:has(> .cron-detail-header) {
+  gap: var(--space-6);
+}
+
+/* The failure belongs to the prompt above it, a little apart from the history. */
+.cron-tab-panel > .cron-failure-details {
+  margin-top: calc(var(--space-4) - var(--space-7));
+}
+
+.cron-tab-panel > .cron-failure-details + .cron-history {
+  margin-top: calc(var(--space-6) - var(--space-7));
 }
 
 .cron-search-box {
@@ -82,6 +90,7 @@
 }
 
 .cron-detail-actions .btn svg,
+.cron-prompt__edit svg,
 .cron-trigger-summary svg {
   width: 13px;
   height: 13px;
@@ -180,25 +189,39 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 .cron-detail-header__copy {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .cron-detail-title {
+  margin: 0;
   color: var(--text-strong);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.cron-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* New automation is a nearly empty page: it starts lower instead of hugging the top edge. */
+.cron-page--create .cron-detail-header {
+  margin-top: clamp(40px, 13vh, 150px);
 }
 
 /* The description reads as the title's subtitle, without a label. */
@@ -225,32 +248,396 @@
   flex: 0 0 auto;
 }
 
-.cron-enabled-toggle + .cron-detail-sub {
-  border-left: 1px solid var(--border);
-  padding-left: 10px;
-}
-
 .cron-detail-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   flex: 0 0 auto;
+  min-height: 32px;
+}
+
+.cron-detail-actions > .cron-enabled-toggle {
+  margin-inline-end: var(--space-2);
+}
+
+/* Raised buttons: the card surface instead of a transparent fill. */
+.cron-page .btn.cron-run-now:not(.danger),
+.cron-page .btn.cron-load-more:not(.danger) {
+  border-color: transparent;
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent),
+    0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.cron-page .btn.cron-run-now:not(.danger):hover,
+.cron-page .btn.cron-load-more:not(.danger):hover {
+  background: color-mix(in srgb, var(--text) 3%, var(--card));
+}
+
+.cron-load-more {
+  align-self: flex-start;
 }
 
 /* Bare fieldset wrapper so busy-state disabling covers every section. */
 .cron-editor {
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
+  gap: var(--space-4);
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
 
-.cron-history,
-.cron-activity {
-  padding: var(--space-3) var(--space-4);
+/* Cards under the prompt keep pickers' menus and focus rings unclipped. */
+.cron-editor-card {
+  overflow: visible;
+}
+
+/* ── Prompt: the composer's sheet with its tray tucked underneath ─────────── */
+
+.cron-prompt {
+  --cron-prompt-radius: var(--composer-radius);
+  --cron-placeholder: color-mix(in srgb, var(--text) 34%, transparent);
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cron-prompt__sheet {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 92px;
+  padding: 15px 18px 16px;
+  border-radius: var(--cron-prompt-radius);
+  corner-shape: var(--chat-composer-corner-shape);
+  background: var(--card);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text) 9%, transparent),
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 4px 12px -6px rgb(0 0 0 / 8%);
+}
+
+/* The tray shows only below the sheet, as if sliding out from under the composer. */
+.cron-prompt__tray {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-top: calc(-1 * var(--cron-prompt-radius));
+  padding: calc(var(--cron-prompt-radius) + 6px) 10px 8px 14px;
+  border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
+  corner-shape: var(--chat-composer-corner-shape);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
+.cron-prompt__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 30px;
+}
+
+.cron-prompt__clock {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-inline-end: 4px;
+  color: var(--muted);
+}
+
+.cron-prompt__clock svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-prompt__facts {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-strong);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-prompt__run-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-inline-start: auto;
+  min-width: 0;
+}
+
+.cron-prompt__saved-text {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+}
+
+.cron-prompt__name,
+.cron-prompt__text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: none;
+  box-shadow: none;
+  resize: none;
+  color: var(--text-strong);
+  font: inherit;
+  field-sizing: content;
+  caret-color: var(--accent);
+}
+
+.cron-prompt__name {
+  margin-bottom: 8px;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+
+.cron-prompt__text {
+  min-height: calc(3 * 1.6em);
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.cron-prompt__name::placeholder,
+.cron-prompt__text::placeholder,
+.cron-tray-input::placeholder,
+.cron-advanced__card .settings-input::placeholder {
+  color: var(--cron-placeholder);
+}
+
+.cron-prompt__name::placeholder {
+  font-weight: 650;
+}
+
+.cron-prompt__sheet > .cron-error,
+.cron-prompt__note {
+  margin-top: var(--space-1);
+}
+
+.cron-prompt__sheet > .cron-payload-code {
+  height: auto;
+  max-height: 320px;
+  min-height: 0;
+}
+
+/* Tray controls: text at rest, a quiet fill on hover, no box. */
+.cron-prompt__tray .cron-tray-input,
+.cron-prompt__tray .picker-select__trigger,
+.cron-page .cron-prompt__tray .btn.cron-prompt__edit:not(.danger) {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.8);
+  background: none;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cron-prompt__tray .cron-tray-input:hover,
+.cron-prompt__tray .picker-select__trigger:hover,
+.cron-page .cron-prompt__tray .btn.cron-prompt__edit:not(.danger):hover,
+.cron-prompt__tray .picker-select__trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
+}
+
+.cron-prompt__tray .cron-tray-input:focus {
+  background: var(--card);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+.cron-prompt__tray .cron-tray-input[aria-invalid="true"] {
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
+.cron-tray-input {
+  width: 15ch;
+  min-width: 0;
+}
+
+.cron-tray-input--narrow {
+  width: 8ch;
+}
+
+.cron-tray-input[type="datetime-local"] {
+  width: auto;
+}
+
+.cron-tray-input--wide {
+  width: 22ch;
+}
+
+/* Suggestions still open while typing; the native arrow would read as a second picker. */
+.cron-tray-input::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
+.cron-tray-pair,
+.cron-tray-picker {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.cron-tray-picker > openclaw-select-picker {
+  min-width: 0;
+}
+
+.cron-tray-picker .model-picker__custom {
+  height: 28px;
+  margin-top: 2px;
+}
+
+.cron-prompt__edit {
+  margin-inline-start: auto;
+}
+
+.cron-prompt__tray .cron-tray-segmented {
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn {
+  height: 28px;
+  border-radius: calc(var(--radius-md) * 0.8);
+  color: var(--muted-strong);
+  font-size: 13px;
+}
+
+.cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn:has(> input:checked) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  box-shadow: none;
+  color: var(--text-strong);
+}
+
+.cron-prompt__tray > .cron-error,
+.cron-prompt__tray > .cron-schedule-summary {
+  padding: 0 0 0 22px;
+}
+
+.cron-schedule-note {
+  margin: 0 0 0 var(--space-4);
+}
+
+/* ── Failure: one danger line under the prompt; the cause opens below ─────── */
+
+.cron-failure-details {
+  min-width: 0;
+  padding: 0 4px 0 6px;
+  color: var(--danger);
+  font-size: 13.5px;
+}
+
+.cron-failure-details__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.cron-failure-details__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.cron-failure-details__copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cron-failure-details__copy strong {
+  font-weight: 600;
+}
+
+.cron-failure-details__outcome {
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
+}
+
+.cron-failure-details__toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 6px 4px 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.8);
+  background: none;
+  color: var(--danger);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: var(--cursor-action);
+}
+
+.cron-failure-details__toggle:hover {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.cron-failure-details__toggle svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.cron-failure-details__toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.cron-failure-details .cron-error-details__text {
+  margin: 10px 0 0;
+  padding: 11px 14px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Control column inside a settings row: input plus its validation message. */
@@ -326,28 +713,73 @@
 
 .cron-schedule-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  color: var(--text);
+  color: var(--muted-strong);
   font-size: 12.5px;
   line-height: 1.4;
 }
 
-.cron-schedule-summary svg {
-  flex: 0 0 auto;
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  color: var(--muted);
+/* Advanced: a quiet text disclosure opening one card of grouped settings. */
+
+.cron-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
-/* Advanced (collapsible section: summary stands in for the heading) */
-
 .cron-advanced__summary {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 5px;
+  margin-inline-start: 8px;
+  padding: 5px 8px;
+  border-radius: calc(var(--radius-md) * 0.8);
+  color: var(--muted-strong);
+  font-size: 13.5px;
+  list-style: none;
   cursor: var(--cursor-action);
+}
+
+.cron-advanced__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-advanced__summary:hover {
+  background: var(--surface-hover);
+  color: var(--text-strong);
+}
+
+.cron-advanced__summary > svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.cron-advanced[open] > .cron-advanced__summary > svg {
+  transform: rotate(180deg);
+}
+
+.cron-advanced__desc {
+  margin: 14px 16px 0;
+}
+
+.cron-advanced__group + .cron-advanced__group {
+  margin-top: 6px;
+}
+
+.cron-advanced__heading {
+  margin: 14px 16px 2px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .cron-trigger-icon {
@@ -378,13 +810,6 @@
   white-space: pre;
 }
 
-.cron-advanced > .settings-section__desc {
-  margin: var(--space-2) 0 0;
-}
-
-.cron-advanced > .settings-group {
-  margin-top: var(--space-3);
-}
 
 .cron-form-status {
   border: 1px solid var(--danger-subtle);
@@ -425,26 +850,22 @@
   color: var(--text-strong);
 }
 
-/* The action bar owns bottom spacing while present. Shell and settings-page
-   padding would leave form content visible beneath it, including at scroll end. */
-.shell main.content.content--cron-editor,
-.content--cron-editor .cron-page--detail > .settings-page {
-  padding-bottom: 0;
-}
-
-/* Sticky save bar: stays visible while the long form scrolls in `.content`. */
+/* Save and Cancel: in the header while editing, at the end of the form while creating. */
 .cron-editor-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  justify-content: flex-end;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px);
+}
+
+.cron-editor-actions--create {
+  margin-top: var(--space-1);
+}
+
+.cron-editor-actions--create > .btn {
+  height: 36px;
+  padding-inline: 16px;
 }
 
 .cron-submit-reason {
@@ -566,6 +987,11 @@
 .cron-runs__list {
   display: flex;
   flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cron-run-filters[hidden] {
+  display: none;
 }
 
 .cron-filter-dropdown {
@@ -610,69 +1036,175 @@
   margin-inline-start: 0;
 }
 
-/* Run entries: flat list separated by hairlines inside the group. */
+/* Run history: a heading row with one filter button; each run is a block on the tray surface. */
 
-.cron-run-entry {
-  padding: var(--space-3) 0;
+/* Popover menus (run filters) must escape the group surface;
+   .settings-group clips overflow by default. */
+.cron-page .settings-group:has(> * > .cron-runs) {
+  overflow: visible;
+}
+
+.cron-activity {
+  padding: var(--space-3) var(--space-4);
+}
+
+.cron-history {
   min-width: 0;
 }
 
-.cron-run-entry + .cron-run-entry {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+.cron-history > .settings-section__header {
+  align-items: center;
+}
+
+.cron-history .oc-icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+
+.cron-run-entry {
+  min-width: 0;
+  padding: 11px 16px 12px;
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  cursor: var(--cursor-action);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+
+.cron-run-entry:hover,
+.cron-run-entry:focus-within {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
 .cron-run-entry--highlighted {
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 75%, transparent);
-  padding-left: var(--space-3);
 }
 
 .cron-run-entry__header {
   display: flex;
-  flex-direction: column;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
   width: 100%;
-}
-
-@media (min-width: 1400px) {
-  .cron-run-entry__header {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-    gap: var(--space-4);
-    align-items: start;
-  }
-
-  .cron-run-entry__meta {
-    text-align: right;
-  }
-}
-
-.cron-run-entry__main {
   min-width: 0;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: inherit;
+}
+
+.cron-run-entry__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+}
+
+.cron-run-entry[data-tone="ok"] .cron-run-entry__dot {
+  background: var(--ok);
+}
+
+.cron-run-entry[data-tone="danger"] .cron-run-entry__dot {
+  background: var(--danger);
 }
 
 .cron-run-entry__title {
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
+  flex: 0 0 auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cron-run-entry__facts {
-  margin-top: 2px;
-  font-size: var(--control-ui-text-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-run-entry__facts:not(:empty)::before {
+  content: "· ";
+}
+
+.cron-run-entry__job {
+  margin-inline-end: 6px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.cron-run-entry__status {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.cron-run-entry[data-tone="muted"] .cron-run-entry__status {
+  color: var(--muted-strong);
+  font-weight: 500;
+}
+
+.cron-run-entry--expanded .cron-run-entry__title,
+.cron-run-entry--expanded .cron-run-entry__facts {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.cron-run-entry__meta {
-  min-width: 0;
-  font-size: var(--control-ui-text-sm);
+.cron-run-entry__time {
+  flex: 0 0 auto;
+  padding-inline-start: var(--space-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .cron-run-entry__body {
-  padding-top: var(--space-2);
-  line-height: 1.45;
+  padding-top: 4px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
   min-width: 0;
   width: 100%;
+}
+
+.cron-run-entry:not(.cron-run-entry--expanded) .cron-run-entry__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.cron-run-entry__summary--empty {
+  color: var(--muted);
+}
+
+.cron-run-entry__error {
+  color: var(--muted-strong);
+}
+
+.cron-run-entry__details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: var(--space-2);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.cron-run-entry__details:empty,
+.cron-run-entry__details[hidden] {
+  display: none;
+}
+
+.cron-run-entry__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--space-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .cron-run-entry__body pre,
@@ -686,7 +1218,8 @@
   width: 100%;
 }
 
-.cron-run-entry__body.chat-text :is(pre, blockquote) {
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote {
   width: 100%;
   max-width: 100%;
 }
@@ -696,7 +1229,9 @@
   margin-top: 0.75em;
 }
 
-.cron-run-entry__body.chat-text :is(pre, blockquote, table) {
+.cron-run-entry__body.chat-text pre,
+.cron-run-entry__body.chat-text blockquote,
+.cron-run-entry__body.chat-text table {
   margin-bottom: 0.75em;
 }
 
@@ -733,12 +1268,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cron-editor-actions {
-    padding-bottom: var(--space-3);
+  .cron-editor-actions--create > .btn {
+    flex: 1 1 auto;
   }
 
-  .cron-editor-actions > .btn {
-    flex: 1 1 auto;
+  .cron-prompt__run-controls {
+    margin-inline-start: 0;
   }
 
   .cron-run-entry__body table {
@@ -756,18 +1291,9 @@
     text-overflow: ellipsis;
   }
 
-  .cron-run-entry + .cron-run-entry {
-    border-top: 0;
+  .cron-run-entry__header {
+    flex-wrap: wrap;
   }
-
-  .cron-run-entry__meta > :has(> .btn),
-  .cron-run-entry__meta > :has(> .btn) + .muted {
-    margin-top: var(--space-2);
-  }
-}
-
-.shell--embed-settings .cron-editor-actions {
-  padding-bottom: var(--space-3);
 }
 
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */

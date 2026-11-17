@@ -75,6 +75,7 @@ const enCron = {
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",
       settingsTab: "Settings",
+      edit: "Edit",
       historyTitle: "Activity history",
       generalSection: "General",
       scheduleSection: "Schedule",
@@ -271,6 +272,9 @@ const enCron = {
       toPlaceholder: "+1555… or chat ID",
       toHelp: "Optional recipient override (chat ID, phone number, or user ID).",
       advanced: "Advanced",
+      advancedTask: "Task",
+      advancedConditions: "Conditions",
+      advancedTiming: "Timing",
       advancedHelp:
         "Optional condition checks, delivery guarantees, schedule jitter, and model controls.",
       conditionTrigger: "Condition trigger",
