@@ -1,5 +1,38 @@
 # Team-shaped synthetic state
 
+## Audit retention page reads
+
+`audit-retention-fixture.mjs` expands a small database created by the real audit
+writer into a roughly 4.6 GB synthetic fixture: 100k activity events, 100k identity
+contexts, 250k decision facts and 200k delivery progress rows. Its payload filler
+models storage size only; measured new writes use valid writer inputs. Never pass
+a production database. The fixture exceeds SQLite's default private page cache;
+it does not reproduce an OS-cold 27 GB database or btrfs stalls.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audit-batch-write-measure.ts \
+  --output .local/audit-seed --iterations 1
+node scripts/perf/audit-retention-fixture.mjs \
+  .local/audit-seed/state/openclaw.sqlite .local/audit-fixture.sqlite
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/audit-batch-write-measure.ts \
+  --fixture .local/audit-fixture.sqlite --output .local/audit-candidate --iterations 1000
+```
+
+Each invocation needs a new output directory and copies the closed fixture. Run
+five serial A1/A2/B groups, loading saved baseline audit owners with `--source-dir`
+for both controls. Compare writer CPU, elapsed time and batch p50/p99; repeat with
+`--allocation` separately. Require identical persisted-row digests and counts.
+Setup, warmup and verification are excluded from measurement.
+
+For page-read regression proof, compile `transcript-active-facts-vfs.c` using the
+instructions in its header and pass `--pager-extension /path/to/bufprobe.dylib`
+(`.so` on Linux). With this fixture and 1,200 turns, add
+`--max-main-page-reads 3000000`: the retained-row OFFSET baseline exceeds five
+million reads and fails; the bounded oldest-row candidate stays below 2.4 million
+and passes. These are SQLite VFS reads, not physical disk reads. Measure timing
+without the probe; require B to beat both controls on reads and writer CPU/time
+without a material batch-latency or allocation regression.
+
 ## Cold archive eligibility (counts only)
 
 Run the same real-worker full/mixed maintenance fixture used by the integration

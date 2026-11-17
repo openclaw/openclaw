@@ -187,22 +187,22 @@ function pruneDecisionFactsAfterInsert(
   if (remaining === 0) {
     return;
   }
-  // The first overflow tuple bounds a range scan without materializing retained IDs.
-  const overflowBoundary = kysely
-    .selectFrom("execution_decision_facts")
-    .select(["occurred_at", "receipt_id"])
-    .orderBy("occurred_at", "desc")
-    .orderBy("receipt_id", "desc")
-    .offset(limits.maxRows)
-    .limit(1)
-    .$asTuple("occurred_at", "receipt_id");
+  // Count the compact index instead of stepping over every retained tuple.
+  const rowCount =
+    normalizeSqliteNumber(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("execution_decision_facts")
+          .select((eb) => eb.fn.countAll<number>().as("count")),
+      )?.count ?? null,
+    ) ?? 0;
   const overflowIds = kysely
     .selectFrom("execution_decision_facts")
     .select("receipt_id")
-    .where((eb) => eb(eb.refTuple("occurred_at", "receipt_id"), "<=", overflowBoundary))
     .orderBy("occurred_at", "asc")
     .orderBy("receipt_id", "asc")
-    .limit(remaining);
+    .limit(Math.min(remaining, Math.max(0, rowCount - limits.maxRows)));
   executeSqliteQuerySync(
     db,
     kysely.deleteFrom("execution_decision_facts").where("receipt_id", "in", overflowIds),
