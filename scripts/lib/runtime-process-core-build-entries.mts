@@ -54,6 +54,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.fileLog,
   runtimeProcessEntrypoints.serviceChildGroupAnchor,
   runtimeProcessEntrypoints.controlUiFile,
+  runtimeProcessEntrypoints.workspaceIcon,
   runtimeProcessEntrypoints.publicSessionCard,
   runtimeProcessEntrypoints.sessionTranscriptReconcile,
   runtimeProcessEntrypoints.gitOperations,
