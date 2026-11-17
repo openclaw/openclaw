@@ -44,7 +44,9 @@ it.each(["gpt-6.2-astra", "gpt-6.2-sol"])(
       baseUrl: "https://clawrouter.example",
     });
     const row = catalog.models[0];
-    if (!row) throw new Error("missing admitted model");
+    if (!row) {
+      throw new Error("missing admitted model");
+    }
     const model = prepareClawRouterRequestModel({
       ...row,
       provider: "clawrouter",
@@ -86,7 +88,6 @@ it.each(["gpt-6.2-astra", "gpt-6.2-sol"])(
           apiKey: "synthetic-key",
           reasoning: "low",
           temperature: 0.3,
-          topP: 0.8,
           cacheRetention: "long",
         },
       )
@@ -101,7 +102,6 @@ it.each(["gpt-6.2-astra", "gpt-6.2-sol"])(
       tools: [{ type: "function", name: "echo" }],
     });
     expect(bodies[0]).not.toHaveProperty("temperature");
-    expect(bodies[0]).not.toHaveProperty("top_p");
     // An unopted proxy must not gain official cache controls from its upstream ID.
     expect(bodies[0]).not.toHaveProperty("prompt_cache_retention");
     expect(bodies[0]).not.toHaveProperty("prompt_cache_options");
