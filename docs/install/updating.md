@@ -545,7 +545,7 @@ warns and continues from the current observed state rather than aborting an
 otherwise valid migration. The receipt permanently disables automatic database
 restoration for that update, so a later failure cannot overwrite newer data with
 the stale backup. Existing integrity, schema, and maintenance-ownership checks
-still apply, as do checks for writes after admission. The candidate must contain
+still apply, as do checks for writes after maintenance admission. The candidate must contain
 this repair; the installed updater's capture and backup checks are unchanged.
 Empty WAL-index transitions without write evidence remain rollback-eligible.
 
@@ -875,14 +875,18 @@ checks. Doctor and competing CLI processes must contain this repair. Already-run
 older processes cannot observe the reservation.
 
 Candidate-side predecessor shutdown retains its durable recovery receipt inside
-Doctor's original database-write capture. The ledger writer includes its own
-native connection close before publishing that write; the following Doctor
-rechecks the database before reacquiring native custody. Unrelated writes before
-or after the receipt still refuse migration rather than becoming a new baseline.
-A completed stop keeps its recovery receipt even when that refusal prevents
+Doctor's original database-write capture. When the receipt owner acquires exclusive
+maintenance custody, Doctor reconciles writes made while stopping the predecessor.
+Changed captured SQLite databases produce a warning and forward repair continues
+from current state; automatic restoration of the stale backup stays disabled.
+This also accepts foreign writes made before custody, preserving their data rather
+than restoring over them. Later changes still refuse receipt attribution or migration.
+The ledger writer includes its own native connection close before publishing that
+write; the following Doctor rechecks the database before reacquiring native custody.
+A completed stop keeps its recovery receipt even when a later refusal prevents
 Doctor from continuing. A loaded supervised service between crashed processes
 still goes through native service-ownership inspection, even without a live lease.
-This is candidate-side behavior; it does not change an already-running older updater.
+The candidate must contain this repair; the installed updater needs no protocol change.
 
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
