@@ -76,8 +76,10 @@ a full run-completion drain before shutdown.
 After marker persistence and cancellation, process-owned shutdown logs a warning
 when required connection cleanup exceeds five seconds, then keeps joining its
 accepted finalizers before releasing the Gateway lock and state admission. The
-existing process shutdown deadline still bounds this join. Embedded hosts also
-join those resources before reusing the runtime.
+existing process shutdown deadline still bounds this join. Shared-state leases
+finish their cleanup before the SQLite worker host closes. Completed orderly
+cleanup preserves exit status `0`; cleanup failures still produce a failed exit.
+Embedded hosts also join those resources before reusing the runtime.
 
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.

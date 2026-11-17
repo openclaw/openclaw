@@ -1,0 +1,2 @@
+6
+# Regression extends the canonical lease-close case to singleton shutdown.
