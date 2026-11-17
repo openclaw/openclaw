@@ -18,6 +18,7 @@ import {
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as processGroups from "../process/child-process-tree.js";
+import * as reservationCensus from "../process/command-reservation-census.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
@@ -294,6 +295,8 @@ unix.each([
   { name: "unverified helper", helper: "unknown" as const },
   { name: "surviving command group", groupAlive: true },
 ])("preserves every retained row beside a $name", (options) => {
+  // A process born at reservation time may be the command the dead spawner started.
+  vi.spyOn(reservationCensus, "findCommandReservationCandidates").mockReturnValue([4242]);
   const f = retainedCommandFixture(options);
   const before = f.rows();
   expect(f.store.acquire(f.install, "repair", { kind: "update" }).kind).toBe("busy");
