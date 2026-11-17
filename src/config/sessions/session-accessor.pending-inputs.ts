@@ -526,24 +526,17 @@ async function stagePreparedPendingInput(
       authority: options.authority,
     };
     if (committed) {
-      if (options.trackCompletion) {
+      // A matched receipt already proves the raw request. Its committed input owns
+      // the once-only hook decision and JSON projection; only retired receipts need reconstruction.
+      if (options.trackCompletion && !previous && !existing) {
         const committedHash = resolveCommittedPendingInputRequestHash(
-          {
-            ...options,
-            message,
-            replaySourceSessionKeys:
-              previous || existing ? undefined : options.replaySourceSessionKeys,
-          },
+          { ...options, message },
           committed.message,
         );
         if (!committedHash) {
           return undefined;
         }
-        // A retained receipt owns the raw request hash, even when JSON storage
-        // normalized its message. Reconstruct identity only after receipt retirement.
-        if (!previous && !existing) {
-          requestHash = committedHash;
-        }
+        requestHash = committedHash;
         await assertCurrent();
       }
       owner = {

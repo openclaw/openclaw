@@ -59,6 +59,7 @@ import * as chatAbort from "./chat-abort.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
@@ -456,6 +457,86 @@ describe("private subagent completion processing receipts", () => {
       } else {
         await expectProcessed();
       }
+    },
+  );
+
+  it.each(["caller presentation", "committed projection"])(
+    "resumes a consumed public settle input after restart changes %s",
+    async (variation) => {
+      const childSessionKey = "agent:main:subagent:synthetic-child";
+      const client = createSyntheticPluginRuntimeClient({ operatorRoleActor: { kind: "system" } });
+      client.internal!.senderAttribution = {
+        id: "synthetic-requester",
+        name: "Synthetic requester",
+      };
+      const settle = async () => {
+        const facade = await kernel.gatewayRequestContext.createAgentTurnFacade!({ client });
+        return facade.dispatch<Record<string, unknown>>(
+          {
+            ...request("The completed child found the synthetic result."),
+            sourceReplyDeliveryMode: "automatic",
+            inputProvenance: {
+              kind: "inter_session",
+              sourceTool: "subagent_settle",
+              sourceSessionKey: childSessionKey,
+            },
+          },
+          {
+            expectFinal: true,
+            settleWakeReplay: { sourceSessionKeys: [childSessionKey], assertCurrent: () => {} },
+          },
+        );
+      };
+      const consumed = createDeferred();
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        const inputRecorder = expectDefined(command.userTurnTranscriptRecorder, "settle recorder");
+        await command.onExecutionStarted?.();
+        expect(await inputRecorder.persistApproved()).toMatchObject({ appended: true });
+        const stopped = createDeferred();
+        command.abortSignal!.addEventListener("abort", () => stopped.resolve(), { once: true });
+        consumed.resolve();
+        await stopped.promise;
+        command.abortSignal!.throwIfAborted();
+      });
+      const interrupted = observe(settle());
+      await consumed.promise;
+      const entry = expectDefined(source(), "accepted settle source");
+      chatAbort.abortChatRunById(kernel.gatewayRequestContext, {
+        runId,
+        sessionKey,
+        expectedEntry: entry,
+        stopReason: "restart",
+      });
+      await interrupted;
+      await expectDrained([{ runId, entry }]);
+      expect(completionOutcome()).toMatchObject({ reason: "cancelled", stopReason: "restart" });
+      const committed = transcript();
+      await restart();
+      if (variation === "caller presentation") {
+        client.internal!.senderAttribution = { id: "synthetic-requester" };
+      }
+      agentCommandMock.mockImplementationOnce(async (input) => {
+        const command = input as AgentCommandOpts;
+        const inputRecorder = expectDefined(command.userTurnTranscriptRecorder, "resumed recorder");
+        await command.onExecutionStarted?.();
+        expect(await inputRecorder.persistApproved()).toMatchObject({ appended: false });
+        return {
+          payloads: [
+            { text: "The parent's answer includes the synthetic child result.", mediaUrl: null },
+          ],
+          meta: { durationMs: 1 },
+        } satisfies Awaited<ReturnType<typeof agentCommandMock>>;
+      });
+      expect(await settle()).toMatchObject({
+        status: "ok",
+        result: {
+          payloads: [{ text: "The parent's answer includes the synthetic child result." }],
+        },
+      });
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(completionOutcome()).toMatchObject({ reason: "completed" });
+      expect(transcript()).toEqual(committed);
     },
   );
 
