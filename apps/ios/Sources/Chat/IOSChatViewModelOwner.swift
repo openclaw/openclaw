@@ -131,9 +131,12 @@ final class IOSChatViewModelOwner {
     }
 
     private func installConversationIfAvailable(appModel: NodeAppModel, viewModel: OpenClawChatViewModel) {
-        guard self.conversation == nil, let webOwner,
-              let store = appModel.makeChatOfflineStore(), let config = appModel.activeGatewayConnectConfig
-        else { return }
+        guard let config = appModel.activeGatewayConnectConfig else { return }
+        if let conversation {
+            conversation.updateControlUIMetadata(from: config)
+            return
+        }
+        guard let webOwner, let store = appModel.makeChatOfflineStore() else { return }
         self.conversation = IOSConversationController(
             owner: webOwner,
             viewModel: viewModel,

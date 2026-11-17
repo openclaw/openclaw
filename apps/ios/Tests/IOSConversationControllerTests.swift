@@ -8,6 +8,97 @@ import UIKit
 @MainActor
 @Suite(.enabled { await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad } }, .timeLimit(.minutes(1)))
 struct IOSConversationControllerTests {
+    @Test(arguments: ["", "/configured"])
+    func `learned mount reaches the retained offline owner before web admission`(urlPath: String) async throws {
+        try await ControllerFixture.run(urlPath: urlPath) { fixture in
+            let authority = fixture.appModel.activeGatewayConnectConfig?.controlUIInputs
+            #expect(!fixture.appModel.isOperatorGatewayConnected)
+            #expect(fixture.controller.bridge == nil)
+            fixture.appModel.activeGatewayConnectConfig?.controlUiBasePath = "/learned/control"
+            #expect(fixture.appModel.activeGatewayConnectConfig?.controlUIInputs == authority)
+            fixture.appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
+            fixture.appModel.chatPresentation.sync(appModel: fixture.appModel)
+            try await TestWait.observed("learned-mount bridge creation") { fixture.controller.bridge != nil }
+            #expect(fixture.appModel.chatPresentation.conversation === fixture.controller)
+            #expect(fixture.appModel.chatPresentation.viewModel === fixture.model)
+            let bridge = try #require(fixture.controller.bridge)
+            let mount = urlPath.isEmpty ? "/learned/control" : "/configured"
+            #expect(bridge.url.path == mount + "/__openclaw__/session-entry")
+            #expect(fixture.controller.documentURL == bridge.url)
+            let entry = try #require(URLComponents(url: bridge.url, resolvingAgainstBaseURL: false))
+            #expect(entry.queryItems == [.init(name: "path", value: mount + "/chat/main")])
+            // These are controller callbacks, not a replacement WebKit trust handshake.
+            // IOSConversationAdapterTests separately exercise real document/mount admission.
+            bridge.onReady?()
+            #expect(fixture.model.usesWebConversation)
+            let dashboard = try JSONDecoder().decode(
+                NativeConversationDashboardRoute.self, from: Data("{\"path\":\"\(mount)/settings\"}".utf8))
+            let outside = try JSONDecoder().decode(
+                NativeConversationDashboardRoute.self, from: Data("{\"path\":\"\(mount)-other/settings\"}".utf8))
+            #expect(bridge.onDashboard?(dashboard) == true)
+            #expect(bridge.onDashboard?(outside) == false)
+            bridge.onRoute?(.init(agentId: "main", sessionKey: "agent:main:main"))
+            try await TestWait.observed("learned-mount canonical route selection") {
+                fixture.model.sessionKey == "agent:main:main"
+            }
+            fixture.expectNativeAdmission(.init(agentId: "main", sessionKey: "agent:main:main"), allowed: false)
+        }
+    }
+
+    @Test func `changed learned mount retires the old bridge without replacing native ownership`() async throws {
+        try await ControllerFixture.run(urlPath: "") { fixture in
+            let original = try await fixture.startWeb()
+            let authority = fixture.appModel.activeGatewayConnectConfig?.controlUIInputs
+            fixture.appModel.activeGatewayConnectConfig?.controlUiBasePath = "/control"
+            #expect(fixture.appModel.activeGatewayConnectConfig?.controlUIInputs == authority)
+            fixture.appModel.chatPresentation.sync(appModel: fixture.appModel)
+            try await TestWait.observed("replacement learned-mount bridge") {
+                fixture.controller.bridge != nil && fixture.controller.bridge !== original
+            }
+            let replacement = try #require(fixture.controller.bridge)
+            #expect(fixture.appModel.chatPresentation.conversation === fixture.controller)
+            #expect(fixture.appModel.chatPresentation.viewModel === fixture.model)
+            #expect(replacement.url.path == "/control/__openclaw__/session-entry")
+            // Probing already excludes native sends; only the replacement may become ready.
+            #expect(fixture.controller.owner.mode == .probing)
+            original.onReady?()
+            #expect(fixture.controller.owner.mode == .probing)
+            replacement.onReady?()
+            #expect(fixture.controller.owner.mode == .web)
+            fixture.expectNativeAdmission(.init(agentId: "main", sessionKey: "main"), allowed: false)
+        }
+    }
+
+    @Test(arguments: [true, false])
+    func `learned mount retries failed admission but preserves explicit native controls`(
+        nativeRequested: Bool) async throws
+    {
+        try await ControllerFixture.run(urlPath: "") { fixture in
+            let bridge = try await fixture.startWeb()
+            if nativeRequested {
+                fixture.controller.requestNativeControls()
+            } else {
+                bridge.onFailure?()
+            }
+            #expect(fixture.controller.bridge == nil)
+            fixture.appModel.activeGatewayConnectConfig?.controlUiBasePath = "/control"
+            fixture.appModel.chatPresentation.sync(appModel: fixture.appModel)
+            if nativeRequested {
+                #expect(fixture.controller.nativeRequested)
+                #expect(fixture.controller.bridge == nil)
+                #expect(!fixture.model.usesWebConversation)
+                fixture.controller.resumeWeb()
+            }
+            try await TestWait.observed("admission after learned-mount recovery") { fixture.controller.bridge != nil }
+            let replacement = try #require(fixture.controller.bridge)
+            #expect(replacement !== bridge)
+            #expect(replacement.url.path == "/control/__openclaw__/session-entry")
+            replacement.onReady?()
+            #expect(fixture.model.usesWebConversation)
+            #expect(fixture.appModel.chatPresentation.viewModel === fixture.model)
+        }
+    }
+
     @Test func `retiring during the final destination draft read cannot leak a web claim`() async throws {
         try await ControllerFixture.run { fixture in
             _ = try await fixture.startWeb()
@@ -137,7 +228,9 @@ private struct ControllerFixture {
     let controller: IOSConversationController
     let store: OpenClawChatSQLiteTranscriptCache
 
-    static func run(sessionKey: String = "main", _ body: (Self) async throws -> Void) async throws {
+    static func run(
+        sessionKey: String = "main", urlPath: String = "/control", _ body: (Self) async throws -> Void) async throws
+    {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
         let gatewayID = "conversation-controller-" + UUID().uuidString
@@ -154,7 +247,7 @@ private struct ControllerFixture {
         appModel.gatewayDefaultAgentId = "main"
         appModel.focusChatSession(sessionKey)
         appModel.activeGatewayConnectConfig = try GatewayConnectConfig(
-            url: #require(URL(string: "wss://gateway.invalid/control")),
+            url: #require(URL(string: "wss://gateway.invalid" + urlPath)),
             stableID: gatewayID,
             tls: nil,
             token: nil,

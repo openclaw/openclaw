@@ -11,7 +11,7 @@ import WebKit
 @Observable
 final class IOSConversationController {
     let owner: OpenClawWebConversation
-    let config: GatewayConnectConfig
+    private(set) var config: GatewayConnectConfig
     let dataStore: WKWebsiteDataStore
     private(set) var bridge: IOSConversationBridge?
     private(set) var documentURL: URL?
@@ -71,6 +71,16 @@ final class IOSConversationController {
                 self?.reconcile()
             }
         }
+    }
+
+    func updateControlUIMetadata(from config: GatewayConnectConfig) {
+        guard !self.closed, self.config.controlUIInputs == config.controlUIInputs,
+              self.config.controlUiBasePath != config.controlUiBasePath else { return }
+        // Hello learns routing metadata without changing the native/authentication owner.
+        // Retire any old executable document before admitting the newly mounted one.
+        self.config.controlUiBasePath = config.controlUiBasePath
+        self.failed = false
+        self.useNative()
     }
 
     static func storageID(gatewayID: String) -> UUID {
