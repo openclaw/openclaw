@@ -730,6 +730,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     queuedInputIds: string[];
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
+    /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
+    scope?: string;
     /** Original per-input limits, restored only after current source revalidation. */
     queuedInputSources?: Record<
       string,

@@ -21,6 +21,7 @@ import {
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
+import { GATEWAY_RESTART_RESUME_SCOPE_ENV } from "../config/sessions/session-restart-resume-scope.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
@@ -861,3 +862,107 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       await live!.settled?.();
     }
   }));
+
+// A supervisor that ends a deployment generation (for example an explicit operator
+// stop followed by a new deployment) starts the next Gateway under a new scope. Work
+// that the old generation interrupted must not run again, and the message queued
+// behind it must not run without its sender; a restart within the same scope still
+// resumes.
+it.for([
+  { live: "run", written: "generation-a", startup: "generation-a", resumes: true },
+  { live: "turn", written: "generation-a", startup: "generation-a", resumes: true },
+  { live: "run", written: "generation-a", startup: "generation-b", resumes: false },
+  { live: "turn", written: "generation-a", startup: "generation-b", resumes: false },
+  { live: "run", written: undefined, startup: "generation-b", resumes: false },
+  { live: "run", written: "generation-a", startup: undefined, resumes: false },
+  // Without a supervisor scope the behavior is unchanged.
+  { live: "run", written: undefined, startup: undefined, resumes: true },
+  { live: "turn", written: undefined, startup: undefined, resumes: true },
+] as const)(
+  "resumes a $live interrupted under scope $written only at startup scope $startup",
+  ({ live, written, startup, resumes }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const name = `scoped-${live}-${written ?? "none"}-${startup ?? "none"}`;
+      const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      const previousScope = process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV];
+      const setScope = (scope: string | undefined) => {
+        if (scope === undefined) {
+          delete process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV];
+        } else {
+          process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV] = scope;
+        }
+      };
+      // The live work at shutdown: a claimed agent run, or a session turn.
+      const runId = `${name}-run`;
+      const claim =
+        live === "run"
+          ? claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true })
+          : undefined;
+      const turn =
+        live === "turn"
+          ? await withSessionTurn(target, async (active) => {
+              assert(active, "Expected a real session turn");
+              return { operation: active, release: active.retainExecution() };
+            })
+          : undefined;
+      const queued = await stageSessionPendingInput(target, {
+        runId: `${name}-queued`,
+        message: {
+          role: "user",
+          content: "Sent while the turn was running",
+          timestamp: Date.now(),
+          idempotencyKey: `${name}-queued:user`,
+        },
+        assertCurrent() {},
+      });
+      assert(queued, "Queued fixture input was not admitted");
+      // Resume admission starts with the session principal's authority. Stop there:
+      // reaching it is the resume decision under test.
+      const admission = vi
+        .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+        .mockRejectedValue(new Error("Stop after observing restart admission"));
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+      try {
+        setScope(written);
+        await persistRunningSessionsForRestart({ cfg });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+          queuedInputIds: [queued.inputId],
+          queuedInputSources: expect.any(Object),
+          ...(written ? { scope: written } : {}),
+        });
+        // The process ends: its run, turn and queued sender are gone.
+        if (claim !== undefined) {
+          releaseAgentRunContext(runId, claim);
+        }
+        turn?.release();
+        await turn?.operation.ownerSettlement;
+        queued.finish("interrupted");
+        await queued.settled?.();
+
+        setScope(startup);
+        await resumeMarkedSessions({
+          context: createContext([], () => cfg),
+          signal: new AbortController().signal,
+          log: { warn: vi.fn() },
+        });
+        expect(admission.mock.calls.length > 0).toBe(resumes);
+        expect(resume).not.toHaveBeenCalled();
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+        if (!resumes) {
+          expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
+            state: "cancelled",
+            message: { content: "Sent while the turn was running" },
+          });
+        }
+      } finally {
+        setScope(previousScope);
+        admission.mockRestore();
+        resume.mockRestore();
+        queued.finish("interrupted");
+        await queued.settled?.();
+      }
+    }),
+);

@@ -23,6 +23,11 @@ import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
 } from "../config/sessions/session-run-lifecycle-projection.js";
+import {
+  createRestartResumeMarker,
+  isRestartResumeMarkerInScope,
+  resolveRestartResumeScope,
+} from "../config/sessions/session-restart-resume-scope.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -255,12 +260,12 @@ async function persistRunningSessions(
               sessionKey,
               entry: {
                 ...entry,
-                resumeAfterRestart: {
+                resumeAfterRestart: createRestartResumeMarker({
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
                   operatorSource:
                     session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
-                },
+                }),
               },
             });
             preserve.push({ session, preserve: queued.preserve });
@@ -451,6 +456,7 @@ async function resumeRestartStore(
     { target, entries },
   );
   const summary = createRestartResumeSummary("startup");
+  const scope = resolveRestartResumeScope();
   const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
     summary.record(
@@ -482,6 +488,7 @@ async function resumeRestartStore(
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
+      let scopeChanged = false;
       try {
         await waitForAgentInputAdmission(agentId, {
           sessionKey,
@@ -519,7 +526,13 @@ async function resumeRestartStore(
               !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
               (!selected.activeWriterRunId ||
                 !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
-            const marker: InternalSessionEntry["resumeAfterRestart"] =
+            // A marker from another scope belongs to an ended deployment generation, such
+            // as an explicit stop. Clear it without resuming; discovery left its queued
+            // inputs to the orphaned-input settlement above.
+            scopeChanged =
+              selected.resumeAfterRestart !== undefined &&
+              !isRestartResumeMarkerInScope(selected.resumeAfterRestart, scope);
+            const recovered: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
               (parked ||
               (orphanedRun &&
@@ -536,7 +549,8 @@ async function resumeRestartStore(
                 selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
                 ? { queuedInputIds: [] }
                 : undefined);
-            if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
+            const marker = scopeChanged ? undefined : recovered;
+            if (!marker && !scopeChanged && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
             const entry = {
@@ -576,7 +590,11 @@ async function resumeRestartStore(
           summary.record(
             agentId,
             sessionKey,
-            interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
+            scopeChanged
+              ? "scope-changed"
+              : interrupted
+                ? "orphaned-run-interrupted"
+                : "marker-not-current-or-legacy-ineligible",
           );
           continue;
         }

@@ -1,6 +1,10 @@
 import { getSubagentRunsForRequesterSession } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { listOrphanedSessionPendingInputTargets } from "../config/sessions/session-pending-input-withdrawal.js";
+import {
+  isRestartResumeMarkerInScope,
+  resolveRestartResumeScope,
+} from "../config/sessions/session-restart-resume-scope.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
@@ -95,10 +99,16 @@ async function prepareRestartStore(
     return undefined;
   }
   let orphaned: PreparedRestartStore["orphaned"] = [];
+  const scope = resolveRestartResumeScope();
   try {
+    // Queued inputs under another scope's marker are settled like a crash's orphans.
     orphaned = await listOrphanedSessionPendingInputTargets(
       target,
-      entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
+      entries.flatMap(({ entry }) =>
+        entry.resumeAfterRestart && isRestartResumeMarkerInScope(entry.resumeAfterRestart, scope)
+          ? entry.resumeAfterRestart.queuedInputIds
+          : [],
+      ),
     );
     signal.throwIfAborted();
   } catch (error) {
