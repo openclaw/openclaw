@@ -10,7 +10,7 @@ import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-uti
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { isMissingPathError } from "../infra/errno.js";
+import { ignoreMissingPath, isMissingPathError } from "../infra/errno.js";
 import { isExecutableFileAsync, resolveExecutablePathAsync } from "../infra/executable-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { lstatIfExists } from "../infra/path-existence.js";
@@ -271,7 +271,7 @@ export async function installDesktopTerminalPath(
   }
   const profileHome = resolveRequiredHomeDir(env);
   if (!(await lstatIfExists(path.join(profileHome, ".openclaw/openclaw.json")))) {
-    for (const directory of await fs.readdir(profileHome)) {
+    for (const directory of (await fs.readdir(profileHome).catch(ignoreMissingPath)) ?? []) {
       if (
         directory.startsWith(".openclaw-") &&
         (await lstatIfExists(path.join(profileHome, directory, "openclaw.json")))

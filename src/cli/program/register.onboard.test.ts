@@ -205,16 +205,18 @@ describe("setup routing", () => {
   }
   beforeEach(() => configSnapshot({}, false));
 
-  it.skipIf(process.platform === "win32").each([false, true])(
-    "exposes the verified desktop CLI without reading config or running setup (custom home=%s)",
-    async (customHome) => {
+  it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(
+    "exposes the verified desktop CLI without reading config or running setup (home=%s)",
+    async (homeKind) => {
+      const customHome = homeKind !== "default";
+      const configured = homeKind === "configured";
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-path-"));
       try {
         const operatorHome = path.join(home, "operator-home");
         const stateDir = path.join(operatorHome, "state");
         const configFile = path.join(stateDir, "openclaw.json");
         const configBytes = Buffer.from(' {"gateway":{"mode":"remote"}}\n');
-        if (customHome) {
+        if (configured) {
           await fs.mkdir(stateDir, { recursive: true });
           await fs.writeFile(configFile, configBytes);
         }
@@ -230,6 +232,7 @@ describe("setup routing", () => {
           `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf '%s\\n' "$HOME" "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH"\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
           { mode: 0o755 },
         );
+        const launcherBytes = await fs.readFile(launcher);
         await fs.writeFile(
           path.join(home, ".bashrc"),
           "# operator settings\nexport PATH=/usr/bin:/bin\n",
@@ -238,9 +241,9 @@ describe("setup routing", () => {
         const env = {
           HOME: home,
           OPENCLAW_HOME: customHome ? operatorHome : undefined,
-          OPENCLAW_PROFILE: customHome ? "operator" : undefined,
-          OPENCLAW_STATE_DIR: customHome ? stateDir : undefined,
-          OPENCLAW_CONFIG_PATH: customHome ? configFile : undefined,
+          OPENCLAW_PROFILE: configured ? "operator" : undefined,
+          OPENCLAW_STATE_DIR: configured ? stateDir : undefined,
+          OPENCLAW_CONFIG_PATH: configured ? configFile : undefined,
           SHELL: "/bin/bash",
           PATH: "/usr/bin:/bin",
         };
@@ -278,10 +281,13 @@ describe("setup routing", () => {
           env.OPENCLAW_CONFIG_PATH ?? "",
           "desktop:operator:qr literal argument",
         ]);
-        if (customHome) {
+        expect(await fs.readFile(launcher)).toEqual(launcherBytes);
+        if (configured) {
           expect(await fs.readFile(configFile)).toEqual(configBytes);
           expect(await fs.readdir(operatorHome)).toEqual(["state"]);
           expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        } else {
+          await expect(fs.lstat(operatorHome)).rejects.toMatchObject({ code: "ENOENT" });
         }
         expect((await fs.stat(path.join(home, ".bashrc"))).mode & 0o777).toBe(0o600);
         expect(
@@ -291,7 +297,7 @@ describe("setup routing", () => {
           ".bashrc",
           ".openclaw",
           ".profile",
-          ...(customHome ? ["operator-home"] : []),
+          ...(configured ? ["operator-home"] : []),
         ]);
         expect(await fs.readdir(path.join(home, ".openclaw"))).toEqual(["bin"]);
       } finally {
