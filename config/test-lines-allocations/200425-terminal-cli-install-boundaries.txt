@@ -1,0 +1,7 @@
+# PR #200425: +498 net test lines against CI base f8038cd6fcf2d7b6df7deef5e1bfb8b5939960c5.
+# Shared fixtures and parameterized cases removed 93 lines before this allocation.
+# Retain distinct actual-shell startup/PATH discovery and precedence, profile and
+# exit propagation, launcher/startup ownership, permissions, atomic races, and
+# refusal/failure proofs; installer and wrapper boundaries remain independently covered.
+# Allocate only the 98 lines above the unchanged 400-line allowance; no extra headroom.
+98
