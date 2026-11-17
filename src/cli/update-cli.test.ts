@@ -12,6 +12,7 @@ import {
 } from "../infra/update-run-ledger.js";
 import type { UpdateOwedStepId } from "../infra/update-run-owed-step.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
+import * as systemPackageOwnership from "../infra/update-system-package-ownership.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -267,6 +268,102 @@ describe("update-cli", () => {
       }
     },
   );
+
+  describe("a switch from a Git checkout to a package install", () => {
+    /** The checkout's wrapper, first on PATH, as `install.sh` and `install.ps1` write it. */
+    const switchFromGitCheckout = async () => {
+      const root = await mockPackageInstallAtCaseDir();
+      vi.mocked(cli.resolveUpdateInstallKind).mockResolvedValue("git");
+      vi.mocked(cli.resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
+      const bin = tempDirs.make("openclaw-git-wrapper-bin-");
+      const windows = process.platform === "win32";
+      const wrapper = path.join(bin, windows ? "openclaw.cmd" : "openclaw");
+      const entry = path.join(root, "dist", "entry.js");
+      await fs.writeFile(
+        wrapper,
+        windows
+          ? `@echo off\r\nnode "${entry}" %*\r\n`
+          : `#!/usr/bin/env bash\nset -euo pipefail\nexec /usr/bin/node ${entry.replaceAll(" ", "\\ ")} "$@"\n`,
+        { mode: 0o755 },
+      );
+      const original = await fs.readFile(wrapper, "utf8");
+      return {
+        wrapper,
+        wrapperUnchanged: async () => (await fs.readFile(wrapper, "utf8")) === original,
+        installedVersion: async () =>
+          JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version,
+        update: (restart: boolean) =>
+          withEnvAsync({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }, () =>
+            runUpdate({ yes: true, channel: "beta", restart }),
+          ),
+      };
+    };
+
+    it.each([
+      { gateway: "--no-restart", restart: false },
+      { gateway: "no Gateway service", restart: true },
+    ])(
+      "keeps the package and warns about the old wrapper it cannot retire ($gateway)",
+      async ({ restart }) => {
+        const { wrapper, wrapperUnchanged, installedVersion, update } =
+          await switchFromGitCheckout();
+        const unlink = fs.unlink;
+        vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+          if (file === wrapper) {
+            throw new Error("EACCES: permission denied, unlink");
+          }
+          await unlink(file);
+        });
+
+        await update(restart);
+
+        const run = cli.listUpdateRuns({ limit: 1 })[0];
+        expect(run, check.getErrorOutput()).toMatchObject({ status: "succeeded" });
+        expect(run?.steps.map((step) => step.step)).not.toContain("package rollback");
+        expect(await installedVersion()).toBe("9999.0.0");
+        expect(await wrapperUnchanged()).toBe(true);
+        const warning = `Could not finish removing the previous Git checkout's openclaw wrapper: Could not retire ${wrapper}: Error: EACCES: permission denied, unlink. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`;
+        const report = check.getLogOutput();
+        expect(report).toContain("OpenClaw updated to 9999.0.0");
+        expect(report).toContain(`Warning: ${warning}`);
+        // The warning stays in update history. No later command can retry it, so it is not owed.
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({ step: "warning:git-wrapper-retirement", detail: warning }),
+        );
+        expect(readOwedUpdateSteps()).toEqual([]);
+      },
+    );
+
+    it("still fails and restores the previous install when a system package owns the old wrapper", async () => {
+      const { wrapper, wrapperUnchanged, installedVersion, update } = await switchFromGitCheckout();
+      const inspect = systemPackageOwnership.createSystemPackageOwnershipInspection;
+      const refused = vi.fn();
+      vi.spyOn(systemPackageOwnership, "createSystemPackageOwnershipInspection").mockImplementation(
+        (...args) => ({
+          ...inspect(...args),
+          assertEntryUnowned: async (file) => {
+            if (file === wrapper) {
+              refused();
+              throw new systemPackageOwnership.SystemPackageOwnershipError("owned-install");
+            }
+          },
+        }),
+      );
+
+      await expect(update(false)).rejects.toEqual(new cli.ExitError(1));
+
+      expect(refused).toHaveBeenCalledOnce();
+      const run = cli.listUpdateRuns({ limit: 1 })[0];
+      expect(run, check.getErrorOutput()).toMatchObject({ status: "failed" });
+      // The failed finalization restores the previous package and settles its backup.
+      expect(run?.steps.map((step) => step.step)).toEqual(
+        expect.arrayContaining(["package rollback", "package-backup-retention"]),
+      );
+      expect(await installedVersion()).toBe("1.0.0");
+      expect(await wrapperUnchanged()).toBe(true);
+      expect(readOwedUpdateSteps()).toEqual([]);
+    });
+  });
 
   it("installs the verified exact package and persists an explicit extended-stable channel", async () => {
     await mockPackageInstallAtCaseDir();
