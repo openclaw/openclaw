@@ -43,7 +43,7 @@ function expectRuntimeArgs(
     fileURLToPath(url),
   ]);
   expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
-    needsLoader ? ["--import", new URL("./runtime-worker-loader.mjs", import.meta.url).href] : [],
+    needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
   );
   expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), runtime)).toBe(needsLoader);
 }

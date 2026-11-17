@@ -90,6 +90,6 @@ export function resolveRuntimeWorkerThreadExecArgv(
     return [];
   }
   return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)
-    ? ["--import", new URL("./runtime-worker-loader.mjs", import.meta.url).href]
+    ? ["--import", import.meta.resolve("tsx/esm")]
     : [];
 }
