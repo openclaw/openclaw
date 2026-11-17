@@ -60,6 +60,13 @@ export function createAgentDatabaseHandleCloser(cache: {
         !priorCheckpointError &&
         database.walMaintenance.health?.state !== "error";
       const pathCurrent = !alreadyClosed && healthy && isOpenClawAgentDatabasePathCurrent(database);
+      timing.checkpoint = {
+        alreadyClosed,
+        pathCurrent,
+        state: database.walMaintenance.health?.state,
+        logFrames: database.walMaintenance.health?.logFrames,
+        checkpointedFrames: database.walMaintenance.health?.checkpointedFrames,
+      };
       // Healthy peer handles keep runtime proof; restart proof still needs an empty WAL.
       retainRuntimeProof = healthy && (alreadyClosed || pathCurrent);
       const nativeCloseAt = performance.now();
@@ -73,9 +80,9 @@ export function createAgentDatabaseHandleCloser(cache: {
       if (pathCurrent && !postgres) {
         const { canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
         // Native last-close may finish a checkpoint; a pinned WAL must remain unsealed.
-        const closedWithEmptyWal =
-          (statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) === 0;
-        if (seal && closedWithEmptyWal) {
+        const walBytes = statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0;
+        timing.checkpoint.walBytes = walBytes;
+        if (seal && walBytes === 0) {
           clean = { path: database.path, publishSeal: seal.publish };
         }
       }

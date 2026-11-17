@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { clearBoundaryMaintenance, isBoundaryMaintenanceDeclined } from "../context-pressure.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
@@ -24,6 +25,7 @@ import { prepareEmbeddedAttemptPromptPreflight } from "./run/attempt-prompt-pref
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
+import { CONTEXT_MAINTENANCE_SIGNAL_TEXT } from "./run/preemptive-compaction.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -193,6 +195,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
     harnessRuntime: "embedded",
     prepareCurrentTranscriptRetry: vi.fn(),
     markOwnedTranscriptRetry: vi.fn(),
+    retryTransientCompactionFailure: vi.fn(async () => false),
     ...restOverrides,
     attempt,
   };
@@ -379,7 +382,9 @@ describe("recoverEmbeddedRunOverflow", () => {
         promptError,
         attempt: {
           terminal: { kind: "failed", source, error: promptError },
-          ...(source === "precheck" ? { preflightRecovery: { route: "compact_only" } } : {}),
+          ...(source === "precheck"
+            ? { preflightRecovery: { pressure: "overflow", route: "compact_only" } }
+            : {}),
         },
       });
 
@@ -401,6 +406,71 @@ describe("recoverEmbeddedRunOverflow", () => {
     },
   );
 
+  // Fault injection: soft-pressure maintenance must continue the turn whatever compaction does.
+  it.each([
+    {
+      name: "summary provider unavailable",
+      result: { ok: false, compacted: false, reason: "The summary provider is unavailable" },
+    },
+    { name: "guard blocked", result: { ok: false, compacted: false, reason: "guard_blocked" } },
+    {
+      name: "compaction timeout",
+      result: { ok: false, compacted: false, reason: "Compaction timed out after 180000ms" },
+    },
+    {
+      name: "removed nothing",
+      result: {
+        ok: true,
+        compacted: true,
+        result: { summary: "s", tokensBefore: 210_000, tokensAfter: 210_000 },
+      },
+    },
+  ] as const)("continues the turn when boundary maintenance fails: $name", async ({ result }) => {
+    mocks.compact.mockResolvedValueOnce(result as CompactionResult);
+    const runId = `maintenance-${Math.random()}`;
+    const promptError = new Error(CONTEXT_MAINTENANCE_SIGNAL_TEXT);
+    const input = makeInput({
+      promptError,
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: promptError },
+        preflightRecovery: {
+          route: "compact_only",
+          pressure: "maintenance",
+          source: "mid-turn",
+          estimatedPromptTokens: 210_000,
+          promptBudgetBeforeReserve: 204_000,
+          overflowTokens: 6_000,
+        },
+      },
+    });
+    input.runParams = { ...input.runParams, runId };
+    try {
+      expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+      expect(mocks.compact).toHaveBeenCalledOnce();
+      expect(input.prepareCurrentTranscriptRetry).toHaveBeenCalled();
+      // Maintenance that cannot reduce context is not retried at every later request.
+      expect(isBoundaryMaintenanceDeclined(runId)).toBe(true);
+    } finally {
+      clearBoundaryMaintenance(runId);
+    }
+  });
+
+  it("keeps the overflow failure when the request cannot fit and compaction fails", async () => {
+    mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason: "guard_blocked" });
+    const promptError = overflowError();
+    const input = makeInput({
+      promptError,
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: promptError },
+        preflightRecovery: { route: "compact_only", pressure: "overflow", source: "mid-turn" },
+      },
+    });
+    expect(await recoverEmbeddedRunOverflow(input)).toMatchObject({
+      action: "surface",
+      kind: "compaction_failure",
+    });
+  });
+
   it("keeps provider overflow guidance when compaction only skipped", async () => {
     mocks.compact.mockResolvedValueOnce({
       ok: true,
@@ -415,6 +485,84 @@ describe("recoverEmbeddedRunOverflow", () => {
       kind: "context_overflow",
       userText: expect.stringContaining("Context overflow"),
     });
+  });
+
+  it("waits out a provider outage during compaction and compacts again", async () => {
+    const rawError =
+      '502: {"error_name":"origin_bad_gateway","retry_after":60,"retryable":true,"status":502}';
+    mocks.compact
+      .mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason: `Compaction safeguard: summarization failed: All models failed (1): ${rawError}`,
+        failure: { reason: "overloaded", status: 502, code: "502", rawError },
+      })
+      .mockResolvedValueOnce(successfulCompaction());
+    const state = createEmbeddedRunContextRecoveryState();
+    const retryTransientCompactionFailure = vi.fn(async () => true);
+    const precheckAttempt = {
+      terminal: { kind: "failed", source: "precheck", error: overflowError() },
+      sessionIdUsed: "session-1",
+      messagesSnapshot: [],
+      preflightRecovery: { pressure: "overflow", route: "compact_only", source: "mid-turn" },
+    } satisfies Partial<EmbeddedRunAttemptResult>;
+    const input = makeInput({ state, retryTransientCompactionFailure, attempt: precheckAttempt });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
+    expect(retryTransientCompactionFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "overloaded", code: "502", message: rawError }),
+    );
+    expect(input.prepareCurrentTranscriptRetry).toHaveBeenCalledOnce();
+    expect(state.overflowCompactionAttempts).toBe(0);
+
+    // The retried attempt hits the same budget check and compacts.
+    const retried = makeInput({ state, retryTransientCompactionFailure, attempt: precheckAttempt });
+    expect(await recoverEmbeddedRunOverflow(retried)).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledTimes(2);
+    expect(retryTransientCompactionFailure).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "the retry policy declines",
+      failure: { reason: "rate_limit", status: 429 },
+      reason: "Summarization failed: 429 rate limited",
+      consulted: true,
+      copy: "Auto-compaction could not reach the model provider before the next model request",
+    },
+    {
+      name: "the failure is not transient",
+      failure: { reason: "auth", status: 401 },
+      reason: "Summarization failed: 401 invalid key",
+      consulted: false,
+      copy: "Auto-compaction failed before the next model request",
+    },
+    {
+      name: "the compaction watchdog timed out",
+      failure: { reason: "timeout" },
+      reason: "Compaction timed out",
+      consulted: false,
+      copy: "Auto-compaction timed out before the next model request",
+    },
+  ])("surfaces the compaction failure when $name", async ({ failure, reason, consulted, copy }) => {
+    mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason, failure });
+    const retryTransientCompactionFailure = vi.fn(async () => false);
+    const input = makeInput({
+      retryTransientCompactionFailure,
+      attempt: {
+        terminal: { kind: "failed", source: "precheck", error: overflowError() },
+        sessionIdUsed: "session-1",
+        messagesSnapshot: [],
+      },
+    });
+
+    expect(await recoverEmbeddedRunOverflow(input)).toMatchObject({
+      action: "surface",
+      kind: "compaction_failure",
+      userText: `${copy}. Try again or run /compact.`,
+    });
+    expect(retryTransientCompactionFailure).toHaveBeenCalledTimes(consulted ? 1 : 0);
+    expect(input.state.overflowCompactionAttempts).toBe(1);
   });
 
   it.each([true])(
@@ -443,7 +591,7 @@ describe("recoverEmbeddedRunOverflow", () => {
           terminal: { kind: "failed", source: "precheck", error: overflowError() },
           sessionIdUsed: "session-1",
           messagesSnapshot: [],
-          preflightRecovery: { route: "compact_then_truncate" },
+          preflightRecovery: { pressure: "overflow", route: "compact_then_truncate" },
         },
       });
 
@@ -712,6 +860,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         attempt: {
           terminal: { kind: "failed", source: "precheck", error: promptError },
           preflightRecovery: {
+            pressure: "overflow",
             route: "compact_then_truncate",
             source,
             estimatedPromptTokens: 268_138,
@@ -754,6 +903,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         promptError: new Error("Context window exceeded: requested 12,000 tokens"),
         attempt: {
           preflightRecovery: {
+            pressure: "overflow",
             route: "compact_then_truncate",
             source: "mid-turn",
             estimatedPromptTokens: 268_138,
@@ -817,7 +967,7 @@ describe("recoverEmbeddedRunOverflow", () => {
     const result = await recoverEmbeddedRunOverflow(
       makeInput({
         state,
-        attempt: { preflightRecovery: { route: "compact_only" } },
+        attempt: { preflightRecovery: { pressure: "overflow", route: "compact_only" } },
       }),
     );
 

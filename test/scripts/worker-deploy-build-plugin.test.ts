@@ -71,7 +71,7 @@ describe("worker deploy build plugin", () => {
         path.resolve("node_modules/@openclaw/fs-safe/dist/native.js"),
       );
       expect(() =>
-        createWorkerDeployBuildPlugin().transform.call({ error: fail }, code, nativePath),
+        createWorkerDeployBuildPlugin().transform.handler.call({ error: fail }, code, nativePath),
       ).toThrow("fs-safe native manifest lookup changed");
     },
   );
@@ -932,7 +932,7 @@ console.log("relocated worker WebSocket and transcription passed");
   it("replaces optional host-native modules with a failing virtual module", () => {
     const plugin = createWorkerDeployBuildPlugin();
 
-    expect(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
+    expect(plugin.load.handler(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
       "optional host-native dependency unavailable",
     );
   });
@@ -942,7 +942,7 @@ console.log("relocated worker WebSocket and transcription passed");
     const source = fs.readFileSync(bridgePath, "utf8");
     const plugin = createWorkerDeployBuildPlugin();
 
-    const transformed = plugin.transform.call({ error: fail }, source, bridgePath);
+    const transformed = plugin.transform.handler.call({ error: fail }, source, bridgePath);
     if (transformed === null) {
       throw new Error("Browser runtime source was not transformed");
     }
@@ -993,7 +993,7 @@ export async function createAttachedBrowserToolRuntime(params) {
 
   it("embeds the Playwright package identity and browser registry", () => {
     const modulePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
-    const transformed = createWorkerDeployBuildPlugin().transform.call(
+    const transformed = createWorkerDeployBuildPlugin().transform.handler.call(
       { error: fail },
       fs.readFileSync(modulePath, "utf8"),
       modulePath,
@@ -1041,6 +1041,6 @@ export async function createAttachedBrowserToolRuntime(params) {
     const resolvedId = path.resolve(modulePath);
     const source = mutate(fs.readFileSync(resolvedId, "utf8"));
     const plugin = createWorkerDeployBuildPlugin();
-    expect(() => plugin.transform.call({ error: fail }, source, resolvedId)).toThrow(error);
+    expect(() => plugin.transform.handler.call({ error: fail }, source, resolvedId)).toThrow(error);
   });
 });

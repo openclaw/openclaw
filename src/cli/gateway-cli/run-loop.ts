@@ -16,7 +16,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { registerSignalExitOwner } from "../signal-exit-barrier.js";
+import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
@@ -75,6 +75,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     gatewayLog,
     () => foregroundUpdateClosed,
     () => (runtimeResourcesRetained = true),
+    () => finishLoop(1),
   );
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let startupWork: Promise<unknown> | undefined;
@@ -714,8 +715,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
             if (
               !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
               !(await eagerLifecycleRuntime.requestManagedServiceUpdateHandoffPark(owner)) ||
-              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner) ||
-              !eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)
+              !(await eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner)) ||
+              !sameManagedUpdateOwner(getManagedUpdateOwner(), owner)
             ) {
               throw new Error("managed update helper lost exact ownership during service parking");
             }
@@ -1024,6 +1025,8 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     updateSuccessor,
     request,
   });
+  // These handlers own SIGINT/SIGTERM now; retire the startup owner in the same turn.
+  handOffGatewayStartupSignals();
   const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({
     decision: restartDecision,
     ownsProcessLifecycle: params.ownsProcessLifecycle === true,
@@ -1245,9 +1248,6 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         });
       }
       await cleanup.waitForCleanup();
-      if (cleanup.failed) {
-        finishLoop(1);
-      }
     }
   } catch (error) {
     loopFailure = { error };

@@ -92,6 +92,7 @@ export function fakeSupervisor() {
     acquireScopeCleanup: vi.fn(() => vi.fn(async () => {})),
     spawn,
     cancel: vi.fn(),
+    release: vi.fn(async () => undefined),
     cancelScope: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };

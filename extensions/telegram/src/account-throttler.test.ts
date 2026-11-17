@@ -417,6 +417,33 @@ it("lets a typing flood wait hold replies in another chat on the same token", as
   expect(sent[1]!.at).toBeGreaterThanOrEqual(6_000);
 });
 
+it("marks typing held back at the gate or in its queue as unsent, unlike Telegram's 429", async () => {
+  vi.useFakeTimers();
+  const { api, sent } = floodApi("typing-unsent", ({ method }) =>
+    method === "editMessageText" ? flood(30) : undefined,
+  );
+  finishClock(60_000);
+  const failure = (request: Promise<unknown>) => request.then(String, (error: unknown) => error);
+  await typing(api, 1);
+  // Passes the open gate, then waits a second for the chat's next action slot.
+  const queued = failure(typing(api, 2));
+  const telegramFlood = failure(
+    runReplaceableTelegramRequest(() => api.editMessageText(-100222, 9, "preview")),
+  );
+  await tick(1_000);
+  const atGate = failure(typing(api, 3));
+  const errors = await Promise.all([telegramFlood, queued, atGate]);
+  const heldBack = {
+    description: expect.stringMatching(/\(flood wait active; replaceable update not sent\)$/),
+  };
+  expect(errors).toMatchObject([
+    { error_code: 429, description: "Too Many Requests: retry after 30" },
+    heldBack,
+    heldBack,
+  ]);
+  expect(sent.map(({ method }) => method)).toEqual(["sendChatAction", "editMessageText"]);
+});
+
 it("pauses a fixed second for a 429 without retry_after and yields previews to the reply", async () => {
   vi.useFakeTimers();
   const { api, sent } = floodApi("flood-bare", (_call, count) =>

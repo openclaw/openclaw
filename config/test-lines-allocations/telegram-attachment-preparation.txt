@@ -1,2 +1,2 @@
-# Exact regression LF growth after native formatting and fixture extraction.
-1546
+# Covers regression lines beyond the 400-line standard allowance.
+1146

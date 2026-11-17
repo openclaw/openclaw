@@ -63,12 +63,14 @@ async function runScript(script: string, timeoutMs = 60_000, execArgv: string[] 
   return JSON.parse(result.stdout);
 }
 
-it("keeps snapshot worker scans equivalent and services cancellation during a large path depth", async () => {
-  const root = await fs.realpath(tempDirs.make("workspace-snapshot-worker-"));
-  const files = Array.from({ length: 128 }, (_, index) => `file-${index}.txt`);
-  await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
-  const scannerUrl = new URL("./workspace-actual-manifest.ts", import.meta.url);
-  const source = `
+it.each([false, true])(
+  "keeps worker scans equivalent and services cancellation during a large path depth (snapshot: %s)",
+  async (btrfsSnapshot) => {
+    const root = await fs.realpath(tempDirs.make("workspace-snapshot-worker-"));
+    const files = Array.from({ length: 128 }, (_, index) => `file-${index}.txt`);
+    await Promise.all(files.map((file) => fs.writeFile(path.join(root, file), "inside")));
+    const scannerUrl = new URL("./workspace-actual-manifest.ts", import.meta.url);
+    const source = `
     import { parentPort, workerData } from "node:worker_threads";
     import { setImmediate } from "node:timers";
     import { scanActualWorkspaceManifest } from ${JSON.stringify(scannerUrl.href)};
@@ -83,7 +85,7 @@ it("keeps snapshot worker scans equivalent and services cancellation during a la
     let failure;
     try {
       await scanActualWorkspaceManifest({
-        ...input, btrfsSnapshot: true, signal: controller.signal,
+        ...input, btrfsSnapshot: workerData.btrfsSnapshot, signal: controller.signal,
         reuseFile: relative => accepted.get(relative),
         onEntry: () => {
           if (++observed === 1) setImmediate(() => controller.abort(new Error("cancel snapshot")));
@@ -93,29 +95,30 @@ it("keeps snapshot worker scans equivalent and services cancellation during a la
     const sorted = entries => entries.sort((left, right) => left.path.localeCompare(right.path));
     parentPort.postMessage({ normal: sorted(normal), snapshot: sorted(snapshot), observed, failure });
   `;
-  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
-    workerData: { root, files },
-    execArgv: resolveRuntimeWorkerThreadExecArgv(scannerUrl),
-  });
-  try {
-    const result = await new Promise<{
-      normal: unknown[];
-      snapshot: unknown[];
-      observed: number;
-      failure: string;
-    }>((resolve, reject) => {
-      worker.once("message", resolve);
-      worker.once("error", reject);
+    const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
+      workerData: { root, files, btrfsSnapshot },
+      execArgv: resolveRuntimeWorkerThreadExecArgv(scannerUrl),
     });
-    expect(result.snapshot).toEqual(result.normal);
-    expect(result.snapshot).toHaveLength(files.length);
-    expect(result.failure).toBe("cancel snapshot");
-    expect(result.observed).toBeGreaterThan(0);
-    expect(result.observed).toBeLessThanOrEqual(32);
-  } finally {
-    await worker.terminate();
-  }
-});
+    try {
+      const result = await new Promise<{
+        normal: unknown[];
+        snapshot: unknown[];
+        observed: number;
+        failure: string;
+      }>((resolve, reject) => {
+        worker.once("message", resolve);
+        worker.once("error", reject);
+      });
+      expect(result.snapshot).toEqual(result.normal);
+      expect(result.snapshot).toHaveLength(files.length);
+      expect(result.failure).toBe("cancel snapshot");
+      expect(result.observed).toBeGreaterThan(0);
+      expect(result.observed).toBeLessThanOrEqual(32);
+    } finally {
+      await worker.terminate();
+    }
+  },
+);
 
 it("releases decoded tree entries while their encoded worker operation is pending", async () => {
   const result = await runScript(

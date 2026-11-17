@@ -300,7 +300,17 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(f.requests).toEqual([]);
   });
 
-  it.each(["role", "linked identity", "publisher", "session"])(
+  it("keeps reading across a config reload that leaves the API base unchanged", async () => {
+    const f = await fixture();
+    f.onRead(async (endpoint) => {
+      if (endpoint.endsWith("/pulls/7")) {
+        setRuntimeConfigSnapshot({ ...f.config });
+      }
+    });
+    expect(await f.invoke()).toMatchObject({ author: { accountId: 101 } });
+  });
+
+  it.each(["role", "linked identity", "publisher", "API base", "session"])(
     "rejects %s revocation during the PR read",
     async (change) => {
       const f = await fixture();
@@ -319,6 +329,11 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
           );
         } else if (change === "publisher") {
           mocks.matchesIdentity.mockReturnValue(false);
+        } else if (change === "API base") {
+          setRuntimeConfigSnapshot({
+            ...f.config,
+            gateway: { ...f.config.gateway, github: { apiBaseUrl: "https://other.example.test" } },
+          });
         } else {
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey: SESSION_KEY },

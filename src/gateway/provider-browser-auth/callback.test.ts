@@ -14,7 +14,6 @@ import {
   createProviderBrowserAuthSession,
   handleProviderOAuthCallback,
   PROVIDER_OAUTH_CALLBACK_PATH,
-  resolveBrowserAuthOrigin,
 } from "../provider-browser-auth.js";
 import { createRequest, createResponse } from "../server-http.test-harness.js";
 import { prepareTailscalePublishedOrigin } from "../tailscale-published-origin.js";
@@ -151,10 +150,17 @@ it.each<[string | undefined, string, boolean, boolean]>([
     clearOrigin();
   }
   const browserOrigin = origin ? { origin, requestHost, isLocalClient } : undefined;
-  expect(resolveBrowserAuthOrigin(browserOrigin)?.origin).toBe(allowed ? origin : undefined);
   const openUrl = vi.fn();
   const session = createSession({ browserOrigin, openUrl });
-  if (!allowed) {
+  expect(session.available).toBe(allowed);
+  if (allowed) {
+    await expect(
+      session.authorizePrepared({
+        timeoutMs: authorization.timeoutMs,
+        prepare: (redirectUrl) => ({ result: redirectUrl }),
+      }),
+    ).resolves.toBe(`${origin}${PROVIDER_OAUTH_CALLBACK_PATH}`);
+  } else {
     await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
     expect(openUrl).not.toHaveBeenCalled();
   }
@@ -263,7 +269,7 @@ it.each([
   ["trusted-proxy", "https://different.example"],
 ] as const)(
   "requires trusted-proxy authentication and the exact public origin (%s, %s)",
-  (authMethod, publicOrigin) => {
+  async (authMethod, publicOrigin) => {
     const config = {
       gateway: {
         ...proxyConfig.gateway,
@@ -275,6 +281,10 @@ it.each([
     const authPolicy = authMethod
       ? captureGatewayAuthPolicy(config, { ...proxyPrincipal, authMethod })
       : undefined;
-    expect(resolveBrowserAuthOrigin(proxyBrowser, { authPolicy })).toBeUndefined();
+    const openUrl = vi.fn();
+    const session = createSession({ browserOrigin: proxyBrowser, authPolicy, openUrl });
+    expect(session.available).toBe(false);
+    await expect(session.authorize(authorization)).rejects.toThrow("secure Gateway address");
+    expect(openUrl).not.toHaveBeenCalled();
   },
 );

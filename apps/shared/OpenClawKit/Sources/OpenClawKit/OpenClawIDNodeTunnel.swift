@@ -150,8 +150,7 @@ public actor OpenClawIDNodeTunnel {
                 if let close {
                     // Only the current server key may report removal; a superseded one cannot
                     // disable the replacement binding.
-                    if close.requiresReenrollment, key == self.latestKey {
-                        await self.markRemoved()
+                    if close.requiresReenrollment, key == self.latestKey, await self.verifyRemoval() {
                         throw OpenClawIDNodeTransportError.removed
                     }
                     throw OpenClawIDNodeTransportError.closed
@@ -231,12 +230,22 @@ public actor OpenClawIDNodeTunnel {
     private func didClose(id: UUID, close: OpenClawIDNodeClose) async {
         guard self.active?.id == id else { return }
         self.active = nil
-        if close.requiresReenrollment { await self.markRemoved() }
+        if close.requiresReenrollment { _ = await self.verifyRemoval() }
     }
 
-    private func markRemoved() async {
-        self.removed = true
-        await self.shutdown()
+    /// A server refusal triggers one signed membership refresh, not retirement by itself. A stale
+    /// server or an unavailable Discovery service must leave the enrollment retryable.
+    private func verifyRemoval() async -> Bool {
+        do {
+            _ = try await self.verifiedKey()
+        } catch OpenClawIDNodeEnrollmentError.notAdmitted {
+            self.removed = true
+            await self.shutdown()
+            return true
+        } catch {
+            // Verification failed without evidence of removal; the next dial can try again.
+        }
+        return false
     }
 
     public func openStream() async throws -> any OpenClawIDNodeStream {

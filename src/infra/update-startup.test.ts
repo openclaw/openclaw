@@ -17,6 +17,7 @@ import {
 import type { AutoUpdateRunner } from "./update-startup-auto-run.js";
 import {
   updateResult,
+  commandSuccess,
   matchingObject,
   containingObject,
   pauseAt,
@@ -74,10 +75,6 @@ const {
 } = await vi.hoisted(() => import("./update-startup.test-support.js"));
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
-
-function commandSuccess(stdout = "") {
-  return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
-}
 
 describe("update-startup", () => {
   let tempDir: string;
@@ -176,6 +173,7 @@ describe("update-startup", () => {
     await resetUpdateFixtureModules();
     await importUpdateFixtureModules();
     versionRef.value = "1.0.0";
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
     clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
     vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
     scheduler = createTestGatewayScheduler(clock.clock);

@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { prepareOperatorModelPolicyPresentation } from "./operator-model-presentation.js";
 import { listAgentsForGateway } from "./session-utils-store.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
 
@@ -93,5 +94,45 @@ describe("listAgentsForGateway model identity", () => {
       }
     }
     expect(cfg).toEqual(original);
+  });
+});
+
+describe("thinking level an agent override falls back to", () => {
+  // Global Low, a shared per-model param of High, and coder's own Medium.
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "openai/gpt-5.5",
+        thinkingDefault: "low",
+        models: { "openai/gpt-5.5": { params: { thinking: "high" } } },
+      },
+      entries: { main: {}, coder: { thinkingDefault: "medium" } },
+    },
+  };
+
+  test("is reported only for agents with their own thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const row = (id: string) => agents.find((agent) => agent.id === id);
+    // Clearing coder's override resolves the per-model param before the global default.
+    expect(row("coder")).toMatchObject({
+      thinkingDefault: "medium",
+      thinkingInheritedDefault: "high",
+    });
+    expect(row("main")).toMatchObject({ thinkingDefault: "high" });
+    expect(row("main")).not.toHaveProperty("thinkingInheritedDefault");
+  });
+
+  test("is dropped by a model-restricted roster, which reports the override as thinkingDefault", async () => {
+    const { agents } = await listAgentsForGateway(cfg);
+    const coder = agents.find((agent) => agent.id === "coder")!;
+    // The policy permits the configured model; the projection still resolves its own defaults.
+    const presentation = prepareOperatorModelPolicyPresentation({
+      cfg,
+      policy: { models: [], allows: () => true },
+    })!;
+    const projected = presentation.forAgent("coder").agent(coder);
+    expect(projected).not.toHaveProperty("thinkingInheritedDefault");
+    // The UI receives the override here, so it must not read it as the inherited level.
+    expect(projected.thinkingDefault).toBe("medium");
   });
 });

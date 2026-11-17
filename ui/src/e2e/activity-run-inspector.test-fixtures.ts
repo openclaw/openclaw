@@ -120,17 +120,3 @@ export function decisionDisplay(params: {
     remediation: [{ code: "safe_next_step", text: params.remediation }],
   };
 }
-
-export function receiptPage(
-  decisionDisplays: DecisionReceiptDisplayV1[],
-  nextDecisionCursor?: string,
-): AuditRunInspectResult {
-  const result = presentResult("receipt-matrix");
-  const { nextDecisionCursor: _nextDecisionCursor, ...base } = result;
-  return {
-    ...base,
-    decisionDisplays,
-    coverage: { state: "unknown", missingEvidence: ["decision.execution_link"] },
-    ...(nextDecisionCursor ? { nextDecisionCursor } : {}),
-  };
-}

@@ -787,7 +787,7 @@ fn validate_quickchat_shortcut(
             parse_shortcut(reserved).expect("the built-in New Session shortcuts must be valid");
         if shortcut == reserved {
             return Err(format!(
-                "Shortcut \"{accelerator}\" is reserved for New Session in the focused dashboard."
+                "Shortcut \"{accelerator}\" is reserved for New Session in the main window."
             ));
         }
     }

@@ -8,10 +8,15 @@ const { lookup } = vi.hoisted(() => ({
   lookup: vi.fn<(hostname: string, options: { all: true }) => Promise<LookupAddress[]>>(),
 }));
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const DNS_ANSWER: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }];
 const PROFILE = { displayname: "Nested Matrix reader" };

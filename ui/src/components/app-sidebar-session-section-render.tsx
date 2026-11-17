@@ -264,11 +264,7 @@ export function renderSessionSection(params: {
                 }
               : undefined
           }
-          draggable={!derivedSection()}
-          disabledReason={(() => {
-            const access = groupWriteAccess();
-            return access.allowed || pinned() ? undefined : access.reason;
-          })()}
+          draggable={!derivedSection() && groupWriteAccess().allowed}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
           onContextMenu={(() => {
@@ -339,6 +335,7 @@ export function renderSessionSection(params: {
                   target={{ group: group() ?? "" }}
                   class="sidebar-session-group-actions sidebar-new-session"
                   label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  tooltip={t("chat.runControls.newSession")}
                   disabledReason={(() => {
                     const access = newSessionAccess();
                     return access.allowed ? undefined : access.reason;

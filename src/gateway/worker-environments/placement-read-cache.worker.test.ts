@@ -12,6 +12,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { placementAuthorityOwnerFor } from "./placement-authority-owner.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -284,7 +285,18 @@ describe("worker placement read cache", () => {
     });
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
+    const owner = placementAuthorityOwnerFor(requireOpenClawStateDatabaseIdentity(database));
+    const iterations = vi.spyOn(owner.placements, Symbol.iterator);
+    await writer.releaseTurnIfOwned(
+      await writer.claimTurn({
+        ...sessionIdentity("local"),
+        owner: { kind: "local" },
+        claimId: "next",
+        runId: "next",
+      }),
+    );
     expect([...unchanged.placements]).toEqual([]);
+    expect(iterations).not.toHaveBeenCalled();
     expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch(sessionIdentity("remote"));
     expect([...unchanged.placements]).toEqual([remote]);

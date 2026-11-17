@@ -30,6 +30,11 @@
  * --sweep-step emits a ready line after warmup, then awaits one stdin line per
  * sample and emits that sample as JSON. Alternate two retained processes for
  * paired warm measurements without repeating process startup and warmup.
+ * --sweep-demand measures six maintenance requests per simulated hour after two
+ * settling passes, using begin/finish admission and the real candidate reader.
+ * This mode WRITES sweep metadata: --reuse must name a task-owned synthetic copy.
+ * Compare idle scans/hour, logical pager bytes/hour, CPU and allocation; preserve
+ * candidate digests. Timing is owner work, not elapsed virtual time or Gateway latency.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -56,12 +61,14 @@ assert.ok(
       option === "--reuse" ||
       option === "--sweep" ||
       option === "--sweep-step" ||
+      option === "--sweep-demand" ||
       option.startsWith("--sweep-epoch=") ||
       option.startsWith("--target-bytes=") ||
       option.startsWith("--pager-extension="),
   ),
 );
 const reuse = options.includes("--reuse");
+const sweepDemand = options.includes("--sweep-demand");
 const sweepEpoch = Number(
   options.find((option) => option.startsWith("--sweep-epoch="))?.split("=")[1] ?? 3,
 );
@@ -87,8 +94,11 @@ const { createLocalWorkspaceManifestTree, localWorkspaceManifestRootReference } 
   await import("../../src/gateway/worker-environments/local-workspace-manifest-tree.js");
 const { localWorkspaceDigestBytes, prepareLocalWorkspaceTreePacks } =
   await import("../../src/gateway/worker-environments/local-workspace-cas.js");
-const { beginLocalWorkspaceSweepInDatabase, prepareLocalWorkspaceContentInDatabase } =
-  await import("../../src/gateway/worker-environments/local-workspace-cas.kernel.js");
+const {
+  beginLocalWorkspaceSweepInDatabase,
+  finishLocalWorkspaceSweepInDatabase,
+  prepareLocalWorkspaceContentInDatabase,
+} = await import("../../src/gateway/worker-environments/local-workspace-cas.kernel.js");
 const { localWorkspaceReadOperations, mutateLocalWorkspaceProjection } =
   await import("../../src/gateway/worker-environments/local-workspace-store.kernel.js");
 const { readLocalWorkspaceManifestRows, executeLocalWorkspaceManifestRead } =
@@ -101,7 +111,7 @@ const { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
 
 const pagerExtension = options.find((option) => option.startsWith("--pager-extension="))?.slice(18);
 using db = new DatabaseSync(databasePath, {
-  readOnly: reuse,
+  readOnly: reuse && !sweepDemand,
   allowExtension: Boolean(pagerExtension),
 });
 if (pagerExtension) {
@@ -230,6 +240,7 @@ if (options.includes("--sweep")) {
   let maxReadHoldMs = 0;
   let maxRows = 0;
   let readStatements = 0;
+  let scans = 0;
   let transactionStarted = 0;
   const originalExec = db.exec.bind(db);
   db.exec = (sql) => {
@@ -246,6 +257,16 @@ if (options.includes("--sweep")) {
   db.prepare = (sql) => {
     const statement = originalPrepare(sql);
     if (/^select\b/i.test(sql)) {
+      statement.get = new Proxy(statement.get.bind(statement), {
+        apply(get, _receiver, args) {
+          const started = performance.now();
+          const row = get(...args);
+          maxReadHoldMs = Math.max(maxReadHoldMs, performance.now() - started);
+          maxRows = Math.max(maxRows, row ? 1 : 0);
+          readStatements++;
+          return row;
+        },
+      });
       statement.all = new Proxy(statement.all.bind(statement), {
         apply(all, _receiver, args) {
           const started = performance.now();
@@ -259,15 +280,48 @@ if (options.includes("--sweep")) {
     }
     return statement;
   };
-  const sweep = () =>
-    localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch: sweepEpoch }, db)
-      .candidates;
+  const performSweep = () => {
+    const epoch = sweepDemand
+      ? runSqliteImmediateTransactionSync(db, () => beginLocalWorkspaceSweepInDatabase(db))
+      : sweepEpoch;
+    if (epoch === null) {
+      return { packs: [], paths: [] };
+    }
+    scans++;
+    const candidates = localWorkspaceReadOperations["localWorkspace.sweepCandidates"](
+      { epoch },
+      db,
+    ).candidates;
+    if (sweepDemand) {
+      assert.equal(
+        candidates.packs.length + candidates.paths.length,
+        0,
+        "demand fixture must contain only live content",
+      );
+      // The baseline predates demand settlement; its unmodified owner always scans.
+      runSqliteImmediateTransactionSync(db, () => finishLocalWorkspaceSweepInDatabase?.(db, epoch));
+    }
+    return candidates;
+  };
+  const sweep = () => {
+    let candidates = performSweep();
+    if (sweepDemand) {
+      for (let request = 1; request < 6; request++) {
+        candidates = performSweep();
+      }
+    }
+    return candidates;
+  };
   const steps = options.includes("--sweep-step")
     ? createInterface({ input: process.stdin })[Symbol.asyncIterator]()
     : undefined;
   const warmupStarted = performance.now();
-  sweep();
+  performSweep();
+  if (sweepDemand) {
+    performSweep();
+  }
   const warmupMs = performance.now() - warmupStarted;
+  const warmupScans = scans;
   if (steps) {
     console.log(JSON.stringify({ ready: true }));
   }
@@ -282,6 +336,7 @@ if (options.includes("--sweep")) {
     maxReadHoldMs = 0;
     maxRows = 0;
     readStatements = 0;
+    scans = 0;
     const readBefore = Number(pager?.get()?.misses ?? 0);
     const cpu = process.cpuUsage();
     const started = performance.now();
@@ -308,6 +363,7 @@ if (options.includes("--sweep")) {
       maxReadHoldMs,
       maxRows,
       readStatements,
+      ...(sweepDemand ? { requestsPerHour: 6, scansPerHour: scans } : {}),
       cpuMs: (used.user + used.system) / 1000,
       logicalReadBytes: pager ? (Number(pager.get()!.misses) - readBefore) * pageSize : undefined,
       allocatedBytes: allocation?.samples.reduce((sum, entry) => sum + entry.size, 0),
@@ -328,6 +384,7 @@ if (options.includes("--sweep")) {
       treeCount,
       sweepEpoch,
       warmupMs,
+      ...(sweepDemand ? { warmupScans } : {}),
       mode,
       samples,
     }),

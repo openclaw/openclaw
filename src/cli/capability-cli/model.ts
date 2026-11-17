@@ -17,6 +17,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/operator-scopes.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -25,6 +26,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -122,7 +124,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           [opts.prompt, opts.promptFile, opts.promptStdin].filter((value) => value !== undefined)
             .length !== 1
         ) {
-          throw new Error("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
+          throwExpectedCliError("Use exactly one of --prompt, --prompt-file, or --prompt-stdin.");
         }
         let prompt = opts.prompt;
         if (opts.promptFile !== undefined) {
@@ -142,11 +144,11 @@ export function registerModelCapabilityCommands(capability: Command): void {
           );
         }
         if (normalizeOptionalString(prompt) === undefined) {
-          throw new Error("--prompt cannot be empty or whitespace-only.");
+          throwExpectedCliError("--prompt cannot be empty or whitespace-only.");
         }
         const thinking = normalizeThinkLevel(opts.thinking);
         if (opts.thinking !== undefined && !thinking) {
-          throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
+          throwExpectedCliError(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
         }
         const transport = resolveTransport({
           local: Boolean(opts.local),
@@ -187,7 +189,7 @@ export function registerModelCapabilityCommands(capability: Command): void {
           const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
           const imageFiles = await Promise.all(
             (files ?? []).map(async (filePath) => {
-              const resolvedPath = path.resolve(filePath);
+              const resolvedPath = resolveFilesystemPath(filePath);
               const buffer = await fs.readFile(resolvedPath);
               const mimeType = normalizeMimeType(
                 await detectMime({

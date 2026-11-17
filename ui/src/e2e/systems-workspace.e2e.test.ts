@@ -90,6 +90,84 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each([390, 1280])(
+    "keeps one useful Systems recovery message while reconnecting at %ipx",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Gateway machine",
+                  status: "available",
+                  desktop: false,
+                },
+              ],
+            },
+          });
+          await page.goto(new URL("systems", suite.server.baseUrl).href);
+          const workspace = page.locator(".systems-workspace");
+          const desktop = workspace.locator(".systems-state");
+          await desktop
+            .getByRole("heading", { name: "No desktop available", exact: true })
+            .waitFor();
+          await workspace
+            .locator(".systems-backups__summary")
+            .getByText("No backups yet.", { exact: true })
+            .waitFor({ state: "attached" });
+          await gateway.setOnline(false);
+          const recovery = "Reconnect to refresh devices or open a desktop.";
+          await desktop.getByRole("heading", { name: recovery, exact: true }).waitFor();
+          const repeatedMessages = await workspace
+            .getByText(recovery, { exact: true })
+            .filter({ visible: true })
+            .count();
+          const prematureRefreshHint = await desktop
+            .getByText("Refresh devices to check screen-sharing availability on this computer.", {
+              exact: true,
+            })
+            .count();
+          const artifacts =
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? createControlUiE2eArtifactDir("systems-recovery-" + width)
+              : undefined;
+          if (artifacts) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              workspace,
+              [desktop.getByRole("heading")],
+              { animations: "disabled" },
+            );
+            await writeFile(artifacts + "/offline.png", frame.png);
+          }
+          await workspace.locator('.systems-toolbar button[aria-label="Device details"]').click();
+          const details = workspace.locator(".systems-details");
+          await details.locator("dd").getByText("Offline", { exact: true }).waitFor();
+          const detailsRepeatedMessage = await details.getByText(recovery, { exact: true }).count();
+          await gateway.setOnline(true);
+          await desktop
+            .getByRole("heading", { name: "No desktop available", exact: true })
+            .waitFor();
+          await workspace
+            .locator(".systems-overview .systems-backups__summary")
+            .getByText("No backups yet.", { exact: true })
+            .waitFor({ state: "attached" });
+          await details.getByRole("button", { name: "Close details", exact: true }).click();
+          await details.waitFor({ state: "hidden" });
+          expect(repeatedMessages, "One connection problem needs one recovery explanation").toBe(1);
+          expect(
+            prematureRefreshHint,
+            "Refreshing devices cannot help while the Gateway is disconnected",
+          ).toBe(0);
+          expect(detailsRepeatedMessage, "Details already reports its disconnected status").toBe(0);
+        },
+      );
+    },
+  );
   it("keeps the phone gutter unchanged across cold, Activity and Chat entries", async () => {
     const proofDir = createControlUiE2eArtifactDir("systems-gutter");
     await suite.withPage(

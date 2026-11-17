@@ -70,14 +70,13 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
-import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
+import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -479,6 +478,8 @@ export function* assembleOpenClawCodingTools(
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             currentChatType: options?.chatType,
+            isTurnTainted: options?.isTurnTainted,
+            preparedModelRuntime: options?.preparedModelRuntime,
             computerTransport:
               options?.computerTransport === null
                 ? null
@@ -631,7 +632,6 @@ export function* assembleOpenClawCodingTools(
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };

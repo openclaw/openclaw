@@ -9,6 +9,7 @@ import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import {
   decodeLocalWorkspaceSourcePathSet,
+  decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   LOCAL_WORKSPACE_CONTENT_BATCH,
@@ -22,6 +23,7 @@ import type {
 const packs = "local_workspace_tree_packs";
 const pathSets = "local_workspace_source_path_sets";
 const epochKey = "workspace.manifest.sweepEpoch";
+const pendingSweepKey = "workspace.manifest.pendingSweepEpoch";
 const query = (db: EngineConnection) => getNodeSqliteKysely<DB>(db);
 
 export function currentLocalWorkspaceSweepEpoch(db: EngineConnection): number {
@@ -52,12 +54,62 @@ export function prepareLocalWorkspaceContentInDatabase(
     if (preparation.packs.length > LOCAL_WORKSPACE_CONTENT_BATCH) {
       throw new Error("Local workspace pack preparation exceeds its batch limit");
     }
-    const rows = preparation.packs.map((record) => ({
-      tree_digest: localWorkspaceDigestBytes(record.treeRef),
-      records_json: JSON.stringify(record.records),
-      children_json: JSON.stringify(record.children),
-      sweep_epoch: epoch,
-    }));
+    const rows = preparation.packs.map((pack) => {
+      let records = pack.records;
+      let children = pack.children;
+      if (pack.baseTreeRef) {
+        const base = executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom(packs)
+            .select(["records_json", "children_json"])
+            .where("tree_digest", "=", Buffer.from(localWorkspaceDigestBytes(pack.baseTreeRef))),
+        );
+        if (!base) {
+          throw new Error("Local workspace baseline nodes are missing");
+        }
+        const merged = decodeLocalWorkspaceTree([base.records_json]);
+        // Child digests follow the records with children in each pack's traversal order.
+        const childRefs = new Map<string, string>();
+        const baseChildren = JSON.parse(base.children_json) as string[]; // SAFETY: Owner-written pack references.
+        let childIndex = 0;
+        for (const record of merged.values()) {
+          if (record.children !== null) {
+            childRefs.set(record.node.path, baseChildren[childIndex++]!);
+          }
+        }
+        childIndex = 0;
+        for (const record of records) {
+          merged.set(record.node.path, record);
+          if (record.children !== null) {
+            childRefs.set(record.node.path, children[childIndex++]!);
+          }
+        }
+        // Traverse the resulting sibling links: deleted records are unreachable,
+        // and a promoted unchanged root is supplied first by the scan owner.
+        const pending = [records[0]!];
+        records = [];
+        children = [];
+        while (pending.length) {
+          const record = pending.pop()!;
+          records.push(record);
+          if (record.children !== null) {
+            children.push(childRefs.get(record.node.path)!);
+          }
+          for (const entryPath of [record.left, record.right]) {
+            if (entryPath !== null) {
+              pending.push(merged.get(entryPath)!);
+            }
+          }
+        }
+      }
+      return {
+        tree_digest: localWorkspaceDigestBytes(pack.treeRef),
+        records_json: JSON.stringify(records),
+        children_json: JSON.stringify(children),
+        sweep_epoch: epoch,
+      };
+    });
     const existing = executeSqliteQuerySync(
       db,
       query(db)
@@ -147,7 +199,7 @@ export function readLocalWorkspaceSourcePaths(db: EngineConnection, digest: Uint
 export function readLocalWorkspaceTree(
   db: EngineConnection,
   root: Uint8Array,
-  options?: { allowMissing?: boolean },
+  options?: { allowMissing?: boolean; referencesOnly?: boolean },
 ) {
   const records: string[] = [];
   let pending = [localWorkspaceDigestReference(root)];
@@ -160,14 +212,23 @@ export function readLocalWorkspaceTree(
         db,
         query(db)
           .selectFrom(packs)
-          .select(["records_json", "children_json"])
+          .select(["tree_digest", "children_json"])
+          .select((eb) =>
+            options?.referencesOnly
+              ? eb.val(null).as("records_json")
+              : eb.ref("records_json").as("records_json"),
+          )
           .where("tree_digest", "in", batch.map(localWorkspaceDigestBytes)),
       ).rows;
       if (rows.length !== batch.length && !options?.allowMissing) {
         throw new Error("Local workspace baseline nodes are missing");
       }
       for (const row of rows) {
-        records.push(row.records_json);
+        records.push(
+          options?.referencesOnly
+            ? localWorkspaceDigestReference(row.tree_digest)
+            : row.records_json!,
+        );
         // SAFETY: This is the owner-produced child-pack digest array.
         for (const child of JSON.parse(row.children_json) as string[]) {
           next.push(child);
@@ -181,7 +242,59 @@ export function readLocalWorkspaceTree(
   return records;
 }
 
-export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number {
+/** The writer records demand atomically with preparations and projection changes. */
+export function requestLocalWorkspaceSweepInDatabase(
+  db: EngineConnection,
+  epoch = currentLocalWorkspaceSweepEpoch(db),
+): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .insertInto("config_machine_state")
+      .values({
+        state_key: pendingSweepKey,
+        // Preserve the preparation grace even if no further workspace writes arrive.
+        value_json: String(epoch + 2),
+        updated_at_ms: Date.now(),
+      })
+      .onConflict((conflict) =>
+        conflict
+          .column("state_key")
+          .doUpdateSet({
+            value_json: String(epoch + 2),
+            updated_at_ms: Date.now(),
+          })
+          .where("value_json", "!=", String(epoch + 2)),
+      ),
+  );
+}
+
+export function finishLocalWorkspaceSweepInDatabase(db: EngineConnection, epoch: number): void {
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("config_machine_state")
+      .set({ value_json: "0", updated_at_ms: Date.now() })
+      .where("state_key", "=", pendingSweepKey)
+      .where((eb) => eb(eb.cast<number>("value_json", "integer"), "<=", epoch)),
+  );
+}
+
+export function beginLocalWorkspaceSweepInDatabase(db: EngineConnection): number | null {
+  const pending = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", pendingSweepKey),
+  );
+  if (pending?.value_json === "0") {
+    return null;
+  }
+  // A pre-upgrade database has no demand marker; settle its existing content once.
+  if (!pending) {
+    requestLocalWorkspaceSweepInDatabase(db);
+  }
   const epoch = currentLocalWorkspaceSweepEpoch(db) + 1;
   executeSqliteQuerySync(
     db,

@@ -778,8 +778,6 @@ test.each<{
       "contextTokens",
       "inputTokens",
       "outputTokens",
-      "totalTokens",
-      "totalTokensFresh",
       "contextBudgetStatus",
     ],
     resolved: { modelProvider: "codex", model: "gpt-5.5" },
@@ -826,7 +824,13 @@ test.each<{
     const key = requireNonEmptyString(created.payload?.key, "created session key");
     const stored = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     for (const entry of [created.payload?.entry, stored]) {
-      expect(entry).toMatchObject({ parentSessionKey: "agent:main:main", ...inherited });
+      expect(entry).toMatchObject({
+        parentSessionKey: "agent:main:main",
+        ...inherited,
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      });
       for (const field of absent) {
         expect(entry?.[field], field).toBeUndefined();
       }
