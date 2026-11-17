@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
 import type { SqliteWorkerRequest } from "../../src/infra/sqlite-worker-contract.js";
@@ -6,6 +7,7 @@ type Sample = {
   packBytes: number;
   elapsedMs: number;
   maxSyncMs: number;
+  maxEventLoopGapMs: number;
   mainCpuMs: number;
   allocatedBytes: number;
   serializedBytes: number;
@@ -60,6 +62,7 @@ export function observeLocalWorkspaceMutations() {
         packBytes,
         elapsedMs: 0,
         maxSyncMs: 0,
+        maxEventLoopGapMs: 0,
         mainCpuMs: 0,
         allocatedBytes: 0,
         serializedBytes: 0,
@@ -68,9 +71,13 @@ export function observeLocalWorkspaceMutations() {
       };
       current = sample;
       let lastTick = started;
+      let loopUsage = performance.eventLoopUtilization();
       const timer = setInterval(() => {
         const now = performance.now();
-        sample.maxSyncMs = Math.max(sample.maxSyncMs, now - lastTick);
+        const nextUsage = performance.eventLoopUtilization();
+        sample.maxSyncMs = Math.max(sample.maxSyncMs, nextUsage.active - loopUsage.active);
+        sample.maxEventLoopGapMs = Math.max(sample.maxEventLoopGapMs, now - lastTick);
+        loopUsage = nextUsage;
         lastTick = now;
       }, 1);
       try {
@@ -81,7 +88,7 @@ export function observeLocalWorkspaceMutations() {
         sample.elapsedMs = performance.now() - started;
         sample.allocatedBytes = getHeapStatistics().total_allocated_bytes - allocated;
         // Let the timer observe the final callback and its entire microtask drain.
-        // This is an upper bound including the timer's 1 ms resolution.
+        // Active time includes synchronous waits but excludes time idle in the event provider.
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 2);
         });
