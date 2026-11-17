@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
+import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -164,6 +165,8 @@ function runDispatch(fakeGh: ReturnType<typeof createFiles>, options: RunOptions
     "GITHUB_TOKEN",
     "GH_ENTERPRISE_TOKEN",
     "GITHUB_ENTERPRISE_TOKEN",
+    // This isolated child does not inherit the parent's notification pipe.
+    "OPENCLAW_PR_LOCK_NOTIFY_FD",
   ]) {
     delete env[name];
   }
@@ -252,9 +255,9 @@ function createFakeGh(
 }
 
 describePosix("scripts/pr ci-dispatch", () => {
-  it("dispatches qualified PR-shaped CI for the exact remote head", () => {
+  it("dispatches qualified PR-shaped CI despite an inherited operation notifier", () => {
     const fakeGh = createFakeGh();
-    const result = fakeGh.ok();
+    const result = withEnv({ OPENCLAW_PR_LOCK_NOTIFY_FD: "3" }, () => fakeGh.ok());
     expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
     const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
