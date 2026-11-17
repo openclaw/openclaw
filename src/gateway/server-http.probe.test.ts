@@ -570,6 +570,96 @@ describe("gateway probe endpoints", () => {
     );
   });
 
+  it("keeps the opted-in startup boot ID inside the direct local transport", async () => {
+    let trustedProxies = ["10.0.0.0/24"];
+    let startupPending = true;
+    let gatewayDraining = false;
+    const bootId = "synthetic-gateway-boot";
+    const getStartup = createStartupChecker({
+      startedAt: Date.now(),
+      gatewayBootId: bootId,
+      getStartupPending: () => startupPending,
+      getGatewayDraining: () => gatewayDraining,
+    });
+    const optIn = { "x-openclaw-startup-boot-id": "1" };
+    await withProbeServer(
+      {
+        getStartup: () => ({ ...getStartup(), uptimeMs: 1_000 }),
+        getRuntimeConfig: () => ({ gateway: { trustedProxies } }),
+      },
+      async (probe) => {
+        const dispatch = async (
+          overrides: Partial<Parameters<typeof createRequest>[0]> = {},
+          localAddress = "127.0.0.1",
+        ) => {
+          const req = createRequest({ path: "/startupz", headers: optIn, ...overrides });
+          Object.defineProperty(req.socket, "localAddress", { value: localAddress });
+          const response = createResponse(req);
+          await dispatchRequest(probe.server, req, response.res);
+          return response;
+        };
+        const expectBody = async (
+          status: number,
+          expectedBody: object,
+          overrides?: Partial<Parameters<typeof createRequest>[0]>,
+          localAddress?: string,
+        ) => {
+          const response = await dispatch(overrides, localAddress);
+          expect(response.res.statusCode, JSON.stringify(overrides)).toBe(status);
+          expect(JSON.parse(response.getBody()), JSON.stringify(overrides)).toEqual(expectedBody);
+        };
+        await expectBody(503, startupDetails("starting", "startup-sidecars"));
+        startupPending = false;
+        await expectBody(200, { ...startupDetails("started"), gatewayBootId: bootId });
+
+        const get = await dispatch();
+        const head = await dispatch({ method: "HEAD" });
+        expect(head.getBody()).toBe("");
+        expect(head.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(get.getBody())),
+        );
+
+        const localDetails = startupDetails("started");
+        for (const overrides of [
+          { path: "/startup" },
+          { path: "/startupz?probe=1" },
+          { headers: { "x-openclaw-startup-boot-id": "0" } },
+          { headers: { ...optIn, origin: "https://gateway.example.test" } },
+          { headers: { ...optIn, cookie: "fixture=1" } },
+          { headers: { ...optIn, "cf-access-jwt-assertion": "test-assertion" } },
+          { headers: { ...optIn, "x-occ-browser-key": "test-claim" } },
+          { headers: { ...optIn, "x-test-user": "test-user" } },
+          { headers: { ...optIn, "x-test-provider": "test-provider" } },
+          { authorization: "Bearer test-token" },
+          { remoteAddress: "192.0.2.8", authorization: "Bearer test-token" },
+        ]) {
+          await expectBody(200, localDetails, overrides);
+        }
+        await expectBody(200, localDetails, {}, "10.0.0.9");
+        const publicBody = { ok: true, status: "started" };
+        await expectBody(200, publicBody, { remoteAddress: "10.0.0.8" }, "10.0.0.9");
+        trustedProxies = [...trustedProxies, "127.0.0.1"];
+        await expectBody(200, localDetails);
+        for (const headers of [
+          { ...optIn, forwarded: "for=127.0.0.1" },
+          { ...optIn, "x-forwarded-for": "127.0.0.1" },
+          { ...optIn, "x-real-ip": "127.0.0.1" },
+        ]) {
+          await expectBody(200, publicBody, { headers });
+        }
+
+        trustedProxies = [];
+        gatewayDraining = true;
+        await expectBody(503, startupDetails("draining"));
+      },
+      {
+        ...AUTH_TOKEN,
+        trustedProxy: { userHeader: "x-test-user", requiredHeaders: ["x-test-provider"] },
+      },
+    );
+  });
+
   it("serves liveness probes before loading gateway config or resolving auth", async () => {
     const getRuntimeConfig = vi.fn(() => {
       throw new Error("config load blocked");

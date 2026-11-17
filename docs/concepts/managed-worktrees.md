@@ -250,9 +250,14 @@ Local sandbox baselines share immutable directory packs and compressed source pa
 sets in the existing shared-state database. Sessions on the same source tree
 reuse those records. Compact file fingerprints let a restarted Gateway reuse
 unchanged hashes while detecting same-size edits and files moved by directory
-renames. Filesystem discovery still checks for additions and deletions on every
+renames. Initialization retains the identities and timestamp eligibility observed
+while hashing its private checkout, so the first reuse can use those same facts.
+Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
-open does not rewrite their inventories.
+open does not rewrite their inventories. Local checkpoint acceptance reuses the
+prepared tree and checks the affected target paths for conflicts. It does not
+build another target manifest that the checkpoint would discard; rollback
+journals and pending-conflict recovery retain their existing ownership.
 
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
@@ -355,8 +360,10 @@ Creation hydrates only the selected commit's missing contents. Its object census
 returns only missing IDs, keeping preparation responses small for large checkouts.
 The batch fetch uses that commit as its only negotiation tip, avoiding reads of
 unrelated session branch tips even though object negotiation is disabled.
-It does not scan every promisor pack to classify missing objects; that proof belongs to snapshot
-removal, where lost locally authored data must preserve the checkout. Successful
+Neither creation nor snapshot removal scans every promisor pack to classify missing
+objects. Removal fetches missing contents first and requires an offline census with
+no missing objects before snapshot capture. Unrecoverable locally authored data
+still preserves the checkout. Successful
 default-base hydration is already shared by commit while the Git worker remains
 active. Hydration failures are not cached.
 
@@ -497,7 +504,7 @@ Concurrent creations from the same source checkout share remote-default preparat
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
-Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing promised blobs from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. The snapshot validates those objects locally before recording the capture or removing the checkout. Missing non-promisor objects, failed fetches, or lost removal authority preserve the checkout; restore remote access or repair the repository before retrying cleanup.
+Background Git maintenance and pack-index repair use only locally available objects. Removal snapshots inspect objects offline, then fetch missing contents from the clone's configured promisor remote in one batch under the removal operation's authority and five-minute fetch budget. A second offline census requires all HEAD contents to be present locally, avoiding a scan of every promisor pack to classify the missing objects. Snapshot capture also runs offline before recording the capture or removing the checkout. A missing promisor remote, failed fetch, remaining missing object, or lost removal authority preserves the checkout; restore remote access or repair the repository before retrying cleanup. Locally authored contents can be recovered when the selected remote serves their exact object IDs; remote configuration or a successful fetch alone never proves local object custody.
 
 Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
 
@@ -569,6 +576,10 @@ objects or locks still prevent fetching. No configuration or state migration is
 required.
 
 The Git worker reuses a bounded set of successful commit-size estimates while it remains active. Default-base object hydration is shared by immutable commit while the worker remains active; explicit refs without shared preparation recheck object availability. Free disk space is checked on every allocation. Git replacement refs disable reuse of the affected size estimates, and worker shutdown discards them.
+
+Missing-object hydration uses isolated Git metadata and does not wait behind shared
+repository ref writes, including recovery-ref publication during removal. Actual
+shared ref changes still use the repository's ordered writer queue.
 
 Creation, restore, orphan cleanup, and snapshot expiry share an allocation owner across repositories and processes using the same state directory. Registered worktree removal holds custody of its own checkout, so an unrelated creation can proceed while background removal runs. Every allocation reserves its estimated pending writes on each volume. If another operation’s reservations leave insufficient space, creation waits for that operation to settle before retrying. Reserved bytes remain accounted for until native work settles, including after cancellation or lease loss. Managed sources stay protected while a creation copies them. Slot admission and orphan cleanup share allocation custody. Template preparation serializes per template while independent checkouts materialize concurrently. A dedicated heartbeat thread renews operation leases, and contention waits are bounded to 30 minutes, allowing a dependency install's 15-minute budget plus checkout and cleanup. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 
@@ -727,9 +738,18 @@ workers so they do not wait in the shared SQLite writer queue. Creation, activit
 and removal still await their durable writes; an unchanged registry update does
 not rewrite the row. Inspecting an empty registry does not create its database.
 
-Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores the ignored files it actually provisioned, except files inside `node_modules` directories, in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
+Ordinary removal retains a recovery point before deleting the checkout. Dirty worktrees use a synthetic commit containing tracked and non-ignored untracked files at `refs/openclaw/snapshots/<id>`. Clean worktrees pin their original HEAD directly at `refs/openclaw/snapshots/clean-v1/<id>`. Both use the same 30-day recovery retention. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores the ignored files it actually provisioned, except files inside `node_modules` directories, in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 
-For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.
+For an ordinary clean checkout, one read-only Git status scan uses the existing index stat cache. The owner also checks untracked and ignored paths for recoverable staged inputs and nested repositories. Hidden index flags require the full capture path so they cannot conceal edits. Clean recovery skips the private snapshot index, full tree inventory, second object-availability scan, and synthetic commit. HEAD object availability is still checked before deletion, including in partial clones; missing objects preserve the checkout with a repository-repair error. Provisioned ignored files retain their separate byte capture even when tracked files are clean. Dirty capture starts a private index at HEAD and hashes only selected changed/new paths; it does not add every tracked file again. Exact-state snapshots continue capturing their complete recorded state.
+
+The removal diagnostic's `snapshotMs` measures this Git recovery capture, not a
+Btrfs subvolume snapshot. A retry before checkout deletion replaces the same
+worktree snapshot ref. Once deletion starts, its pending removal ref preserves
+the completed recovery point for explicit recovery. The bounded `recovery` field reports `head`, `capture`, or `none` after completed removals; `tracked` counts all indexed files, not modified files. Slow failed removals include a
+bounded error class and message with paths removed; the worktree ID identifies
+the affected checkout. A pending workspace integration is rejected before Git
+snapshot capture; finish the original `github_publish prepare_pr` or
+`refresh_base` action before retrying removal.
 
 Sandbox-created ignored files (including symlinks) and empty directories already accepted by reconciliation remain in the existing projection owner’s custody. Before removal, OpenClaw retains their missing snapshot delta in its pending-result receipt and private recovery refs. Restore replays that receipt before another turn can synchronize the workspace. This does not force ignored paths into publication or import unrelated ignored host files. The receipt follows the same snapshot retention period, and unaccepted private edits defer cleanup. The legacy provisioned-file ledger remains regular-file-only. Older versions can restore that ledger and the Git snapshot, but do not apply the projection receipt; return to a supporting version to recover accepted guest data.
 
@@ -772,7 +792,8 @@ not establish disposal authority. Put future disposable landing clones under
 `.openclaw/tmp/` to opt into automatic expiry.
 
 Gateway idle cleanup starts at most one removal attempt per minute, including
-across archive-triggered sweeps. On Linux, btrfs commits taking at least one second, a one-second delay in the
+across archive-triggered sweeps. On Linux, btrfs commits totaling at least one second
+between samples (or a single current or fresh last commit taking that long), a one-second delay in the
 Gateway’s own asynchronous kernel-counter reads (including event-loop and IO-pool
 wait), or IO PSI `some avg60` of at least 50% pause admission for five minutes
 before checking again. These derive distress from filesystem latency, local
@@ -849,7 +870,7 @@ recovery can be repeated with the same ID and snapshot after its blocker is reso
 Once checkout deletion is admitted, it is joined without the ordinary Git command
 deadline so that the timeout cannot interrupt deletion again.
 
-Restore recreates `openclaw/<name>` at the original pre-snapshot commit, reusing its clean source template when available. Git applies the saved differences as unstaged modifications and untracked files without replacing the template with snapshot contents. Without a reusable template, Git materializes the snapshot directly. Disk admission includes space for changed and added files alongside clone metadata, or the full snapshot for an ordinary checkout. If the snapshot changes `.gitattributes` or its diff exceeds the bounded inventory size, Git rematerializes all snapshot files with a full-copy space allowance. This applies the snapshot's line endings and filters even to unchanged blobs. The synthetic snapshot stays out of branch history; its ref remains recorded as provenance.
+Restore recreates `openclaw/<name>` at the original pre-snapshot commit (or the directly retained HEAD for clean recovery), reusing its clean source template when available. Git applies the saved differences as unstaged modifications and untracked files without replacing the template with snapshot contents. Without a reusable template, Git materializes the snapshot directly. Disk admission includes space for changed and added files alongside clone metadata, or the full snapshot for an ordinary checkout. If the snapshot changes `.gitattributes` or its diff exceeds the bounded inventory size, Git rematerializes all snapshot files with a full-copy space allowance. This applies the snapshot's line endings and filters even to unchanged blobs. The synthetic snapshot stays out of branch history; its ref remains recorded as provenance.
 
 A branch at a shallow history boundary can still be snapshotted and restored. If a later depth-limited fetch makes the snapshot commit itself shallow, Git may no longer resolve its parent. Restore then preserves the snapshot and reports the repository and snapshot commit with `git fetch --unshallow` guidance. OpenClaw does not deepen automatically: origin may not contain the local snapshot, so even a successful fetch cannot guarantee recovery. If the snapshot remains shallow after fetching, recover its parent from the original repository before retrying.
 

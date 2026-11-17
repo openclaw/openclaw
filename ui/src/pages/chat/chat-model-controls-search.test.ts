@@ -31,6 +31,15 @@ function pickerElements(container: HTMLElement) {
 }
 
 describe("chat model controls", () => {
+  it("preserves a catalog failure even with pending provider metadata", async () => {
+    const container = await renderModelControls(headerState([]), {
+      modelCatalogState: { hasSnapshot: true, status: "error", pendingProviders: ["example"] },
+    });
+    expect(container.querySelector("[data-chat-model-select]")?.textContent).toBe(
+      "Models unavailable",
+    );
+  });
+
   it("groups catalog models and selects a search result", async () => {
     const state = headerState([
       openai,

@@ -201,7 +201,13 @@ at most two retries. Once a hook, model, or delivery may have performed work, it
 does not replay the occurrence; a failed scheduled run remains visible in cron
 history and the next schedule is a separate run.
 
-Logging changes never revoke scheduled work. Plugin changes, including turning a
+Logging, diagnostics, UI preferences, telemetry, update settings, and session
+maintenance changes (including cold-storage enablement) never revoke session events.
+Session routing, storage location, sharing, communication, and tool or model policy
+still recheck the occurrence. A refused session authority stops model fallback;
+switching providers cannot restore that authority.
+
+Plugin changes, including turning a
 plugin such as Advisor on or off, leave scheduled turns to the plugin reload:
 the turn hands over at its next step boundary or keeps its admitted plugin
 generation until it finishes, as interactive turns do. Once a scheduled turn selects its

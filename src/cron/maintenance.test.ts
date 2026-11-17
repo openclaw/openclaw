@@ -4,6 +4,7 @@ import { captureRuntimeConfigAsyncReader, resetConfigRuntimeState } from "../con
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as workAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -37,89 +38,117 @@ function readHistory() {
   return runOpenClawStateWriteTransaction(({ db }) => readCronRunRecordsInDatabase(db));
 }
 
-it("runs Gateway retention with scheduling disabled and reconciles only unowned legacy Cron rows", async () => {
-  await withOpenClawTestState(
-    { layout: "state-only", prefix: "cron-maintenance-disabled-" },
-    async (state) => {
-      resetConfigRuntimeState();
-      resetGatewayWorkAdmission();
-      resetCronActiveJobs();
-      const now = Date.parse("2026-09-20T12:00:00Z");
-      vi.useFakeTimers();
-      vi.setSystemTime(now);
-      const gatewayScheduler = createTestGatewayScheduler("fake-timers");
-      try {
-        const config: OpenClawConfig = {
-          cron: { enabled: false },
-          agents: { ownership: "explicit", entries: { main: {} } },
-        };
-        await state.writeConfig(config);
-        setRuntimeConfigSnapshot(config);
-        const storePath = state.statePath("cron/jobs.json");
-        const job = makeCronReceiptJob("receipt-owned", "main");
-        await saveCronStore(storePath, { version: 1, jobs: [job] });
-        const receipt = claimCronRunReceiptForTest(storePath, job, now - 10 * DAY);
-        for (const [id, status] of [
-          ["orphan", "running"],
-          ["queued", "queued"],
-          ["terminal", "succeeded"],
-          ["receipt-owned", "running"],
-          ["local-owned", "running"],
-        ]) {
-          insertHistory(id!, status!);
-        }
-        insertHistory("young", "running", now - 5 * 60_000 + 5_001);
-        insertHistory("retired-task", "running", 1, "subagent");
-        const local = markCronJobActive("local-owned");
-        const sessionStore = path.join(state.sessionsDir("main"), "sessions.json");
-        const sessionKey = "agent:main:cron:terminal:run:old";
-        await replaceSessionEntry(
-          { sessionKey, storePath: sessionStore },
-          { sessionId: "old", updatedAt: now - 8 * DAY },
-        );
-        startCronMaintenance(gatewayScheduler, () => storePath);
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
-        await vi.advanceTimersByTimeAsync(1);
-        await stopCronMaintenance();
-        expect(readHistory().find((row) => row.id === "terminal")).toBeUndefined();
-        expect(loadSessionEntry({ sessionKey, storePath: sessionStore })).toBeUndefined();
-        for (const id of ["orphan", "queued"]) {
-          expect(readHistory().find((row) => row.id === id)).toMatchObject({
-            status: "lost",
-            endedAt: now + 5_000,
-            cleanupAfter: now + 5_000 + DAY,
-            error: "backing session missing",
-          });
-        }
-        for (const id of ["receipt-owned", "local-owned", "young"]) {
-          expect(readHistory().find((row) => row.id === id)?.status).toBe("running");
-        }
-        expect(
-          runOpenClawStateWriteTransaction(({ db }) =>
-            db.prepare("SELECT status FROM task_runs WHERE task_id = 'retired-task'").get(),
-          ),
-        ).toEqual({ status: "running" });
-        clearCronJobActive("local-owned", local);
-        await finishCronRunReceiptAsync({
-          handle: receipt,
-          status: "interrupted",
-          finishedAtMs: now + 5_000,
-        });
-        await maintainCronRunHistory(captureOpenClawStateWorkerContext(), () => {});
-        expect(readHistory().find((row) => row.id === "receipt-owned")?.status).toBe("lost");
-        expect(readHistory().find((row) => row.id === "local-owned")?.status).toBe("lost");
-      } finally {
-        await stopCronMaintenance();
-        await gatewayScheduler.stop();
-        resetCronActiveJobs();
-        resetGatewayWorkAdmission();
-        vi.useRealTimers();
+it.each([false, true])(
+  "runs Gateway retention after memory pressure clears (pressure=%s)",
+  async (pressure) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cron-maintenance-disabled-" },
+      async (state) => {
         resetConfigRuntimeState();
-      }
-    },
-  );
-});
+        resetGatewayWorkAdmission();
+        resetCronActiveJobs();
+        const now = Date.parse("2026-09-20T12:00:00Z");
+        const clock = createGatewaySchedulerClock(now);
+        const wallClock = vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+        const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+        const constrained = vi
+          .spyOn(process, "constrainedMemory")
+          .mockReturnValue(1024 * 1024 * 1024);
+        const available = vi
+          .spyOn(process, "availableMemory")
+          .mockReturnValue(pressure ? 128 * 1024 * 1024 : 1024 * 1024 * 1024);
+        const delay = pressure ? 120_000 : 0;
+        const admission = vi.spyOn(workAdmission, "runWithGatewayIndependentRootWorkAdmission");
+        try {
+          const config: OpenClawConfig = {
+            cron: { enabled: false },
+            agents: { ownership: "explicit", entries: { main: {} } },
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
+          const storePath = state.statePath("cron/jobs.json");
+          const job = makeCronReceiptJob("receipt-owned", "main");
+          await saveCronStore(storePath, { version: 1, jobs: [job] });
+          const receipt = claimCronRunReceiptForTest(storePath, job, now - 10 * DAY);
+          for (const [id, status] of [
+            ["orphan", "running"],
+            ["queued", "queued"],
+            ["terminal", "succeeded"],
+            ["receipt-owned", "running"],
+            ["local-owned", "running"],
+          ]) {
+            insertHistory(id!, status!);
+          }
+          insertHistory("young", "running", now + delay - 5 * 60_000 + 5_001);
+          insertHistory("retired-task", "running", 1, "subagent");
+          const local = markCronJobActive("local-owned");
+          const sessionStore = path.join(state.sessionsDir("main"), "sessions.json");
+          const sessionKey = "agent:main:cron:terminal:run:old";
+          await replaceSessionEntry(
+            { sessionKey, storePath: sessionStore },
+            { sessionId: "old", updatedAt: now - 8 * DAY },
+          );
+          startCronMaintenance(gatewayScheduler, () => storePath);
+          await clock.advanceBy(4_999);
+          expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
+          await clock.advanceBy(1);
+          if (pressure) {
+            expect(
+              admission.mock.calls.filter(([, label]) => label === "cron:maintenance"),
+            ).toHaveLength(0);
+            expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
+            expect(loadSessionEntry({ sessionKey, storePath: sessionStore })).toBeDefined();
+            await clock.advanceBy(60_000);
+            expect(readHistory().find((row) => row.id === "terminal")).toBeDefined();
+            expect(
+              admission.mock.calls.filter(([, label]) => label === "cron:maintenance"),
+            ).toHaveLength(0);
+            available.mockReturnValue(1024 * 1024 * 1024);
+            await clock.advanceBy(60_000);
+          }
+          await stopCronMaintenance();
+          expect(readHistory().find((row) => row.id === "terminal")).toBeUndefined();
+          expect(loadSessionEntry({ sessionKey, storePath: sessionStore })).toBeUndefined();
+          for (const id of ["orphan", "queued"]) {
+            expect(readHistory().find((row) => row.id === id)).toMatchObject({
+              status: "lost",
+              endedAt: now + 5_000 + delay,
+              cleanupAfter: now + 5_000 + delay + DAY,
+              error: "backing session missing",
+            });
+          }
+          for (const id of ["receipt-owned", "local-owned", "young"]) {
+            expect(readHistory().find((row) => row.id === id)?.status).toBe("running");
+          }
+          expect(
+            runOpenClawStateWriteTransaction(({ db }) =>
+              db.prepare("SELECT status FROM task_runs WHERE task_id = 'retired-task'").get(),
+            ),
+          ).toEqual({ status: "running" });
+          clearCronJobActive("local-owned", local);
+          await finishCronRunReceiptAsync({
+            handle: receipt,
+            status: "interrupted",
+            finishedAtMs: now + 5_000,
+          });
+          await maintainCronRunHistory(captureOpenClawStateWorkerContext(), () => {});
+          expect(readHistory().find((row) => row.id === "receipt-owned")?.status).toBe("lost");
+          expect(readHistory().find((row) => row.id === "local-owned")?.status).toBe("lost");
+        } finally {
+          await stopCronMaintenance();
+          await gatewayScheduler.stop();
+          resetCronActiveJobs();
+          resetGatewayWorkAdmission();
+          admission.mockRestore();
+          available.mockRestore();
+          constrained.mockRestore();
+          wallClock.mockRestore();
+          resetConfigRuntimeState();
+        }
+      },
+    );
+  },
+);
 
 it("does not reconcile or prune history when caller authority is retired before dispatch", async () => {
   await withOpenClawTestState(

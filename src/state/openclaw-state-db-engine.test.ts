@@ -32,6 +32,18 @@ it("does not derive PostgreSQL migrations for SQLite startup and retains the req
   }
 });
 
+it("keeps the materialized PostgreSQL schema writable for Doctor rollback", () => {
+  const installed = { ...stateEngineSchema };
+  try {
+    stateEngineSchema.postgresMigrations = [];
+    Object.assign(stateEngineSchema, { postgres: "SELECT 1;" });
+    expect(stateEngineSchema.postgresMigrations).toEqual([]);
+    expect(stateEngineSchema.postgres).toBe("SELECT 1;");
+  } finally {
+    Object.assign(stateEngineSchema, installed);
+  }
+});
+
 it("preserves explicit backend selection and the test-only state connection fallback", () => {
   const key = "openclaw.test.state.connection";
   const previousConnection = getEnvironmentData(key);

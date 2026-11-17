@@ -355,10 +355,12 @@ export async function createNpmCliProcessFixture(
   const packageArtifacts = [...artifacts.values()].filter(
     (entry) => entry.workflow_run.id === 5001,
   );
-  json("actions/runs/5001/artifacts?per_page=100&page=1", {
-    total_count: packageArtifacts.length,
-    artifacts: packageArtifacts,
-  });
+  for (let offset = 0; offset < packageArtifacts.length; offset += 100) {
+    json("actions/runs/5001/artifacts?per_page=100&page=" + (offset / 100 + 1), {
+      total_count: packageArtifacts.length,
+      artifacts: packageArtifacts.slice(offset, offset + 100),
+    });
+  }
   const carrierRun = {
     ...packageRun,
     id: 800,

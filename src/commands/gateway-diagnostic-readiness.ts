@@ -27,10 +27,7 @@ export async function waitForGatewayDiagnostic(
   const remainingMs = Math.max(0, Math.ceil(deadlineMs - performance.now()));
   if (
     remainingMs > 0 &&
-    (!readiness ||
-      readiness.healthy ||
-      readiness.waitOutcome === "channel-errors" ||
-      readiness.waitOutcome === "plugin-errors")
+    (!readiness || readiness.healthy || readiness.waitOutcome === "channel-errors")
   ) {
     return remainingMs;
   }

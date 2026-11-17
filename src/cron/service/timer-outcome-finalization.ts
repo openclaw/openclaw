@@ -57,7 +57,6 @@ export async function finalizeCompletedCronRunOutcomes(
           nowMs: state.deps.nowMs(),
           defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
           cronConfig: state.deps.cronConfig,
-          failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
           outcomes: outcomes.map(
             ({
               activeJobMarker,

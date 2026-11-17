@@ -121,11 +121,7 @@ export async function dispatchCronDelivery(
       agentId: params.agentId,
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
-      conversation: {
-        sessionKey,
-        sessionId: params.sessionId,
-        lifecycleRevision: params.lifecycleRevision,
-      },
+      conversation: { sessionKey },
       payloads,
       signal: params.abortSignal,
       deliveryAttemptFence: params.deliveryAttemptFence,
@@ -136,12 +132,13 @@ export async function dispatchCronDelivery(
     diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
     return undefined;
   };
-  const failTarget = (error: string) => {
+  const failTarget = async (error: string) => {
     const detail = params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? error +
         "; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target"
       : error;
     record("not-delivered", detail);
+    await logCronDeliveryWarn(`[cron:${params.job.id}] delivery failed: ${detail}`);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
   const finishInterrupted = () => {
@@ -312,7 +309,7 @@ export async function dispatchCronDelivery(
   let conversationError: string | undefined;
   const conversation =
     !params.resolvedDelivery.ok && params.sourceSessionKey && params.sourceSessionGeneration
-      ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
+      ? { sessionKey: params.sourceSessionKey }
       : undefined;
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
     if (params.job.sessionTarget === "current") {
@@ -349,16 +346,6 @@ export async function dispatchCronDelivery(
         admittedReasoning: true,
         sessionGeneration,
         transcriptRoute: params.resolvedDelivery.sessionRoute,
-        transcriptExpectedGeneration:
-          sessionGeneration &&
-          params.resolvedDelivery.sessionRoute?.sessionKey ===
-            toAgentStoreSessionKey({
-              agentId: params.agentId,
-              requestKey: sessionGeneration.sessionKey,
-              mainKey: params.cfgWithAgentDefaults.session?.mainKey,
-            })
-            ? params.sourceSessionGeneration
-            : undefined,
         onTranscriptDiagnostic: (message) => {
           diagnostics = mergeCronRunDiagnostics(
             diagnostics,

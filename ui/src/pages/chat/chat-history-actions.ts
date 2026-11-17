@@ -254,7 +254,12 @@ export async function rewindChatHistory(
     const result = await state.sessions.rewind(sessionKey, entryId, agentParams);
     const editorText = result.editorText ?? "";
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");
-    if (viewMatches()) {
+    // The restored prompt is the user's next action, so every exit refills the
+    // composer first and reloads the transcript after.
+    const reload = async () => {
+      if (!viewMatches()) {
+        return;
+      }
       const entries = getChatSessionProjection(state).entries;
       const rewindIndex = entries.findIndex((entry) => entry.identity?.id === entryId);
       const retainedHistory = entries
@@ -263,10 +268,11 @@ export async function rewindChatHistory(
         .map((entry) => entry.message);
       resetChatHistoryProjection(state, agentParams.agentId, retainedHistory);
       await Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    }
+    };
     // Rewind commits history independently; only its unchanged composer package
-    // may receive the restored prompt after either round trip.
+    // receives the restored prompt.
     if (!connectionIsCurrent() || !ownsComposer() || readComposer() !== composerSignature) {
+      await reload();
       return null;
     }
     persistChatComposerState(state, sessionKey, {
@@ -279,6 +285,7 @@ export async function rewindChatHistory(
         .committed,
     });
     if (!viewMatches()) {
+      await reload();
       return null;
     }
     state.chatGoalDraftMode = null;
@@ -292,6 +299,7 @@ export async function rewindChatHistory(
     if (attachmentReads.readSignal === attachmentReadSignal) {
       attachmentReads.abortReads();
     }
+    await reload();
     return result;
   } catch (error) {
     if (viewIsCurrent()) {

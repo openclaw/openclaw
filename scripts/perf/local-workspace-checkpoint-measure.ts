@@ -22,6 +22,15 @@
  * --mode reconcile instead calls the ordinary projection synchronization owner once
  * per request. --reconcile-target canonical|projection selects guest export or host
  * import; --reconcile-changed-files N changes N existing files at their original size.
+ * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
+ * allocation mode reports main and matched worker allocation for each reconcile burst.
+ * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
+ * one-second allocation timeline. Run this diagnostic separately from timing samples.
+ * It also reports uncompressed patch field bytes and journal counts (no paths/content).
+ * --build-input-files 24997 --files 3 --file-bytes 32 creates 25k files with a
+ * retained build-input inventory; two edited root files still produce a delta journal.
+ * Phase durations are exclusive; existing checkpointPhases remain nested.
  * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
@@ -147,9 +156,11 @@ import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { getHeapStatistics } from "node:v8";
+import { deserialize, getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -193,11 +204,15 @@ const { values } = parseArgs({
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
     "tools-per-turn": { type: "string", default: "10" },
+    "reconcile-traffic": { type: "boolean", default: false },
+    "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
+    "reconcile-random-bytes": { type: "string", default: "0" },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
+    "build-input-files": { type: "string", default: "0" },
     "file-bytes": { type: "string", default: "0" },
     "transcript-mib": { type: "string", default: "0" },
     "agent-storage-dir": { type: "string" },
@@ -234,7 +249,7 @@ function installFingerprintObservers(destination: string) {
       "  async (command, channel, control) => {",
       `  async (command, channel, control) => {
     const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
-      fingerprintHitCount: 0, fingerprintMissCount: 0 };
+      fingerprintHitCount: 0, fingerprintMissCount: 0, packedRecords: 0 };
     Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
     ],
     [
@@ -272,6 +287,14 @@ function installFingerprintObservers(destination: string) {
         measured.target = "target" in action ? action.target : null;
       }
       const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/local-workspace-cas.ts", [
+    [
+      "  const batches: Uint8Array[] = [];",
+      `  const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+  if (measured) { measured.packedRecords += packs.reduce((sum, pack) => sum + pack.records.length, 0); }
+  const batches: Uint8Array[] = [];`,
     ],
   ]);
   rewrite("src/infra/git-worker.ts", [
@@ -437,6 +460,9 @@ assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 
 const reconcileTarget = values["reconcile-target"];
 assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
 const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
+const reconcileRandomBytes = Number(values["reconcile-random-bytes"]);
+assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
+assert(!reconcileRandomBytes || reconcile);
 assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
 assert(!reconcile || reconcileChangedFiles < Number(values.files));
 const nativeTurns = values["native-turns"];
@@ -523,8 +549,8 @@ const reusableSerial =
   !values["agent-db-fixture"] &&
   siblingWorktrees === 0;
 assert(
-  !fingerprintImport || reusableSerial,
-  "Fingerprint import requires the simple serial fixture",
+  !fingerprintImport || reusableSerial || reconcile,
+  "Fingerprint counters require the simple serial fixture or reconcile mode",
 );
 if (fingerprintImport) {
   const frozen = path.join(sourceRoot, "checkpoint-source.json");
@@ -542,6 +568,8 @@ const requests = Number(values.requests),
   worktrees = Number(values.worktrees);
 const fileBytes = Number(values["file-bytes"]);
 assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
+const buildInputFiles = Number(values["build-input-files"]);
+assert(Number.isSafeInteger(buildInputFiles) && buildInputFiles >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
 assert(!values["agent-db-fixture"] || (serialTurns && !transcriptMiB));
@@ -551,6 +579,13 @@ for (const value of [requests, burst, files, port, worktrees]) {
 }
 assert(port >= 40000 && port <= 65535);
 assert(["timing", "allocation", "retention"].includes(values.instrument!));
+assert(
+  !values["reconcile-profile"] ||
+    (reconcile &&
+      values.instrument === "allocation" &&
+      Number(process.versions.node.split(".")[0]) >= 26),
+  "Reconcile profiles require reconcile allocation mode and Node 26+",
+);
 const retentionMs = Number(values["retention-ms"]);
 assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
 const workers = new Set<Worker>();
@@ -619,7 +654,7 @@ const summarizeWorkerAllocation = (
       "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
   };
 };
-const startSerialWorkerProfiles = async () => {
+const startSerialWorkerProfiles = async (allWorkers = false) => {
   const { sampleTrackedWorkerMemory } = await import("../../src/infra/worker-cpu.js");
   const snapshot = sampleTrackedWorkerMemory({ refresh: false });
   const identities = new Map(
@@ -630,7 +665,7 @@ const startSerialWorkerProfiles = async () => {
   );
   const existing = new Set(workers);
   const selected = [...existing].filter(
-    (worker) => identities.get(worker.threadId) === "git-operation.worker.js",
+    (worker) => allWorkers || identities.get(worker.threadId) === "git-operation.worker.js",
   );
   assert(selected.length <= 16, "Allocation proof supports at most 16 existing Git workers");
   const captures: {
@@ -649,7 +684,16 @@ const startSerialWorkerProfiles = async () => {
         cpu: await worker.startCpuProfile(),
       };
       captures.push(capture);
-      captures.at(-1)!.heap = await worker.startHeapProfile();
+      captures.at(-1)!.heap = await worker.startHeapProfile(
+        allWorkers
+          ? {
+              sampleInterval: 32_768,
+              stackDepth: 32,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            }
+          : undefined,
+      );
       captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
     }
   } catch (error) {
@@ -675,7 +719,7 @@ const startSerialWorkerProfiles = async () => {
         const heap = await capture.heap!.stop().catch(failed);
         const cpu = await capture.cpu.stop().catch(failed);
         const exited = !workers.has(capture.worker);
-        const prefix = `${values.report}.${phase}.git-worker-${capture.threadId}`;
+        const prefix = `${values.report}.${phase}.${allWorkers ? "worker" : "git-worker"}-${capture.threadId}`;
         if (!discard && heap) {
           fs.writeFileSync(path.join(output, `${prefix}.heapprofile`), heap);
         }
@@ -684,14 +728,20 @@ const startSerialWorkerProfiles = async () => {
         }
         const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
           node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-        const parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        let parsedCpu;
+        try {
+          parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        } catch (error) {
+          failed(error);
+        }
         profiles.push({
           threadId: capture.threadId,
-          script: "git-operation.worker.js",
-          sourcePath: path.join(sourceRoot, "src/infra/git-operation.worker.ts"),
+          script: identities.get(capture.threadId),
           exited,
           errors,
-          sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
+          ...(allWorkers
+            ? { sampledAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }
+            : { sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }),
           workerCpuMs:
             !exited && cpuAfter && capture.cpuBefore
               ? (cpuAfter.user +
@@ -722,8 +772,9 @@ const startSerialWorkerProfiles = async () => {
         newWorkerThreadIds: [...workers]
           .filter((worker) => !existing.has(worker))
           .map((worker) => worker.threadId),
-        accounting:
-          "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+        accounting: allWorkers
+          ? "All existing workers, 32 KiB sampling, depth 32, includes minor/major collected objects. Diagnostic pass only. New/exited workers and child processes are unmeasured."
+          : "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
       };
     } finally {
       clearInterval(stopKeepAlive);
@@ -810,6 +861,8 @@ const owners = [
   "src/gateway/worker-environments/local-workspace-state.ts",
   "src/gateway/worker-environments/local-workspace-checkpoint.ts",
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/local-workspace-cas.ts",
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts",
   "src/gateway/worker-environments/local-workspace-fingerprints.ts",
   "src/gateway/worker-environments/workspace-actual-manifest.ts",
   "src/agents/worktrees/filesystem-native.ts",
@@ -823,6 +876,8 @@ const owners = [
   "src/gateway/control-ui-assistant-media-read.ts",
   "src/gateway/worker-environments/local-workspace-checkout.ts",
   "src/gateway/worker-environments/local-workspace-store.kernel.ts",
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
@@ -893,10 +948,91 @@ type FingerprintMetrics = {
   contentReadBytes: number;
   fingerprintHitCount: number;
   fingerprintMissCount: number;
+  packedRecords: number;
 };
 const fingerprintMetrics: FingerprintMetrics[] = [];
+const reconcileTraffic: Array<{
+  phase: string;
+  operation: string;
+  bytes: number;
+  action?: string;
+  fieldBytes?: Record<string, number>;
+  journalCounts?: Record<string, number>;
+}> = [];
+const reconcilePhases: Array<{ phase: string; durationMs: number }> = [];
+let reconcilePhase = "idle";
+let reconcilePhaseStarted = performance.now();
+const markReconcilePhase = (phase: string) => {
+  const now = performance.now();
+  reconcilePhases.push({ phase: reconcilePhase, durationMs: now - reconcilePhaseStarted });
+  reconcilePhase = phase;
+  reconcilePhaseStarted = now;
+};
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __reconcilePhase: markReconcilePhase,
+  __reconcileTraffic: (
+    operation: string,
+    input: { action?: { kind?: string }; mutation?: unknown },
+    bytes: number,
+  ) => {
+    if (operation.startsWith("localWorkspace.")) {
+      const mutation: unknown =
+        input.mutation instanceof Uint8Array
+          ? deserialize(
+              input.mutation[0] === 0x28 &&
+                input.mutation[1] === 0xb5 &&
+                input.mutation[2] === 0x2f &&
+                input.mutation[3] === 0xfd
+                ? zstdDecompressSync(input.mutation)
+                : inflateRawSync(input.mutation),
+            )
+          : input.mutation;
+      const patch = isRecord(mutation) ? (mutation.patch ?? mutation.row) : undefined;
+      const fieldBytes = isRecord(patch)
+        ? Object.fromEntries(
+            Object.entries(patch).map(([key, value]) => [
+              key,
+              typeof value === "string"
+                ? Buffer.byteLength(value)
+                : value instanceof Uint8Array
+                  ? value.byteLength
+                  : 0,
+            ]),
+          )
+        : undefined;
+      const journal: unknown =
+        isRecord(patch) && typeof patch.journal_json === "string"
+          ? JSON.parse(patch.journal_json)
+          : undefined;
+      const journalCounts = isRecord(journal)
+        ? Object.fromEntries(
+            [
+              "baseEntries",
+              "appliedEntries",
+              "baseDirectories",
+              "appliedDirectories",
+              "baseTree",
+            ].map((key) => [
+              key,
+              Array.isArray(journal[key])
+                ? journal[key].length
+                : typeof journal[key] === "string"
+                  ? Buffer.byteLength(journal[key])
+                  : 0,
+            ]),
+          )
+        : undefined;
+      reconcileTraffic.push({
+        phase: reconcilePhase,
+        operation,
+        bytes,
+        action: input.action?.kind,
+        fieldBytes,
+        journalCounts,
+      });
+    }
+  },
   __recordWorkspaceFingerprintMetrics: (metrics: FingerprintMetrics) =>
     fingerprintMetrics.push(metrics),
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
@@ -976,6 +1112,25 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + "\nglobalThis.__reconcileTraffic(commandType, command.input, payload.byteLength);",
+      );
+    }
+    if (
+      (values["reconcile-traffic"] || values["reconcile-profile"]) &&
+      relative === "src/gateway/worker-environments/local-workspace-projection-operation.ts"
+    ) {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code = code.replaceAll(
+        /options\.onPhase\?\.\(([^;]+)\);/g,
+        "globalThis.__reconcilePhase($1); $&",
+      );
+    }
     const phaseFunctions: Record<string, string[]> = {
       "src/agents/worktrees/filesystem-native.ts": ["read", "write"],
       "src/gateway/worker-environments/workspace-manifest-worker.ts": ["computeWorkspaceManifest"],
@@ -1093,7 +1248,6 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   caseEnv: {
     ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
     OPENCLAW_STATE_DIR: path.join(output, "state"),
-    TMPDIR: path.join(output, "tmp"),
     OPENCLAW_SKIP_CHANNELS: "1",
     DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -1153,7 +1307,7 @@ const git = (...args: string[]) =>
 if (reuseFixture && !resumeOwnerSwitch) {
   assert.equal(
     fs.readdirSync(repo).length - 1,
-    files,
+    files + (buildInputFiles ? 1 : 0),
     "Reused fixture must have the requested file count",
   );
 } else if (!resumeOwnerSwitch) {
@@ -1182,6 +1336,13 @@ if (reuseFixture && !resumeOwnerSwitch) {
         '{"name":"synthetic-builder","private":true}\n',
       );
       fs.writeFileSync(path.join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    }
+  }
+  if (buildInputFiles) {
+    const inputs = path.join(repo, ".artifacts", "build-cache-inputs");
+    fs.mkdirSync(inputs, { recursive: true });
+    for (let index = 0; index < buildInputFiles; index++) {
+      fs.writeFileSync(path.join(inputs, `input-${index}.json`), `{"synthetic":${index}}\n`);
     }
   }
   // An exported repository may contain deliberately tracked ignored fixtures.
@@ -1575,10 +1736,12 @@ measurement: try {
         const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
         const writeFiles = `
           const fs = require("node:fs");
-          const [root, seed, count, bytes] = process.argv.slice(1);
+          const [root, seed, count, bytes, randomBytes] = process.argv.slice(1);
           for (let i = 1; i <= Number(count); i++) {
             fs.writeFileSync(root + "/file-" + i + ".txt",
-              (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
+              Number(randomBytes)
+                ? require("node:crypto").createHash("shake256", { outputLength: Number(randomBytes) }).update(seed + " file-" + i).digest()
+                : (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
           }
         `;
         assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
@@ -1593,6 +1756,7 @@ measurement: try {
             seed,
             String(reconcileChangedFiles),
             String(fileBytes),
+            String(reconcileRandomBytes),
           ]);
         } else {
           execFileSync(process.execPath, [
@@ -1602,6 +1766,7 @@ measurement: try {
             seed,
             String(reconcileChangedFiles),
             String(fileBytes),
+            String(reconcileRandomBytes),
           ]);
         }
         const began = performance.now();
@@ -1624,17 +1789,19 @@ measurement: try {
         });
         assert(pauseBegan === undefined, "Reconciliation must resume the guest");
         for (let i = 1; i <= reconcileChangedFiles; i++) {
-          const expected = `${seed} file-${i}\n`.padEnd(fileBytes, ".");
+          const expected = reconcileRandomBytes
+            ? createHash("shake256", { outputLength: reconcileRandomBytes })
+                .update(`${seed} file-${i}`)
+                .digest()
+            : Buffer.from(`${seed} file-${i}\n`.padEnd(fileBytes, "."));
           for (const directory of [canonical, workspace!]) {
-            assert.equal(fs.readFileSync(path.join(directory, `file-${i}.txt`), "utf8"), expected);
+            assert.deepEqual(fs.readFileSync(path.join(directory, `file-${i}.txt`)), expected);
           }
         }
         if (nativeTurns) {
-          assert.equal(
-            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"], {
-              encoding: "utf8",
-            }),
-            `${seed} file-1\n`.padEnd(fileBytes, "."),
+          assert.deepEqual(
+            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]),
+            fs.readFileSync(path.join(canonical, "file-1.txt")),
           );
         }
         return;
@@ -2682,13 +2849,39 @@ measurement: try {
   finalizations.length = 0;
   pauseDurationsMs.length = 0;
   checkpointPhases.length = 0;
+  fingerprintMetrics.length = 0;
+  reconcileTraffic.length = 0;
+  reconcilePhases.length = 0;
+  reconcilePhase = "idle";
+  reconcilePhaseStarted = performance.now();
   leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
   await waitForDiagnosticEventsDrained();
   const leaseRequests: Record<string, number> = {};
+  const workspaceRequests: Array<{
+    requestClass: string;
+    durationMs?: number;
+    executionMs?: number;
+  }> = [];
   stopLeaseDiagnostics = onInternalDiagnosticEvent(
     (event) => {
+      if (
+        values["reconcile-traffic"] &&
+        event.type === "worker.request" &&
+        event.phase === "completed" &&
+        event.requestClass.startsWith("localWorkspace")
+      ) {
+        const timing = event.timing;
+        workspaceRequests.push({
+          requestClass: event.requestClass,
+          durationMs: event.durationMs,
+          executionMs:
+            timing?.executeStarted !== undefined && timing.executeFinished !== undefined
+              ? timing.executeFinished - timing.executeStarted
+              : undefined,
+        });
+      }
       if (
         event.type === "worker.request" &&
         event.phase === "completed" &&
@@ -2731,7 +2924,27 @@ measurement: try {
   });
   observer.observe({ entryTypes: ["gc"] });
   const nativeWorkerAllocationBefore =
-    nativeTurns && values.instrument === "allocation" ? await sampleWorkerAllocation() : undefined;
+    (nativeTurns || reconcile) && values.instrument === "allocation"
+      ? await sampleWorkerAllocation()
+      : undefined;
+  const stopReconcileProfiles = values["reconcile-profile"]
+    ? await startSerialWorkerProfiles(true)
+    : undefined;
+  const allocationTimeline: unknown[] = [];
+  let timelinePending = Promise.resolve();
+  const timelineStart = performance.now();
+  const timelineTimer = values["reconcile-profile"]
+    ? setInterval(() => {
+        timelinePending = timelinePending.then(async () => {
+          allocationTimeline.push({
+            elapsedMs: performance.now() - timelineStart,
+            phase: reconcilePhase,
+            main: getHeapStatistics(),
+            workers: await sampleWorkerAllocation(),
+          });
+        });
+      }, 1000)
+    : undefined;
   const nativeWorkerStartsBefore = workerStarts,
     nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
@@ -2770,6 +2983,7 @@ measurement: try {
   const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const memoryBefore = process.memoryUsage();
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
   let representativeResult: unknown;
@@ -2815,6 +3029,9 @@ measurement: try {
       }),
     );
   }
+  if (values["reconcile-traffic"]) {
+    markReconcilePhase("idle");
+  }
   const cleanupSettlementStarted = performance.now();
   if (nativeTurns) {
     // Settle the instrumented native removals and deferred kernel cleanup after acceptance.
@@ -2854,6 +3071,9 @@ measurement: try {
           workerExits - nativeWorkerExitsBefore,
         )
       : undefined;
+  clearInterval(timelineTimer);
+  await timelinePending;
+  const reconcileProfiles = await stopReconcileProfiles?.("reconcile");
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2866,6 +3086,12 @@ measurement: try {
     fs.writeFileSync(
       path.join(output, `${values.report}.cpuprofile`),
       JSON.stringify(cpuProfile.profile),
+    );
+  }
+  if (profile && values["reconcile-profile"]) {
+    fs.writeFileSync(
+      path.join(output, `${values.report}.heapprofile`),
+      JSON.stringify(profile.profile),
     );
   }
   inspector?.disconnect();
@@ -2889,6 +3115,10 @@ measurement: try {
   };
   const report = {
     mode: values.mode,
+    workspaceRequests: values["reconcile-traffic"] ? [...workspaceRequests] : undefined,
+    fingerprintMetrics: fingerprintImport ? [...fingerprintMetrics] : undefined,
+    reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
+    reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
     sourceAuthorityProof,
     operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
@@ -2897,7 +3127,7 @@ measurement: try {
           tools: reconcile ? 1 : toolsPerTurn,
           changed: reconcile ? 1 : values["all-mutating"] ? toolsPerTurn : toolsPerTurn / 5,
           unchanged: reconcile || values["all-mutating"] ? 0 : (toolsPerTurn * 4) / 5,
-          ...(reconcile ? { reconcileTarget, reconcileChangedFiles } : {}),
+          ...(reconcile ? { reconcileTarget, reconcileChangedFiles, reconcileRandomBytes } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
           snapshotCaptures: checkpointPhases.filter(
@@ -2971,12 +3201,15 @@ measurement: try {
       ? "main-isolate V8 total allocated bytes, including background work; excludes workers"
       : "V8 total allocation counter unavailable; use separate sampled allocation pass",
     workerAllocation: nativeWorkerAllocation,
+    reconcileProfiles,
+    allocationTimeline: values["reconcile-profile"] ? allocationTimeline : undefined,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
     requests,
     burst,
     files,
+    buildInputFiles,
     fileBytes,
     transcriptMiB,
     separateAgentStorage: Boolean(values["agent-storage-dir"]),
@@ -3039,6 +3272,7 @@ measurement: try {
     gcMs,
     gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
+    memoryBefore,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,

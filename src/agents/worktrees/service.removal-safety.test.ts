@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -165,71 +166,92 @@ describe("managed removal custody", () => {
     expect(await read(created.path)).toBe("hidden change\n");
   });
 
-  it.each(["local", "promisor", "unavailable", "corrupt"])("removal (%s)", async (state) => {
-    const source = repo;
-    await fs.writeFile(path.join(source, "second.txt"), "second blob\n");
-    // Cross Git's output buffer boundary and verify the final partial buffer too.
-    const batchFiles =
-      state === "local" ? Array.from({ length: 257 }, (_, i) => `batch-${i}.txt`) : [];
-    for (const name of batchFiles) {
-      await fs.writeFile(path.join(source, name), `${name}\n`);
-    }
-    await git(source, "add", ".");
-    await git(source, "commit", "-m", "two promised blobs");
-    await git(source, "config", "uploadpack.allowFilter", "true");
-    repo = path.join(root, "partial");
-    const url = pathToFileURL(source).href;
-    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, repo);
-    const packDirectory = path.join(repo, ".git", "objects", "pack");
-    const initialPacks = new Set(await fs.readdir(packDirectory));
-    await git(repo, "checkout", "main");
-    const blobPacks = (await fs.readdir(packDirectory)).filter(
-      (name) => name.endsWith(".pack") && !initialPacks.has(name),
-    );
-    expect(blobPacks).toHaveLength(1);
-    const created = await materialize("missing-clean-blob", "session");
-    const head = await git(created.path, "rev-parse", "HEAD");
-    const tree = await git(created.path, "rev-parse", "HEAD^{tree}");
-    for (const name of ["README.md", "second.txt"]) {
-      await fs.utimes(path.join(created.path, name), 1_600_000_000, 1_600_000_000);
-    }
-    await git(created.path, "update-index", "--refresh");
-    if (state !== "local") {
-      for (const pack of blobPacks) {
-        await fs.unlink(path.join(packDirectory, pack));
-        await fs.unlink(path.join(packDirectory, pack.replace(/\.pack$/, ".idx")));
-      }
-    }
-    await git(repo, "config", "remote.origin.promisor", String(state !== "corrupt"));
-    if (state === "unavailable" || state === "local") {
-      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
-    }
-    const trace = path.join(root, "snapshot-git.trace");
-    vi.stubEnv("GIT_TRACE", trace);
-    if (state === "unavailable" || state === "corrupt") {
-      await expect(remove(created.id)).rejects.toThrow(/missing blob [a-f0-9]{40,64}/);
-      expect(registry(created.id)?.snapshotRef).toBeUndefined();
-      expect(registry(created.id)?.removedAt).toBeUndefined();
-      expect(await read(created.path)).toBe("base\n");
-      expect(await read(created.path, "second.txt")).toBe("second blob\n");
-    } else {
-      const removed = await remove(created.id);
-      expect(removed.removed).toBe(true);
-      expect(await git(repo, "rev-parse", `${removed.snapshotRef}^{tree}`)).toBe(tree);
-      expect(await git(repo, "rev-parse", `${removed.snapshotRef}^`)).toBe(head);
-      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
-      vi.stubEnv("GIT_ALLOW_PROTOCOL", "");
-      const restored = await service.restore({ id: created.id });
-      expect(await read(restored.path)).toBe("base\n");
-      expect(await read(restored.path, "second.txt")).toBe("second blob\n");
+  it.each(["local", "promisor", "noop", "unavailable", "corrupt"])(
+    "removal (%s)",
+    async (state) => {
+      const source = repo;
+      await fs.writeFile(path.join(source, "second.txt"), "second blob\n");
+      // Cross Git's output buffer boundary and verify the final partial buffer too.
+      const batchFiles =
+        state === "local" ? Array.from({ length: 257 }, (_, i) => `batch-${i}.txt`) : [];
       for (const name of batchFiles) {
-        expect(await read(restored.path, name)).toBe(`${name}\n`);
+        await fs.writeFile(path.join(source, name), `${name}\n`);
       }
-    }
-    expect((await fs.readFile(trace, "utf8")).match(/built-in: git fetch /g) ?? []).toHaveLength(
-      state === "promisor" || state === "unavailable" ? 1 : 0,
-    );
-  });
+      await git(source, "add", ".");
+      await git(source, "commit", "-m", "two promised blobs");
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      repo = path.join(root, "partial");
+      const url = pathToFileURL(source).href;
+      await git(root, "clone", "--filter=blob:none", "--no-checkout", url, repo);
+      const packDirectory = path.join(repo, ".git", "objects", "pack");
+      const initialPacks = new Set(await fs.readdir(packDirectory));
+      await git(repo, "checkout", "main");
+      const blobPacks = (await fs.readdir(packDirectory)).filter(
+        (name) => name.endsWith(".pack") && !initialPacks.has(name),
+      );
+      expect(blobPacks).toHaveLength(1);
+      const created = await materialize("missing-clean-blob", "session");
+      const head = await git(created.path, "rev-parse", "HEAD");
+      const tree = await git(created.path, "rev-parse", "HEAD^{tree}");
+      for (const name of ["README.md", "second.txt"]) {
+        await fs.utimes(path.join(created.path, name), 1_600_000_000, 1_600_000_000);
+      }
+      await git(created.path, "update-index", "--refresh");
+      if (state !== "local") {
+        for (const pack of blobPacks) {
+          await fs.unlink(path.join(packDirectory, pack));
+          await fs.unlink(path.join(packDirectory, pack.replace(/\.pack$/, ".idx")));
+        }
+      }
+      await git(repo, "config", "remote.origin.promisor", String(state !== "corrupt"));
+      if (state === "unavailable" || state === "local") {
+        await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable"));
+      }
+      const trace = path.join(root, "snapshot-git.trace");
+      vi.stubEnv("GIT_TRACE", trace);
+      const execute = gitExec.executeGitCommand;
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (state === "promisor" && args.includes("--missing=allow-promisor")) {
+          throw new Error("whole-pack promisor scan timed out");
+        }
+        if (state === "noop" && args[0] === "fetch") {
+          return {
+            stdout: "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+            timeoutMs: 0,
+          };
+        }
+        return execute(cwd, args, options);
+      });
+      if (state === "unavailable" || state === "corrupt" || state === "noop") {
+        await expect(remove(created.id)).rejects.toThrow(/missing blob [a-f0-9]{40,64}/);
+        expect(registry(created.id)?.snapshotRef).toBeUndefined();
+        expect(registry(created.id)?.removedAt).toBeUndefined();
+        expect(await read(created.path)).toBe("base\n");
+        expect(await read(created.path, "second.txt")).toBe("second blob\n");
+      } else {
+        const removed = await remove(created.id);
+        expect(removed.removed).toBe(true);
+        expect(await git(repo, "rev-parse", `${removed.snapshotRef}^{tree}`)).toBe(tree);
+        expect(await git(repo, "rev-parse", removed.snapshotRef!)).toBe(head);
+        await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+        vi.stubEnv("GIT_ALLOW_PROTOCOL", "");
+        const restored = await service.restore({ id: created.id });
+        expect(await read(restored.path)).toBe("base\n");
+        expect(await read(restored.path, "second.txt")).toBe("second blob\n");
+        for (const name of batchFiles) {
+          expect(await read(restored.path, name)).toBe(`${name}\n`);
+        }
+      }
+      expect((await fs.readFile(trace, "utf8")).match(/built-in: git fetch /g) ?? []).toHaveLength(
+        state === "promisor" || state === "unavailable" ? 1 : 0,
+      );
+    },
+  );
 
   it("finalizes source-only deletion after its producer and command scope are revoked", async () => {
     const created = await materialize("revoked-deletion", "session");

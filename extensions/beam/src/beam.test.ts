@@ -546,7 +546,7 @@ describe("Beam session catalog", () => {
 
     for (const limit of [1, 2]) {
       await expect(read(transcript.nextCursor, limit)).rejects.toThrow(
-        "stale Beam transcript cursor",
+        "stale Beam chat history cursor",
       );
     }
   });

@@ -173,7 +173,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 it.each([
   ["promised", 1],
   ["promised-retry", 2],
-  ["unpromised", 0],
+  ["unpromised", 1],
   ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],
@@ -253,6 +253,8 @@ it.each([
     const trace = path.join(root, "partial-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const service = makeService(env);
+    // Retirement deadline behavior is covered separately in service.gc-performance.test.ts.
+    vi.spyOn(performance, "now").mockReturnValue(0);
     const result = await service.gc({ retryDeferred: damage === "promised-retry" });
     const suspended = damage === "checksum" || damage === "promised-retry";
     const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));

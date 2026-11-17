@@ -14,7 +14,7 @@ import type { ChannelAdmissionEvidence } from "../../../channels/message-access/
 import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { CronCreatorAuthorityRunScope as CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityRunScope as CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";

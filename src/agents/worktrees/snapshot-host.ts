@@ -30,6 +30,7 @@ import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-life
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot } from "./snapshot-exact-state.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import { readExactRestoreReceipt } from "./snapshot-restore-exact.js";
 import type {
   ManagedWorktreeRecord,
@@ -84,21 +85,13 @@ export async function captureManagedWorktreeSnapshot(params: {
       const missing = await missingCommitObjects(record.path, "HEAD", options);
       if (missing.length > 0) {
         try {
-          // Retirement must distinguish promised contents from lost local data.
-          // Git scans every promisor pack for this proof; creation does not need it.
-          await requireGit(
-            record.path,
-            [
-              "rev-list",
-              "--objects",
-              "--quiet",
-              "--missing=allow-promisor",
-              "--max-count=1",
-              "HEAD",
-            ],
-            { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
-          );
           await hydrateCommitObjects(record.path, "HEAD", missing, options);
+          // Prove local custody, not promisor membership (which scans every promisor pack).
+          // A successful fetch alone cannot prove a clean snapshot is offline-restorable.
+          const remaining = await missingCommitObjects(record.path, "HEAD", options);
+          if (remaining.length > 0) {
+            throw new Error(`Worktree snapshot has missing blob ${remaining[0]}`);
+          }
         } catch (cause) {
           params.signal?.throwIfAborted();
           params.assertCurrent?.();
@@ -307,7 +300,7 @@ async function prepareExactSnapshotRetirement(params: {
   assertCurrent: () => void;
 }) {
   const { record, expected, signal, assertCurrent } = params;
-  const ref = `refs/openclaw/snapshots/${record.id}`;
+  const ref = record.snapshotRef;
   if (expected.retainedSourceRef.startsWith("refs/heads/openclaw/")) {
     throw new Error(
       "Managed branches expire with their worktrees; choose an ordinary branch or remote-tracking retained source ref",
@@ -315,8 +308,12 @@ async function prepareExactSnapshotRetirement(params: {
   }
   if (
     expected.id !== record.id ||
+    !ref ||
+    ![
+      `refs/openclaw/snapshots/${record.id}`,
+      `refs/openclaw/snapshots/clean-v1/${record.id}`,
+    ].includes(ref) ||
     expected.expectedSnapshotRef !== ref ||
-    record.snapshotRef !== ref ||
     record.removedAt !== expected.expectedRemovedAt ||
     !Number.isSafeInteger(expected.expectedRemovedAt) ||
     expected.expectedRemovedAt < 0 ||
@@ -389,19 +386,26 @@ async function prepareExactSnapshotRetirement(params: {
   if (snapshotTree !== retainedTree) {
     throw new Error("Snapshot contains source not covered by the retained commit");
   }
-  const parents = (
-    await requireGit(
-      record.repoRoot,
-      ["rev-list", "--parents", "-n", "1", expected.expectedSnapshotOid],
-      options,
-    )
-  ).split(" ");
-  if (parents.length !== 2) {
-    throw new Error("Snapshot parent custody is unavailable");
+  if (worktreeSnapshotBase(ref, expected.expectedSnapshotOid) !== expected.expectedSnapshotOid) {
+    const parents = (
+      await requireGit(
+        record.repoRoot,
+        ["rev-list", "--parents", "-n", "1", expected.expectedSnapshotOid],
+        options,
+      )
+    ).split(" ");
+    if (parents.length !== 2) {
+      throw new Error("Snapshot parent custody is unavailable");
+    }
   }
   await requireGit(
     record.repoRoot,
-    ["merge-base", "--is-ancestor", parents[1]!, expected.expectedRetainedSourceOid],
+    [
+      "merge-base",
+      "--is-ancestor",
+      worktreeSnapshotBase(ref, expected.expectedSnapshotOid),
+      expected.expectedRetainedSourceOid,
+    ],
     options,
   );
   assertCurrent();

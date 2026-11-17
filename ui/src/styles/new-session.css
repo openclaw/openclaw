@@ -583,19 +583,11 @@ span.new-session-page__select {
   width: anchor-size(width);
 }
 
-.new-session-page__project-status,
 .new-session-page__project-error {
+  color: var(--danger);
   padding: 5px 8px;
   font-size: 11px;
   line-height: 1.4;
-}
-
-.new-session-page__project-status {
-  color: var(--muted);
-}
-
-.new-session-page__project-error {
-  color: var(--danger);
 }
 
 .new-session-page__menu-field {
@@ -890,12 +882,6 @@ span.new-session-page__select {
   font-size: 12px;
   color: var(--text);
   outline: none;
-}
-
-.new-session-page__browser-loading {
-  flex: 0 0 auto;
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .new-session-page__browser-list {
@@ -1532,12 +1518,9 @@ span.new-session-page__select {
   }
 }
 
-/* Reserve the label track while background catalog metadata supplies the name. */
+/* Bound long names without adding empty space before a short name’s chevron. */
 .new-session-page .chat-controls__model-trigger .chat-controls__inline-select-label {
-  width: 8.5em;
-  flex: 0 1 8.5em;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 8.5em;
 }
 
 /* Keep catalog arrival inside the space between the fixed footer controls. */
@@ -1553,16 +1536,11 @@ span.new-session-page__select {
     flex: 1;
   }
 
-  /* The picker holds the whole track, so nothing moves when the catalog
-     arrives; the chip inside it hugs its label and chevron. */
-  .new-session-page .chat-controls__model-trigger {
-    width: fit-content;
-  }
-
-  /* Empty catalogs have no effort chip to fill the track. Keep that status by
-     the actions; loading and model selections retain their stable alignment. */
-  .new-session-page [data-chat-model-empty="true"] {
+  /* The picker holds the track while its chip hugs the label. Anchor the
+     chevron beside the actions so background catalog names do not move it. */
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
     display: flex;
+    width: fit-content;
     margin-inline-start: auto;
   }
 
@@ -2098,6 +2076,7 @@ span.new-session-page__select {
     flex: 0 0 14px;
     width: 14px;
     height: 14px;
+    margin-inline-start: auto;
     color: var(--muted);
     stroke-width: 1.5px;
   }

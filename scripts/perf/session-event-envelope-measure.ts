@@ -8,7 +8,7 @@
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
  *   scripts/perf/session-event-envelope-measure.ts --events 3000
  * Add --owner .local/base-projection.ts for a saved projection source, --delivery-owner
- * src/gateway/.delivery-baseline.ts to compare delta preparation, and --allocations
+ * .local/delivery-baseline.ts to compare delta preparation, and --allocations
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
@@ -36,7 +36,8 @@
  * --cpu-profile <file> attributes a separate sender-only measured pass.
  * --start-at <epoch-ms> synchronizes warmed paired senders on separate --port values;
  * a sender that misses the start fails rather than reporting an unmatched timing arm.
- * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
+ * --fields-owner <saved-source.ts> replaces the field/delta owner alongside --delivery-owner.
+ * patchEncoding counts JSON serializations and distinct patch sets in the digest replay.
  * --source-revisions replaces materialized rows for each transcript publication;
  * omit it to measure clock/runtime changes over unchanged materialized facts.
  * --yield-events gives each publication its own job, allowing weak samples to expire.
@@ -60,7 +61,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { SerializedGatewayFrame } from "../../src/gateway/serialized-json.js";
@@ -158,8 +159,18 @@ const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import
 const loadedOwnerUrl = `${ownerUrl}?measured-owner`;
 const broadcastUrl = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
 const loadedBroadcastUrl = `${broadcastUrl}?measured-owner`;
+const deliveryOwner = path.resolve(values["delivery-owner"]);
+const deliveryUrl = new URL("../../src/gateway/session-ancestor-references.ts", import.meta.url)
+  .href;
 const ownerHook = registerHooks({
   load(url, context, nextLoad) {
+    if (url === deliveryUrl) {
+      return {
+        format: "module-typescript",
+        source: readFileSync(deliveryOwner, "utf8"),
+        shortCircuit: true,
+      };
+    }
     if (url === loadedBroadcastUrl) {
       return {
         format: "module-typescript",
@@ -183,9 +194,8 @@ const { createGatewayBroadcaster }: typeof import("../../src/gateway/server-broa
   await import(loadedBroadcastUrl);
 const { GatewayClientRegistry } = await import("../../src/gateway/server/client-registry.js");
 ownerHook.deregister();
-const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
-  await import(pathToFileURL(deliveryOwner).href);
+  await import(deliveryUrl);
 fieldsHook.deregister();
 const fields = Object.fromEntries(
   `createdActor owner participants participantCount visibility channel subject groupChannel space
@@ -652,6 +662,30 @@ try {
   const wireDigest = createHash("sha256");
   const utf8 = { encodings: 0, bytes: 0, sessionEncodings: 0, sessionBytes: 0 };
   const ownedCopies = { calls: 0, bytes: 0 };
+  const patchEncoding = { calls: 0, bytes: 0, distinctSets: 0 };
+  const patchSets = new WeakSet<object>();
+  const stringify = JSON.stringify;
+  JSON.stringify = new Proxy(stringify, {
+    apply(target, thisArg, args) {
+      const encoded: unknown = Reflect.apply(target, thisArg, args);
+      const value: unknown = args[0];
+      if (
+        typeof encoded === "string" &&
+        value &&
+        typeof value === "object" &&
+        "set" in value &&
+        "remove" in value
+      ) {
+        patchEncoding.calls++;
+        patchEncoding.bytes += Buffer.byteLength(encoded);
+        if (value.set && typeof value.set === "object" && !patchSets.has(value.set)) {
+          patchSets.add(value.set);
+          patchEncoding.distinctSets++;
+        }
+      }
+      return encoded;
+    },
+  });
   const ownedDescriptor = Object.getOwnPropertyDescriptor(Buffer, "allocUnsafeSlow");
   assert(ownedDescriptor);
   const ownedAllocate = Buffer.allocUnsafeSlow.bind(Buffer);
@@ -691,6 +725,7 @@ try {
       await setImmediate();
     }
   }
+  JSON.stringify = stringify;
   Object.defineProperty(Buffer, "from", fromDescriptor);
   Object.defineProperty(Buffer, "allocUnsafeSlow", ownedDescriptor);
   let received: CompressionPeerReport | undefined;
@@ -715,6 +750,7 @@ try {
       broadcastCpuMs,
       utf8,
       ownedCopies,
+      patchEncoding,
       sessionEncodeHistogram,
       clients,
       audiences,
