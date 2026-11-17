@@ -213,6 +213,13 @@ Browser Talk acquires the microphone before creating the provider session, so
 time spent granting permission does not consume a short-lived connection token.
 If session creation fails, Talk releases the microphone before reporting the error.
 
+Composer dictation does the opposite: it creates its Gateway transcription
+session first and opens the microphone only after the Gateway accepts it.
+Stopped recordings keep their sessions until their text arrives, and each
+connection has two. When both are still transcribing, a new recording shows
+"Dictation is busy" without opening the microphone; try again once the earlier
+text appears.
+
 If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.

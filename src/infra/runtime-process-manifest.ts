@@ -17,6 +17,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
 
   return {
+    workerThreadLoader: loaderFreeEntrypoint("infra/runtime-worker-loader"),
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
