@@ -33,26 +33,36 @@ function readFileArchiveNames(target: string): string[] {
  * and cleanup only unlink, and nothing chmods or rewrites an archive, so a link never lets the
  * rehearsal change live bytes. Across volumes copy instead; if the rehearsal volume, which released
  * drivers size for SQLite files only, cannot hold the copy, a symbolic link still lets reads
- * verify the live payload. An archive that is absent live stays absent in the rehearsal.
+ * verify the live payload. Windows always copies: its recursive removal may chmod a name before
+ * deleting it, which would reach the live file through a link. An archive absent live stays absent.
  */
 export async function linkRehearsalColdArchives(
   target: string,
   sourceStorePath: string,
 ): Promise<void> {
+  const windows = process.platform === "win32";
   for (const name of readFileArchiveNames(target)) {
     const live = resolveSessionColdArchivePath(sourceStorePath, name);
     const copy = resolveSessionColdArchivePath(target, name);
     await fs.mkdir(path.dirname(copy), { recursive: true, mode: 0o700 });
-    await fs.link(live, copy).catch(async (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT" || error.code === "EEXIST") {
-        return;
-      }
+    const linked =
+      !windows &&
+      (await fs.link(live, copy).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => error.code === "ENOENT" || error.code === "EEXIST",
+      ));
+    if (!linked) {
       await fs
         .copyFile(live, copy, fs.constants.COPYFILE_EXCL | fs.constants.COPYFILE_FICLONE)
-        .catch(async () => {
+        .catch(async (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" || error.code === "EEXIST") {
+            return;
+          }
           await fs.rm(copy, { force: true });
-          await fs.symlink(live, copy);
+          if (!windows) {
+            await fs.symlink(live, copy);
+          }
         });
-    });
+    }
   }
 }

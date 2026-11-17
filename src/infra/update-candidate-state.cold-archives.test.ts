@@ -18,6 +18,7 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { linkRehearsalColdArchives } from "./update-candidate-cold-archives.js";
 import {
   readUpdateCandidateStateInventoryInProcess,
   snapshotUpdateCandidateState,
@@ -132,3 +133,18 @@ it.each(["copy", "symlink"] as const)(
     expect(await fs.readFile(live)).toEqual(before);
   },
 );
+
+it("gives Windows rehearsals a private copy instead of a link", async () => {
+  const { source, target, archive } = await snapshotWithFileArchive();
+  const live = resolveSessionColdArchivePath(source, archive);
+  const placed = resolveSessionColdArchivePath(target, archive);
+  await fs.rm(placed);
+  // Windows recursive removal may chmod a name before deleting it; a link would reach live data.
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  await linkRehearsalColdArchives(target, source);
+  vi.restoreAllMocks();
+
+  const [copied, original] = await Promise.all([fs.lstat(placed), fs.stat(live)]);
+  expect(copied.isFile() && copied.ino !== original.ino).toBe(true);
+  expect(await fs.readFile(placed)).toEqual(await fs.readFile(live));
+});
