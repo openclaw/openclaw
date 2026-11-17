@@ -1,0 +1,2 @@
+# Discord CDN destination authority through resolver, guarded download and storage.
+93
