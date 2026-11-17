@@ -1,6 +1,6 @@
 // Start this build's Gateway on real prior-release state and prove the
 // copy-and-swap upgrade: it starts, user data survives, and the old files keep
-// their exact bytes under `.pre-<version>`.
+// their exact bytes under `.pre-<buildId>`.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -239,9 +239,15 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         }
         await instance.stopGateway();
 
-        // The old bytes survive unchanged under the preserved name.
+        // The old bytes survive unchanged under the name of the build that replaced them.
+        const builtBy = JSON.parse(
+          fs.readFileSync(
+            fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
+            "utf8",
+          ),
+        ) as { buildId?: string };
         for (const [file, digest] of before) {
-          expect(sha256(`${file}.pre-${VERSION}`), file).toBe(digest);
+          expect(sha256(`${file}.pre-${builtBy.buildId ?? VERSION}`), file).toBe(digest);
         }
         const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
           readOnly: true,
