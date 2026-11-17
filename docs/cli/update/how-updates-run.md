@@ -906,8 +906,8 @@ can be owed:
   change. The updater restores every plugin package it replaced in that pass, so
   plugins stay on their previous versions and records. The update then validates
   the final config, runs readiness checks, and starts the Gateway as usual.
-- **Post-plugin Doctor** (`post-plugin-doctor`): Doctor started after plugins
-  changed, and the updater then failed around it for a reason Doctor did not
+- **Post-plugin Doctor** (`post-plugin-doctor`): Doctor started after plugin
+  convergence, and the updater then failed around it for a reason Doctor did not
   report, such as a state read that failed after Doctor finished. Config
   validation and readiness checks still run before the Gateway starts.
 
