@@ -258,7 +258,7 @@ it.each(["validating", "activating"] as const)(
 
 it.each(["monotonic"] as const)(
   "blocks a delayed forward effect after %s preparation expiry while retaining terminal bookkeeping",
-  async (expiration) => {
+  async () => {
     const record = prepareTimedUpdate();
     const observing = createDeferredCore();
     const resume = createDeferredCore();
