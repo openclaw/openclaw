@@ -1086,3 +1086,13 @@ For the load pipeline, registry model, provider runtime hooks, Gateway HTTP rout
 - [Plugin SDK setup](/plugins/sdk-setup)
 - [Context engines](/concepts/context-engine)
 - [Plugin Runtime](/plugins/sdk-runtime) - the `api.runtime` helpers plugins call
+
+### Capture custody during asynchronous preparation
+
+Asynchronous plugin preparation allocates source and native roots through the existing
+broker resource owner. Execution workers borrow paths; host cache and recovery leases
+retain native custody independently, including after preparation-worker exit or an
+ordinary Gateway restart. Loaded native code retains its physical token and unrefed
+broker until host exit. A failed broker remains terminal; a fresh execution source
+may use a new broker without reviving the old authority. Installed-index publication
+settles before native commit is acknowledged.

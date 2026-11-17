@@ -112,6 +112,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
+    pluginCaptureNativeResource: runtimeProcessEntrypoint("plugins/plugin-capture-native-resource"),
     pluginGenerationPreparation: runtimeProcessEntrypoint(
       "plugins/plugin-generation-preparation.worker",
     ),

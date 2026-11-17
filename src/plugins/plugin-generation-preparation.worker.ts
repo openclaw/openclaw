@@ -1,9 +1,11 @@
-import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
+import { receiveMessageOnPort, workerData, type MessagePort } from "node:worker_threads";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCaptureResourceClient } from "./plugin-capture-native-resource.client.js";
+import { PLUGIN_CAPTURE_RESOURCE_PORT } from "./plugin-capture-native-resource.types.js";
 import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
 import {
   markPluginSourceCaptureOperation,
@@ -26,10 +28,14 @@ import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-co
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
 
+const captureResource = createPluginCaptureResourceClient(workerData[PLUGIN_CAPTURE_RESOURCE_PORT]);
+
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
 
-function createPreparationSession(context: CaptureCommand) {
+function createPreparationSession(
+  context: CaptureCommand & { scratch: string; managedRoot?: string },
+) {
   const resources = new Set<Resource>();
   const orphaned = new Set<Resource>();
   const owned = new WeakSet<Resource>();
@@ -129,9 +135,11 @@ function createPreparationSession(context: CaptureCommand) {
       recordPluginNativeLoad(message.filename);
     }
   }
-  function requestHost(
-    request: { kind: "mapping"; captureId: number; filename: string } | { kind: "native-root" },
-  ): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
+  function requestHost(request: {
+    kind: "mapping";
+    captureId: number;
+    filename: string;
+  }): Extract<GenerationWorkerCallback, { kind: "callback-result" }> {
     if (!callbacks) {
       throw new Error("Plugin preparation host is unavailable");
     }
@@ -177,7 +185,11 @@ function createPreparationSession(context: CaptureCommand) {
       : filename;
   }
   function createNativeRoot() {
-    const reference = requestHost({ kind: "native-root" }).root;
+    const reference = captureResource.requestSync({
+      type: "native",
+      captureId: context.captureId,
+      storage: context.storage,
+    });
     if (!reference) {
       throw new Error("Plugin preparation host did not allocate native custody");
     }
@@ -341,7 +353,23 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
     // SAFETY: The matching internal host submits only GenerationWorkerInput to this pool.
     const command = input as GenerationWorkerInput;
     if (command.operation === "capture") {
-      sessions.set(command.captureId, createPreparationSession(command));
+      const source = await captureResource.request({
+        type: "source",
+        captureId: command.captureId,
+        storage: command.storage,
+        prefix: "plugin-preparation-",
+      });
+      if (!source) {
+        throw new Error("Plugin capture owner returned no source root");
+      }
+      sessions.set(
+        command.captureId,
+        createPreparationSession({
+          ...command,
+          scratch: source.directory,
+          managedRoot: source.managedRoot,
+        }),
+      );
     }
     const session = sessions.get(command.captureId);
     if (!session) {

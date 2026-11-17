@@ -13,8 +13,6 @@ export type GenerationWorkerInput = (
       storage: PluginSourceCaptureStorage;
       installRoots: PluginInstallRoots;
       readOnly: boolean;
-      scratch: string;
-      managedRoot?: string;
       admission: Pick<
         AdmissionState,
         "owners" | "managedRoots" | "receipts" | "files" | "namespaces"
@@ -36,7 +34,6 @@ export type GenerationWorkerReply = (
 ) & { released?: number[] };
 export type GenerationWorkerCallback =
   | { kind: "mapping"; id: number; captureId: number; filename: string; signal: Int32Array }
-  | { kind: "native-root"; id: number; signal: Int32Array }
   | {
       kind: "callback-result";
       id: number;

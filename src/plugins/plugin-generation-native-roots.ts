@@ -1,25 +1,23 @@
-import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { snapshotOwners } from "./plugin-native-admission-state.js";
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
-import { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
+import type { PluginNativeCaptureRoot } from "./plugin-native-root.types.js";
 
 /** Filesystem custody stays in the host; preparation workers only borrow paths. */
-export function createPluginGenerationNativeRoots(storage: PluginSourceCaptureStorage) {
+export function createPluginGenerationNativeRoots() {
   const roots = new Map<
     number,
     {
-      root: ReturnType<typeof createPluginNativeCaptureRoot>;
+      root: PluginNativeCaptureRoot;
       custody: ReturnType<typeof retainPluginNativeRoot>;
     }
   >();
   let nextId = 0;
   let closed = false;
   return {
-    allocate() {
+    allocate(root: PluginNativeCaptureRoot) {
       if (closed) {
         throw new Error("Plugin native preparation custody has closed");
       }
-      const root = createPluginNativeCaptureRoot(storage.stateDir, storage.placement);
       snapshotOwners.set(root, new Set());
       const id = ++nextId;
       roots.set(id, { root, custody: retainPluginNativeRoot(root) });

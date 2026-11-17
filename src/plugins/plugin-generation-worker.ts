@@ -1,19 +1,15 @@
 import path from "node:path";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
-import { throwSettledAggregate } from "../infra/error-graph-internal.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  captureRetainedNativeWorkerSource,
-  type RetainedNativeWorkerSource,
-} from "../infra/worker-native-lifecycle.js";
-import { createOwnedWorkerTaskPool } from "../infra/worker-task-pool.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
+import {
+  createPreparationPool,
+  preparationOwnerFor,
+} from "./plugin-generation-preparation-pool.js";
 import { GenerationCodec } from "./plugin-generation-worker-codec.js";
 import type {
   GenerationWorkerInput,
@@ -29,7 +25,6 @@ import {
 } from "./plugin-native-admission-state.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
-import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
 
 export type PreparedPluginGenerationArtifact = {
@@ -41,112 +36,6 @@ type PreparationParameters = {
   source: string | readonly string[];
   standalone?: boolean;
 };
-type PreparationPool = ReturnType<typeof createPreparationPool>;
-type PreparationOwner = {
-  closing: boolean;
-  clients: Set<() => Promise<void>>;
-  nextCaptureId: number;
-  pool?: PreparationPool;
-};
-
-function createPreparationPool(nativeSource: RetainedNativeWorkerSource) {
-  const clients = new Map<number, { service(): void; releaseRoot(): Promise<void> }>();
-  let retired = false;
-  const pool = createOwnedWorkerTaskPool<GenerationWorkerInput, GenerationWorkerReply>(
-    {
-      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.pluginGenerationPreparation),
-      maxWorkers: 1,
-      idleTimeoutMs: 0,
-      restartOnError: false,
-      prepareWorker: () => ({
-        options: {},
-        releaseResources: async () => {
-          retired = true;
-          // Captured handles cannot migrate to a replacement isolate. Stop queued
-          // captures before releasing roots they might otherwise still use.
-          void pool.close(new Error("Plugin preparation worker has closed")).catch(() => {});
-          const outcomes = await Promise.allSettled(
-            [...clients.values()].map((client) => client.releaseRoot()),
-          );
-          throwSettledAggregate(outcomes, "Plugin preparation roots failed to close");
-        },
-      }),
-    },
-    { retainedTransport: true, nativeSource },
-  );
-  type Task = ReturnType<typeof pool.startTask>;
-  const tasks = new Set<Task>();
-  const releases = new WeakMap<Task, ReturnType<Task["release"]>>();
-  const release = (task: Task) => {
-    let released = releases.get(task);
-    if (!released) {
-      released = task.release();
-      releases.set(task, released);
-      void released.result.finally(() => tasks.delete(task)).catch(() => {});
-    }
-    return released;
-  };
-  return {
-    pool,
-    clients,
-    get retired() {
-      return retired;
-    },
-    startTask(...args: Parameters<typeof pool.startTask>) {
-      // A sibling's owner-controlled capture must not consume this call's deadline.
-      const task = pool.startTask(args[0], { ...args[1], timeoutFrom: "dispatch" });
-      tasks.add(task);
-      // Physical task custody ends with its reply. Artifact custody continues until
-      // its own disposal, independently of host-side admission publication.
-      void task.result
-        .then(
-          () => release(task).result,
-          () => release(task).result,
-        )
-        .catch(() => {});
-      return task;
-    },
-    release,
-    service() {
-      for (const client of clients.values()) {
-        client.service();
-      }
-      for (const task of tasks) {
-        task.service();
-        if (task.read().status !== "pending") {
-          const released = release(task);
-          released.service();
-          if (released.read().status !== "pending") {
-            tasks.delete(task);
-          }
-        }
-      }
-    },
-  };
-}
-const preparationOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.pluginPreparationOwners"),
-  () => new WeakMap<RetainedNativeWorkerSource, PreparationOwner>(),
-);
-
-function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwner {
-  let owner = preparationOwners.get(source);
-  if (!owner) {
-    owner = { closing: false, clients: new Set(), nextCaptureId: 0 };
-    preparationOwners.set(source, owner);
-    const retained = owner;
-    source.retain(owner, async () => {
-      retained.closing = true;
-      const outcomes = await Promise.allSettled([...retained.clients].map((close) => close()));
-      throwSettledAggregate(outcomes, "Plugin preparation workers failed to close");
-    });
-  }
-  if (owner.closing) {
-    throw new Error("Plugin preparation owner is closing");
-  }
-  return owner;
-}
-
 /** Artifacts keep separate capture custody and share their owner's preparation isolate. */
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,
@@ -156,7 +45,14 @@ export async function preparePluginGenerationArtifact(
   const shared =
     owner.pool && !owner.pool.retired
       ? owner.pool
-      : (owner.pool = createPreparationPool(nativeSource));
+      : await (owner.preparingPool ??= createPreparationPool(nativeSource)
+          .then((prepared) => (owner.pool = prepared))
+          .finally(() => {
+            owner.preparingPool = undefined;
+          }));
+  if (owner.closing) {
+    throw new Error("Plugin preparation owner is closing");
+  }
   const { pool } = shared;
   const captureId = ++owner.nextCaptureId;
   const storage = resolvePluginSourceCaptureStorage();
@@ -166,17 +62,15 @@ export async function preparePluginGenerationArtifact(
   });
   const readOnly = isArtifactPreservingStateRead();
   const admission = nativeAdmissionStateFor();
-  const nativeRoots = createPluginGenerationNativeRoots(storage);
+  const nativeRoots = createPluginGenerationNativeRoots();
   const admissionRoot = path.resolve(params.rootDir);
   const admissionOwner = admission.owners.get(admissionRoot);
-  const root = createPluginSourceCaptureRoot(
-    storage.stateDir,
-    "plugin-preparation-",
-    storage.placement,
-  );
   let releasedRoot: Promise<void> | undefined;
   const releaseRoot = () =>
-    (releasedRoot ??= Promise.all([nativeRoots.close(), root.release()]).then(() => {}));
+    (releasedRoot ??= Promise.all([
+      nativeRoots.close(),
+      shared.captures.releaseSource(captureId),
+    ]).then(() => {}));
   const { port1, port2 } = new MessageChannel();
   let moduleSource: ((filename: string) => string) | undefined;
   let resources = 0;
@@ -191,7 +85,7 @@ export async function preparePluginGenerationArtifact(
     }
   });
   function callback(message: GenerationWorkerCallback): void {
-    if (message.kind !== "mapping" && message.kind !== "native-root") {
+    if (message.kind !== "mapping") {
       return;
     }
     const reply: Extract<GenerationWorkerCallback, { kind: "callback-result" }> = {
@@ -199,11 +93,7 @@ export async function preparePluginGenerationArtifact(
       id: message.id,
     };
     try {
-      if (message.kind === "native-root") {
-        reply.root = nativeRoots.allocate();
-      } else {
-        reply.filename = moduleSource?.(message.filename) ?? message.filename;
-      }
+      reply.filename = moduleSource?.(message.filename) ?? message.filename;
     } catch (failure) {
       reply.error = failure instanceof Error ? failure.message : String(failure);
     }
@@ -215,6 +105,7 @@ export async function preparePluginGenerationArtifact(
   port1.unref();
   shared.clients.set(captureId, {
     releaseRoot,
+    registerNativeRoot: (root) => nativeRoots.allocate(root),
     service() {
       // SAFETY: This artifact's private port carries only GenerationWorkerCallback messages.
       const message = receiveMessageOnPort(port1)?.message as GenerationWorkerCallback | undefined;
@@ -398,8 +289,6 @@ export async function preparePluginGenerationArtifact(
       storage,
       installRoots,
       readOnly,
-      scratch: root.directory,
-      managedRoot: root.managedRoot,
       callbackPort: port2,
       admission: {
         // One artifact uses one owner; shared native indexes still serve dependencies outside it.
