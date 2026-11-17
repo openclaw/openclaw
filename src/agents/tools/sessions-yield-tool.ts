@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
 import { normalizeToolPolicyName } from "../tool-policy-shared.js";
-import { readToolResultStatus } from "../tool-result-error.js";
+import { readToolResultDetails, readToolResultStatus } from "../tool-result-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
@@ -39,16 +39,36 @@ export type SessionsYieldCallback = (
   },
 ) => Promise<void> | void;
 
-/**
- * A later turn's yield found an earlier turn's children still pending. When that turn
- * already delivered its visible reply through the message tool, the runtime ends it here:
- * the reply is out and the earlier wake resumes the session, so trailing text is not a reply.
- */
-export function isAlreadyPendingSessionsYieldResult(toolName: string, result: unknown): boolean {
-  return (
-    normalizeToolPolicyName(toolName) === "sessions_yield" &&
-    readToolResultStatus(result) === "already_pending"
+/** Only an active child with an armed wake resumes this session after the turn ends. */
+function hasResumingPendingChild(children: readonly unknown[]): boolean {
+  return children.some(
+    (child) =>
+      typeof child === "object" &&
+      child !== null &&
+      Reflect.get(child, "wakeArmed") === true &&
+      Reflect.get(child, "state") !== "paused",
   );
+}
+
+/**
+ * A later turn's yield found an earlier turn's children still pending, and at least one of
+ * them will wake this session. When that turn already delivered its visible reply through the
+ * message tool, the runtime ends it here: the reply is out and the earlier wake resumes the
+ * session, so trailing text is not a reply. Paused or unarmed children resume nothing, so
+ * their already_pending result keeps the turn for the model to act on.
+ */
+export function isResumingAlreadyPendingSessionsYieldResult(
+  toolName: string,
+  result: unknown,
+): boolean {
+  if (
+    normalizeToolPolicyName(toolName) !== "sessions_yield" ||
+    readToolResultStatus(result) !== "already_pending"
+  ) {
+    return false;
+  }
+  const children = readToolResultDetails(result)?.pendingChildren;
+  return Array.isArray(children) && hasResumingPendingChild(children);
 }
 
 function describePendingChild(child: UnsettledRequesterChild): string {
@@ -148,10 +168,7 @@ export function createSessionsYieldTool(opts?: {
         waitFor ? { waitFor, ...(acknowledgment ? { acknowledgment } : {}) } : undefined,
       );
       if (typeof claim === "object" && "pendingChildren" in claim) {
-        if (
-          acknowledgment &&
-          claim.pendingChildren.some((child) => child.wakeArmed && child.state !== "paused")
-        ) {
+        if (acknowledgment && hasResumingPendingChild(claim.pendingChildren)) {
           // Keep the existing wake owner; only end this turn with its waiting reply.
           await opts.onYield(message, acknowledgment, undefined);
           return jsonResult({

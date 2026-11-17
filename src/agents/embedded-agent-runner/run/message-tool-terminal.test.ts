@@ -321,10 +321,16 @@ describe("message-tool-only source replies", () => {
 });
 
 describe("already-pending yield after a delivered reply", () => {
-  const alreadyPending = {
+  const pendingResult = (state: "running" | "paused", wakeArmed: boolean) => ({
     content: [{ type: "text" as const, text: '{"status":"already_pending"}' }],
-    details: { status: "already_pending", pendingChildren: [] },
-  };
+    details: {
+      status: "already_pending",
+      pendingChildren: [
+        { runId: "earlier-child", childSessionKey: "agent:main:subagent:child", state, wakeArmed },
+      ],
+    },
+  });
+  const alreadyPending = pendingResult("running", true);
   const progressSend = {
     args: { action: "send", message: "progress reply", final: false },
     result: settledResult(true),
@@ -363,6 +369,20 @@ describe("already-pending yield after a delivered reply", () => {
       invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending }),
     ).resolves.toBeUndefined();
   });
+
+  it.each([
+    ["paused", true],
+    ["running", false],
+  ] as const)(
+    "keeps the turn when no pending child will wake the session (%s, armed %s)",
+    async (state, wakeArmed) => {
+      const { invoke } = scoped(fixture());
+      await invoke(progressSend);
+      await expect(
+        invoke({ toolName: "sessions_yield", args: {}, result: pendingResult(state, wakeArmed) }),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("keeps the turn for other yield results", async () => {
     const { invoke } = scoped(fixture());

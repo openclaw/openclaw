@@ -23,7 +23,7 @@ import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../run
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
-import { isAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
+import { isResumingAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
@@ -177,7 +177,7 @@ export function installMessageToolTerminalHook(
       inputScope !== undefined &&
       deliveredReplyInputs.has(inputScope) &&
       !context.isError &&
-      isAlreadyPendingSessionsYieldResult(toolName, context.result);
+      isResumingAlreadyPendingSessionsYieldResult(toolName, context.result);
     if (endsAfterPendingYield) {
       finalReplyInputs.add(inputScope);
     }

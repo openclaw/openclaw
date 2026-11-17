@@ -335,6 +335,11 @@ turn's active child completion is already armed. The acknowledgment ends only
 the current turn; it does not claim the child again or rearm its completion.
 Without an acknowledgment, or when the earlier children are paused or have no
 armed wake, `sessions_yield` reports the pending work and leaves the turn active.
+If that turn already delivered its reply through the message tool and at least
+one earlier child is active with an armed wake, the runtime ends the turn at the
+`already_pending` result instead, because that wake resumes the session. Paused
+or unarmed children resume nothing, so their result always leaves the turn
+active for the model to act on.
 
 When settlement resumes a top-level parent with automatic channel delivery,
 OpenClaw keeps the channel's typing indicator active while that continuation

@@ -1,6 +1,6 @@
 import type { CliBackendTurnInterrupt } from "../../plugins/cli-backend.types.js";
 import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
-import { isAlreadyPendingSessionsYieldResult } from "../tools/sessions-yield-tool.js";
+import { isResumingAlreadyPendingSessionsYieldResult } from "../tools/sessions-yield-tool.js";
 
 type CliTurnInterruptReason = Parameters<CliBackendTurnInterrupt["interrupt"]>[0];
 
@@ -67,7 +67,7 @@ export function createCliYieldTurnEnd(
       pendingAfterSourceReply ||=
         deliveredForInput &&
         call.outcome === "completed" &&
-        isAlreadyPendingSessionsYieldResult(toolName, call.result);
+        isResumingAlreadyPendingSessionsYieldResult(toolName, call.result);
     },
     onToolResult(toolName: string, isError: boolean | undefined) {
       if (isError || stripOpenClawMcpToolPrefix(toolName) !== "sessions_yield") {

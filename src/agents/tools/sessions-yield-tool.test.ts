@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { createSessionsYieldTool } from "./sessions-yield-tool.js";
+import {
+  createSessionsYieldTool,
+  isResumingAlreadyPendingSessionsYieldResult,
+} from "./sessions-yield-tool.js";
 
 function setup(options: Parameters<typeof createSessionsYieldTool>[0] = {}) {
   const onYield = vi.fn();
@@ -220,5 +223,43 @@ describe("sessions_yield tool", () => {
     expect(invalid.details).toMatchObject({ status: "error" });
     expect(claimYield).toHaveBeenCalledTimes(2);
     expect(onYield).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isResumingAlreadyPendingSessionsYieldResult", () => {
+  const result = (status: string, children: unknown[]) => ({
+    content: [],
+    details: { status, pendingChildren: children },
+  });
+  const child = (state: string, wakeArmed: boolean) => ({
+    runId: "earlier-child",
+    childSessionKey: "agent:main:subagent:child",
+    state,
+    wakeArmed,
+  });
+
+  it.each([
+    ["an active armed child", [child("running", true)], true],
+    ["an armed child among paused ones", [child("paused", false), child("completing", true)], true],
+    ["only an unarmed child", [child("running", false)], false],
+    ["only a paused child", [child("paused", true)], false],
+    ["no children", [], false],
+  ])("requires a child that wakes the session: %s", (_name, children, expected) => {
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult(
+        "sessions_yield",
+        result("already_pending", children),
+      ),
+    ).toBe(expected);
+  });
+
+  it("ignores other statuses and tools", () => {
+    const armed = [child("running", true)];
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult("sessions_yield", result("yielded", armed)),
+    ).toBe(false);
+    expect(
+      isResumingAlreadyPendingSessionsYieldResult("message", result("already_pending", armed)),
+    ).toBe(false);
   });
 });

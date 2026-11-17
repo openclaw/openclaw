@@ -251,7 +251,17 @@ it.each([true, false])(
       ]);
       const pending = {
         content: [{ type: "text", text: '{"status":"already_pending"}' }],
-        details: { status: "already_pending", pendingChildren: [] },
+        details: {
+          status: "already_pending",
+          pendingChildren: [
+            {
+              runId: "earlier-child",
+              childSessionKey: "agent:main:subagent:child",
+              state: "running",
+              wakeArmed: true,
+            },
+          ],
+        },
       };
       loopback("sessions_yield", {}, pending);
       yield message("user", [{ type: "tool_result", tool_use_id: "yield-1", ...pending }]);
