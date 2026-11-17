@@ -88,6 +88,13 @@ and backs up and migrates an older SQLite schema before publishing the agent.
 Stop the Gateway before restoring an older schema. A failed restoration leaves
 the database held; `openclaw doctor --fix` provides inspection and restoration guidance.
 
+With PostgreSQL agent storage, a retained local anchor must still match an initialized
+server namespace. If that namespace is missing, empty, or belongs to another store,
+creation refuses before changing the workspace or configuration. Restore a matching
+backup, or follow the [manual discard procedure](/gateway/postgresql#recover-a-retained-agent-store)
+if the history is intentionally gone. A failed first creation can be retried normally;
+an incomplete anchor left by an older version requires the same conservative recovery.
+
 #### Role templates
 
 `--role` works in interactive and non-interactive creation, including `--json`.
