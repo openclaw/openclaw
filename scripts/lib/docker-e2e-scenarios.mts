@@ -462,6 +462,37 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
   }),
+  // Release directories behind a linked package path on an install-cli-shaped prefix: adoption
+  // and switch, and rollback after a failed post-switch Doctor. Each adds candidate updates to the cell. No CI workflow
+  // selects these lanes yet.
+  npmLane("published-driver-release-adoption", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rollback", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  // An added launcher takes the swap and the next update adopts again (owned prefix). A linked
+  // root whose service a published updater bound to a release has that release replaced in place;
+  // the restart rebinds the service (rebind), or with --no-restart it stays bound (in-place).
+  npmLane("published-driver-release-launcher", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rebind", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-in-place", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",

@@ -781,6 +781,7 @@ describe("sessions_search tool", () => {
     const tool = createTool({
       agentId: "main",
       agentSessionKey: MAIN,
+      config: fixtureConfig("all"),
       results: [hit({ sessionKey: MAIN, agentId: "main" })],
       describeError: failure,
     });
@@ -908,12 +909,12 @@ describe("sessions_search tool", () => {
     expectSearch(requests, "work", [WORK]);
   });
 
-  it("accepts the gateway's canonical key for the current-session alias", async () => {
+  it("accepts the current-session canonical key without depending on the session inventory", async () => {
     const tool = createSessionsSearchTool({
       config: fixtureConfig("self"),
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
         if (request.method === "sessions.list") {
-          return { sessions: [], hasMore: false } as T;
+          throw new Error("Unrelated session inventory is unavailable");
         }
         if (request.method === "sessions.describe") {
           return { session: null } as T;

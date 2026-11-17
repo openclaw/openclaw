@@ -3,8 +3,8 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestor } from "./boundary-path.js";
 import { isMissingPathError } from "./errno.js";
+import { resolveIdentityPathViaExistingAncestor } from "./path-existence.js";
 import {
   canShareSqliteDatabaseAdmissions,
   getSqliteDatabaseAdmissionIdentityForPath,

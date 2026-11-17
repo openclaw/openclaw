@@ -21,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed", "suspended"] as const)(
+it.each(["failed", "suspended", "retryable"] as const)(
   "applies session-run retention after six minutes (%s)",
   async (deliveryStatus) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -34,11 +34,15 @@ it.each(["failed", "suspended"] as const)(
         delivery:
           deliveryStatus === "suspended"
             ? { status: "suspended", suspendedAt: settledAt, suspendedReason: "permanent_failure" }
-            : { status: "failed", lastError: "completion agent did not produce a visible reply" },
+            : {
+                status: "failed",
+                ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
+                lastError: "completion agent did not produce a visible reply",
+              },
       });
       const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
       await sweeper.sweepOnce();
-      expect(runs.has(entry.runId)).toBe(deliveryStatus === "suspended");
+      expect(runs.has(entry.runId)).toBe(deliveryStatus !== "failed");
       expect(callGateway).not.toHaveBeenCalled();
     });
   },

@@ -1,5 +1,6 @@
 import type { PluginOperatorGrants } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { AgentConfig } from "../config/types.agents.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type {
@@ -25,6 +26,28 @@ export type {
 export const TEMPLATE_ADD_PLAN_SCHEMA_VERSION = "openclaw.templateAddPlan.v1" as const;
 export const TEMPLATE_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.templateInspect.v1" as const;
 export const TEMPLATE_OUTPUT_STABILITY = "experimental" as const;
+
+export type TemplateAddPlanContext = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  workspace?: string;
+  existingAgentIds?: Iterable<string>;
+  existingWorkspacePaths?: Iterable<string>;
+  /** Workspace owned by the caller's exact pending ordinary creation receipt. */
+  admittedWorkspace?: string;
+  existingMcpServerNames?: Iterable<string>;
+  existingMcpServers?: Record<string, Record<string, unknown>>;
+  packagePreflight?: TemplatePackagePreflight;
+  sourceReferenceRoot?: string;
+  /**
+   * Maps the Template's preferred model to a model this host offers, or undefined.
+   * Absent resolver means the preference cannot be verified and is not applied.
+   */
+  resolvePreferredModel?: (
+    requested: string,
+    agentId: string,
+  ) => Promise<string | undefined> | string | undefined;
+};
 
 type TemplateExtensionFormat = TemplateAppliedExtension["format"];
 
@@ -117,7 +140,8 @@ export type TemplateAddPlanAction = {
   action: "create" | "write" | "install" | "reuse" | "configure" | "schedule";
   target: string;
   source?: string;
-  sourceKind?: "templateMarkdownBody";
+  /** Bytes other than a declared workspace source: the CLAW.md body, or the whole manifest file. */
+  sourceKind?: "templateMarkdownBody" | "templateManifest";
   digest?: string;
   details?: Record<string, unknown>;
   automation?: CronJobCreate;

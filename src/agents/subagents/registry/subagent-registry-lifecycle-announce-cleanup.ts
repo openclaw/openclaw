@@ -17,6 +17,7 @@ import {
 import {
   ensureDeliveryState,
   getDeliveryLastError,
+  hasConsumedPrivateRequesterInput,
   isDeliverySuspended,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
@@ -211,7 +212,9 @@ export const startSubagentAnnounceCleanupFlow = (
     });
   };
   const alreadyDelivered = () =>
-    typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered";
+    typeof entry.delivery?.announcedAt === "number" ||
+    entry.delivery?.status === "delivered" ||
+    hasConsumedPrivateRequesterInput(entry);
   const finalizeDelivered = (options?: { skipRequesterDelivery: boolean }) =>
     finalizeSubagentCleanup(context, entry, cleanup, "delivered", cleanupGeneration, stateContext, {
       skipAnnounce: true,
@@ -353,6 +356,7 @@ export const startSubagentAnnounceCleanupFlow = (
     current.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
   let latestDeliveryError = getDeliveryLastError(entry);
   let committedDeliveryOwner: SubagentRunRecord | undefined;
+  let storeReplaced = false;
   let waitForRequesterDelivery: (() => Promise<void> | undefined) | undefined;
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     assertPersistenceCurrent();
@@ -424,7 +428,6 @@ export const startSubagentAnnounceCleanupFlow = (
     roundOneReply: entry.completion?.resultText ?? undefined,
     fallbackReply: entry.completion?.fallbackResultText ?? undefined,
     endedReason: entry.endedReason,
-    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
     wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
@@ -437,6 +440,9 @@ export const startSubagentAnnounceCleanupFlow = (
           entry,
           cleanupGeneration,
           committedDeliveryOwner,
+          () => {
+            storeReplaced = true;
+          },
         ) && subagentRuns.runWithCompletionAuthority(entry, () => true)
       );
     },
@@ -631,7 +637,7 @@ export const startSubagentAnnounceCleanupFlow = (
     if (
       context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
       getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&
-      (subagentRuns.isCompletionAuthorityRetired(entry) ||
+      (storeReplaced ||
         (shouldSuspendPendingFinalDelivery(entry) &&
           !isSystemEventStoreCurrent(
             entry.requesterSessionKey,

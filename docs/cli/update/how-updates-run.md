@@ -164,6 +164,25 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
+With `--no-restart`, the package is replaced under a running Gateway, and that
+Gateway restarts itself when its installation check sees the new files. On a
+Linux systemd service the restart can land while a maintenance stop, such as
+update Doctor's, is draining and stopping the Gateway. The stop then finds a
+different process than the one it inspected. If the latest shutdown the Gateway
+recorded belongs to the inspected process and names the replaced installation,
+the stop inspects the service once more, rechecks its ownership and definition,
+records a warning in update history, and drains and stops the restarted process.
+The update continues. A process change without that record is still refused with
+`Gateway process changed during maintenance drain`, and so is a second change.
+A stop that inspects the service during systemd's restart delay (`RestartSec=5`
+in the managed unit), while neither process is running, is also still refused. Its
+service ownership check then reports the service as unavailable.
+
+This handling is part of the new version's maintenance stop, which the installed
+updater runs from the replaced package. It applies to the first update to a
+release that contains it, provided the running Gateway records its
+installation-replacement restart.
+
 Maintenance drain uses the service's local credentials, including an existing
 paired operator identity when no shared token or password is configured. It does
 not create an identity or request new pairing. Older installed updaters that omit
@@ -1587,6 +1606,79 @@ attempt tries to remove only its own staging prefix; leftover cleanup does not
 reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
+
+### Release directories on OpenClaw-owned prefixes
+
+On macOS and Linux, the prefix that `install-cli.sh` creates
+(`<prefix>/tools/node-v<version>`) and the durable service copy at
+`<state dir>/npm` keep each release in its own directory. The package path
+`lib/node_modules/openclaw` is a link to
+`releases/<release>/lib/node_modules/openclaw` in the same prefix. The service
+definition, `bin/openclaw`, and the `install-cli.sh` wrapper keep naming the
+package path, so none of them changes during an update.
+
+An update installs the new release into a fresh `releases/<release>` directory
+and verifies it while the old Gateway serves. After the Gateway stops, it
+records both releases on the update run and replaces the link with one rename.
+The previous release is not modified. Rollback renames a link to the previous
+release back into place, after checking that its version, build, and directory
+identity still match the record. A release that another updater rewrote in
+place is refused as a rollback target.
+
+The first update with this layout support converts a plain package directory:
+the existing directory becomes the previous release in `releases/` and a link
+takes its place, then the update switches the link to the new release. The
+conversion is one atomic exchange of the directory and a prepared link
+(`renameat2` with `RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP`
+on macOS), so the package path names a complete package at every instant, also
+when the updater is killed. Node has no API for that call. The update makes it
+through Node's built-in FFI when the running Node has it (Node 26), and
+otherwise through `/usr/bin/osascript` on macOS or `/usr/bin/perl` on Linux
+x64 and arm64. The `package-swap` step of the update result says which one ran.
+
+An updater killed before the exchange leaves an unused directory in
+`releases/` that holds only a link naming nothing. It is not a release:
+`openclaw update status` does not list it, the next update converts the
+package directory again, and a successful update removes it once it is a day
+old.
+
+When no exchange is available (another platform or architecture without Node
+FFI, a system without that perl such as Alpine, or a filesystem that refuses
+the call), the update still converts the directory, with two renames: the
+directory moves into `releases/`, then a link takes its place. Between those
+two renames the package path is briefly missing. If the updater dies there,
+`openclaw` cannot start, the old package is intact under `releases/`, and a
+leftover `lib/node_modules/.openclaw.release-link-*` link names it. Rename that
+link onto `lib/node_modules/openclaw` to restore the installation, then run
+the update again.
+
+The release layout is an optimisation, and an update never fails because it
+cannot be used. When the new release's `openclaw` launcher is not the link the
+prefix already has, when `releases/` cannot be created or is on another
+filesystem than the package path, or when the installed package cannot be read
+as a release, the update finds this before it stops the Gateway and replaces
+the package path with the swap described above instead. The update result
+carries a warning that names the reason, and the next update tries the release
+layout again.
+
+When the Gateway service starts a path inside a release instead of the package
+path (an older OpenClaw writes that when it reinstalls the service through the
+link), switching releases would leave the service on the old one. The update
+replaces the selected release in place instead, so the Gateway starts the new
+version, and its restart reinstalls the service from the package path when the
+service definition can be rewritten. The update warns with the
+`openclaw gateway install --force` command that binds the service to the package
+path if the restart does not. Once the service names the package path, the next
+update switches releases. npm global prefixes you
+manage yourself, pnpm, Bun, Git checkouts, and Windows keep the swap described
+above. A link to a checkout made with `npm link` is not a release and stays on
+the swap. A manual `npm install -g` into an owned prefix replaces the link with
+a plain directory; the next update converts it again.
+
+A successful update removes an unselected release only when no open update run
+names it, no running Gateway holds its lease under `releases/.leases`, and
+neither the release nor the link changed in the last 24 hours. `openclaw update
+status` lists the active and retained releases.
 
 A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit

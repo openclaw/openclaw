@@ -287,7 +287,6 @@ export const streamOpenAICodexResponses: StreamFunction<
             signal: activitySignal ?? streamOptions?.signal,
             reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
               sessionId: streamOptions?.sessionId,
-              authProfileId: streamOptions?.authProfileId,
             }),
             resolveServiceTier: resolveCodexServiceTier,
             applyServiceTierPricing: (usage, serviceTier) =>
@@ -1227,7 +1226,6 @@ async function processWebSocketStream(
           includeSystemPrompt: false,
           replayResponsesItemIds: false,
           sessionId: options?.sessionId,
-          authProfileId: options?.authProfileId,
         },
       ).filter((item) => item.type !== "function_call_output");
       entry.continuation = {
