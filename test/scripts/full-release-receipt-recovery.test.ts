@@ -186,7 +186,14 @@ describe("receipt-backed aggregate recovery", () => {
                   ...coverage.requiredJobs,
                   ...qualificationRequiredChildJobs({
                     role: request.role,
-                    inputs: request.inputs,
+                    inputs: Object.fromEntries(
+                      Object.entries(request.inputs).map(([key, value]) => {
+                        if (typeof value !== "string") {
+                          throw new Error("Recovery dispatch inputs must be strings: " + key);
+                        }
+                        return [key, value];
+                      }),
+                    ),
                     getSource: (path) => readFileSync(path, "utf8"),
                     getCandidateFileNames: old.client.getCandidateFileNames,
                   }),

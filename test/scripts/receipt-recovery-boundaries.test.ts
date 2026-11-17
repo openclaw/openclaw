@@ -138,18 +138,15 @@ describe("receipt recovery production boundaries", () => {
         runId: request.publicationArtifacts!.docker.preparedRunId,
         runAttempt: request.publicationArtifacts!.docker.preparedRunAttempt,
       },
-      request.publicationArtifacts!.pluginNpm,
     ];
     for (const tuple of tuples) {
-      if (tuple) {
-        responses[prefix + "actions/runs/" + tuple.runId] = JSON.stringify({
-          id: Number(tuple.runId),
-          run_attempt: Number(tuple.runAttempt),
-          head_sha: old.q,
-          status: "completed",
-          conclusion: "success",
-        });
-      }
+      responses[prefix + "actions/runs/" + tuple.runId] = JSON.stringify({
+        id: Number(tuple.runId),
+        run_attempt: Number(tuple.runAttempt),
+        head_sha: old.q,
+        status: "completed",
+        conclusion: "success",
+      });
     }
     const directory = mkdtempSync(join(process.cwd(), ".openclaw/tmp/recovery-boundary-"));
     try {
