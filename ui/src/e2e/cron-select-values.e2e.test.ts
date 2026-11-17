@@ -287,7 +287,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
         featureMethods: cronSidebarFeatureMethods,
-        methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
+        methodResponses: cronResponses([gardenJob()], "cron-select-values-fixture", true, false),
       });
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);

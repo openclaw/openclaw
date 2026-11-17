@@ -8,6 +8,7 @@ import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { sectionListsItems } from "../../lib/section-navigation.ts";
 import { BackRow, ErrorBanner, NoticeBanner } from "./view-controls.tsx";
 import { RunsSection } from "./view-runs.tsx";
 import type { CronProps } from "./view-types.ts";
@@ -37,7 +38,7 @@ export function CronView(props: CronProps) {
             <PanelEmptyState
               icon={<Icon name="automations" />}
               heading={
-                props.listError || props.jobs.length > 0
+                props.listError || (props.jobs.length > 0 && sectionListsItems("automations"))
                   ? t("tabs.cron")
                   : t("cron.list.emptyTitle")
               }

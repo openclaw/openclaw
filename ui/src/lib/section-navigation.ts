@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, untrack } from "solid-js";
+import { createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -76,4 +76,33 @@ export function createSectionSidebarSource(read: () => string | undefined): void
 
 export function sectionSidebarShown(section: ListingSection): boolean {
   return shownSection() === section;
+}
+
+// Each listing section's sidebar reports whether its scope has anything to list, so the shell
+// shows only the rail beside a section with nothing in it. An unreported or unread section lists.
+const [itemSources, setItemSources] = createSignal<
+  ReadonlyMap<ListingSection, () => boolean | undefined>
+>(new Map());
+
+/** The section's source for whether it lists anything, for as long as the calling owner lives. */
+export function createSectionItemsSource(
+  section: ListingSection,
+  read: () => boolean | undefined,
+): void {
+  onSettled(() => {
+    setItemSources((current) => new Map(current).set(section, read));
+    return () =>
+      setItemSources((current) => {
+        if (current.get(section) !== read) {
+          return current;
+        }
+        const next = new Map(current);
+        next.delete(section);
+        return next;
+      });
+  });
+}
+
+export function sectionListsItems(section: ListingSection): boolean {
+  return itemSources().get(section)?.() !== false;
 }

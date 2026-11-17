@@ -13,6 +13,7 @@ import {
   cronSidebarFeatureMethods,
   openAutomation,
   openAutomationActivity,
+  openRunHistoryByAddress,
 } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -211,8 +212,7 @@ suite.define(() => {
         ]),
       });
 
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await openAutomationActivity(page);
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -278,9 +278,8 @@ suite.define(() => {
     await suite.withPage({ ...contextOptions, locale: "de-DE" }, async ({ page }) => {
       const gateway = await installCronGateway(page);
 
-      await page.goto(`${suite.server.baseUrl}cron`);
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await openAutomationActivity(page);
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -333,8 +332,7 @@ suite.define(() => {
         "cron.runs": cronRunsResponse([run(1, "initial-job", "Initial history")]),
       });
 
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await openAutomationActivity(page);
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
@@ -483,6 +481,17 @@ suite.define(() => {
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("control-ui-main");
+    });
+  });
+
+  it("shows only the rail beside Automations without an automation", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      await installCronGateway(page, {});
+
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await page.locator(".cron-overview-empty").getByText("No automations yet").waitFor();
+      await page.locator(".shell--nav-page-hidden").waitFor({ state: "attached" });
+      expect(await page.locator(".sidebar-automations").isVisible()).toBe(false);
     });
   });
 });

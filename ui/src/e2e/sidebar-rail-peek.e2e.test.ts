@@ -81,8 +81,8 @@ suite.define(() => {
         const runs = () =>
           page.evaluate(() => (window as unknown as { navRuns: string[] }).navRuns);
 
-        await page.locator('.sidebar-rail a.nav-item[href="/automations"]').click();
-        await waitForControlUiRoute(page, { routeId: "cron" });
+        await page.locator('.sidebar-rail [data-navigation-view="online"]').click();
+        await waitForControlUiRoute(page, { routeId: "activity" });
         await expect.poll(() => collapsed.count()).toBe(0);
         await page.evaluate(
           () =>

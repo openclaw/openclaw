@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
@@ -13,7 +13,7 @@ import { formatCronCadence } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { sectionLocation } from "../lib/section-navigation.ts";
+import { createSectionItemsSource, sectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
@@ -81,21 +81,34 @@ export function SidebarAutomations(props: {
       offset = page.nextOffset;
     }
   });
+  // The automations of the filter's agent. Unset follows the agent selected now; automations
+  // without one run on the default agent.
+  const scoped = createMemo(() => {
+    const filterAgentId = automationsFilter().agentId;
+    const agentId =
+      filterAgentId === null
+        ? null
+        : normalizeAgentId(filterAgentId ?? resolveSessionNavigationAgentId(app));
+    const defaultAgentId = app.agents.state.agentsList?.defaultId;
+    return jobs().filter(
+      (job) =>
+        agentId === null || normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId,
+    );
+  });
+  // With no automation in its agent's scope the section shows only the rail and the page's empty
+  // state. An agent picked in the filter keeps the sidebar, so the filter stays in reach.
+  const listed = createMemo(
+    () => typeof automationsFilter().agentId === "string" || scoped().length > 0,
+    { loadingValue: undefined },
+  );
+  createSectionItemsSource("automations", () => latest(listed));
   // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
   const shown = createMemo(() => {
     const filter = automationsFilter();
-    // Unset follows the agent selected now; automations without one run on the default agent.
-    const agentId =
-      filter.agentId === null
-        ? null
-        : normalizeAgentId(filter.agentId ?? resolveSessionNavigationAgentId(app));
-    const defaultAgentId = app.agents.state.agentsList?.defaultId;
     const direction = filter.sortDir === "desc" ? -1 : 1;
-    return jobs()
+    return scoped()
       .filter(
         (job) =>
-          (agentId === null ||
-            normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId) &&
           (filter.scheduleKind === "all" || job.scheduleKind === filter.scheduleKind) &&
           (filter.lastRun === "all" || (job.lastRunStatus ?? "unknown") === filter.lastRun) &&
           (filter.trigger === "all" || (filter.trigger === "conditional") === Boolean(job.trigger)),

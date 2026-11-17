@@ -273,7 +273,8 @@ catalogSuite.define(() => {
         });
         await page.goto(url.toString());
         await waitForControlUiGatewayReady(page);
-        await page.locator(".sidebar-automations__new").click();
+        // Without an automation, the page's empty state offers New automation.
+        await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");

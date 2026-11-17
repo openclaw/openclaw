@@ -71,3 +71,9 @@ export async function openAutomationActivity(page: Page) {
   await page.locator('.sidebar-automations a[href$="?activity"]').click();
   await page.locator('.cron-page[data-panel-mode="activity"]').waitFor({ state: "visible" });
 }
+
+/** Opens Run history by its address; without an automation, Automations has no sidebar. */
+export async function openRunHistoryByAddress(page: Page, baseUrl: string) {
+  await page.goto(`${baseUrl}cron?activity`);
+  await page.locator('.cron-page[data-panel-mode="activity"]').waitFor({ state: "visible" });
+}
