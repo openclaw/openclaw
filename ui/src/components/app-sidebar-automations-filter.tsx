@@ -1,3 +1,4 @@
+import type { ApplicationContext } from "../app/context.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import {
@@ -7,11 +8,13 @@ import {
   setAutomationsFilter,
   type AutomationsFilter,
 } from "../lib/cron/automations-filter.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   renderSidebarSectionFilterMenu,
+  SectionFilter,
   type SidebarSectionFilterPicker,
 } from "./app-sidebar-section-filter.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -46,7 +49,19 @@ export function renderSidebarAutomationsFilterMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
 ) {
-  const context = host.sessionDataContext;
+  return renderSidebarSectionFilterMenu(
+    menus,
+    "automationsFilter",
+    automationFilterOptions(host.sessionDataContext),
+  );
+}
+
+export function AutomationsFilter() {
+  const context = useApplication();
+  return <SectionFilter options={automationFilterOptions(context)} />;
+}
+
+function automationFilterOptions(context: ApplicationContext | undefined) {
   // Unset follows the agent selected now; the sidebar list resolves it the same way.
   const agentValue = () => {
     const agentId = automationsFilter().agentId;
@@ -59,7 +74,7 @@ export function renderSidebarAutomationsFilterMenuForMenus(
       value: normalizeAgentId(agent.id),
       label: normalizeAgentLabel(agent),
     }));
-  return renderSidebarSectionFilterMenu(menus, "automationsFilter", {
+  return {
     label: t("cron.list.filters"),
     resetLabel: t("cron.jobs.reset"),
     filtered: automationsFiltered,
@@ -113,5 +128,5 @@ export function renderSidebarAutomationsFilterMenuForMenus(
         { value: "desc", label: t("cron.jobs.descending") },
       ]),
     ],
-  });
+  };
 }

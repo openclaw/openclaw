@@ -6,6 +6,7 @@ import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { createMsFormatter } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -19,6 +20,7 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarListGroup } from "./sidebar-list-group.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
 
@@ -55,32 +57,38 @@ export function SidebarAutomations(props: {
       }
     }),
   );
-  const jobs = createMemo(async () => {
-    revision();
-    gateway.revision();
-    const snapshot = app.gateway.snapshot;
-    if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
-      return [];
-    }
-    // The sidebar is the only list beside the Automations page, so it reads every page.
-    const rows: CronCompactJob[] = [];
-    let offset = 0;
-    while (true) {
-      const page = await readCronInventory(snapshot.client, {
-        includeDisabled: true,
-        compact: true,
-        limit: 200,
-        offset,
-        sortBy: "name",
-        sortDir: "asc",
-      }).catch(() => null);
-      rows.push(...(page?.jobs ?? []));
-      if (!page?.hasMore || !page.nextOffset || page.nextOffset <= offset) {
-        return rows;
+  const inventory = createMemo(
+    async (): Promise<{ jobs: CronCompactJob[]; error: string | null }> => {
+      revision();
+      gateway.revision();
+      const snapshot = app.gateway.snapshot;
+      if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
+        return { jobs: [], error: null };
       }
-      offset = page.nextOffset;
-    }
-  });
+      // The sidebar is the only list beside the Automations page, so it reads every page.
+      const rows: CronCompactJob[] = [];
+      let offset = 0;
+      try {
+        while (true) {
+          const page = await readCronInventory(snapshot.client, {
+            includeDisabled: true,
+            compact: true,
+            limit: 200,
+            offset,
+            sortBy: "name",
+            sortDir: "asc",
+          });
+          rows.push(...page.jobs);
+          if (!page.hasMore || !page.nextOffset || page.nextOffset <= offset) {
+            return { jobs: rows, error: null };
+          }
+          offset = page.nextOffset;
+        }
+      } catch (error) {
+        return { jobs: [], error: formatUiError(error) };
+      }
+    },
+  );
   // The automations of the filter's agent. Unset follows the agent selected now; automations
   // without one run on the default agent.
   const scoped = createMemo(() => {
@@ -90,7 +98,7 @@ export function SidebarAutomations(props: {
         ? null
         : normalizeAgentId(filterAgentId ?? resolveSessionNavigationAgentId(app));
     const defaultAgentId = app.agents.state.agentsList?.defaultId;
-    return jobs().filter(
+    return inventory().jobs.filter(
       (job) =>
         agentId === null || normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId,
     );
@@ -98,7 +106,10 @@ export function SidebarAutomations(props: {
   // With no automation in its agent's scope the section shows only the rail and the page's empty
   // state. An agent picked in the filter keeps the sidebar, so the filter stays in reach.
   const listed = createMemo(
-    () => typeof automationsFilter().agentId === "string" || scoped().length > 0,
+    () =>
+      Boolean(inventory().error) ||
+      typeof automationsFilter().agentId === "string" ||
+      scoped().length > 0,
     { loadingValue: undefined },
   );
   createSectionItemsSource("automations", () => latest(listed));
@@ -166,6 +177,24 @@ export function SidebarAutomations(props: {
   };
   return (
     <nav class="sidebar-automations" aria-label={t("tabs.cron")}>
+      <Show when={inventory().error}>
+        {(error) => (
+          <InlineAlert
+            tone="danger"
+            action={
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={() => setRevision((value) => value + 1)}
+              >
+                {t("common.retry")}
+              </button>
+            }
+          >
+            {error()}
+          </InlineAlert>
+        )}
+      </Show>
       <a
         class="nav-item sidebar-automations__new"
         href={`${cronPath()}?new`}

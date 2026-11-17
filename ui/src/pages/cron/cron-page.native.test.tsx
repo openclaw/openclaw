@@ -3,7 +3,12 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter } from "../../app-routes.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
 import { createChannelCapability } from "../../lib/channels/index.ts";
+import {
+  DEFAULT_AUTOMATIONS_FILTER,
+  setAutomationsFilter,
+} from "../../lib/cron/automations-filter.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -183,5 +188,49 @@ it("retries an initial list failure through the owner", async () => {
   } finally {
     warn.mockRestore();
     page.remove();
+  }
+});
+
+it("offers the shared automation filters in the native embedded list", async () => {
+  vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", { platform: "ios", formFactor: "pad" });
+  const active = createCronViewJob("active", { name: "Active task" });
+  const paused = createCronViewJob("paused", { name: "Paused task", enabled: false });
+  const request = cronRpc({ "cron.list": () => cronListResponse([active, paused]) });
+  const gateway = createGateway(createTestGatewayClient(request), true);
+  gateway.emitSnapshot({ hello: gatewayHelloForMethods(["cron.list"]) });
+  const page = createPage(createContext(gateway), { render: true });
+  try {
+    await waitForSolid(() =>
+      expect(page.querySelector('.sidebar-automations a[href*="?job=active"]')).not.toBeNull(),
+    );
+    const filter = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.getAttribute("aria-label") === "Filters",
+    );
+    expect(filter).toBeDefined();
+    filter!.click();
+    await waitForSolid(() =>
+      expect(document.querySelector("#sidebar-automations-status")).not.toBeNull(),
+    );
+    document.querySelector<HTMLButtonElement>("#sidebar-automations-status")!.click();
+    await waitForSolid(() =>
+      expect(document.querySelector('[role="option"][data-value="paused"]')).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>('[role="option"][data-value="paused"]')!.click();
+    await waitForSolid(() => {
+      expect(page.querySelector('.sidebar-automations a[href*="?job=active"]')).toBeNull();
+      expect(page.querySelector('.sidebar-automations a[href*="?job=paused"]')).not.toBeNull();
+      expect(document.activeElement).toBe(filter);
+    });
+    filter!.click();
+    await waitForSolid(() => expect(getButtonByText(document.body, "Reset")).toBeDefined());
+    getButtonByText(document.body, "Reset").click();
+    await waitForSolid(() => {
+      expect(page.querySelector('.sidebar-automations a[href*="?job=active"]')).not.toBeNull();
+      expect(document.activeElement).toBe(filter);
+    });
+  } finally {
+    page.remove();
+    setAutomationsFilter(DEFAULT_AUTOMATIONS_FILTER);
+    vi.unstubAllGlobals();
   }
 });

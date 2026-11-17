@@ -1,5 +1,6 @@
 import { lazy, Loading, Errored, Show } from "solid-js";
 import { SidebarAutomations } from "../../components/app-sidebar-automations.tsx";
+import { SidebarViewBoundary } from "../../components/sidebar-view-boundary.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
@@ -106,13 +107,15 @@ function PageAutomations() {
   const app = useApplication();
   return (
     <div class="cron-overview-list">
-      <SidebarAutomations
-        host={{
-          basePath: app.basePath,
-          activeRouteId: "cron",
-          onNavigate: (route, options) => app.navigate(route, options),
-        }}
-      />
+      <SidebarViewBoundary>
+        <SidebarAutomations
+          host={{
+            basePath: app.basePath,
+            activeRouteId: "cron",
+            onNavigate: (route, options) => app.navigate(route, options),
+          }}
+        />
+      </SidebarViewBoundary>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import type { CronJob } from "../../api/types.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
+import { AutomationsFilter } from "../../components/app-sidebar-automations-filter.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { profileDirectory } from "../../lib/profile-directory.ts";
@@ -76,11 +77,14 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
           active="cron"
           docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
           actions={
-            <AgentScopeControl
-              agents={pageHeader().agents}
-              selection={props.page.context().agentSelection}
-              selectedId={pageHeader().selectedAgentId}
-            />
+            <>
+              <AgentScopeControl
+                agents={pageHeader().agents}
+                selection={props.page.context().agentSelection}
+                selectedId={pageHeader().selectedAgentId}
+              />
+              <AutomationsFilter />
+            </>
           }
         />
       </Show>
