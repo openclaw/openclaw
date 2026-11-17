@@ -1,8 +1,5 @@
 import {
-  isStrictOpenAIJsonSchemaCompatible,
-  normalizeOpenAIStrictToolParameters,
   normalizeToolParameterSchema,
-  prepareAnthropicInputSchema,
   publishRuntimeToolInputSchema,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -22,12 +19,11 @@ import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-follow
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 type PreparedSchema = { parameters: AnyAgentTool["parameters"] };
-type PublishedSchema = { parameters: Record<string, unknown>; prewarmed: Set<string> };
 
 function createSchemaMemo() {
   return {
     normalized: new WeakMap<object, Map<string, PreparedSchema>>(),
-    published: new WeakMap<object, PublishedSchema>(),
+    published: new WeakMap<object, Record<string, unknown>>(),
   };
 }
 
@@ -86,7 +82,7 @@ function publishParameters(
   memo: ReturnType<typeof createSchemaMemo>,
   parameters: AnyAgentTool["parameters"],
   name: string,
-): PublishedSchema | undefined {
+): Record<string, unknown> | undefined {
   const cached = memo.published.get(parameters);
   if (cached) {
     return cached;
@@ -96,19 +92,9 @@ function publishParameters(
   if (projected.violations.length > 0 || !isRecord(projected.schema)) {
     return undefined;
   }
-  const published = { parameters: projected.schema, prewarmed: new Set<string>() };
-  memo.published.set(parameters, published);
-  memo.published.set(published.parameters, published);
-  return published;
-}
-
-function prewarmOpenAISchema(parameters: AnyAgentTool["parameters"], compat?: ModelCompatConfig) {
-  for (const strict of [false, true]) {
-    if (strict && !isStrictOpenAIJsonSchemaCompatible(parameters)) {
-      continue;
-    }
-    normalizeOpenAIStrictToolParameters(parameters, strict, compat);
-  }
+  memo.published.set(parameters, projected.schema);
+  memo.published.set(projected.schema, projected.schema);
+  return projected.schema;
 }
 
 type FinalizeAgentToolsOptions = {
@@ -201,6 +187,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     return finalized;
   }
   // Settlement retains metadata only, never executable closures or the plugin snapshot.
+  // Provider serializers prepare wire variants only when a request selects them.
   const pending = finalized.map(({ name, parameters, outputSchema }, index) => ({
     name,
     parameters,
@@ -208,26 +195,17 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     // SAFETY: Hook and availability wrappers preserve the tool array's positions.
     prepared: prepared[index]!,
   }));
-  const { modelApi, modelCompat, registerRunCleanup } = options;
+  const { registerRunCleanup } = options;
   const publish = () => {
     for (const entry of pending) {
       const normalizedSchema = publishParameters(memo, entry.prepared.parameters, entry.name);
       if (normalizedSchema) {
-        entry.prepared.parameters = normalizedSchema.parameters;
+        entry.prepared.parameters = normalizedSchema;
       }
-      const published = publishParameters(memo, entry.parameters, entry.name);
+      publishParameters(memo, entry.parameters, entry.name);
       if (entry.outputSchema) {
         publishParameters(memo, entry.outputSchema, entry.name);
       }
-      if (!published || published.prewarmed.has(key)) {
-        continue;
-      }
-      if (!modelApi || modelApi === "openai-responses" || modelApi === "openai-completions") {
-        prewarmOpenAISchema(published.parameters, modelCompat);
-      } else if (modelApi === "anthropic-messages") {
-        prepareAnthropicInputSchema(published.parameters);
-      }
-      published.prewarmed.add(key);
     }
   };
   if (registerRunCleanup) {
@@ -239,9 +217,9 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     // Positions are preserved across normalization, wrapping, and availability, so the
     // input tool still carries the provider-neutral contract for this position.
     const canonicalParameters = options.tools[index]?.parameters ?? tool.parameters;
-    const parameters = memo.published.get(tool.parameters)?.parameters ?? tool.parameters;
+    const parameters = memo.published.get(tool.parameters) ?? tool.parameters;
     const outputSchema = tool.outputSchema
-      ? (memo.published.get(tool.outputSchema)?.parameters ?? tool.outputSchema)
+      ? (memo.published.get(tool.outputSchema) ?? tool.outputSchema)
       : undefined;
     const projected =
       parameters === tool.parameters && outputSchema === tool.outputSchema

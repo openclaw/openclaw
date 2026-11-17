@@ -23,9 +23,6 @@ const mocks = vi.hoisted(() => ({
 }));
 const synchronousToken: SqliteStagingToken = Object.assign(mocks.retireSync, {
   beginRetirement: () => synchronousToken,
-  releaseForRetirement: () => {
-    throw new Error("This fixture retains synchronous retirement custody");
-  },
 });
 vi.mock("./sqlite-backup.js", () => ({ backupNodeSqliteDatabase: mocks.backup }));
 vi.mock("./sqlite-snapshot-staging.js", async (importOriginal) => ({

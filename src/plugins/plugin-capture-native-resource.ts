@@ -87,15 +87,14 @@ export function createNativeWorkerResource(
       const { createPluginSourceCapture, withPluginSourceCaptureDirectory } =
         await import("./plugin-package-metadata-capture.js");
       const copyInput = command.input;
-      const createCapture = () => createPluginSourceCapture("native");
       const capture = withPluginSourceCaptureStorage(copyInput.storage, () =>
         copyInput.directory
           ? withPluginSourceCaptureDirectory(
               copyInput.directory.directory,
-              createCapture,
+              createPluginSourceCapture,
               copyInput.directory.managedRoot,
             )
-          : createCapture(),
+          : createPluginSourceCapture(),
       );
       const source = {
         directory: capture.directory,
@@ -138,7 +137,6 @@ export function createNativeWorkerResource(
         command.storage.stateDir,
         command.prefix,
         command.storage.placement,
-        "native",
       );
       owned.sources.set(command.captureId, source);
       return {
@@ -156,7 +154,6 @@ export function createNativeWorkerResource(
       const root = createPluginNativeCaptureRoot(
         command.storage.stateDir,
         command.storage.placement,
-        "native",
       );
       const rootId = ++owned.nextRoot;
       const retained = { captureId: command.captureId, announced: false, root };

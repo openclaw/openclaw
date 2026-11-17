@@ -6,10 +6,7 @@ import path from "node:path";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type {
-  PluginCaptureReclaimCandidate,
-  PluginCaptureRetirement,
-} from "../infra/fs-safe-copy-worker-contract.js";
+import type { PluginCaptureReclaimCandidate } from "../infra/fs-safe-copy-worker-contract.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -19,11 +16,9 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
-import { createPluginNativeCaptureState } from "./plugin-native-capture-state.js";
 import {
   pluginSourceCaptureMaintenance,
   pluginSourceCaptureOwnedRoots,
@@ -58,8 +53,6 @@ type Instance = {
   managedRoot?: string;
   token?: SqliteStagingToken;
   releaseSignalExit?: () => void;
-  retirement?: Promise<void>;
-  handoff?: PluginCaptureRetirement;
 };
 const {
   instances,
@@ -95,11 +88,6 @@ export {
 /** Explicit exits cannot await generation disposal. These native leases belong
  * only to this exiting process; worker overrides remain with their parent. */
 function retireInstanceForExit(key: string, instance: Instance): void {
-  // The joined child owns retirement after handoff. An abrupt host exit leaves
-  // unretired private staging for the existing startup reclaimer, never deletion.
-  if (instance.handoff || instance.retirement) {
-    return;
-  }
   try {
     const root = retireInstance(key, instance);
     if (root) {
@@ -128,11 +116,6 @@ function retireInstance(key: string, instance: Instance): string | undefined {
     instance.token?.();
     removalRoot = undefined;
   }
-  finishInstanceRetirement(key, instance);
-  return removalRoot;
-}
-
-function finishInstanceRetirement(key: string, instance: Instance): void {
   if (instance.root) {
     ownedRoots.delete(instance.root);
   }
@@ -143,6 +126,7 @@ function finishInstanceRetirement(key: string, instance: Instance): void {
   }
   instance.releaseSignalExit?.();
   scheduleCaptureCleanup(key, instance);
+  return removalRoot;
 }
 
 function warn(error: unknown) {
@@ -530,13 +514,9 @@ export function retainPluginSourceCaptureInstance(
     // A signalled process can outlive its drain until supervisors force-kill it,
     // which skips "exit"; retire after other shutdown owners have settled.
     const created = instance;
-    created.releaseSignalExit = registerSignalExitFinalizer(async () => {
-      if (created.retirement) {
-        await created.retirement;
-      } else {
-        retireInstanceForExit(key, created);
-      }
-    });
+    created.releaseSignalExit = registerSignalExitFinalizer(async () =>
+      retireInstanceForExit(key, created),
+    );
     if (storage.placement === "state") {
       if (maintenance) {
         void maintenance.run(() => sweepPluginSourceCaptureDirectories(storage.stateDir));
@@ -594,70 +574,40 @@ export function retainPluginSourceCaptureInstance(
       return { directory, commit: () => retained.pendingNative.delete(directory) };
     },
     release() {
-      if (retained.handoff || retained.retirement) {
-        throw new Error("Plugin source capture requires asynchronous retirement settlement");
-      }
       const root = retire();
       if (root) {
         removeInstanceSync(root, retained.pendingNative);
       }
     },
     async releaseAsync() {
-      if (released) {
-        return;
-      }
-      if (retained.retirement) {
-        return retained.retirement;
-      }
       const scope = retained.cleanupScope;
-      if (
-        retained.references.size > 1 ||
-        (retained.root && retainLoadedPluginSourceCapture(retained.root))
-      ) {
-        retire();
-        if (scope !== retained.cleanupScope) {
-          await scope?.stop();
-        }
-        if (retained.references.size === 0) {
-          await sweeps.get(path.resolve(resolvePluginSourceCapturesDirectory(storage.stateDir)));
-        }
-        return;
-      }
-      retained.closing = true;
-      let releaseRetirement = true;
-      retained.retirement = (async () => {
-        if (retained.root && !retained.handoff) {
-          try {
-            retained.handoff = {
-              directory: retained.root,
-              identity: retained.token!.releaseForRetirement(),
-              pendingNative: [...retained.pendingNative],
-            };
-          } catch (error) {
-            ignoreMissingPath(error);
-            retained.token?.();
-          }
-        }
-        scope?.beginClose();
+      const root = retire();
+      if (scope !== retained.cleanupScope) {
         await scope?.stop();
+      }
+      if (retained.references.size === 0) {
+        // A previous scheduler may still own the root's coalesced scan after rebinding.
         await sweeps.get(path.resolve(resolvePluginSourceCapturesDirectory(storage.stateDir)));
-        if (retained.handoff) {
-          await reclaimPluginCaptureSweep([], retained.handoff);
-        }
-        finishInstanceRetirement(key, retained);
-        released = true;
-      })()
-        .catch((error: unknown) => {
-          releaseRetirement = !hasCommandProcessCleanupError(error);
-          throw error;
-        })
-        .finally(() => {
-          // An uncertain process keeps this same rejected operation and deletion claim.
-          if (releaseRetirement) {
-            retained.retirement = undefined;
+      }
+      if (root) {
+        try {
+          await fsPromises.rm(path.join(root, "captures"), { recursive: true, force: true });
+          for (const directory of retained.pendingNative) {
+            await fsPromises.rm(directory, { recursive: true, force: true });
           }
-        });
-      return retained.retirement;
+          const native = await fsPromises
+            .readdir(path.join(root, "native"))
+            .catch((error: unknown) => {
+              ignoreMissingPath(error);
+              return [];
+            });
+          if (native.length === 0) {
+            await fsPromises.rm(root, { recursive: true, force: true });
+          }
+        } catch (error) {
+          warn(error);
+        }
+      }
     },
   };
 }
@@ -666,32 +616,41 @@ export function retainPluginSourceCaptureInstance(
 export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
-  retirementOwner: "host" | "native" = "host",
 ) {
   const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
-    return createPluginNativeCaptureState({
+    let committed = false;
+    let disposed = false;
+    return {
       directory: root.directory,
-      commit: root.commit,
-      dispose(committed) {
-        if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
-          fs.rmSync(root.directory, { recursive: true, force: true });
+      commit(): void {
+        if (disposed) {
+          throw new Error("Plugin native capture has been disposed");
         }
-        instance.release();
+        root.commit();
+        committed = true;
       },
-      async disposeAsync(committed) {
-        if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
-          const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
-          await removeTemporaryArtifacts(root.directory, "Plugin native capture");
-        }
-        if (retirementOwner === "native") {
+      dispose() {
+        if (!disposed) {
+          if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
+            fs.rmSync(root.directory, { recursive: true, force: true });
+          }
+          disposed = true;
           instance.release();
-        } else {
+        }
+      },
+      async disposeAsync() {
+        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
+        if (!disposed) {
+          if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
+            await removeTemporaryArtifacts(root.directory, "Plugin native capture");
+          }
+          disposed = true;
           await instance.releaseAsync();
         }
       },
-    });
+    };
   } catch (error) {
     instance.release();
     throw error;
@@ -703,7 +662,6 @@ export function createPluginSourceCaptureRoot(
   stateDir: string,
   prefix: string,
   placement?: PluginSourceCaptureStorage["placement"],
-  retirementOwner: "host" | "native" = "host",
 ) {
   const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
@@ -716,11 +674,7 @@ export function createPluginSourceCaptureRoot(
         if (!retainLoadedPluginSourceCapture(directory)) {
           await removeTemporaryArtifacts(directory, "Plugin source worker");
         }
-        if (retirementOwner === "native") {
-          instance.release();
-        } else {
-          await instance.releaseAsync();
-        }
+        await instance.releaseAsync();
       },
     };
   } catch (error) {

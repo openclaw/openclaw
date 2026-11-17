@@ -7,7 +7,6 @@ import type {
   FsSafeCopyReply,
   FsSafeCopyWrite,
   PluginCaptureReclaimCandidate,
-  PluginCaptureRetirement,
 } from "../infra/fs-safe-copy-worker-contract.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -18,79 +17,6 @@ import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
 } from "../infra/sqlite-staging-token.js";
-import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-
-/** The standalone process commits retirement before touching captured payload. */
-export async function retirePluginCapture(retirement: PluginCaptureRetirement): Promise<void> {
-  const { directory, identity, pendingNative } = retirement;
-  const ownerPath = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
-  const assertIdentity = () => {
-    const root = fs.lstatSync(directory, { bigint: true });
-    if (
-      !root.isDirectory() ||
-      root.dev.toString() !== identity.directory.dev ||
-      root.ino.toString() !== identity.directory.ino ||
-      (process.getuid && root.uid !== BigInt(process.getuid()))
-    ) {
-      throw new Error("Plugin source capture directory ownership is unknown");
-    }
-    assertDatabaseFileIdentity(fs.lstatSync(ownerPath, { bigint: true }), identity.token);
-    for (const file of SQLITE_STAGING_TOKEN_FILES) {
-      const item = fs.lstatSync(path.join(directory, file), { throwIfNoEntry: false });
-      if (
-        item &&
-        (!item.isFile() || item.nlink !== 1 || (process.getuid && item.uid !== process.getuid()))
-      ) {
-        throw new Error("Plugin source capture token ownership is unknown");
-      }
-    }
-  };
-  const captures = path.join(directory, "captures");
-  const native = path.join(directory, "native");
-  for (const pending of pendingNative) {
-    if (path.dirname(pending) !== native) {
-      throw new Error("Pending native capture is outside its original owner");
-    }
-  }
-  assertIdentity();
-  const release = acquireSqliteStagingToken(directory, "reclaim", {
-    expectedIdentity: identity.token,
-  });
-  const errors: unknown[] = [];
-  try {
-    assertIdentity();
-    release(true);
-  } catch (error) {
-    errors.push(error);
-  } finally {
-    try {
-      release();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  throwSqliteLifecycleErrors(errors, "Plugin capture retirement failed");
-  for (const payload of [captures, ...pendingNative]) {
-    assertIdentity();
-    const item = fs.lstatSync(payload, { throwIfNoEntry: false });
-    if (item && !item.isDirectory()) {
-      throw new Error("Plugin source capture payload ownership is unknown");
-    }
-    await fsPromises.rm(payload, { recursive: true, force: true });
-  }
-  assertIdentity();
-  const nativeEntries = await fsPromises.readdir(native).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-    return [];
-  });
-  if (nativeEntries.length === 0) {
-    assertIdentity();
-    await fsPromises.rm(directory, { recursive: true, force: true });
-  }
-}
 
 export async function reclaimLegacyPluginCapture(candidate: PluginCaptureReclaimCandidate) {
   const current = fs.lstatSync(candidate.directory);
@@ -297,53 +223,42 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
 
   /** Existing custody excludes new readers of bytes the child will delete. */
   function claimPluginCaptureReclaim(
-    candidate: Pick<PluginCaptureReclaimCandidate, "directory" | "kind">,
-    pendingNative: readonly string[] = [],
-    owned = false,
+    candidate: PluginCaptureReclaimCandidate,
   ): (() => void) | undefined {
     const { directory } = candidate;
     const deleted = candidate.kind === "managed" ? path.join(directory, "captures") : directory;
     if (
-      (owned ? !ownedRoots.has(directory) : ownedRoots.has(directory)) ||
+      ownedRoots.has(directory) ||
       [...nativeLoadPaths].some((file) => isPathInside(directory, file)) ||
-      [...nativeReferences.keys()].some((file) =>
-        [deleted, ...pendingNative].some((root) => isPathInside(root, file)),
-      )
+      [...nativeReferences.keys()].some((file) => isPathInside(deleted, file))
     ) {
       return undefined;
     }
     ownedRoots.add(directory);
     retiringNativeRoots.add(deleted);
-    for (const pending of pendingNative) {
-      retiringNativeRoots.add(pending);
-    }
     return () => {
       retiringNativeRoots.delete(deleted);
-      for (const pending of pendingNative) {
-        retiringNativeRoots.delete(pending);
-      }
-      if (!owned) {
-        ownedRoots.delete(directory);
-      }
+      ownedRoots.delete(directory);
     };
   }
 
   /** The caller owns these retirement claims until the command owner confirms exit. */
   async function reclaimPluginCaptureSweep(
     candidates: readonly PluginCaptureReclaimCandidate[],
-    retirement?: PluginCaptureRetirement,
   ): Promise<{ failures: number; firstFailure?: string }> {
-    if (candidates.length === 0 && !retirement) {
+    if (candidates.length === 0) {
       return { failures: 0 };
     }
     const [
       { deserialize },
       { runCommandBuffersWithTimeout },
+      { hasCommandProcessCleanupError },
       { withCommandProcessScope },
       { withChildProcessOperation },
     ] = await Promise.all([
       import("node:v8"),
       import("../process/exec-runner.js"),
+      import("../process/exec-result.js"),
       import("../process/exec-spawn.js"),
       import("../process/spawn-diagnostics.js"),
     ]);
@@ -356,25 +271,12 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
         releases.push(release);
       }
     }
-    if (retirement) {
-      const release = claimPluginCaptureReclaim(
-        { directory: retirement.directory, kind: "managed" },
-        retirement.pendingNative,
-        true,
-      );
-      if (!release) {
-        throw new Error("Plugin source capture still has active payload readers");
-      }
-      releases.push(release);
-    }
-    if (releases.length === 0) {
+    if (admitted.length === 0) {
       return { failures: 0 };
     }
     let releaseClaims = true;
     try {
-      const command: FsSafeCopyWrite = retirement
-        ? { type: "retire-plugin-capture", retirement }
-        : { type: "reclaim-plugin-captures", candidates: admitted };
+      const command: FsSafeCopyWrite = { type: "reclaim-plugin-captures", candidates: admitted };
       const result = await withCommandProcessScope(() =>
         withChildProcessOperation("plugin.capture-reclamation", () =>
           runCommandBuffersWithTimeout(
@@ -388,11 +290,8 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
               input: JSON.stringify(command),
               beforeInput: () => {
                 if (
-                  (retirement
-                    ? [retirement.directory]
-                    : admitted.map((candidate) => candidate.directory)
-                  ).some((directory) =>
-                    [...nativeLoadPaths].some((file) => isPathInside(directory, file)),
+                  admitted.some((candidate) =>
+                    [...nativeLoadPaths].some((file) => isPathInside(candidate.directory, file)),
                   )
                 ) {
                   throw new Error("Plugin capture became loaded before reclamation");
@@ -413,12 +312,6 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
       const reply = deserialize(result.stdout) as FsSafeCopyReply;
       if (reply.type === "failed") {
         throw new Error(reply.message);
-      }
-      if (retirement) {
-        if (reply.type !== "capture-retired") {
-          throw new Error("Plugin capture retirement returned no completion receipt");
-        }
-        return { failures: 0 };
       }
       if (reply.type !== "captures-reclaimed") {
         throw new Error("Plugin capture reclamation returned no completion receipt");

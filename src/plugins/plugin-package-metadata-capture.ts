@@ -653,7 +653,7 @@ export function withPluginSourceCaptureDirectory<T>(
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
-export function createPluginSourceCapture(retirementOwner: "host" | "native" = "host") {
+export function createPluginSourceCapture() {
   const override = pluginSourceCaptureDirectory.getStore();
   const instance = override === undefined ? retainPluginSourceCaptureInstance() : undefined;
   let created: string | undefined;
@@ -702,11 +702,7 @@ export function createPluginSourceCapture(retirementOwner: "host" | "native" = "
       if (!retainLoadedPluginSourceCapture(directory)) {
         await fsPromises.rm(directory, { recursive: true, force: true });
       }
-      if (retirementOwner === "native") {
-        instance?.release();
-      } else {
-        await instance?.releaseAsync();
-      }
+      await instance?.releaseAsync();
     },
   });
 }
