@@ -664,6 +664,14 @@
   font-size: 12px;
 }
 
+/* Pending transcripts keep the status after Stop, when the pickers return; it
+   stays beside Stop and Send in the phone toolbar instead of leading the row. */
+@container chat-composer (max-width: 480px) {
+  .agent-chat__input--mobile-toolbar .agent-chat__dictation-status {
+    order: 3;
+  }
+}
+
 /* The dictation timeline takes the rest of the row, so it grows with the composer. */
 .agent-chat__dictation-status .agent-chat__voice-activity {
   flex: 1;
