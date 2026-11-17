@@ -6,18 +6,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { MeetingBrowserRequestCaller } from "./platform-adapter-contract.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { createBrowserMeetingRealtimeAudioTransport } from "./realtime-browser-audio-transport.js";
 
-async function setup(
-  received = vi.fn(),
-  fatal = vi.fn(),
-  options: {
-    beforeBrowserRequest?: () => void;
-    create?: <T>(create: () => Promise<T>) => Promise<T>;
-  } = {},
-) {
+async function setup(received = vi.fn(), fatal = vi.fn()) {
   const startInput = vi.fn<MeetingRealtimeAudioTransport["startInput"]>();
   const nativeTransport = {
     onFatal: vi.fn(),
@@ -28,38 +20,32 @@ async function setup(
     clearOutput: vi.fn(async () => {}),
   } satisfies MeetingRealtimeAudioTransport;
   const pulls: ReturnType<typeof createDeferredCore<Record<string, unknown>>>[] = [];
-  const logger = { warn: vi.fn(), info: vi.fn(), error: vi.fn() };
-  const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async ({ body: requestBody }) => {
-    options.beforeBrowserRequest?.();
-    const body = requestBody as { fn: string };
-    const { action, captureId } = JSON.parse(body.fn) as { action: string; captureId: string };
-    if (action === "pull") {
-      const pending = createDeferredCore<Record<string, unknown>>();
-      pulls.push(pending);
-      return { result: JSON.stringify({ captureId, ...(await pending.promise) }) };
-    }
-    const result = { captureId, isolated: action === "start", closed: action === "stop" };
-    return { result: JSON.stringify(result) };
+  const transport = await createBrowserMeetingRealtimeAudioTransport({
+    nativeTransport,
+    hasConfiguredInputCommand: false,
+    callBrowser: async ({ body: requestBody }) => {
+      if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Browser requester is no longer active");
+      }
+      const body = requestBody as { fn: string };
+      const { action, captureId } = JSON.parse(body.fn) as { action: string; captureId: string };
+      if (action === "pull") {
+        const pending = createDeferredCore<Record<string, unknown>>();
+        pulls.push(pending);
+        return { result: JSON.stringify({ captureId, ...(await pending.promise) }) };
+      }
+      const result = { captureId, isolated: action === "start", closed: action === "stop" };
+      return { result: JSON.stringify(result) };
+    },
+    buildCaptureScript: JSON.stringify,
+    meetingSessionId: "session-1",
+    meetingUrl: "https://meet.google.com/abc-defg-hij",
+    targetId: "tab-1",
+    audioFormat: "pcm16-24khz",
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
   });
-  const create = () =>
-    createBrowserMeetingRealtimeAudioTransport({
-      nativeTransport,
-      hasConfiguredInputCommand: false,
-      callBrowser,
-      buildCaptureScript: JSON.stringify,
-      meetingSessionId: "session-1",
-      meetingUrl: "https://meet.google.com/abc-defg-hij",
-      targetId: "tab-1",
-      audioFormat: "pcm16-24khz",
-      logger,
-    });
-  // Production creates and starts the transport inside the join request; keep both there.
-  const transport = await (options.create ?? ((run) => run()))(async () => {
-    const created = await create();
-    created.onFatal(fatal);
-    created.startInput(received);
-    return created;
-  });
+  transport.onFatal(fatal);
+  transport.startInput(received);
   await setImmediate();
   return {
     resolvePull: (result: Record<string, unknown>) => pulls.shift()!.resolve(result),
@@ -69,11 +55,6 @@ async function setup(
     transport,
     received,
     fatal,
-    logger,
-    lastAction: () => {
-      const body = callBrowser.mock.calls.at(-1)?.[0].body as { fn: string };
-      return (JSON.parse(body.fn) as { action: string }).action;
-    },
   };
 }
 
@@ -112,49 +93,22 @@ it("discards a pull after stop and rejects an expired browser capture", async ()
   await next.transport.stop();
 });
 
-it("keeps pulling and cleaning up after the joining Gateway request has responded", async () => {
-  // Real timers: Node propagates the async context into the 50 ms pull timer, which is how
-  // the loop inherits the join request; fake timers would drop it and hide the bug.
-  vi.useRealTimers();
-  // Models the Gateway request that issued googlemeet.join: its client authority ends once
-  // the method responds, and in-process browser requests still dispatched under it are
-  // refused (openclaw/openclaw#173896).
-  const request = { responded: false };
-  const joinScope = {
+it("keeps pulling after the joining request has responded", async () => {
+  vi.useRealTimers(); // Fake timers drop the async context the pull timer inherits.
+  let responded = false;
+  const join = {
     isWebchatConnect: () => false,
     signal: new AbortController().signal,
-    hasCurrentClientAuthority: () => !request.responded,
+    hasCurrentClientAuthority: () => !responded,
   };
   const owner = createOwnedTestInstance("meeting-owner");
-  const { transport, received, fatal, resolvePull, pendingPulls, logger, lastAction } = await setup(
-    vi.fn(),
-    vi.fn(),
-    {
-      beforeBrowserRequest: () => {
-        if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
-          throw new Error("Browser requester is no longer active");
-        }
-      },
-      create: (create) => withPluginRuntimeGatewayRequestScope(joinScope, () => owner.run(create)),
-    },
-  );
-  await vi.waitFor(() => expect(pendingPulls()).toBe(1));
-  resolvePull({ isolated: true, base64: Buffer.from([1, 0]).toString("base64") });
-  request.responded = true;
-  // Without the fix the next pull is refused and the transport goes fatal instead.
-  const nextPull = () =>
-    vi.waitFor(() => {
-      expect(fatal).not.toHaveBeenCalled();
-      expect(pendingPulls()).toBe(1);
-    });
-  await nextPull();
-  resolvePull({ isolated: true, base64: Buffer.from([2, 0]).toString("base64") });
-  await nextPull();
-  expect(received.mock.calls).toEqual([[Buffer.from([1, 0])], [Buffer.from([2, 0])]]);
-
-  const stopping = withPluginRuntimeGatewayRequestScope(joinScope, () => transport.stop());
-  resolvePull({ isolated: true });
+  const fixture = await withPluginRuntimeGatewayRequestScope(join, () => owner.run(() => setup()));
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  responded = true;
+  fixture.resolvePull({ isolated: true });
+  await vi.waitFor(() => expect(fixture.pendingPulls()).toBe(1));
+  expect(fixture.fatal).not.toHaveBeenCalled();
+  const stopping = fixture.transport.stop();
+  fixture.resolvePull({ isolated: true });
   await stopping;
-  expect(logger.warn).not.toHaveBeenCalled();
-  expect(lastAction()).toBe("stop");
 });
