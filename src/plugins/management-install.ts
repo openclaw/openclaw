@@ -8,7 +8,7 @@ import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/insta
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveCompatibilityHostVersion, VERSION } from "../version.js";
+import { resolveReleaseHostVersion, VERSION } from "../version.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
@@ -185,7 +185,7 @@ async function resolveOfficialManagedInstallSpec(params: {
           spec: request.recordSpec ?? request.spec,
           updateChannel,
           officialPackageName: packageName,
-          coreVersion: resolveCompatibilityHostVersion(),
+          coreVersion: resolveReleaseHostVersion(),
           preferCoreVersion: true,
         })
       : await resolveNpmInstallSpecsForUpdateChannel({

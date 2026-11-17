@@ -23,7 +23,7 @@ import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
 import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { resolveReleaseHostVersion } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../../doctor-plugin-registry.js";
 import {
@@ -283,7 +283,7 @@ async function runPostCorePluginConvergenceWithLease(
   const smokeRecords = filterRecordsToActive({ cfg: recovered.config, records, env });
   if (repairVersionDrift) {
     for (const drift of detectPluginVersionDrift({
-      gatewayVersion: resolveCompatibilityHostVersion(env),
+      gatewayVersion: resolveReleaseHostVersion(env),
       installRecords: smokeRecords,
       config: recovered.config,
     }).drifts) {

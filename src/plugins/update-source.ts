@@ -23,7 +23,7 @@ import {
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { resolveCompatibilityHostVersion } from "../version.js";
+import { resolveCompatibilityHostVersion, resolveReleaseHostVersion } from "../version.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
@@ -558,8 +558,7 @@ export function resolveNpmUpdateTarget(params: {
               : undefined,
           updateChannel: params.updateChannel,
           officialPackageName: resolveNpmSpecPackageName(official?.npmSpec),
-          coreVersion:
-            params.coreVersion ?? (stableSpec ? resolveCompatibilityHostVersion() : undefined),
+          coreVersion: params.coreVersion ?? (stableSpec ? resolveReleaseHostVersion() : undefined),
           versionBoundToCore: params.versionBoundToCore,
           timeoutMs: params.timeoutMs,
           followStableChannel: !params.specOverride && Boolean(stableSpec),
@@ -616,7 +615,7 @@ export function resolveClawHubUpdateSpecs(params: {
     spec: stableSpec || unpinnedSpec ? `clawhub:${stableSpec ?? unpinnedSpec}` : recordSpec,
     updateChannel: params.updateChannel,
     officialPackageName: params.officialPackageName,
-    coreVersion: params.coreVersion ?? (stableSpec ? resolveCompatibilityHostVersion() : undefined),
+    coreVersion: params.coreVersion ?? (stableSpec ? resolveReleaseHostVersion() : undefined),
     versionBoundToCore: params.versionBoundToCore,
     followStableChannel: Boolean(stableSpec),
   });

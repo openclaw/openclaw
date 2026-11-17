@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { resolveCompatibilityHostVersion, resolveReleaseHostVersion } from "../version.js";
 import { buildPostCoreHandoffEnv } from "./update-post-core-context.js";
 
 describe("buildPostCoreHandoffEnv", () => {
+  it("preserves the signed baseline compatibility through an extended-stable handoff", () => {
+    const env = buildPostCoreHandoffEnv({
+      baseEnv: {},
+      compatHostVersion: "2026.10.33",
+      requestedChannel: "extended-stable",
+    });
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.10.33");
+    expect(resolveCompatibilityHostVersion(env)).toBe("2026.11.4");
+    expect(resolveReleaseHostVersion(env)).toBe("2026.10.33");
+  });
   it("replaces only current-run handoff values without mutating the base env", () => {
     const baseEnv: NodeJS.ProcessEnv = {
       PATH: "/usr/bin",

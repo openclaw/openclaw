@@ -5,6 +5,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   setupModelsListFixture,
+  EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
   OPENCLAW_DEVICE_PLACEMENT,
   withoutOpenAIEnvAuth,
   withModelsTestState,
@@ -100,6 +101,7 @@ describe("models.list", () => {
             {
               id: "source-model",
               name: "Source Model",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "vllm",
               contextWindow: 128_000,
               reasoning: true,
@@ -175,6 +177,7 @@ describe("models.list", () => {
             {
               id: "llama-secure",
               name: "Llama Secure",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "vllm",
               input: ["text", "image", "document"],
               tags: ["default"],
@@ -373,6 +376,7 @@ describe("models.list", () => {
           {
             id: "llama-local",
             name: "Llama Local",
+            agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
             provider: "vllm",
             tags: ["default"],
           },
@@ -426,6 +430,7 @@ describe("models.list", () => {
           {
             id: "llama-secure",
             name: "Llama Secure",
+            agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
             provider: "vllm",
             available: false,
             tags: ["default"],
@@ -550,8 +555,20 @@ describe("models.list", () => {
               },
               available: true,
             },
-            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+            {
+              id: "llama-local",
+              name: "Llama Local",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              provider: "vllm",
+              available: true,
+            },
+            {
+              id: "qwen-local",
+              name: "Qwen Local",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              provider: "vllm",
+              available: true,
+            },
           ],
         },
         undefined,
@@ -574,6 +591,7 @@ describe("models.list", () => {
             {
               id: "claude-test",
               name: "Claude Test",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "anthropic",
               available: false,
               unavailableReason: "missing-auth",
@@ -602,8 +620,20 @@ describe("models.list", () => {
               },
               available: true,
             },
-            { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
-            { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+            {
+              id: "llama-local",
+              name: "Llama Local",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              provider: "vllm",
+              available: true,
+            },
+            {
+              id: "qwen-local",
+              name: "Qwen Local",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              provider: "vllm",
+              available: true,
+            },
           ],
         },
         undefined,
@@ -651,6 +681,7 @@ describe("models.list", () => {
               {
                 id: "llama-configured",
                 name: "Llama Configured",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "vllm",
                 available: true,
                 tags: ["default"],
@@ -658,6 +689,7 @@ describe("models.list", () => {
               {
                 id: "llama-discovered",
                 name: "Llama Discovered",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "vllm",
                 available: true,
               },

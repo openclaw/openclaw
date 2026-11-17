@@ -169,23 +169,30 @@ export function resolveRuntimeServiceCommit(): string | null {
   return RUNTIME_SERVICE_COMMIT;
 }
 
+// Package cohorts retain the selected release identity, including post-core handoffs.
+export function resolveReleaseHostVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
+): string {
+  return (
+    firstNonEmpty(env.OPENCLAW_COMPATIBILITY_HOST_VERSION) ??
+    resolveVersionFromRuntimeSources({
+      env,
+      runtimeVersion: resolveUsableRuntimeVersion(VERSION),
+      fallback,
+      preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
+    })
+  );
+}
+
 export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
-  const explicitCompatibilityVersion = firstNonEmpty(env.OPENCLAW_COMPATIBILITY_HOST_VERSION);
-  if (explicitCompatibilityVersion) {
-    return explicitCompatibilityVersion;
-  }
-  return resolveVersionFromRuntimeSources({
-    env,
-    // This release is the signed v2026.11.4 source baseline with an extended-stable
-    // package number. Keep its compatibility identity without changing the
-    // displayed version, lowering plugin floors, or guessing for other releases.
-    runtimeVersion: resolveUsableRuntimeVersion(VERSION === "2026.10.33" ? "2026.11.4" : VERSION),
-    fallback,
-    preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
-  });
+  const releaseVersion = resolveReleaseHostVersion(env, fallback);
+  // This extended-stable release contains the signed v2026.11.4 source baseline.
+  // Apply its API identity after resolving explicit post-core handoffs too.
+  return releaseVersion === "2026.10.33" ? "2026.11.4" : releaseVersion;
 }
 
 // Single source of truth for the current OpenClaw version.

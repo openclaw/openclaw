@@ -45,7 +45,7 @@ import {
 } from "../../../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { resolveReleaseHostVersion } from "../../../version.js";
 import type { DownloadableInstallCandidate } from "./missing-configured-plugin-install.candidates.js";
 import { resolveLegacyNpmPackageInstallPath } from "./missing-configured-plugin-install.records.js";
 import {
@@ -141,7 +141,7 @@ async function installCandidatePackage(
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name
           : undefined,
-        coreVersion: resolveCompatibilityHostVersion(params.env),
+        coreVersion: resolveReleaseHostVersion(params.env),
         versionBoundToCore: candidate.versionBoundToOpenClaw,
       })
     : null;
@@ -153,7 +153,7 @@ async function installCandidatePackage(
         officialPackageName: candidate.trustedSourceLinkedOfficialInstall
           ? parseRegistryNpmSpec(candidate.npmSpec)?.name
           : undefined,
-        coreVersion: resolveCompatibilityHostVersion(params.env),
+        coreVersion: resolveReleaseHostVersion(params.env),
         versionBoundToCore: candidate.versionBoundToOpenClaw,
       })
     : null;

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { inspectDecisionProviders } from "../decisions/runtime.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
-import { resolveCompatibilityHostVersion } from "../version.js";
+import { resolveReleaseHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import {
   inspectBundleMcpRuntimeSupport,
@@ -184,7 +184,7 @@ function resolveReportedPluginVersion(
     return plugin.version;
   }
   return (
-    normalizeOpenClawVersionBase(resolveCompatibilityHostVersion(env)) ??
+    normalizeOpenClawVersionBase(resolveReleaseHostVersion(env)) ??
     normalizeOpenClawVersionBase(plugin.version) ??
     plugin.version
   );

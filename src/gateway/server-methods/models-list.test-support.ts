@@ -31,6 +31,15 @@ export const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["deviceP
   consumesWorkerSlot: true,
 };
 
+export const EXPECTED_IMPLICIT_OPENCLAW_RUNTIME: GatewayAgentRuntime = {
+  id: "openclaw",
+  source: "implicit",
+  cloudPlacementSupported: true,
+  cloudPlacementExecutionMode: "worker-turn",
+  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
+  devicePlacementSupported: true,
+};
+
 const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
   const { createModelPluginMetadataSnapshot } = await import("./models-metadata.test-support.js");
   return createModelPluginMetadataSnapshot();

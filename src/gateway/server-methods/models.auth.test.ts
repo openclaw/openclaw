@@ -9,6 +9,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   setupModelsListFixture,
+  EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
   withoutOpenAIEnvAuth,
   withoutAnthropicEnvAuth,
   withModelsTestState,
@@ -189,7 +190,15 @@ describe("models.list", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       {
-        models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm", available: false }],
+        models: [
+          {
+            id: "llama-secure",
+            name: "Llama Secure",
+            agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+            provider: "vllm",
+            available: false,
+          },
+        ],
       },
       undefined,
     );
@@ -225,7 +234,13 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "llama-managed", name: "Llama Managed", provider: "vllm", available: false },
+          {
+            id: "llama-managed",
+            name: "Llama Managed",
+            agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+            provider: "vllm",
+            available: false,
+          },
         ],
       },
       undefined,
@@ -297,7 +312,13 @@ describe("models.list", () => {
           true,
           {
             models: [
-              { id: "llama-secure", name: "Llama Secure", provider: "vllm", available: true },
+              {
+                id: "llama-secure",
+                name: "Llama Secure",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+                provider: "vllm",
+                available: true,
+              },
             ],
           },
           undefined,
@@ -332,6 +353,7 @@ describe("models.list", () => {
             {
               id: "demo-model",
               name: "Demo Model",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "demo-provider",
               available: false,
             },
@@ -377,6 +399,7 @@ describe("models.list", () => {
               {
                 id: "demo-model",
                 name: "Demo Model",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "demo-provider",
                 available: false,
               },
@@ -429,6 +452,7 @@ describe("models.list", () => {
               {
                 id: "demo-model",
                 name: "Demo Model",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "demo-provider",
                 available: true,
               },
@@ -484,6 +508,7 @@ describe("models.list", () => {
             {
               id: "demo-model",
               name: "Demo Model",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "demo-provider",
               available: false,
             },
@@ -539,6 +564,7 @@ describe("models.list", () => {
             {
               id: "qwen-remote",
               name: "Qwen Remote",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
               provider: "cliproxyapi",
               available: false,
               unavailableReason: "cooldown",
@@ -562,7 +588,13 @@ describe("models.list", () => {
         true,
         {
           models: [
-            { id: "qwen-remote", name: "Qwen Remote", provider: "cliproxyapi", available: true },
+            {
+              id: "qwen-remote",
+              name: "Qwen Remote",
+              agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              provider: "cliproxyapi",
+              available: true,
+            },
           ],
         },
         undefined,
@@ -630,6 +662,7 @@ describe("models.list", () => {
               {
                 id: "demo-model",
                 name: "Demo Model",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "demo-provider",
                 available: true,
               },
@@ -731,6 +764,7 @@ describe("models.list", () => {
               {
                 id: "llama-secure",
                 name: "Llama Secure",
+                agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
                 provider: "vllm",
                 available: fixture.available,
                 ...(fixture.unavailableReason

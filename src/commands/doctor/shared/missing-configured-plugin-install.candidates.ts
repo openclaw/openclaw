@@ -33,7 +33,7 @@ import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
+import { resolveReleaseHostVersion } from "../../../version.js";
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
@@ -131,7 +131,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
       }
     }
   }
-  const currentVersion = params.coreVersion ?? resolveCompatibilityHostVersion(params.env);
+  const currentVersion = params.coreVersion ?? resolveReleaseHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion,
