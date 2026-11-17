@@ -17,6 +17,8 @@ export function sameDeferredPluginMigrationInputs(
   expected: readonly DeferredPluginMigration[],
 ) {
   const inputs = (pending: readonly DeferredPluginMigration[]) =>
-    pending.map(({ reason: _reason, command: _command, ...fields }) => fields);
+    pending
+      .map(({ reason: _reason, command: _command, ...fields }) => fields)
+      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
   return isDeepStrictEqual(inputs(current), inputs(expected));
 }

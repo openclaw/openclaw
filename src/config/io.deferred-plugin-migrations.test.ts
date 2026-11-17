@@ -81,6 +81,45 @@ describe("config IO with deferred plugin migrations", () => {
     return { root, configPath, env, ioOptions };
   }
 
+  it.each([false, true])(
+    "release audit publishes order-only obligations (guidance changed: %s)",
+    async (rewordGuidance) => {
+      const { configPath, env, ioOptions } = fixture();
+      const source = {
+        gateway: { mode: "local", port: 18789 },
+        plugins: { entries: { sample: { config: { retained: "authored" } } } },
+      };
+      fs.writeFileSync(configPath, JSON.stringify(source));
+      const obligation = (reword: boolean) => ({
+        pluginId: "sample",
+        configPaths: [["plugins", "entries", "sample", "config"]],
+        reason: reword ? "Inspection remains pending." : pendingPlugin.reason,
+        command: reword ? "openclaw doctor --fix" : pendingPlugin.command,
+      });
+      const other = { ...pendingPlugin, pluginId: "another-owner" };
+      const expected = [obligation(false), other];
+      await recordDeferredPluginMigrations({ env, pending: expected });
+      const io = createConfigIO({ ...ioOptions, deferredPluginMigrations: expected });
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 18790 } },
+        {
+          ...repairOptions,
+          beforeCommit: async () => {
+            await recordDeferredPluginMigrations({
+              env,
+              pending: [other, obligation(rewordGuidance)],
+            });
+          },
+        },
+      );
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+        ...source,
+        gateway: { mode: "local", port: 18790 },
+      });
+      expect(readDeferredPluginMigrations({ env })).toEqual([other, obligation(rewordGuidance)]);
+    },
+  );
+
   it("normal reads and writes never inspect deferred migration records", async () => {
     const root = tempDirs.make("openclaw-canonical-config-");
     const configPath = path.join(root, "openclaw.json");
