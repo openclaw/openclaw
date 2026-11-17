@@ -1009,8 +1009,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect(result).toMatchObject(
         blockedBy === "cancelled"
           ? { delivered: false, path: "none" }
-          : { delivered: false, path: "none", reason: "source_owner_changed", terminal: true },
+          : { delivered: false, path: "none", reason: "source_owner_changed" },
       );
+      expect(result.terminal).toBeUndefined();
       expect(sendMessage).toHaveBeenCalledOnce();
       expect(platformSend).not.toHaveBeenCalled();
     },
@@ -1911,7 +1912,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
       path: "none",
       reason: "source_owner_changed",
-      terminal: true,
     });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();

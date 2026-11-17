@@ -60,7 +60,8 @@ describe("requester pause notices", () => {
       if (typeof isSourceSessionEffectsAllowed !== "function") {
         throw new Error("expected delivery authority check");
       }
-      expect(isSourceSessionEffectsAllowed()).toBe(false);
+      // A newer requester run is not a revocation; this attempt still fails on its own.
+      expect(isSourceSessionEffectsAllowed()).toBe(true);
       return {
         delivered: false,
         path: "none",
@@ -81,8 +82,9 @@ describe("requester pause notices", () => {
     });
     const firstKey = deliveredCallArg().directIdempotencyKey;
     await expectWake(true, 2, params);
+    // The failed attempt is an ordinary nondelivery; the retry carries its own attempt key.
     expect(deliverSpy.mock.calls[1]?.[0]).toMatchObject({
-      directIdempotencyKey: firstKey,
+      directIdempotencyKey: `${firstKey}:retry-1`,
       triggerMessage: expect.stringContaining("TURNOVER"),
     });
     expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();

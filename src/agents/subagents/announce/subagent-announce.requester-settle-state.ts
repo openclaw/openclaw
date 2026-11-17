@@ -5,7 +5,7 @@ import type {
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
-import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
@@ -148,25 +148,6 @@ export function isRequesterSettleDeliveryClosed(params: {
     // already removed its own. An ordinary wave owes nothing once every member retired.
     (!params.requesterYieldBatch && currentBatch.every(isSubagentObligationRetired))
   );
-}
-
-export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null | undefined) {
-  const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
-  return (currentRequester: SubagentRunRecord | null | undefined, continuationRunId: string) => {
-    if (!currentRequester || !requesterRun) {
-      return !currentRequester && !requesterRun;
-    }
-    if (isSameSubagentRun(currentRequester, requesterRun)) {
-      return isSameSubagentRunOwner(currentRequester, requesterRun);
-    }
-    // Only the admitted continuation may replace its captured task owner.
-    return (
-      currentRequester.runId === continuationRunId &&
-      currentRequester.taskRunId === requesterTaskRunId &&
-      currentRequester.requesterSessionKey === requesterRun.requesterSessionKey &&
-      currentRequester.requesterAgentId === requesterRun.requesterAgentId
-    );
-  };
 }
 
 /**

@@ -542,7 +542,8 @@ it.each([
         await registryTesting.sweepOnceForTests();
       }
       await fixture.settle();
-      if (phase === "failed kill") {
+      if (phase === "failed kill" || phase === "requester replacement") {
+        // A newer requester run is not a revocation: the owed result reaches the requester.
         expect(startedTurns).toEqual([requesterKey]);
       } else {
         expect(startedTurns).toEqual([]);
@@ -600,7 +601,7 @@ it.each([
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
+        if (phase === "requester reset") {
           expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
         } else {
           expect(subagentRuns.has("nested")).toBe(false);

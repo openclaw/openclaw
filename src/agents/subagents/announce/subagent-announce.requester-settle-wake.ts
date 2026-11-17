@@ -63,7 +63,6 @@ import {
   createRequesterSettleBatchCompletion,
   needsRequesterSettleFindings,
   isRequesterSettleMemberReady,
-  captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
   resolveRequesterSettlePolicy,
   waitForRequesterDescendants,
@@ -286,7 +285,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           requesterAgentId,
         ));
   const requesterRun = getRequesterRun();
-  const isRequesterRunCurrent = captureRequesterRunOwner(requesterRun);
   const isBatchDeliveryClosed = () =>
     isRequesterSettleDeliveryClosed({
       requesterRun,
@@ -402,7 +400,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           return false;
         }
       }
-      return isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
+      // A newer requester turn is not a revocation: the result stays owed to this chat.
+      return true;
     };
     const areCompletionRowsCurrent = () => {
       const currentRows = currentCompletionRows(readCurrentBatch() ?? []);
@@ -500,7 +499,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
         return false;
       }
-      // Requester turnover closes this attempt, not the child's pending question.
+      // Only real authority reaches here: a cancelled batch, a deleted requester or a
+      // followup successor. A pause notice survives a live requester's followup change.
       if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
         await completeBatch(settledBatch, state);
       }
