@@ -93,12 +93,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     sessionAgentId,
   } = input.setup;
-  const {
-    catalogToolHookContext,
-    deferredDirectoryToolsCallable,
-    effectiveTools,
-    toolSearchRunPlan,
-  } = input.toolCatalog;
+  const { catalogToolHookContext, deferredDirectoryToolsCallable, effectiveTools } =
+    input.toolCatalog;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   const {
     codeModeControlsEnabledForRun,
@@ -133,7 +129,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         onSessionManagerCreated: (manager) => {
           resources.sessionManager = manager;
         },
-        replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
         withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
       }),

@@ -6,7 +6,12 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle-observation.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import {
+  AUTOMATION_RESULT_MODEL,
+  OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+} from "../shared/transcript-only-openclaw-assistant.js";
 import type {
   GitHubPublicationCoordinator,
   GitHubPublicationTranscriptReport,
@@ -86,6 +91,19 @@ export async function reportGitHubPublicationTranscript(
   if (entry?.sessionId !== params.sessionId || target.canonicalKey !== params.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }
+  // Defer live-run receipts to preserve the append-only provider prefix.
+  const placement = isSessionControllerWorkActive(
+    target.storePath,
+    [params.sessionKey, params.sessionId],
+    target.agentId,
+  )
+    ? {
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        model: AUTOMATION_RESULT_MODEL,
+        excludeFromContext: true,
+        openclawModelPlacement: "pending" as const,
+      }
+    : {};
   const appended = await appendSessionTranscriptReport(
     {
       agentId: target.agentId,
@@ -107,6 +125,7 @@ export async function reportGitHubPublicationTranscript(
           usage: makeZeroUsageSnapshot(),
           stopReason: "stop",
           timestamp: Date.now(),
+          ...placement,
         },
         params.runId,
       ),
