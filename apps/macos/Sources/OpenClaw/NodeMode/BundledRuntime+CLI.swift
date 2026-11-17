@@ -29,9 +29,10 @@ extension BundledRuntime {
                     try shim.write(to: command, atomically: true, encoding: .utf8)
                     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
                 }
-                // Shared shell files outlive this launch; only the persistently installed default profile owns PATH.
-                if allowsPersistentIntegration, !profile.isActive {
-                    Self.installShellPath(bin: bin, homeDirectory: homeDirectory)
+                if allowsPersistentIntegration,
+                   let terminalBin = try Self.terminalDefaultBin(command: command, homeDirectory: homeDirectory)
+                {
+                    Self.installShellPath(bin: terminalBin, homeDirectory: homeDirectory)
                 } else {
                     Self.cliLogger.notice(
                         "Shell PATH unchanged for this profile or app location; run \(command.path, privacy: .public)")
@@ -132,7 +133,7 @@ extension BundledRuntime {
     private static func cliShim(profile: AppProfile, homeDirectory: URL) -> String {
         let current = Self(root: profile.stateDirectoryURL(homeDirectory: homeDirectory)
             .appendingPathComponent("runtime/current"))
-        let profileLine = profile.name.map { "export OPENCLAW_PROFILE=\(Self.shellQuote($0))\n" } ?? ""
+        let profileLine = "export OPENCLAW_PROFILE=\"${OPENCLAW_PROFILE:-\(profile.name ?? "default")}\"\n"
         let cli = current.packageRoot.appendingPathComponent("openclaw.mjs")
         return """
         #!/bin/sh
@@ -141,6 +142,37 @@ extension BundledRuntime {
         exec \(Self.shellQuote(current.bun.path)) \(Self.shellQuote(cli.path)) "$@"
 
         """
+    }
+
+    /// The first installation owns the terminal default. Configuration remains evidence while offline.
+    private static func terminalDefaultBin(command: URL, homeDirectory: URL) throws -> URL? {
+        let fileManager = FileManager.default
+        let bin = homeDirectory.appendingPathComponent(".openclaw/bin")
+        let terminal = bin.appendingPathComponent("openclaw")
+        if command.path == terminal.path { return bin }
+        if let attributes = try? fileManager.attributesOfItem(atPath: terminal.path) {
+            if attributes[.type] as? FileAttributeType == .typeSymbolicLink,
+               (try? fileManager.destinationOfSymbolicLink(atPath: terminal.path)) == command.path
+            { return bin }
+            Self.cliLogger.notice("Terminal default unchanged; this Gateway: \(command.path, privacy: .public)")
+            return nil
+        }
+        let state = command.deletingLastPathComponent().deletingLastPathComponent()
+        for name in try fileManager.contentsOfDirectory(atPath: homeDirectory.path)
+            where name == ".openclaw" || name.hasPrefix(".openclaw-")
+        {
+            let other = homeDirectory.appendingPathComponent(name)
+            if other.path != state.path,
+               fileManager.fileExists(atPath: other.appendingPathComponent("openclaw.json").path)
+            {
+                Self.cliLogger.notice(
+                    "Configured profile owns terminal default; this Gateway: \(command.path, privacy: .public)")
+                return nil
+            }
+        }
+        try fileManager.createDirectory(at: bin, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: terminal, withDestinationURL: command)
+        return bin
     }
 
     static func isManagedShim(_ text: String, stateDirectory: URL) -> Bool {
@@ -184,6 +216,7 @@ extension BundledRuntime {
         case "bash": [".bashrc", bashLogin]
         case "zsh": [".zshrc", ".zprofile"]
         case "fish": [fish]
+        case "sh": [".profile"]
         default: []
         }
         guard !primary.isEmpty else {

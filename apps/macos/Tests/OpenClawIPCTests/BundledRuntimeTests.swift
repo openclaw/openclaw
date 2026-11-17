@@ -349,7 +349,7 @@ struct BundledRuntimeTests {
     }
 
     @Test(arguments: [(false, true), (true, true), (false, false)])
-    func `only the persistent default profile adds its CLI to shell startup files`(
+    func `the first persistent installation adds its CLI to shell startup files`(
         namedProfile: Bool,
         allowsPersistentIntegration: Bool) throws
     {
@@ -375,7 +375,7 @@ struct BundledRuntimeTests {
                 allowsPersistentIntegration: allowsPersistentIntegration)
             #expect(FileManager.default.isExecutableFile(atPath: state.appendingPathComponent("bin/openclaw").path))
             let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
-            if allowsPersistentIntegration, !namedProfile {
+            if allowsPersistentIntegration {
                 #expect(shellText == "export PATH=\"\(home.path)/.openclaw/bin:$PATH\"\n# existing settings\n")
             } else {
                 #expect(shellText == "# existing settings\n")
@@ -383,6 +383,64 @@ struct BundledRuntimeTests {
                     Set([".zshrc", state.lastPathComponent]))
             }
         }
+    }
+
+    @Test
+    func `first named install is discoverable and later profiles preserve its default`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try "# operator settings\n".write(to: home.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        for name in ["first", "second"] {
+            let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+            let app = home.appendingPathComponent("\(name).app")
+            _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+            let bundle = try #require(Bundle(url: app))
+            let runtime = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+            runtime.installCLI(bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
+            runtime.installCLI(bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
+        }
+        let sqlite = home.appendingPathComponent(".openclaw-first/runtime/current/lib/libsqlite3.dylib").path
+        for mode in ["-ic", "-lic"] {
+            let result = await ShellExecutor.runDetailed(
+                command: ["/bin/zsh", mode, "openclaw qr"],
+                cwd: nil,
+                env: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
+                timeout: 5)
+            #expect(result.success)
+            #expect(result.stdout == "first\n\(sqlite)\nqr\n")
+        }
+        let override = await ShellExecutor.runDetailed(
+            command: [home.appendingPathComponent(".openclaw/bin/openclaw").path, "--profile", "default", "qr"],
+            cwd: nil,
+            env: ["OPENCLAW_PROFILE": "override"],
+            timeout: 5)
+        #expect(override.success)
+        #expect(override.stdout == "override\n\(sqlite)\n--profile\ndefault\nqr\n")
+    }
+
+    @Test(arguments: [".openclaw", ".openclaw-other"])
+    func `named installation does not claim a configured offline terminal default`(other: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let otherState = home.appendingPathComponent(other)
+        try FileManager.default.createDirectory(at: otherState, withIntermediateDirectories: true)
+        let config = otherState.appendingPathComponent("openclaw.json")
+        try "{\"gateway\":{\"mode\":\"local\"}}".write(to: config, atomically: true, encoding: .utf8)
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "new"])
+        let app = home.appendingPathComponent("Fixture.app")
+        _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+        let bundle = try #require(Bundle(url: app))
+        let runtime = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+        runtime.installCLI(bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".openclaw/bin/openclaw").path))
+        #expect(try String(contentsOf: config, encoding: .utf8) == "{\"gateway\":{\"mode\":\"local\"}}")
+        let result = await ShellExecutor.runDetailed(
+            command: [home.appendingPathComponent(".openclaw-new/bin/openclaw").path, "qr"],
+            cwd: nil,
+            env: [:],
+            timeout: 5)
+        #expect(result.success)
+        #expect(result.stdout.hasPrefix("new\n"))
     }
 
     @Test func `owned mac CLI link follows app moves without seeding or creating terminal commands`() throws {
@@ -545,7 +603,8 @@ struct BundledRuntimeTests {
         return runtimes
     }
 
-    @Test func `service Bun keeps one real path and follows the installed service after a failed install`() async throws {
+    @Test
+    func `service Bun keeps one real path and follows the installed service after a failed install`() async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "service-bun-fixture"])

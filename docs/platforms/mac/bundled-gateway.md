@@ -41,14 +41,21 @@ The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLit
 By default, `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`.
 
 When the app runs from a persistent location, it also links `openclaw-mac` beside
-that command. The default profile adds the bin directory to the usual shell
-profile files.
+that command. The first persistent installation adds `~/.openclaw/bin` to the
+usual Bash, zsh, fish, or POSIX sh startup files. A fresh named-profile install
+links its profile command there, so plain `openclaw qr` selects that installation.
+Open a new terminal after installation.
 
-Named profiles and apps running from Downloads, Desktop, a disk image, or a
-temporary directory such as `/tmp` do not change shell profiles. Use the full
-command path instead, for example `~/.openclaw-<profile>/bin/openclaw`.
+Later installations preserve that terminal default, even when its Gateway is
+offline. Existing configuration for another profile prevents a named install
+from claiming the default. No configuration or Gateway state is moved or merged.
+For a different installation, use its full command path, for example
+`~/.openclaw-<profile>/bin/openclaw qr`. Explicit `--profile` flags and inherited
+`OPENCLAW_PROFILE` override the launcher default.
 
-The app preserves an operator-created `openclaw` file.
+Apps running from Downloads, Desktop, a disk image, or a temporary directory
+such as `/tmp` do not change shell profiles. The app preserves operator-created
+`openclaw` files and links, and reports shell integration failures in its logs.
 
 ### Existing and development Gateways
 
