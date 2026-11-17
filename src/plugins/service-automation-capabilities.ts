@@ -45,6 +45,8 @@ export function createPluginServiceAutomationCapabilities(params: {
   );
   const sessionWork: PluginServiceSessionWorkV1 = {
     version: 1,
+    withCurrent: async ({ agentId, sessionKey, toolName }, work) =>
+      (await loadSessionWork()).withCurrent({ agentId, sessionKey, toolName }, work),
     admit: async ({ id, agentId, sessionKey, toolName, delegatedTools }) => {
       // Capture admission before lazy loading yields to the original caller.
       const input = {

@@ -56,10 +56,9 @@ function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard)
   return (
     <Show when={props.onAction}>
       <button
-        class="rail-header__action session-progress-card__dismiss"
+        class="oc-icon-button oc-icon-button--28 rail-header__action session-progress-card__dismiss"
         type="button"
         aria-label={label()}
-        title={label()}
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();

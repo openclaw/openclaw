@@ -133,7 +133,7 @@ describe("Pages navigation identity", () => {
       expect(icon.querySelectorAll('circle[fill="currentColor"]')).toHaveLength(2);
       expect(icon.getAttribute("fill")).toBe("none");
       expect(icon.getAttribute("stroke")).toBe("currentColor");
-      expect(icon.getAttribute("viewBox")).toBe("0 0 46 45");
+      expect(icon.getAttribute("viewBox")).toBe("0 0 24 24");
     }
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;

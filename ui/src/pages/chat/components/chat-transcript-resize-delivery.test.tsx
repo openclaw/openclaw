@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
@@ -62,16 +62,23 @@ it.each([false, true])(
 );
 
 it("defers replacement rows when resize delivery reads a pending native jump", async () => {
+  // Scroll idle must share the manually advanced frame clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const frame = stubAnimationFrames();
   const rows = contentRows(80);
-  const { container, renderRows } = await mountTestTranscript("resize-native-jump", rows);
+  const mounting = mountTestTranscript("resize-native-jump", rows);
+  await vi.advanceTimersByTimeAsync(0);
+  const { container, renderRows } = await mounting;
   frame();
-  await flushDeferredRowPrune();
+  await vi.advanceTimersByTimeAsync(0);
   renderRows(rows);
   container.scrollTop = 800;
   container.dispatchEvent(new Event("scroll"));
   frame();
-  await flushDeferredRowPrune();
+  await vi.advanceTimersByTimeAsync(0);
   const before = transcriptRows(container);
   const outgoing = before[0]!;
   expect(before.length).toBeLessThan(rows.length);
@@ -82,11 +89,11 @@ it("defers replacement rows when resize delivery reads a pending native jump", a
   container.scrollTop = 4000;
   emitTranscriptResize(outgoing, 800, 120);
   expect(transcriptRows(container)).toEqual(before);
-  await flushDeferredRowPrune();
+  await vi.advanceTimersByTimeAsync(0);
   expect(transcriptRows(container)).toEqual(before);
 
   frame();
-  await flushDeferredRowPrune();
+  await vi.advanceTimersByTimeAsync(0);
   expect(container.scrollTop).toBe(4000);
   expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
 });

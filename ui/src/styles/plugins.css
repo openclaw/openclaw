@@ -296,8 +296,7 @@
   contain-intrinsic-block-size: auto 280px;
 }
 
-.plugin-catalog-section__header,
-.plugins-settings-error {
+.plugin-catalog-section__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -673,7 +672,6 @@
 }
 
 .plugins-tile--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
@@ -778,7 +776,7 @@
   padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-consent__header > .oc-dialog__close {
+.plugins-consent__header .oc-dialog__close {
   align-self: start;
   margin-block-start: calc(12px - var(--overlay-modal-padding));
 }
@@ -1609,8 +1607,8 @@
   }
 
   /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
-    justify-content: center;
+  openclaw-skills-page .skill-library-search__action .refresh-button {
+    justify-items: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {

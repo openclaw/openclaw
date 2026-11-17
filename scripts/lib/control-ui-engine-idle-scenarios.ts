@@ -9,14 +9,57 @@ import { parityBaseScenario } from "../control-ui-parity/fixtures.ts";
 import { dataUsageScenarios } from "./control-ui-data-usage-scenarios.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { createEnginePageScenarios } from "./control-ui-engine-page-scenarios.ts";
-import { frames } from "./control-ui-interaction-navigation.ts";
-import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
+import { frames, navigation } from "./control-ui-interaction-navigation.ts";
+import {
+  interactionScenarios,
+  settleSidebarBackgroundWork,
+} from "./control-ui-interaction-scenarios.ts";
 import { readControlUiResourceCounts } from "./control-ui-resource-counts.ts";
 
 export type EngineIdleScenario = EngineScenario & { idle: true };
 
+type EngineIdleControl = EngineIdleScenario & {
+  idleControl: true;
+  prepare: (page: Page) => Promise<void>;
+  run: () => Promise<void>;
+};
+
 export function isEngineIdleScenario(scenario: EngineScenario): scenario is EngineIdleScenario {
   return "idle" in scenario && scenario.idle === true;
+}
+
+export function isEngineIdleControl(scenario: EngineScenario): scenario is EngineIdleControl {
+  return "idleControl" in scenario && scenario.idleControl === true;
+}
+
+/** Same native visibility and CPU window as app idle, without an app or Gateway. */
+export function createEngineIdleControls(durationMs = 30_000): readonly EngineIdleControl[] {
+  return ["blank", "static"].map((kind): EngineIdleControl => ({
+    id: `idle-control-${kind}-hidden`,
+    idle: true,
+    idleControl: true,
+    standaloneDocument: true,
+    explicitOnly: true,
+    viewports: ["desktop"],
+    visibility: "hidden",
+    route: kind === "blank" ? "about:blank" : "/__idle-static-control",
+    expected: `A natively hidden control document remains idle for ${durationMs} ms without input.`,
+    setup: async (page) => {
+      if (kind === "static") {
+        await page.route("**/__idle-static-control", (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: '<!doctype html><meta charset="utf-8"><title>Idle control</title><p>Static idle control</p>',
+          }),
+        );
+      }
+    },
+    prepare: async () => {},
+    run: () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, durationMs);
+      }),
+  }));
 }
 
 /** Endpoint reads only: no sampling timer or observer adds work during idle. */
@@ -38,6 +81,26 @@ export async function readEngineIdleState(page: Page) {
       gatewayPhase: snapshot?.gatewayPhase,
       route: location.pathname,
       nodes: document.querySelectorAll("*").length,
+      running: [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")]
+        .filter((row) => row.querySelector(".session-glyph__ring, .session-glyph__trace-run"))
+        .map((row) => {
+          const ring = row.querySelector<HTMLElement>(
+            ".session-glyph__ring, .session-glyph__trace-run",
+          )!;
+          const bounds = ring.getBoundingClientRect();
+          const port = row.closest(".sidebar-shell__body")?.getBoundingClientRect();
+          return {
+            key: row.dataset.sessionKey,
+            visible:
+              document.visibilityState === "visible" &&
+              bounds.bottom > (port?.top ?? 0) &&
+              bounds.top < (port?.bottom ?? innerHeight) &&
+              bounds.right > 0 &&
+              bounds.left < innerWidth,
+            animation: getComputedStyle(ring).animationName,
+            clock: Boolean(row.querySelector("openclaw-elapsed-time")),
+          };
+        }),
       rows: Object.fromEntries(
         selectors.map((selector) => [selector, document.querySelectorAll(selector).length]),
       ),
@@ -88,31 +151,26 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
       throw new Error("Clock fixture has no start time");
     }
     await clock.scrollIntoViewIfNeeded();
-    // The shared clock may be up to one tick old; a 30-second frozen label cannot pass.
-    await clock.evaluate(
-      (element, startedAt) =>
-        new Promise<void>((resolve, reject) => {
-          const deadline = performance.now() + 3_000;
-          const check = () => {
-            const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1_000));
-            const read = element.textContent?.trim() ?? "";
-            const seconds = [...read.matchAll(/(\d+)\s*([hms])/gu)].reduce(
-              (total, match) =>
-                total + Number(match[1]) * (match[2] === "h" ? 3600 : match[2] === "m" ? 60 : 1),
-              0,
-            );
-            if (Math.abs(seconds - elapsed) <= 2) {
-              resolve();
-            } else if (performance.now() >= deadline) {
-              reject(new Error(`Clock did not catch up: ${read}; expected ${elapsed}s`));
-            } else {
-              setTimeout(check, 100);
-            }
-          };
-          check();
-        }),
-      start,
-    );
+    // Compare at the formatter's precision: hour-long runs omit seconds.
+    const deadline = Date.now() + 3_000;
+    for (;;) {
+      const { label, now } = await clock.evaluate((element) => ({
+        label: element.textContent?.trim() ?? "",
+        now: Date.now(),
+      }));
+      const expected = [-2_000, -1_000, 0, 1_000, 2_000].map((offset) =>
+        formatDurationParts(resolveCompactDurationParts(Math.max(1_000, now - start + offset))!),
+      );
+      if (expected.includes(label)) {
+        break;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Clock did not catch up: ${label}; expected ${expected[2]}`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+    }
     checked.push({
       key,
       label: await clock.textContent(),
@@ -123,7 +181,7 @@ export async function verifyEngineIdleClocks(page: Page, gateway: MockGatewayCon
   return checked;
 }
 
-export function createEngineIdleScenarios(): readonly EngineScenario[] {
+export function createEngineIdleScenarios(durationMs = 30_000): readonly EngineScenario[] {
   const pages = createEnginePageScenarios();
   const pageSource = (id: string) => {
     const source = pages.find((scenario) => scenario.id === `page-${id}-leave`);
@@ -184,12 +242,11 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     viewports: ["desktop"],
     settings: { ...source.settings, locale: "en" },
     visibility: hidden ? "hidden" : undefined,
-    expected:
-      "A connected production page retains its route and native visibility for 30 seconds without input.",
+    expected: `A connected production page retains its route and native visibility for ${durationMs} ms without input.`,
     // The wait belongs to Node; a browser timeout would create measured page work.
     run: async () => {
       await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30_000);
+        setTimeout(resolve, durationMs);
       });
     },
   });
@@ -264,5 +321,108 @@ export function createEngineIdleScenarios(): readonly EngineScenario[] {
     ...[false, true].map((hidden) =>
       idle(clocks, `idle-sidebar-clock-${hidden ? "hidden" : "visible"}`, hidden),
     ),
+    ...[0, 1, 5, 20].flatMap((count) => {
+      const desktop = idle(
+        {
+          ...clocks,
+          fixtureOverrides: (_sandbox, base) => ({
+            sessions: base.sessions.map((row, index) =>
+              index > count && index <= 200
+                ? { ...row, hasActiveRun: false, activeRunIds: [], status: "done" }
+                : row,
+            ),
+          }),
+          prepare: async (page) => {
+            await navigation(page, "sessions");
+            const toggle = page.locator('[data-child-session-toggle="agent:main:interaction-a"]');
+            if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+              await toggle.click();
+            }
+            const more = page.locator('[data-show-more-children="agent:main:interaction-a"]');
+            if ((await more.count()) > 0) {
+              await more.click();
+            }
+            await page.waitForFunction(
+              (expected) =>
+                document.querySelectorAll(".sidebar-recent-session openclaw-elapsed-time")
+                  .length === expected,
+              count,
+            );
+            const viewport = page.viewportSize()!;
+            await page.mouse.move(viewport.width - 8, viewport.height - 8);
+            await page.locator('[role="tooltip"]:visible').first().waitFor({ state: "hidden" });
+            await settleSidebarBackgroundWork(page);
+          },
+        },
+        `idle-sidebar-running-${count}`,
+        false,
+      );
+      if (count !== 1) {
+        return [desktop];
+      }
+      return [
+        desktop,
+        {
+          ...desktop,
+          id: "idle-sidebar-clock-mobile-open-1",
+          viewports: ["mobile"],
+          expected:
+            "A touch-capable mobile page retains one visible running-session clock in its open navigation drawer without input.",
+          prepare: async (page, gateway) => {
+            await desktop.prepare(page, gateway);
+            const viewport = page.viewportSize()!;
+            const ready = await page.evaluate(({ width, height }) => {
+              const drawer = document.querySelector<HTMLElement>(
+                ".shell--mobile-nav.shell--nav-drawer-open > .shell-nav",
+              );
+              const runningClocks = drawer?.querySelectorAll<HTMLElement>(
+                ".sidebar-recent-session openclaw-elapsed-time",
+              );
+              const clock = runningClocks?.[0];
+              const row = clock?.closest(".sidebar-recent-session");
+              const clockStyle = clock ? getComputedStyle(clock) : undefined;
+              // ElapsedTime uses display: contents; measure its rendered text.
+              const range = document.createRange();
+              if (clock) {
+                range.selectNodeContents(clock);
+              }
+              const bounds = range.getBoundingClientRect();
+              const port = clock?.closest(".sidebar-shell__body")?.getBoundingClientRect();
+              return {
+                viewport: innerWidth === width && innerHeight === height,
+                // WebKit/Firefox can emulate touch while reporting zero maxTouchPoints.
+                coarsePointer: matchMedia("(pointer: coarse)").matches,
+                visibleDocument: document.visibilityState === "visible",
+                modalDrawer:
+                  drawer?.getAttribute("aria-modal") === "true" &&
+                  drawer.getAttribute("aria-hidden") !== "true" &&
+                  !drawer.inert,
+                oneClock: runningClocks?.length === 1,
+                visibleRow:
+                  row?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) === true,
+                labeledClock: Boolean(clock?.textContent?.trim()),
+                running: Boolean(
+                  row?.querySelector(".session-glyph__ring, .session-glyph__trace-run"),
+                ),
+                visibleText:
+                  clockStyle?.visibility === "visible" &&
+                  clockStyle.opacity !== "0" &&
+                  bounds.width > 0 &&
+                  bounds.height > 0 &&
+                  bounds.right > 0 &&
+                  bounds.left < innerWidth &&
+                  bounds.bottom > (port?.top ?? 0) &&
+                  bounds.top < (port?.bottom ?? innerHeight),
+              };
+            }, viewport);
+            if (Object.values(ready).some((condition) => !condition)) {
+              throw new Error(
+                `Mobile idle requires the selected touch viewport, an open modal drawer, and one visible running-session clock: ${JSON.stringify(ready)}`,
+              );
+            }
+          },
+        } satisfies EngineIdleScenario,
+      ];
+    }),
   ];
 }

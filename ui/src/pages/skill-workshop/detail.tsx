@@ -1,6 +1,7 @@
 import type { SkillWorkshopChange } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -115,12 +116,12 @@ export function Detail(props: { view: WorkshopView; reads: WorkshopReads }) {
       {!skill() ? (
         <div class="sw-notice">{t("skillWorkshop.viewer.archivedNotice")}</div>
       ) : unused() !== null ? (
-        <div class="sw-notice sw-notice--warning">
+        <InlineAlert tone="warning" class="sw-detail-alert">
           {t("skillWorkshop.unused.notice", {
             days: String(unused()),
             limit: String(UNUSED_ARCHIVE_DAYS),
           })}
-        </div>
+        </InlineAlert>
       ) : null}
       <nav class="sw-tabs" aria-label={t("skillWorkshop.tabs.aria")}>
         <For each={tabs()} keyed={(tab) => tab.value}>
@@ -451,7 +452,6 @@ export function Diff(props: {
   after: string;
   beforeLabel: string;
   afterLabel: string;
-  sameText?: string;
   tooLargeText?: string;
   /** Which side to show when there is no line diff; `before` unless set. */
   fallbackSide?: "before" | "after";
@@ -465,7 +465,7 @@ export function Diff(props: {
           <p class="sw-diff__same">
             {lines() === null
               ? (props.tooLargeText ?? t("skillWorkshop.viewer.diffTooLarge"))
-              : (props.sameText ?? t("skillWorkshop.viewer.noDiff"))}
+              : t("skillWorkshop.viewer.noDiff")}
           </p>
           <MarkdownHtml
             class="sw-markdown chat-text"

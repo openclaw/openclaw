@@ -213,8 +213,11 @@ describe("DirectDictationControl", () => {
     controller.transcript = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
     const { container, update } = mountControl(control, true);
-    expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
-      "Listening",
+    // The phase view is a lazy chunk that loads with the first dictation.
+    await vi.waitFor(() =>
+      expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
+        "Listening",
+      ),
     );
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating")?.click();

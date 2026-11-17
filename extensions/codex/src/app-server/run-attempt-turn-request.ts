@@ -35,6 +35,7 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
+import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
@@ -56,12 +57,8 @@ export async function prepareCodexAttemptTurnRequest(
   waitForActiveNativeTurnCompletion: () => Promise<boolean>,
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
-  const {
-    context,
-    turnState,
-    buildRenderedCodexDeveloperInstructions,
-    nativeHistoryProvenancePrefix,
-  } = prompt;
+  const { context, turnState, buildRenderedCodexInstructions, nativeHistoryProvenancePrefix } =
+    prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
@@ -111,7 +108,7 @@ export async function prepareCodexAttemptTurnRequest(
     capture: codexModelContentCapture,
     tools,
     buildInputMessages: buildCodexModelInputMessages,
-    buildSystemPrompt: buildRenderedCodexDeveloperInstructions,
+    buildSystemPrompt: buildRenderedCodexInstructions,
     onErrorDiagnostic: (error) => {
       embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
         error: formatErrorMessage(error),
@@ -341,10 +338,7 @@ export async function prepareCodexAttemptTurnRequest(
     });
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
+      developerInstructions: buildRenderedCodexInstructions(),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
     });
@@ -367,6 +361,28 @@ export async function prepareCodexAttemptTurnRequest(
       .flatMap((item) => (item.type === "text" ? [item.text] : []))
       .join("\n");
     try {
+      const recorder = params.userTurnTranscriptRecorder;
+      if (
+        !params.skipPreparedUserTurnMessage &&
+        !recorder?.isBlocked() &&
+        recorder?.captureModelPromptProjection
+      ) {
+        const { prompt: builtPrompt, promptInputRange } = turnState.promptBuild;
+        if (!promptInputRange) {
+          throw new Error("Codex prompt input range is missing before provider dispatch");
+        }
+        // Freeze current user and hook context, not native history or workspace policy.
+        // Embedded fallback must replay this same projection after native acceptance.
+        const currentInput = prependCurrentInboundContext(
+          params.prompt,
+          params.currentInboundContext,
+        );
+        const text =
+          builtPrompt.slice(0, promptInputRange.start) +
+          currentInput +
+          builtPrompt.slice(promptInputRange.end);
+        await recorder.captureModelPromptProjection(text, assertTurnCurrent);
+      }
       const startedTurn = assertCodexTurnStartResponse(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
@@ -462,7 +478,7 @@ export async function prepareCodexAttemptTurnRequest(
   prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     ...buildModelCallIdentity(),
-    systemPrompt: buildRenderedCodexDeveloperInstructions(),
+    systemPrompt: buildRenderedCodexInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: [],
     imagesCount:

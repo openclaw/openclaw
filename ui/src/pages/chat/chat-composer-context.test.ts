@@ -156,7 +156,7 @@ describe("renderChatComposer context usage", () => {
     });
     expect(contextRingFor(container)?.getAttribute("title")).toBe("Context: 89% used");
     expect(part(container, "context-value")?.textContent).toContain("180k");
-    expect(part(container, "title")?.textContent).toBe("Prompt budget");
+    expect(part(container, "header .oc-menu-heading__label")?.textContent).toBe("Prompt budget");
     expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
   });
 
@@ -454,6 +454,27 @@ describe("renderChatComposer context usage", () => {
     for (const text of ["Context window", "Latest run", "Cost", "$0.03"]) {
       expect(popoverText).toContain(text);
     }
+  });
+
+  it("leaves calls without a cache split out of the run cache rate", () => {
+    // A provider that reports prompt tokens without a cache split.
+    const unmeasured = (state: string) =>
+      assistant({
+        usage: { input: 1_000, cacheRead: 0, cacheWrite: 0, cacheTelemetry: { state } },
+      });
+    const run = (...calls: unknown[]) =>
+      part(
+        renderComposer({
+          session: { estimatedCostUsd: 0.01 },
+          messages: [{ role: "user", content: "hi" }, ...calls],
+          sessions: defaultSessions() as never,
+        }),
+        "stats",
+      )?.textContent;
+    const measured = assistant({ usage: { input: 10, cacheRead: 990, cacheWrite: 0 } });
+    expect(run(measured, unmeasured("available"))).toContain("Cache49.50%");
+    expect(run(measured, unmeasured("unavailable"))).toContain("Cache99.00%");
+    expect(run(unmeasured("unavailable"))).not.toContain("Cache");
   });
 
   it("omits the cost tooltip when every recorded cost is zero", () => {

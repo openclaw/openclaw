@@ -7,10 +7,8 @@ import type { Page } from "playwright";
 import type { GatewaySessionRow } from "../../ui/src/api/types.ts";
 import { pathForWorkboardBoard } from "../../ui/src/app-route-paths.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
-import {
-  defaultControlUiFeatureMethods,
-  type ControlUiMockGatewayScenario,
-} from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { prepareNativeControlUiPluginFixtures } from "../../ui/src/test-helpers/control-ui-plugin-fixture.ts";
 import { workboardUi } from "../../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import type { InteractionEvidence } from "./control-ui-interaction-scenarios.ts";
@@ -156,7 +154,7 @@ export function createWorkboardResourceFixture(
         }) satisfies GatewaySessionRow,
     ),
     methodResponses: workboardResourceResponses(totalCards, 1),
-  } satisfies ControlUiMockGatewayScenario;
+  } satisfies NativeControlUiMockGatewayScenario;
 }
 
 async function loadAllCards(page: Page, cardCount: number) {

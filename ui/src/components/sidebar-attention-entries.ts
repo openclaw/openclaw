@@ -30,8 +30,10 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   meta?: { context?: string; status: string };
   arrivedAtMs?: number;
   action:
-    | { kind: "navigate"; routeId: NavigationRouteId }
-    | { kind: "askCustodian"; alert: CustodianAlert };
+    | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
+    | { kind: "askCustodian"; alert: CustodianAlert }
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };

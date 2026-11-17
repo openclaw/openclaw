@@ -15,7 +15,6 @@ openclaw-question-page {
   grid-auto-rows: max-content;
   height: 100%;
   min-height: 100%;
-  align-content: start;
   align-content: safe center;
   justify-content: center;
   place-items: center;

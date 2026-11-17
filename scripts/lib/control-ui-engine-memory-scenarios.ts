@@ -1,5 +1,5 @@
 import { expect, type Page } from "playwright/test";
-import { pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
+import { APP_ROUTE_IDS, pathForRoute, type RouteId } from "../../ui/src/app-route-paths.ts";
 import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e-session-urls.ts";
 import {
@@ -10,6 +10,7 @@ import {
 import { parityBaseScenario } from "../control-ui-parity/fixtures.ts";
 import type { EngineScenario } from "./control-ui-engine-boot-scenarios.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
+import type { InteractionEvidence } from "./control-ui-interaction-scenarios.ts";
 
 /** A working day's churn in one document, sampled at the same parked route. */
 export function workingDayScenario(
@@ -318,6 +319,167 @@ export function workingDayScenario(
   };
 }
 
+/** Chromium scalar checkpoints avoid snapshot allocations between natural collections. */
+function messageCacheChurn(): EngineScenario {
+  const seed = workingDayScenario(1, "sessions");
+  const keys = Array.from({ length: 321 }, (_, index) => `agent:main:heap-census-${index}`);
+  return {
+    id: "cache-natural-scalar",
+    route: "/new",
+    explicitOnly: true,
+    memory: true,
+    expected:
+      "Chromium: 300 distinct 2,000-message switches with natural GC, then 20 more and repeated full GC.",
+    fixtureOverrides: (sandbox, base) => ({
+      ...seed.fixtureOverrides!(sandbox, base),
+      sessionKey: keys[0],
+      sessions: keys.map((key, index) => ({
+        key,
+        sessionId: `heap-census-${index}`,
+        agentId: "main",
+        kind: "direct" as const,
+        label: `Heap census ${index}`,
+        updatedAt: 1_800_000_000_000,
+      })),
+      sessionTranscripts: {},
+      historyMessages: [],
+    }),
+    prepare: async () => {},
+    run: async (page, gateway) => {
+      const cdp = await page.context().newCDPSession(page);
+      const evidence: InteractionEvidence = {};
+      const collect = async () => {
+        await cdp.send("HeapProfiler.collectGarbage");
+        await cdp.send("HeapProfiler.collectGarbage");
+        return cdp.send("Runtime.getHeapUsage");
+      };
+      try {
+        for (const [session, key] of keys.entries()) {
+          // Keep only the latest fixture response; older messages belong to the app's cache.
+          await gateway.setHistoryMessages(
+            Array.from({ length: 2_000 }, (_, index) => ({
+              role: index % 2 ? "assistant" : "user",
+              content: `Heap census ${session} message ${index}.\n${"Synthetic retained transcript.\n".repeat(4)}`,
+              timestamp: 1_800_000_000_000 + index * 1_000,
+              __openclaw: { id: `heap-census-${session}-${index}`, seq: index + 1 },
+            })),
+          );
+          await navigateToControlUiSession(page, key);
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await expect(pane).toHaveJSProperty("transcriptReady", true);
+          await pane.getByText(`Heap census ${session} message 1999.`, { exact: false }).waitFor();
+          await page.evaluate(() => {
+            Reflect.get(window, "openclawControlUiE2eGateway").requests.length = 0;
+          });
+          if (session === 300 || session === 320) {
+            evidence[`heapBefore${session}Bytes`] = (
+              await cdp.send("Runtime.getHeapUsage")
+            ).usedSize;
+            // Allow the existing delayed pane cleanup to finish before sampling retained data.
+            await page.waitForTimeout(4_100);
+            evidence[`heapAfter${session}Bytes`] = (await collect()).usedSize;
+          }
+        }
+        evidence.heapRepeatedBytes = (await collect()).usedSize;
+        return evidence;
+      } finally {
+        await cdp.detach();
+      }
+    },
+  };
+}
+
+/** Separate resident code/data from churn in the same production document. */
+function memoryOwnerCensus(messageCount?: number): EngineScenario {
+  const seed = workingDayScenario(1, "sessions");
+  const sizes =
+    messageCount === undefined
+      ? [0, 400, 2_000, ...Array.from({ length: 20 }, () => 400)]
+      : [messageCount];
+  const keys = sizes.map((_, index) => `agent:main:heap-census-${index}`);
+  return {
+    ...seed,
+    id: messageCount === undefined ? "memory-owner-census" : `memory-transcript-${messageCount}`,
+    expected:
+      messageCount === undefined
+        ? "Empty/400/2,000-message Chat, native routes, then twenty distinct session switches."
+        : `Fresh document with one ${messageCount}-message session.`,
+    fixtureOverrides: (sandbox, base) => ({
+      ...seed.fixtureOverrides!(sandbox, base),
+      sessionKey: keys[0],
+      sessions: keys.map((key, index) => ({
+        key,
+        sessionId: `heap-census-${index}`,
+        agentId: "main",
+        kind: "direct" as const,
+        label: `Heap census ${index}`,
+        updatedAt: 1_800_000_000_000,
+      })),
+      sessionTranscripts: Object.fromEntries(
+        keys.map((key, session) => [
+          key,
+          {
+            messages: Array.from({ length: sizes[session]! }, (_, index) => ({
+              role: index % 2 ? "assistant" : "user",
+              content: `Heap census ${session} message ${index}.\n${"Synthetic retained transcript.\n".repeat(4)}`,
+              timestamp: 1_800_000_000_000 + index * 1_000,
+              __openclaw: { id: `heap-census-${session}-${index}`, seq: index + 1 },
+            })),
+          },
+        ]),
+      ),
+    }),
+    run: async (page, _gateway, checkpoint): Promise<InteractionEvidence> => {
+      if (!checkpoint) {
+        throw new Error("Heap census requires memory collection");
+      }
+      const visitChat = async (index: number) => {
+        await navigateToControlUiSession(page, keys[index]!);
+        const pane = page.locator(".chat-pane-cache__pane--active");
+        await expect(pane).toHaveJSProperty("transcriptReady", true);
+        await pane.locator("textarea").first().waitFor();
+        if (sizes[index]) {
+          await pane
+            .getByText(`Heap census ${index} message ${sizes[index]! - 1}.`, { exact: false })
+            .waitFor();
+        }
+      };
+      await checkpoint("boot-new");
+      await visitChat(0);
+      if (messageCount !== undefined) {
+        await checkpoint(`chat-${messageCount}`);
+        return { messages: messageCount };
+      }
+      await checkpoint("chat-empty");
+      await visitChat(1);
+      await checkpoint("chat-400");
+      await visitChat(2);
+      await checkpoint("chat-2000");
+      await navigate(page, "new-session");
+      await checkpoint("chat-parked");
+      for (const id of APP_ROUTE_IDS) {
+        // Plugin/Workboard require their separate plugin-bundle fixture. Chat
+        // and New Session have explicit checkpoints above; settings redirects.
+        if (["plugin", "workboard", "chat", "new-session", "settings"].includes(id)) {
+          continue;
+        }
+        await navigate(page, id);
+        await checkpoint(`route-${id}-entered`);
+        await navigate(page, "new-session");
+        await checkpoint(`route-${id}-left`);
+      }
+      await checkpoint("tour-complete");
+      for (let index = 3; index < keys.length; index++) {
+        await visitChat(index);
+      }
+      await checkpoint("switched-20");
+      await navigate(page, "new-session");
+      await checkpoint("switched-20-parked");
+      return { sessionSwitches: 20, routeVisits: APP_ROUTE_IDS.length - 5 };
+    },
+  };
+}
+
 async function navigate(page: Page, routeId: RouteId) {
   await page.waitForFunction(() => window.openclawControlUi !== undefined);
   await page.evaluate(
@@ -332,7 +494,10 @@ async function navigate(page: Page, routeId: RouteId) {
           : "",
     },
   );
-  await waitForControlUiRoute(page, { routeId });
+  await waitForControlUiRoute(page, {
+    routeId:
+      routeId === "config" ? "appearance" : routeId === "model-setup" ? "model-providers" : routeId,
+  });
   await frames(page);
 }
 
@@ -458,6 +623,9 @@ export function createEngineMemoryScenarios(soakRounds: number): EngineScenario[
     ]),
   );
   return [
+    messageCacheChurn(),
+    memoryOwnerCensus(),
+    ...[0, 400, 2_000].map(memoryOwnerCensus),
     workingDayScenario(soakRounds),
     ...routeScenarios,
     {

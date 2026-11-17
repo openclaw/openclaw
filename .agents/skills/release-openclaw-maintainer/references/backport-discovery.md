@@ -1,8 +1,13 @@
 # Evidence-Driven Backport Discovery
 
 Use this before selecting backports for any OpenClaw release line: regular
-beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
-mutated, not a title search and not permission to expand a frozen release.
+beta/stable, extended-stable, or a release-repair branch. Audit each selected fix
+before applying it; complete the full inventory before freezing the candidate.
+This is not a title search or permission to expand a frozen release.
+
+For an individual fix-status check or a verified cumulative source count, use
+[fix-inclusion tracing](fix-inclusion.md). Keep its source-to-carrier mapping in
+this inventory, not a second release-state store.
 
 ## Start from the shared ledger
 
@@ -10,6 +15,17 @@ Start with [shared candidates and assessments](hotfix-ledger-management.md),
 including carry-forward and sibling-release evidence; sync new findings and
 decisions back. Empty/incomplete records do not replace the pinned inventory
 or P0/P1 discovery below. Use local evidence when access is unavailable.
+
+## Select by release track
+
+- **Extended-stable:** generally take only P0 and P1 hotfixes.
+- **Stable:** also consider significant P2 fixes that are easy to port.
+- **Beta:** allow a broader P2 set when fixes are reasonably small, portable,
+  and low risk.
+
+Assess actual impact, dependency closure, and maintenance risk, not just labels.
+These are selection defaults, not permission to expand frozen intake, bypass
+approval, or weaken validation. Record exceptions and rationale in the ledger.
 
 ## Freeze the Audit
 
@@ -85,20 +101,26 @@ for the batch:
 ```bash
 pnpm release:backport-probe -- \
   --baseline "$baseline_sha" \
+  --scan-end "$pinned_main_sha" \
   --candidate "$candidate_sha" > backport-probe.tsv
 ```
 
-The helper uses `git merge-tree --write-tree` with the candidate's parent as
-the explicit merge base, so it simulates that single patch without checking out
-or resetting a worktree. The TSV binds the resolved candidate and baseline,
-classification (`clean`, `conflicted`, or `already-covered`), conflict count,
-touched-file count, every touched path, and whether that path conflicts. It
-refuses root and merge commits whose cherry-pick mainline is ambiguous.
+The helper first requires every candidate to be reachable from the pinned scan
+end, then uses `git merge-tree --write-tree` with the candidate's parent as the
+explicit merge base. This simulates that single patch without checking out or
+resetting a worktree. The TSV binds the resolved candidate, baseline, and scan
+end; records reachability; and reports a patch classification (`clean`,
+`conflicted`, or `already-covered`), conflict count, touched-file count, every
+touched path, and whether that path conflicts. It refuses unreachable, root,
+and merge commits whose provenance or cherry-pick mainline is ambiguous.
 
-Record a failed probe with its exact reason. A clean probe is triage evidence
-only; it does not approve a backport. If the commit needs companions, probe and
-assess the smallest ordered final fix rather than treating each clean commit as
-an independent candidate.
+Every row remains `contract-review-required`: the mechanical probe cannot prove
+runtime reachability, caller-chain closure, or prerequisite dependencies. Record
+a failed probe with its exact reason. A clean patch classification is triage
+evidence only; it does not approve a backport. Trace callers and prerequisites
+under [Close Selected Contracts Before Qualification](#close-selected-contracts-before-qualification).
+If the commit needs companions, probe and assess the smallest ordered final fix
+rather than treating each clean commit as an independent candidate.
 
 ## Close Selected Contracts Before Qualification
 
@@ -138,7 +160,8 @@ pnpm release:backport-companions -- \
 ```
 
 Disposition every reported later same-path commit, later mention of the
-selected PR number, existing neighbor test, selected-file reference/registry,
+selected PR number or commit SHA (whole 7–40-character tokens, case-insensitive),
+existing neighbor test, selected-file reference/registry,
 candidate file-set difference, and candidate content difference. A whole-file
 difference is inspection evidence, not a failure: a release adaptation or the
 final selected companion sequence can differ legitimately. This scan is
@@ -193,8 +216,20 @@ That decision invalidates affected evidence; it never authorizes publication of
 untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
-proposed set for maintainer approval. After approval, backport with provenance,
-update the ledger, run focused proof plus the release-appropriate validation,
+proposed set for maintainer approval unless selection authority was explicitly
+delegated. During open preparation, a maintainer may instead approve an exact,
+dependency-closed group while independent discovery continues. Record that
+approval and the unfinished audit scope; do not call the full inventory complete
+or advance its scan cursor until every entry is accounted for. Follow the
+[owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
+ready approved groups without waiting for unrelated audit lanes.
+
+After approval, apply each backport directly
+to the canonical release branch with `git cherry-pick -x`, one at a time in
+dependency order; do not open individual or combined backport PRs. Follow
+[backports and new fixes](../SKILL.md#backports-and-new-fixes) for CI recovery
+and fixes not yet on main. Update the ledger, run focused proof plus
+release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.
@@ -220,7 +255,10 @@ Every porting brief contains these steps for each pick, in order:
 2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
    before porting.
 3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
-   `Release adaptation:` in the commit body.
+   `Release adaptation:` in the commit body. Immediately update the shared
+   [hotfix assessment](hotfix-ledger-management.md) after every adaptation;
+   record newly discovered validation errors and subsequent repairs as they
+   occur, not only when the pick or batch is finished.
 4. Run targeted tests and typechecks for the touched owners only. Wrap every
    local command in `timeout`; full local gates are not a worker's job.
 5. Commit, then append the pick's result to the lane report before the next

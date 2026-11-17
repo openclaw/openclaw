@@ -291,6 +291,26 @@ it("preserves hook context when backend sandbox env resolution is deferred", asy
   expect(buildExecSpec.mock.calls[0]?.[0]?.env).toMatchObject({ PLUGIN_SAFE: "yes" });
 });
 
+it.each([
+  [undefined, undefined, "/remote/workspace"],
+  [{ HOME: "/configured-home" }, undefined, "/configured-home"],
+  [{ HOME: "/configured-home" }, { HOME: "/requested-home" }, "/requested-home"],
+])("keeps sandbox HOME stable across task workdirs (%j, %j)", async (env, requested, home) => {
+  const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(async (params) =>
+    sandboxExecSpec(params.command),
+  );
+  const tool = backendTool({
+    env,
+    validateWorkdir: async (workdir) => workdir,
+    buildExecSpec,
+  });
+  for (const task of ["task-a", "task-b"]) {
+    const workdir = `/remote/workspace/.openclaw/tmp/${task}`;
+    await tool.execute(task, { command: "pwd", workdir, env: requested });
+    expect(buildExecSpec.mock.lastCall?.[0]).toMatchObject({ workdir, env: { HOME: home } });
+  }
+});
+
 it("lets lazy before_tool_call see invalid workdirs before failing unchanged params", async () => {
   const hooks = installWrappedHooks(
     vi.fn(async () => undefined),

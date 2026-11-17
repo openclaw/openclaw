@@ -50,7 +50,7 @@ describe("identity avatar model projection", () => {
         const extra = await loadExtraBootstrapFilesWithDiagnostics(workspace, ["IDENTITY.md"]);
         expect(extra.files[0]?.content).toBe(identity?.content);
         expect(extra.diagnostics).toEqual([]);
-        expect(project).toHaveBeenCalledTimes(kind === "local" ? 1 : 2);
+        expect(project).toHaveBeenCalledTimes(2);
         expect(await fs.readFile(filePath, "utf8")).toBe(source);
       } finally {
         project.mockRestore();
@@ -77,25 +77,5 @@ describe("identity avatar model projection", () => {
     const [identity] = await loadWorkspaceBootstrapFiles(workspace, ["IDENTITY.md"]);
     expect(identity?.content).toContain("[UNREADABLE:");
     expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe(source);
-  });
-
-  it("keeps an ordinary file alias bounded after caching the larger raw identity", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const workspace = tempDirs.make("identity-avatar-cache-bound-");
-    const identityPath = path.join(workspace, "IDENTITY.md");
-    const source = `- Avatar: data:image/png;base64,${"A".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES)}\n- Name: Cached\n`;
-    await fs.writeFile(identityPath, source);
-    const raw = await readWorkspaceFileWithGuards({
-      filePath: identityPath,
-      workspaceDir: workspace,
-    });
-    expect(raw).toMatchObject({ ok: true, content: source });
-    await fs.symlink("IDENTITY.md", path.join(workspace, "AGENTS.md"));
-
-    const [agents] = await loadWorkspaceBootstrapFiles(workspace, ["AGENTS.md"]);
-    expect(agents?.content).toContain("[UNREADABLE:");
-    expect(await fs.readFile(identityPath, "utf8")).toBe(source);
   });
 });

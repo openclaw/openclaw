@@ -44,6 +44,7 @@ export {
   isDevicePairApproveParams,
   isDevicePairRejectParams,
   isDevicePairRemoveParams,
+  isDevicePairCodeParams,
   isDevicePairSetupCodeParams,
   isDevicePairSetupStatusParams,
   isDevicePairRenameParams,

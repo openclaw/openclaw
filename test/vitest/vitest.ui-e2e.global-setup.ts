@@ -32,30 +32,40 @@ export default async function setup(project: TestProject) {
   if (root.getProvidedContext().controlUiE2eChromium !== undefined) {
     return;
   }
+  const setupStarted = performance.now();
   const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
   const available = canRunPlaywrightChromium(executablePath);
   if (available) {
     await assertUiE2ePreflight();
   }
   const productionRoot = process.env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT;
-  if (productionRoot) {
+  const deploymentRoot = process.env.OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT;
+  const artifactRoot = productionRoot || deploymentRoot;
+  if (artifactRoot) {
     // Artifact restore owns digest/revision verification. Fixtures copy these
     // immutable production bytes before changing HTML or service-worker identity.
     const { buildId, version } = normalizeControlUiBuildInfo(
-      JSON.parse(readFileSync(path.join(productionRoot, "..", "build-info.json"), "utf8")),
+      JSON.parse(readFileSync(path.join(artifactRoot, "..", "build-info.json"), "utf8")),
     );
-    root.provide("controlUiE2ePrebuiltAssets", {
-      root: path.resolve(productionRoot),
-      buildInfo: { buildId, version },
-    });
+    const assets = { root: path.resolve(artifactRoot), buildInfo: { buildId, version } };
+    // Deployment fixtures can borrow restored production bytes without narrowing
+    // the suite or replacing its separately owned mock/native-plugin bundle.
+    root.provide("controlUiE2eDeploymentAssets", assets);
+    if (productionRoot) {
+      root.provide("controlUiE2ePrebuiltAssets", assets);
+    }
   }
+  const launchStarted = performance.now();
   const browser = available
     ? await chromium.launchServer({
         executablePath,
+        // Secretless namespaces need not carry host DNS or /etc/hosts.
+        host: "127.0.0.1",
         // Match private suite launches: full-tile CPU rasterization is deterministic.
         args: ["--disable-partial-raster", "--disable-gpu-rasterization"],
       })
     : undefined;
+  const launchMs = performance.now() - launchStarted;
   // onClose runs after the entire invocation and worker pool settle, including
   // sibling projects whose setup borrowed the endpoint. A browser crash fails
   // its connected suites; the CI harness does not retry or relaunch it.
@@ -84,6 +94,9 @@ export default async function setup(project: TestProject) {
     available,
     wsEndpoint: browser?.wsEndpoint() ?? null,
   });
+  console.info(
+    `[ui-e2e] Chromium setup ${Math.round(performance.now() - setupStarted)} ms; launch ${Math.round(launchMs)} ms; available=${available}`,
+  );
 }
 
 // Inspector.targetCrashed has no payload. The browser Target domain retains the

@@ -92,6 +92,33 @@ it("publishes cohort scope discovery once and preserves independent write receip
   expect(publications).toEqual([4]);
 });
 
+it("bounds worker clone handles while keeping packed scope receipts independent", () => {
+  using database = new DatabaseSync(":memory:");
+  const record = createAdmission();
+  const receipts = createReceipts(record);
+  const scopes = Array.from({ length: 128 }, (_, index) => `entry-${index}`);
+  const before = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+  const revisions = [...record.writeScopes.values()];
+  expect(new Set(revisions.map((revision) => revision.state.buffer)).size).toBeLessThanOrEqual(8);
+  const inherited = structuredClone(revisions);
+
+  receipts.withSqliteDatabaseWriteScope(database, [scopes[17]!], () => {
+    receipts.begin(database, false);
+    receipts.finish(database, record);
+  });
+  const after = receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes)!;
+  for (let index = 0; index < scopes.length; index++) {
+    expect(after[index] === before[index]).toBe(index !== 17);
+    expect(Atomics.load(inherited[index]!.state, 0)).toBe(Atomics.load(revisions[index]!.state, 0));
+  }
+
+  receipts.retireSqliteDatabaseWriteScopes(database, scopes);
+  receipts.readSqliteDatabaseScopedWriteTokensForPath(":memory:", scopes);
+  const replacements = [...record.writeScopes.values()];
+  expect(replacements.every((revision) => Atomics.load(revision.state, 1) === 0)).toBe(true);
+  expect(inherited.every((revision) => Atomics.load(revision.state, 1) === 1)).toBe(true);
+});
+
 it("publishes scope discovery and reference installs without revisiting unchanged scopes", () => {
   const record = createAdmission();
   const references = new SharedArrayBuffer(8);

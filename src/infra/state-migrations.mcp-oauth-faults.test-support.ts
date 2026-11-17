@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
@@ -49,15 +50,15 @@ export function observeLegacyMcpOAuthImport(
   const created = vi
     .spyOn(workerCpu, "createCpuTrackedWorker")
     .mockImplementation((filename, options) => {
+      let workerEntry = filename;
       let workerOptions = options;
       if (mode !== "observe") {
+        const operationUrl =
+          typeof filename === "string" ? pathToFileURL(filename).href : filename.href;
+        const source = `${preload}\nawait import(${JSON.stringify(operationUrl)});`;
+        workerEntry = new URL(`data:text/javascript,${encodeURIComponent(source)}`);
         workerOptions = {
           ...options,
-          execArgv: [
-            ...(options?.execArgv ?? []),
-            "--import",
-            `data:text/javascript,${encodeURIComponent(preload)}`,
-          ],
           workerData: {
             ...options?.workerData,
             mcpMigrationSourceKey: sourceKey,
@@ -66,7 +67,7 @@ export function observeLegacyMcpOAuthImport(
           },
         };
       }
-      const worker = create(filename, workerOptions);
+      const worker = create(workerEntry, workerOptions);
       const post = worker.postMessage.bind(worker);
       const posted = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
         const message: unknown = args[0];

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { once } from "node:events";
 import { promisify } from "node:util";
 import { MessageChannel, Worker, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -10,6 +11,10 @@ import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "./runtime-worker-url.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "./worker-native-lifecycle.js";
 import { nativeWorkerLifecycleEntrypoint } from "./worker-native-lifecycle.runtime.test-support.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";
 
@@ -45,6 +50,13 @@ const nativeExit = {
 };
 const cases = [
   { ending: "reference-liveness", activeCompleted: true },
+  ...(["close-live-worker", "close-owner-retry"] as const).map((ending) =>
+    Object.assign({ ending }, trueFields("refusedSourceUsable retryJoined freshSourceUsable")),
+  ),
+  {
+    ending: "close-teardown-failure",
+    ...trueFields("failedSourceRetained overlapRefused"),
+  },
   {
     ending: "resource-idle-broker",
     ...resourceCustody,
@@ -161,7 +173,7 @@ function startSupervisor() {
 function createRequest(
   id: number,
   extra: Pick<NativeWorkerRequest & { type: "create" }, "resource" | "taskPort"> = {},
-): NativeWorkerRequest {
+): Extract<NativeWorkerRequest, { type: "create" }> {
   return {
     type: "create",
     id,
@@ -173,7 +185,7 @@ function createRequest(
   };
 }
 
-it("keeps the supervisor alive when a resource attachment endpoint is rejected synchronously", async () => {
+it("keeps the supervisor usable after resource attachment and worker entry failures", async () => {
   const supervisor = startSupervisor();
   const types = (id: number) =>
     supervisor.replies.filter((reply) => reply.id === id).map((reply) => reply.type);
@@ -195,21 +207,127 @@ it("keeps the supervisor alive when a resource attachment endpoint is rejected s
   await supervisor.until(() => types(1).includes("stop-error"));
   task.port1.close();
 
-  expect(supervisor.exitCode()).toBeUndefined();
   expect(types(1)).toEqual(["created", "error", "execution-exit", "stop-error"]);
   const failure = supervisor.replies.find((reply) => reply.id === 1 && reply.type === "error");
   expect(failure).toMatchObject({
     error: { name: "RangeError", message: expect.stringContaining("70000") },
   });
 
-  supervisor.post(createRequest(2));
-  await supervisor.until(() => types(2).includes("created"));
-  supervisor.post({ type: "post", id: 2, value: "ping", transferList: [] });
-  await supervisor.until(() => types(2).includes("message"));
-  supervisor.post({ type: "stop", id: 2 });
+  const missingEntry = new URL("./missing-native-worker.mjs", import.meta.url).href;
+  supervisor.post({ ...createRequest(2), filename: { kind: "url", value: missingEntry } });
   await supervisor.until(() => types(2).includes("stopped"));
+  expect(
+    supervisor.replies.find((reply) => reply.id === 2 && reply.type === "error"),
+  ).toMatchObject({
+    error: { message: expect.stringContaining("missing-native-worker.mjs") },
+  });
+
+  supervisor.post(createRequest(3));
+  supervisor.post({ type: "post", id: 3, value: "ping", transferList: [] });
+  await supervisor.until(() => types(3).includes("message"));
+  supervisor.post({ type: "stop", id: 3 });
+  await supervisor.until(() => types(3).includes("stopped"));
 
   expect(supervisor.exitCode()).toBeUndefined();
-  expect(supervisor.replies).toContainEqual({ type: "message", id: 2, value: "ping" });
-  expect(types(2)).toEqual(["created", "message", "stopped"]);
+  expect(supervisor.replies).toContainEqual({ type: "message", id: 3, value: "ping" });
+  expect(types(3)).toEqual(["created", "message", "stopped"]);
 }, 30_000);
+
+it("retains an independent resource after completed execution source close", async () => {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const moduleUrl = new URL(
+    `data:text/javascript,${encodeURIComponent(
+      'export function createNativeWorkerResource(port) { port.on("message", value => port.postMessage(value)); return { async close() { port.close(); } }; }',
+    )}`,
+  );
+  const resource = await source.captureIndependentResource(moduleUrl);
+  let successor: Awaited<ReturnType<typeof source.captureIndependentResource>> | undefined;
+  try {
+    expect(await source.retireIdleBroker()).toBe(false);
+    await closeDefaultRetainedNativeWorkerSource();
+    const reply = once(resource.port, "message");
+    resource.port.postMessage("retained-custody", []);
+    expect(await reply).toEqual(["retained-custody"]);
+    await expect(source.captureIndependentResource(moduleUrl)).rejects.toThrow("source is closing");
+    successor = await captureRetainedNativeWorkerSource({
+      runtimeGeneration: undefined,
+    }).captureIndependentResource(moduleUrl);
+    await resource.close();
+    const successorReply = once(successor.port, "message");
+    successor.port.postMessage("successor-custody", []);
+    expect(await successorReply).toEqual(["successor-custody"]);
+  } finally {
+    await resource.close();
+    await closeDefaultRetainedNativeWorkerSource();
+    await successor?.close();
+  }
+});
+
+it("replaces failed retained broker authority after completed source close", async () => {
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(closeDefaultRetainedNativeWorkerSource);
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const moduleUrl = new URL(
+    `data:text/javascript,${encodeURIComponent(
+      'export function createNativeWorkerResource(port) { port.on("message", value => { if (value === "exit") process.exit(17); else port.postMessage(process.pid); }); return { async close() { port.close(); } }; }',
+    )}`,
+  );
+  const resource = await source.captureIndependentResource(moduleUrl);
+  let failed = false;
+  cleanup.defer(async () => {
+    if (!failed) {
+      await resource.close();
+    }
+  });
+  const firstReply = once(resource.port, "message");
+  resource.port.postMessage("pid", []);
+  const [pid] = await firstReply;
+  resource.retainBrokerUntilProcessExit();
+  const lost = once(resource.port, "close");
+  resource.port.postMessage("exit", []);
+  await lost;
+  failed = true;
+  // Transport loss is not a fabricated native-close receipt for the old claim.
+  await expect(resource.close()).rejects.toThrow();
+  await closeDefaultRetainedNativeWorkerSource();
+  const successor = await captureRetainedNativeWorkerSource({
+    runtimeGeneration: undefined,
+  }).captureIndependentResource(moduleUrl);
+  cleanup.defer(() => successor.close());
+  const nextReply = once(successor.port, "message");
+  successor.port.postMessage("pid", []);
+  expect((await nextReply)[0]).not.toBe(pid);
+});
+
+it("shares cold broker admission between independent and synchronous execution resources", async () => {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const moduleUrl = new URL(
+    `data:text/javascript,${encodeURIComponent(
+      'export function createNativeWorkerResource(port) { port.on("message", () => port.postMessage(process.pid)); return { async close() { port.close(); } }; }',
+    )}`,
+  );
+  const preparing = source.captureIndependentResource(moduleUrl);
+  const worker = source.create(
+    new URL(
+      `data:text/javascript,${encodeURIComponent(
+        'import { parentPort, workerData } from "node:worker_threads"; workerData.resource.on("message", value => parentPort.postMessage(value)); workerData.resource.postMessage("owner");',
+      )}`,
+    ),
+    {},
+    source.captureResource(moduleUrl, "resource"),
+  );
+  const workerReply = new Promise<unknown>((resolve, reject) => {
+    worker.on("message", resolve);
+    worker.on("error", reject);
+  });
+  const resource = await preparing;
+  try {
+    const independentReply = once(resource.port, "message");
+    resource.port.postMessage("owner", []);
+    expect((await independentReply)[0]).toEqual(await workerReply);
+  } finally {
+    await worker.terminate();
+    await resource.close();
+    await closeDefaultRetainedNativeWorkerSource();
+  }
+});

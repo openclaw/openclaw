@@ -1,5 +1,0 @@
-# PR #192974: 309 net regression-test lines against the exact CI base.
-# Covers multi-level Waiting on/direct/history navigation, collapsed owning groups,
-# late/partial lineage, pagination, manual disclosure, and unrelated running trees.
-# Reuses the existing Chromium suite; no shared scalar or test expectations change.
-309

@@ -7,8 +7,10 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { requestOneShotSettledExitWatchdog } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import { hasCliProcessScope } from "./runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -117,6 +119,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
+        if (hasCliProcessScope()) {
+          requestOneShotSettledExitWatchdog();
+        }
         const repair = hidden
           ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
           : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;

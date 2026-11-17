@@ -119,10 +119,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
     }),
   );
-  const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const runWithCurrentPluginMetadata = <T>(config: OpenClawConfig, run: () => T): T => {
     const soleAgentId = tryResolveSoleAgentId(config);
-    return runWithPluginMetadataSnapshot(
+    return pluginMetadataSnapshotScope.run(
       {
         config,
         workspaceDir: soleAgentId ? resolveAgentWorkspaceDir(config, soleAgentId) : undefined,
@@ -140,7 +139,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   let modelRetirementRepairRan = false;
-  let modelRetirementOnly = false;
+  let modelRetirementBlockers = ["model-retirement"];
   let channelWorkObserved = false;
   const configAdvisories: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
@@ -519,7 +518,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           env: process.env,
           blockedCodexProviderPlan,
           pluginMetadataSnapshotState,
-          runWithPluginMetadataSnapshot,
+          runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
           ...(prompter
             ? {
                 onCapabilityConsent: createPluginCapabilityConsentPrompter({
@@ -548,7 +547,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     openAICodexAuthProfileIdMap = repairSequence.openAICodexAuthProfileIdMap;
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
-    modelRetirementOnly = repairSequence.modelRetirementOnly;
+    modelRetirementBlockers = repairSequence.modelRetirementBlockers;
     if (repairSequence.authProfilesRepaired) {
       const { refreshGatewayAuthStateAfterAuthProfileRepair } =
         await import("./doctor/auth-profile-repair.js");
@@ -668,30 +667,31 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // Later Doctor contributions and service finalization consume these callbacks.
   const resources = preparingResources.move();
 
-  const retirementOnlyBlocker =
-    (!modelRetirementOnly && "model-retirement") ||
-    (state !== preRetiredConfigState && "config-repair") ||
-    (!snapshot.exists && "config-missing") ||
-    (!snapshot.valid && "config-invalid") ||
-    (legacyStep.blocksWrite && "legacy-write-blocked") ||
-    (deferHeartbeat && "heartbeat-deferred") ||
-    (!preflight.preflightLegacyStateConfig && "preflight-unsettled") ||
-    (preflight.configChanged && "preflight-config-changed") ||
-    (preflight.stateMigrationUnsettled && "state-migration-unsettled") ||
-    (preflight.cronStoreSelectionUnresolved && "cron-selection-unresolved") ||
-    (Boolean(preflight.heartbeatMigrationSource) && "heartbeat-migration") ||
-    (Boolean(preflight.modelBillingRouteMigrationSource) && "billing-migration") ||
-    (configRepairWarnings.length > 0 && "repair-warning") ||
-    (mutableAllowlistWarnings.length > 0 && "mutable-allowlist-warning") ||
-    (pluginWarnings.length > 0 && "plugin-warning") ||
-    (Boolean(migrationResult.modelBillingRouteWarnings?.length) && "billing-warning") ||
-    (pluginMetadataSnapshotState.inventoryChanged && "plugin-inventory-changed") ||
-    (channelWorkObserved && "channel-work") ||
-    (providerRenames.length > 0 && "provider-renames") ||
-    (blockedCodexModelIdentities.size > 0 && "blocked-models") ||
-    (retiredPhoneControlCleanup.cleanupPending && "phone-cleanup") ||
-    (migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound") ||
-    (Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused");
+  const retirementOnlyBlockers = [
+    ...modelRetirementBlockers,
+    state !== preRetiredConfigState && "config-repair",
+    !snapshot.exists && "config-missing",
+    !snapshot.valid && "config-invalid",
+    legacyStep.blocksWrite && "legacy-write-blocked",
+    deferHeartbeat && "heartbeat-deferred",
+    !preflight.preflightLegacyStateConfig && "preflight-unsettled",
+    preflight.configChanged && "preflight-config-changed",
+    preflight.stateMigrationUnsettled && "state-migration-unsettled",
+    preflight.cronStoreSelectionUnresolved && "cron-selection-unresolved",
+    Boolean(preflight.heartbeatMigrationSource) && "heartbeat-migration",
+    Boolean(preflight.modelBillingRouteMigrationSource) && "billing-migration",
+    configRepairWarnings.length > 0 && "repair-warning",
+    mutableAllowlistWarnings.length > 0 && "mutable-allowlist-warning",
+    pluginWarnings.length > 0 && "plugin-warning",
+    Boolean(migrationResult.modelBillingRouteWarnings?.length) && "billing-warning",
+    pluginMetadataSnapshotState.inventoryChanged && "plugin-inventory-changed",
+    channelWorkObserved && "channel-work",
+    providerRenames.length > 0 && "provider-renames",
+    blockedCodexModelIdentities.size > 0 && "blocked-models",
+    retiredPhoneControlCleanup.cleanupPending && "phone-cleanup",
+    migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound",
+    Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused",
+  ].filter((blocker): blocker is string => Boolean(blocker));
 
   const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
@@ -732,10 +732,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(providerRenames.length > 0 ? { providerRenames } : {}),
     modelRetirementRepairRan:
       modelRetirementRepairRan && !legacyStep.blocksWrite && (shouldWriteConfig || snapshot.valid),
-    retirementOnly: !retirementOnlyBlocker,
-    retirementOnlyBlocker: retirementOnlyBlocker || undefined,
+    retirementOnly: retirementOnlyBlockers.length === 0,
+    retirementOnlyBlockers,
     ...migrationResult,
-    runWithPluginMetadataSnapshot,
+    runWithPluginMetadataSnapshot: pluginMetadataSnapshotScope.run,
     invalidatePluginMetadataSnapshot,
   };
   return configResult;

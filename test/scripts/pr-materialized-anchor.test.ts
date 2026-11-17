@@ -1,45 +1,20 @@
 import { spawnSync } from "node:child_process";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyPrRoutingWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrRoutingWrapperSources, runWithPrAnchor } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const helper = resolve("scripts/pr-lib/materialized-anchor.mjs");
 
 function retire(path: string) {
-  const fd = openSync(path, "r");
-  try {
-    return spawnSync(process.execPath, [helper, "retire-created", path], {
-      encoding: "utf8",
-      env: { ...process.env, HOME: path },
-      stdio: [
-        "ignore",
-        "pipe",
-        "pipe",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        fd,
-      ],
-    });
-  } finally {
-    closeSync(fd);
-  }
+  return runWithPrAnchor(path, [helper, "retire-created", path], {
+    runtime: process.execPath,
+    env: { ...process.env, HOME: path },
+  });
 }
 
 describePosix("materialized PR anchor retirement", () => {

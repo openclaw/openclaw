@@ -63,6 +63,10 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.core.json",
   "config/tsconfig/oxlint.scripts.json",
   "test/tsconfig/tsconfig.test.root.json",
+  "test/tsconfig/tsconfig.test.root.tooling.json",
+  "test/tsconfig/tsconfig.test.root.scripts.json",
+  "test/tsconfig/tsconfig.test.root.other.json",
+  "test/tsconfig/tsconfig.test.root.e2e.json",
   "tsconfig.ui.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";

@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext } from "../../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
@@ -14,9 +13,6 @@ import { createSolidApplicationContextProvider } from "../../../test-helpers/sol
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
-import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
-
-type ActivityElement = SolidBridgeElement<SubagentActivityProps>;
 
 it("keeps live child headlines scoped to their run, incarnation, and connection", async () => {
   const connection = createApplicationGateway();
@@ -55,10 +51,17 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     createContext(connection.gateway, sessions),
   );
   const subscriptions = vi.spyOn(connection.gateway, "subscribeEvents");
-  const view = mountSolid(() => createComponent(ChatSubagentActivity, { rows: rows(child) }), {
-    wrapper: provider.wrapper,
-  });
-  const element = view.container.querySelector<ActivityElement>("openclaw-chat-subagent-activity")!;
+  const [currentChild, setCurrentChild] = createSignal(child);
+  const view = mountSolid(
+    () =>
+      createComponent(ChatSubagentActivity, {
+        get rows() {
+          return rows(currentChild());
+        },
+      }),
+    { wrapper: provider.wrapper },
+  );
+  const element = view.container;
   onTestFinished(() => {
     view.unmount();
     sessions.dispose();
@@ -122,10 +125,11 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).not.toContain("Running the backend tests");
   await emit();
   expect(element.textContent).toContain(digest.headline);
-  element.rows = rows({ ...child, activeRunIds: ["replacement-run"] });
+  setCurrentChild({ ...child, activeRunIds: ["replacement-run"] });
+  flush();
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
-  element.rows = rows(child);
+  setCurrentChild(child);
   flush();
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 11 });

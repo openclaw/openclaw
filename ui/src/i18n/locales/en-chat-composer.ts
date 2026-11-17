@@ -1,32 +1,28 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const catalog = {
   chat: {
     view: {
-      activityDetails: "View activity details",
       workingDetails: "Agent is working. View details",
     },
     composer: {
-      running: "running",
       composerInput: "Chat composer",
-      usePrediction: "Use suggestion",
-      predictionShortcut: "Tab",
-      dismissPrediction: "Dismiss suggestion",
+      predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",
-      preparingModel: "Preparing model…",
-      responding: "{name} is responding…",
-      sendingMessage: "Sending message…",
-      working: "{name} is working…",
+      preparingModel: "Preparing model",
+      responding: "{name} is responding",
+      sendingMessage: "Sending message",
+      working: "{name} is working",
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      runStatus: "Run status: {status}",
-      compactingContext: "Compacting context…",
+      compactingContext: "Compacting context",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
@@ -43,7 +39,6 @@ const catalog = {
       browserAnnotationPreview: "Browser annotation preview",
       browserAnnotationRegion: "{count} marked region",
       browserAnnotationRegions: "{count} marked regions",
-      browserAnnotationInspectedElement: "Element inspected",
       browserAnnotationRemoved: "Browser annotation removed.",
       browserAnnotationUndoUnavailable:
         "Undo is unavailable because the browser annotation limit has been reached.",
@@ -66,11 +61,6 @@ const catalog = {
         adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… Try again in a moment.",
       },
-      overrides: {
-        count: "{count} overrides",
-        countOne: "{count} override",
-        clear: "Reset this session’s changes",
-      },
       contextUsage: {
         title: "Context usage details",
         percentUsed: "Context: {pct}% used",
@@ -81,9 +71,10 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
-        latestRunTokens: "Latest run tokens",
-        estimatedCost: "Est. cost",
-        planUsage: "Plan usage",
+        cacheShort: "Cache",
+        cacheHitRate: "Prompt tokens read from cache",
+        sessionTotal: "Session total",
+        unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
@@ -98,7 +89,6 @@ const catalog = {
         compactDescription: "Summarizes older messages to free up space.",
         compactAfterRun: "Available after this reply finishes.",
       },
-      takePhoto: "Take photo",
       cameraAccessFailed:
         "Couldn’t access the camera. Check this browser’s camera permission and try again.",
       cameraBusy: "The camera is busy or unavailable to the browser.",
@@ -133,8 +123,6 @@ const catalog = {
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
-      openRealtimeTalkSettings: "Talk settings",
-      openDictationSettings: "Transcription setup",
       configureCapability: "Configure",
       holdToRecordSetting: "Hold the mic button to dictate",
       holdToDictate: "Hold to dictate",
@@ -149,9 +137,8 @@ const catalog = {
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
+      dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
-      dictationProviderUnavailable:
-        "No transcription provider is configured for dictation. Choose one in Settings to dictate.",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:
@@ -204,7 +191,7 @@ const catalog = {
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
       discardPendingMessage:
-        "Discard this local pending copy. This does not cancel a message already received by the Gateway.",
+        "Discard this local copy. This does not cancel a message already received by the Gateway.",
       steer: "Steer",
       steerQueuedMessage: "Steer queued message",
       resume: "Resume",
@@ -217,14 +204,14 @@ const catalog = {
       moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
+        followup: "Queued",
         applyingSettings: "Applying session settings",
         blockedByReview:
           "Queue paused. Review or discard the earlier held message in the conversation.",
         pausedByStop: "Queue paused",
-        pausedByStopReason: "You stopped the run",
+        pausedByStopReason: "You requested a stop",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
-        editing: "Editing",
         needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
@@ -236,14 +223,14 @@ const catalog = {
       empty: "No people found",
       truncated: "Keep typing to find more people.",
       online: "Online",
-      offline: "Disconnected",
       unavailable: "Could not load people. Try again.",
       accessDenied: "Mention access denied. Sign in or contact an admin.",
       profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
       rejected: "Mention search rejected. Check access or use another session.",
       limit: "You can mention up to 10 people per message.",
-      selectedLabel: "Will notify",
-      selected: "Will notify: {names}",
+      selectedLabel: "Notify or invite",
+      selected: "Notify or invite: {names}",
+      invite: "Guest invitations require the session creator or an admin.",
       remove: "Remove mention",
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",
@@ -276,7 +263,7 @@ const catalog = {
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
-        "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+        "Browser attachment storage is unavailable. Allow browser storage and close older OpenClaw tabs before reconnecting and retrying. No new message was sent.",
       outboxPayloadMissing:
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",
@@ -325,8 +312,7 @@ const catalog = {
       openOriginal: "Open original",
       compressToFit: "Compress to fit",
       retryCompression: "Retry compression",
-      compressionHint:
-        "Video is too large. Compress a copy on this device; the original stays unchanged.",
+      compressionHint: "Compress a smaller copy on this device. The original is unchanged.",
       compressing: "Compressing · {progress}%",
       compressionUnsupported: "This browser cannot compress this video.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
@@ -398,34 +384,6 @@ const catalog = {
   },
 } satisfies TranslationMap;
 
-export const registerChatComposerEnglish = Object.assign(
-  () => {
-    const {
-      view,
-      composer,
-      queue,
-      mentions,
-      permissions,
-      voice,
-      sendErrors,
-      attachments,
-      privateDraftReload,
-      progressLabels,
-      ...outboxRecovery
-    } = catalog.chat;
-    Object.assign(en.chat, outboxRecovery);
-    Object.assign(en.chat.view, view);
-    const { menu, ...composerLabels } = composer;
-    Object.assign(en.chat.composer, composerLabels);
-    en.chat.composer.menu ??= menu;
-    Object.assign(en.chat.queue, queue);
-    Object.assign(en.chat.mentions, mentions);
-    Object.assign(en.chat.permissions, permissions);
-    Object.assign(en.chat.voice, voice);
-    Object.assign(en.chat.sendErrors, sendErrors);
-    Object.assign(en.chat.attachments, attachments);
-    Object.assign(en.chat.privateDraftReload, privateDraftReload);
-    Object.assign(en.chat.progressLabels, progressLabels);
-  },
-  { catalog },
-);
+export const registerChatComposerEnglish = Object.assign(() => mergeCatalog(en, catalog), {
+  catalog,
+});

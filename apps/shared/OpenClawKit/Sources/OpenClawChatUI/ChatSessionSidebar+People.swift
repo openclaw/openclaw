@@ -210,7 +210,7 @@ private struct ChatSidebarPersonRow: View {
         .accessibilityValue(activity.label + " · " + (workload.map {
             String(format: String(localized: "%lld open sessions, %lld running"), $0._open, $0.running)
         } ?? String(localized: "Session counts unavailable")))
-        .help(workload == nil ? String(localized: "Session counts unavailable") : self.person.label)
+        .help(workload == nil ? String(localized: "Session counts unavailable") : "")
         .popover(isPresented: self.isPresented, arrowEdge: .trailing) {
             ChatSidebarPersonCard(
                 person: self.person,

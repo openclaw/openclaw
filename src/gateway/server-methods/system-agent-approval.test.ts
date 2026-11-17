@@ -26,6 +26,9 @@ import {
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
 import { resetPluginStateStoreForTests } from "../../plugin-state/plugin-state-store.js";
+import { createManagedPluginArtifactConsentHandler } from "../../plugins/capability-consent.js";
+import { installManagedPlugin } from "../../plugins/management-mutations.js";
+import { writeArtifacts } from "../../plugins/public-surface.test-support.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -56,7 +59,7 @@ function expectReplyParts(payload: unknown, ...parts: string[]) {
 
 const expiredGuidance = [
   "expired without a decision",
-  "approve it in the Control UI or OpenClaw apps",
+  "approve it in the OpenClaw app",
   "Retrying alone does not approve the change",
 ];
 const failedGuidance = ["application status is unconfirmed", "before retrying"];
@@ -65,6 +68,8 @@ const cancelledGuidance = ["approval request is no longer active", "No change wa
 const setupInferenceMocks = vi.hoisted(() => ({ resolvePersistentApplyInference: vi.fn() }));
 // mock-isolation: Exercise delegated approval without loading the machine's config CLI.
 vi.mock("../../cli/config-cli.js", () => ({ runConfigSet: vi.fn() }));
+// mock-isolation: Approval composition uses the real staged consent owner, not package downloads or runtime code.
+vi.mock("../../plugins/management-mutations.js", () => ({ installManagedPlugin: vi.fn() }));
 vi.mock("../../system-agent/setup-inference.js", () => ({
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
 }));
@@ -75,6 +80,7 @@ afterEach(() => {
 
 describe("Full Access delegated chat", () => {
   const verifiedConfig: OpenClawConfig = {
+    commands: { plugins: false },
     agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
     auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
   };
@@ -105,7 +111,7 @@ describe("Full Access delegated chat", () => {
 
   async function createDelegatedChatFixture(
     scheduler: GatewayScheduler,
-    source: "typed" | "model tool" | "repair" = "typed",
+    source: "typed" | "model tool" | "repair" | "plugin" = "typed",
     previousRun = "live",
   ) {
     const stateDir = systemAgentTempDirs.make("openclaw-full-access-change-");
@@ -125,7 +131,13 @@ describe("Full Access delegated chat", () => {
       ...createSnapshot({ sourceConfig: verifiedConfig, hash: "verified-config", raw: null }),
       includedPaths: [],
     });
+    const applyPluginRuntime = vi.fn(async () => ({
+      operationId: "synthetic-plugin-application",
+      generation: 7,
+      pluginIds: ["consent-fixture"],
+    }));
     const engine = new SystemAgentChatEngine({
+      deps: { applyPluginRuntime },
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: fixture.binding,
@@ -140,11 +152,19 @@ describe("Full Access delegated chat", () => {
           operatorApprovalOnly: params.operatorApprovalOnly,
           proposalRef: params.session.proposalRef,
         });
-        await tool.execute("propose-config", {
-          action: "config_set",
-          path: source === "repair" ? "gateway.port" : "logging.level",
-          value: source === "repair" ? "18789" : "debug",
-        });
+        await tool.execute(
+          "propose-change",
+          source === "plugin"
+            ? {
+                action: "plugin_install",
+                spec: "git:github.com/example/consent-fixture@v1.0.0",
+              }
+            : {
+                action: "config_set",
+                path: source === "repair" ? "gateway.port" : "logging.level",
+                value: source === "repair" ? "18789" : "debug",
+              },
+        );
         return { text: "Change proposed." };
       },
     });
@@ -173,7 +193,7 @@ describe("Full Access delegated chat", () => {
     const operationalRunInstance = createOperationalRunInstanceRef("delegated-full-run");
     const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
     const requested = createDeferred();
-    const broadcast = vi.fn((event: string) => {
+    const broadcast = vi.fn<GatewayRequestContext["broadcast"]>((event) => {
       if (event === "openclaw.approval.requested") {
         requested.resolve();
       }
@@ -213,6 +233,7 @@ describe("Full Access delegated chat", () => {
     return {
       engine,
       manager,
+      applyPluginRuntime,
       authority,
       delegatedSession,
       runConfigSet: vi.mocked(runConfigSetCommand),
@@ -227,6 +248,188 @@ describe("Full Access delegated chat", () => {
         ).toHaveLength(count),
     };
   }
+
+  it.each([
+    "apply",
+    "source-denied",
+    "capabilities-denied",
+    "cancelled",
+    "changed-surface",
+  ] as const)(
+    "keeps delegated Git installation behind exact source and capability approval: %s",
+    async (outcome) => {
+      const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "plugin");
+      const stage = systemAgentTempDirs.make("openclaw-delegated-plugin-stage-");
+      const manifest = {
+        id: "consent-fixture",
+        configSchema: {},
+        contracts: { tools: ["fixture_read"] },
+      };
+      writeArtifacts(stage, {
+        "package.json": { name: "consent-fixture", openclaw: { extensions: ["./index.js"] } },
+        "openclaw.plugin.json": manifest,
+        "index.js": "throw new Error('capability review must not execute plugin code');",
+      });
+      const committed = vi.fn();
+      // Substitute acquisition/publication I/O only; capability review and token validation are real.
+      vi.mocked(installManagedPlugin).mockImplementation(async (params) => {
+        const consent = createManagedPluginArtifactConsentHandler({
+          config: verifiedConfig,
+          source: "git",
+          onCapabilityConsent: params.onCapabilityConsent,
+        });
+        await consent.onBeforePluginArtifactCommit({
+          pluginId: manifest.id,
+          stagedArtifactDir: stage,
+          mode: "install",
+        });
+        params.beforePersistentApply?.();
+        committed();
+        const application = await params.applyRuntime?.({
+          config: verifiedConfig,
+          pluginIds: [manifest.id],
+          reason: "install",
+        });
+        return {
+          plugin: {
+            id: manifest.id,
+            name: manifest.id,
+            installed: true,
+            enabled: true,
+            state: "enabled",
+          },
+          application,
+        };
+      });
+      const controller = new AbortController();
+      const pending = fixture.callChat("Please install the requested Git plugin", {
+        approvalSignals: [controller.signal],
+      });
+      try {
+        expect(
+          await Promise.race([
+            fixture.requested.promise.then(() => "requested"),
+            pending.then(() => "completed"),
+          ]),
+        ).toBe("requested");
+        const source = expectDefined(
+          (await fixture.manager.listPendingRecords())[0],
+          "source approval",
+        );
+        expect(source.request.description).toContain("Git repository");
+        expect(source.request.description).toContain("outside ClawHub");
+        expect(source.request.description).toContain(
+          "git:github.com/example/consent-fixture@v1.0.0",
+        );
+        expect(installManagedPlugin).not.toHaveBeenCalled();
+        expect(fixture.applyPluginRuntime).not.toHaveBeenCalled();
+        if (outcome === "source-denied") {
+          await fixture.manager.resolve(source.id, "deny", "operator");
+          expectReplyParts((await pending).payload, "Denied");
+          expect(installManagedPlugin).not.toHaveBeenCalled();
+          expect(committed).not.toHaveBeenCalled();
+          expect(fixture.applyPluginRuntime).not.toHaveBeenCalled();
+          expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
+          expect(await fixture.manager.listPendingRecords()).toEqual([]);
+          return;
+        }
+        const capabilitiesRequested = createDeferred();
+        const sourceApplied = createDeferred();
+        fixture.broadcast.mockImplementation((event, payload) => {
+          if (event === "openclaw.approval.requested") {
+            capabilitiesRequested.resolve();
+          }
+          if (
+            event === "openclaw.approval.resolved" &&
+            expect
+              .objectContaining({ id: source.id, applicationStatus: "applied" })
+              .asymmetricMatch(payload)
+          ) {
+            sourceApplied.resolve();
+          }
+        });
+        await fixture.manager.resolve(source.id, "allow-once", "operator");
+        expect(
+          await Promise.race([
+            capabilitiesRequested.promise.then(() => "requested"),
+            pending.then(() => "completed"),
+          ]),
+        ).toBe("requested");
+        const capabilities = expectDefined(
+          (await fixture.manager.listPendingRecords())[0],
+          "capability approval",
+        );
+        expect(capabilities.request.description).toContain("fixture_read");
+        expect(capabilities.request.description).toContain("Conversation access: denied");
+        expect(capabilities.request.description).not.toContain("The host applies");
+        expect(capabilities.request.description).not.toContain(
+          "Do not request conversational approval",
+        );
+        expect(
+          fixture.broadcast.mock.calls.some(
+            ([event, payload]) =>
+              event === "openclaw.approval.resolved" &&
+              expect
+                .objectContaining({ id: source.id, applicationStatus: "not-applied" })
+                .asymmetricMatch(payload),
+          ),
+        ).toBe(false);
+        expect(capabilities.request.proposalHash).not.toBe(source.request.proposalHash);
+        expect(committed).not.toHaveBeenCalled();
+        expect(fixture.applyPluginRuntime).not.toHaveBeenCalled();
+        expect(await fixture.manager.resolve(source.id, "allow-once", "stale-operator")).toBe(
+          false,
+        );
+        if (outcome === "cancelled") {
+          controller.abort();
+        } else {
+          if (outcome === "changed-surface") {
+            writeArtifacts(stage, {
+              "openclaw.plugin.json": {
+                ...manifest,
+                contracts: { tools: ["fixture_read", "fixture_write"] },
+              },
+            });
+          }
+          await fixture.manager.resolve(
+            capabilities.id,
+            outcome === "capabilities-denied" ? "deny" : "allow-once",
+            "operator",
+          );
+        }
+        const result = await pending;
+        if (outcome === "apply") {
+          await sourceApplied.promise;
+          expectReplyParts(
+            result.payload,
+            'Installed plugin "consent-fixture"',
+            "Applied in Gateway generation 7",
+          );
+          expect(committed).toHaveBeenCalledOnce();
+          expect(fixture.applyPluginRuntime).toHaveBeenCalledOnce();
+        } else {
+          expect(committed).not.toHaveBeenCalled();
+          expect(fixture.applyPluginRuntime).not.toHaveBeenCalled();
+          expectReplyParts(
+            result.payload,
+            outcome === "cancelled"
+              ? "cancelled"
+              : outcome === "capabilities-denied"
+                ? "Denied"
+                : "capabilit",
+          );
+        }
+        fixture.expectRequests(2);
+        expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
+        expect(await fixture.manager.listPendingRecords()).toEqual([]);
+      } finally {
+        for (const record of await fixture.manager.listPendingRecords()) {
+          await fixture.manager.resolve(record.id, "deny", "cleanup");
+        }
+        await pending;
+      }
+    },
+  );
 
   it.each([
     "apply",
@@ -359,7 +562,7 @@ describe("Full Access delegated chat", () => {
         fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
       const reply = await fixture.callChat("config set gateway.port banana", {
-        fullPermission: true,
+        assertAutoApproveChangesCurrent: () => {},
       });
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
       expect(await fixture.manager.listPendingRecords()).toEqual([]);
@@ -420,7 +623,8 @@ describe("Full Access delegated chat", () => {
       const pending = fixture
         .callChat(
           "config set logging.level debug",
-          { approvalSignals: [controller.signal] },
+          // A posture boolean without host-held authority still requires approval.
+          { approvalSignals: [controller.signal], fullPermission: true },
           observation,
         )
         .then((result) => {
@@ -568,7 +772,7 @@ describe("Full Access delegated chat", () => {
 
       const call = await fixture.callChat(
         source === "typed" ? "config set logging.level debug" : "Change the logging level.",
-        { fullPermission: true },
+        { assertAutoApproveChangesCurrent: () => {} },
       );
 
       expect(call.error).toBeUndefined();
@@ -608,7 +812,8 @@ describe("Full Access delegated chat", () => {
         });
       }
       const proposalCall = fixture.callChat("config set logging.level info", {
-        fullPermission: previousRun === "unregistered-closed",
+        assertAutoApproveChangesCurrent:
+          previousRun === "unregistered-closed" ? () => {} : undefined,
       });
       if (previousRun === "unregistered-closed" || previousRun === "registration-failure") {
         await expect(proposalCall).rejects.toThrow(
@@ -641,7 +846,7 @@ describe("Full Access delegated chat", () => {
       const readOnly = () =>
         fixture.callChat("config get logging.level", {
           operationalRunInstance: replacementRun,
-          fullPermission: previousRun !== "live-restricted",
+          assertAutoApproveChangesCurrent: previousRun !== "live-restricted" ? () => {} : undefined,
         });
       if (previousRun === "storage-failure") {
         const forceDeny = fixture.manager.forceDenyIfRuntimeAuthorityClosed.bind(fixture.manager);

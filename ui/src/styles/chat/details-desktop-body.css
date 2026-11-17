@@ -26,9 +26,6 @@
   --details-section-padding: 10px;
   /* Follows the surface it sits on, so docked and floating panels read the same. */
   --details-separator: color-mix(in srgb, var(--text) 8%, var(--details-surface));
-  --scrollbar-size: 8px;
-  --scrollbar-thumb-inset: 2px;
-  --details-scrollbar-thumb: transparent;
   --details-fade-top: 0px;
   --details-fade-bottom: 0px;
   font-variant-numeric: tabular-nums;
@@ -38,11 +35,6 @@
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--details-scrollbar-thumb) transparent;
-
-  &:hover {
-    --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
-  }
 
   &[data-fade-top] {
     --details-fade-top: 24px;
@@ -72,23 +64,7 @@
 }
 
 @supports selector(::-webkit-scrollbar) {
-  .chat-details-desktop-body {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar {
-    width: var(--scrollbar-size);
-  }
-
   .chat-details-desktop-body::-webkit-scrollbar-track {
     margin-block: 16px;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-thumb {
-    border: var(--scrollbar-thumb-inset) solid transparent;
-    border-radius: 4px;
-    background: var(--details-scrollbar-thumb);
-    background-clip: content-box;
   }
 }
