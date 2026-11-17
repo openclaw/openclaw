@@ -34,6 +34,7 @@ import {
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
+import type { SpawnBrokerHost } from "./host-contract.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import {
   childCapacityError,
@@ -59,12 +60,12 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease } from "./resource-host.js";
+export type { BrokerNativeResourceLease, SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
-export class SpawnBrokerHost {
+class BrokerHost implements SpawnBrokerHost {
   private readonly unregisterExitCleanup: () => void;
   readonly entryPath: string;
   private readonly workerUrl: URL;
@@ -736,7 +737,7 @@ export class SpawnBrokerHost {
 }
 
 export function createSpawnBrokerHost(
-  options?: ConstructorParameters<typeof SpawnBrokerHost>[0],
+  options?: ConstructorParameters<typeof BrokerHost>[0],
 ): SpawnBrokerHost {
-  return new SpawnBrokerHost(options);
+  return new BrokerHost(options);
 }

@@ -348,40 +348,46 @@ it.each(["content", "source-path"] as const)(
   },
 );
 
-it("keeps a native-only recovery fork after its worker and admission cache retire", async () => {
-  await withWorkerFixture("worker-native-fork", async ({ fixture, cache }) => {
-    preparePluginNativeAdmissions(fixture.index, cache);
-    const { prepared, rootCalls } = await (async () => {
-      using observedFs = observeMainThreadFs();
-      const capture = await prepare(fixture);
-      return {
-        prepared: capture,
-        rootCalls: observedFs
-          .stacks()
-          .filter(({ stack }) => stack.includes("plugin-source-capture-directory")),
-      };
-    })();
-    const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
-    const recovery = prepared.artifact.captureRecoverySource();
-    const native = recovery.native!.fork();
-    try {
-      await recovery.disposeAsync();
-      await prepared.artifact.disposeAsync();
-      expect(workersActive()).toBe(false);
-      await retirePluginCache(cache);
-      expectBytes(captured, fixture.bytes);
-      const child = native.fork();
-      await child.disposeAsync();
-      expectBytes(captured, fixture.bytes);
-    } finally {
-      await native.disposeAsync();
-      await recovery.disposeAsync();
-      await prepared.artifact.disposeAsync();
-    }
-    expect(fs.existsSync(captured)).toBe(false);
-    expect(rootCalls).toEqual([]);
-  });
-});
+it.each(["sync", "async"] as const)(
+  "keeps a native-only %s recovery fork after its worker and admission cache retire",
+  async (mode) => {
+    await withWorkerFixture("worker-native-fork", async ({ fixture, cache }) => {
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const { prepared, rootCalls } = await (async () => {
+        using observedFs = observeMainThreadFs();
+        const capture = await prepare(fixture);
+        return {
+          prepared: capture,
+          rootCalls: observedFs
+            .stacks()
+            .filter(({ stack }) => stack.includes("plugin-source-capture-directory")),
+        };
+      })();
+      const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+      const recovery =
+        mode === "async"
+          ? await prepared.artifact.captureRecoverySourceAsync!()
+          : prepared.artifact.captureRecoverySource();
+      const native = recovery.native!.fork();
+      try {
+        await recovery.disposeAsync();
+        await prepared.artifact.disposeAsync();
+        expect(workersActive()).toBe(false);
+        await retirePluginCache(cache);
+        expectBytes(captured, fixture.bytes);
+        const child = native.fork();
+        await child.disposeAsync();
+        expectBytes(captured, fixture.bytes);
+      } finally {
+        await native.disposeAsync();
+        await recovery.disposeAsync();
+        await prepared.artifact.disposeAsync();
+      }
+      expect(fs.existsSync(captured)).toBe(false);
+      expect(rootCalls).toEqual([]);
+    });
+  },
+);
 
 it("keeps a prepared child's native bytes after its source custody retires", async () => {
   await withWorkerFixture("worker-child-native-custody", async ({ fixture, cache }) => {

@@ -11,6 +11,11 @@ import { WorktreeRemovalContentionError } from "./errors.js";
 import type { WorktreeEvictionReason } from "./git-worktree-operations.js";
 import { prepareWorktreeRegistryGuard, readRegistryWorktrees } from "./registry-read.js";
 import {
+  deferFailedWorktreeRemoval,
+  deferWorktreeCleanup,
+  removalDeferralReason,
+} from "./registry-retirement.js";
+import {
   createWorktreeRemovalClaimsGuard,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
@@ -36,6 +41,7 @@ export async function evictManagedWorktree(params: {
   env: NodeJS.ProcessEnv;
   record: ManagedWorktreeRecord;
   reason: WorktreeEvictionReason;
+  retryDeferred?: boolean;
   guard: WorktreeAllocationGuard;
   getConfig: () => OpenClawConfig;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
@@ -74,8 +80,12 @@ export async function evictManagedWorktree(params: {
     let outcome:
       | { ok: true; value: WorktreeEvictionReason | "dirty-purged" }
       | { ok: false; error: unknown };
+    const started = performance.now();
     try {
       assertCurrent();
+      if (params.retryDeferred && record.gcRetry) {
+        await deferWorktreeCleanup(env, { observed: record, reason: null }, assertCurrent);
+      }
       const { withSettledLocalWorkspace } =
         await import("../../gateway/worker-environments/local-workspace-projection.js");
       const value = await withSettledLocalWorkspace<WorktreeEvictionReason | "dirty-purged">(
@@ -243,7 +253,23 @@ export async function evictManagedWorktree(params: {
           );
           return reason;
         },
-      );
+      ).catch(async (error: unknown) => {
+        const refusal = removalDeferralReason(error);
+        if (refusal && !hasSqliteWorkerOutcomeUnknown(error)) {
+          await deferFailedWorktreeRemoval({
+            env,
+            id: record.id,
+            stage: "snapshot",
+            ...refusal,
+            elapsedMs: Math.round(performance.now() - started),
+            now: Date.now(),
+            previousAttempts: record.gcRetry?.attempts ?? 0,
+            claimToken: token,
+            assertCurrent,
+          });
+        }
+        throw error;
+      });
       outcome = { ok: true, value };
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
