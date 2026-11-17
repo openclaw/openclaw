@@ -167,6 +167,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
   "gateway.auth.trustedProxy.delegation.credentialFile":
     "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt":
+    "Opt-in check that each request's cf-access-jwt-assertion is signed by your Cloudflare Access team, is for this application, and has not expired. The user header must match the signed email claim. Without it, the Gateway trusts the identity headers from any trusted proxy source, including other local processes.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.issuer":
+    "Exact HTTPS origin of your Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Signing keys are fetched from its /cdn-cgi/access/certs endpoint.",
+  "gateway.auth.trustedProxy.cloudflareAccessJwt.audience":
+    "Application Audience (AUD) tag from the Access application's overview page. Assertions issued for other applications are rejected.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
   "gateway.auth.trustedProxy.gitCoauthor":
