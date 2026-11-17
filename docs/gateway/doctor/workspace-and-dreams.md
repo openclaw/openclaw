@@ -21,6 +21,8 @@ here too because they use doctor-style RPC methods but are not part of the
 
     When both `MEMORY.md` and legacy `memory.md` exist, `doctor --fix` can archive and merge the legacy file. Invalid UTF-8 leaves both files unchanged before archiving. If a file becomes invalid during archiving, Doctor leaves the canonical file unwritten and reports the preserved archive. Keep the original bytes, convert a copy to UTF-8, and restore the legacy file from the archive if needed before retrying.
 
+    Before publishing a merge, Doctor saves the original `MEMORY.md` as `MEMORY.md.pre-merge` beside the legacy archive under `.openclaw-repair/root-memory/`. Each repair gets a unique directory so earlier backups remain intact. A failed merge write leaves the live canonical file intact; inspect the repair directory and restore the archived legacy file before retrying. A second run after a completed merge leaves the canonical file unchanged.
+
     See [/concepts/agent-workspace](/concepts/agent-workspace) for a full guide to workspace structure and git backup (recommended private GitHub or GitLab).
 
   </Accordion>
