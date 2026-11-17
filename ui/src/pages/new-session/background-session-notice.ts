@@ -133,10 +133,9 @@ export function prepareBackgroundSessionCompletion(params: {
       const row = context.sessions.state.result?.sessions.find((session) =>
         areUiSessionKeysEquivalent(session.key, key),
       );
-      // A finished run needs no label; any other outcome names itself in one muted word.
       const status =
         result.status === "ok"
-          ? undefined
+          ? t("common.completed")
           : result.status === "timeout"
             ? t("sessionsView.statusTimeout")
             : result.stopReason === "rpc"

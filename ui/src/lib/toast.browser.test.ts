@@ -54,7 +54,11 @@ async function settleAnimations(host: HTMLElement) {
     });
     const animations = [...host.querySelectorAll(".app-toast")]
       .flatMap((toast) => toast.getAnimations({ subtree: true }))
-      .filter((animation) => animation.playState !== "finished");
+      .filter(
+        (animation) =>
+          animation.playState !== "finished" &&
+          Number.isFinite(animation.effect?.getComputedTiming().endTime),
+      );
     if (animations.length === 0) {
       return;
     }
@@ -116,38 +120,57 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
-  it("signals severity only through the leading icon color and the live role", async () => {
-    const { host, toast } = await renderToast();
-    const neutral = {
-      card: getComputedStyle(toast).backgroundColor,
-      text: getComputedStyle(toast).color,
-    };
-    expect(toast.querySelector(".app-toast__icon")).toBeNull();
-    expect(toast.getAttribute("role")).toBe("status");
-    const tone = (value: string) => {
-      const probe = host.appendChild(document.createElement("span"));
-      probe.style.color = value;
-      const color = getComputedStyle(probe).color;
-      probe.remove();
-      return color;
-    };
-    for (const [severity, token] of [
-      ["success", "var(--ok)"],
-      ["info", "var(--info)"],
-      ["warning", "var(--warn)"],
-      ["error", "var(--danger)"],
-    ] as const) {
-      const { toast: card, action } = await renderToast({ severity }, host);
-      expect(card.classList.contains(`app-toast--${severity}`)).toBe(true);
-      expect(getComputedStyle(card).columnGap).toBe("6px");
-      expect(getComputedStyle(card.querySelector(".app-toast__content")!).columnGap).toBe("14px");
-      expect(getComputedStyle(card.querySelector(".app-toast__icon")!).color).toBe(tone(token));
-      expect(getComputedStyle(card).backgroundColor).toBe(neutral.card);
-      expect(getComputedStyle(card).color).toBe(neutral.text);
-      expect(getComputedStyle(action).color).toBe(neutral.text);
-      expect(card.getAttribute("role")).toBe(severity === "error" ? "alert" : "status");
-    }
-  });
+  it.each([false, true])(
+    "signals severity without tinting the card (avatar: %s)",
+    async (avatar) => {
+      const options = {
+        description: "Operation status",
+        ...(avatar ? { avatar: { id: "main", name: "Main", textAvatar: "M" } } : {}),
+      };
+      const { host, toast } = await renderToast(options);
+      const neutral = {
+        card: getComputedStyle(toast).backgroundColor,
+        text: getComputedStyle(toast).color,
+      };
+      expect(toast.querySelector(".app-toast__icon")).toBeNull();
+      expect(toast.getAttribute("role")).toBe("status");
+      const tone = (value: string) => {
+        const probe = host.appendChild(document.createElement("span"));
+        probe.style.color = value;
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      for (const [severity, token] of [
+        ["success", "var(--ok)"],
+        ["info", "var(--info)"],
+        ["warning", "var(--warn)"],
+        ["error", "var(--danger)"],
+        ["progress", "var(--status-running)"],
+      ] as const) {
+        const { toast: card, action } = await renderToast({ ...options, severity }, host);
+        expect(card.classList.contains(`app-toast--${severity}`)).toBe(true);
+        expect(getComputedStyle(card).columnGap).toBe(avatar ? "10px" : "6px");
+        expect(getComputedStyle(card.querySelector(".app-toast__content")!).columnGap).toBe("14px");
+        expect(
+          getComputedStyle(
+            card.querySelector(avatar ? ".app-toast__description" : ".app-toast__icon")!,
+          ).color,
+        ).toBe(tone(token));
+        if (avatar) {
+          expect(card.querySelector(".app-toast__icon")).toBeNull();
+        } else {
+          expect(getComputedStyle(card.querySelector(".app-toast__description")!).color).toBe(
+            tone("var(--muted)"),
+          );
+        }
+        expect(getComputedStyle(card).backgroundColor).toBe(neutral.card);
+        expect(getComputedStyle(card).color).toBe(neutral.text);
+        expect(getComputedStyle(action).color).toBe(neutral.text);
+        expect(card.getAttribute("role")).toBe(severity === "error" ? "alert" : "status");
+      }
+    },
+  );
 
   it("splits the title and description and keeps one line a pill", async () => {
     await useViewport(1280);
