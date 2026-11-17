@@ -204,11 +204,18 @@ function formatChangedObligationFields(
   current: readonly DeferredPluginMigration[],
 ): string {
   const currentById = new Map(current.map((entry) => [entry.pluginId, entry]));
-  const fields = deferredPluginMigrationSchema.keyof().options;
-  const changed: string[] = [];
+  const expectedIds = new Set(expected.map((entry) => entry.pluginId));
+  // Reason and command are guidance; only the fields that refuse publication are reported.
+  const fields = deferredPluginMigrationSchema
+    .keyof()
+    .options.filter((field) => field !== "reason" && field !== "command");
+  const changed = current
+    .filter((entry) => !expectedIds.has(entry.pluginId))
+    .map((entry) => `${entry.pluginId}:added`);
   for (const before of expected) {
     const after = currentById.get(before.pluginId);
     if (!after) {
+      changed.push(`${before.pluginId}:removed`);
       continue;
     }
     for (const field of fields) {

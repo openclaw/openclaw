@@ -367,6 +367,37 @@ describe("unavailable plugin migration owners", () => {
     },
   );
 
+  it("publishes Doctor's config repair when a new obligation sorts before a retained one", async () => {
+    await withHome(async (home) => {
+      const owners = { "zeta-owner": { z: 1 }, "alpha-owner": { a: 1 } };
+      await writeOpenClawConfig(home, {
+        gateway: { mode: "local" },
+        agents: { list: [{ id: "main" }] },
+        plugins: {
+          entries: Object.fromEntries(
+            Object.entries(owners).map(([id, config]) => [id, { enabled: true, config }]),
+          ),
+        },
+      });
+      await defer(makePending("zeta-owner", { configPaths: protectedConfig("zeta-owner") }));
+
+      // Doctor's retained-first list ([zeta, alpha]) and the rows read back by ID
+      // ([alpha, zeta]) name the same obligations; publication must not refuse.
+      trackDoctorPreflightCache(
+        await runDoctorConfigPreflight({ ...options, migrateLegacyConfig: true }),
+      );
+
+      expect(readDeferredPluginMigrations().map(({ pluginId }) => pluginId)).toEqual([
+        "alpha-owner",
+        "zeta-owner",
+      ]);
+      const written = await readConfig(home);
+      expect(written.agents).not.toHaveProperty("list");
+      expect(written.plugins.entries["zeta-owner"].config).toEqual(owners["zeta-owner"]);
+      expect(written.plugins.entries["alpha-owner"].config).toEqual(owners["alpha-owner"]);
+    });
+  });
+
   it("keeps retained values and tells Doctor which unavailable plugin to install or enable", async () => {
     await withHome(async (home) => {
       const pluginId = "webhooks";

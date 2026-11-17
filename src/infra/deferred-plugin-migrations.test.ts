@@ -255,6 +255,25 @@ describe("deferred configured-plugin migrations", () => {
     },
   );
 
+  it("publishes against the same obligations listed in another order", () => {
+    const { env } = fixture();
+    const alpha = { ...pending, pluginId: "alpha-plugin" };
+    const zeta = { ...pending, pluginId: "zeta-plugin", requiresStateMigration: true as const };
+    writePending(env, zeta);
+    writePending(env, alpha);
+    const publish = vi.fn(() => "published");
+
+    expect(
+      withDeferredPluginMigrationsCurrent({ env, expectedPending: [zeta, alpha] }, publish),
+    ).toBe("published");
+    expect(() =>
+      withDeferredPluginMigrationsCurrent(
+        { env, expectedPending: [{ ...zeta, requiresStateMigration: undefined }, alpha] },
+        publish,
+      ),
+    ).toThrow("changed=[zeta-plugin:requiresStateMigration]");
+  });
+
   it("rechecks obligations created before missing-state publication acquires ownership", () => {
     const { env } = fixture();
     const acquire = stateOwners.acquireStateDatabaseSchemaLease;
@@ -459,8 +478,21 @@ describe("deferred configured-plugin migrations", () => {
     });
 
     expect(error.message).toContain("during config include publication");
-    expect(error.message).toContain("+2 more");
+    expect(error.message).toContain(
+      "changed=[fixture-plugin:configPaths, fixture-plugin:requiresDoctorInspection, fixture-plugin:requiresStateMigration, fixture-plugin:validationExcludedPaths]",
+    );
     expect(error.message).not.toContain("/private/");
+  });
+
+  it("names added and removed obligations that a truncated ID list hides", () => {
+    const owner = (pluginId: string) => ({ pluginId, reason: "r", command: "c" });
+    const shared = ["a-plugin", "b-plugin", "c-plugin", "d-plugin"].map(owner);
+    const error = new DeferredPluginMigrationConflictError([...shared, owner("y-plugin")], {
+      expected: [...shared, owner("z-plugin")],
+    });
+
+    expect(error.message).toContain("expected=[a-plugin, b-plugin, c-plugin, d-plugin, +1 more]");
+    expect(error.message).toContain("changed=[y-plugin:added, z-plugin:removed]");
   });
 
   it("removes historical completion facts when work is deferred without changing other metadata", async () => {

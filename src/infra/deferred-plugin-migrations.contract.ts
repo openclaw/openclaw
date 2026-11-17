@@ -15,12 +15,19 @@ export const deferredPluginMigrationSchema = z.object({
 
 export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
 
-/** Doctor can reword guidance without changing the requirements protecting retained inputs. */
+/**
+ * Obligations are one record per plugin, so list order carries no meaning: rows read
+ * back by ID and Doctor's in-memory retained-first list describe the same generation.
+ */
 export function sameDeferredPluginMigrationInputs(
   current: readonly DeferredPluginMigration[],
   expected: readonly DeferredPluginMigration[],
 ) {
   const inputs = (pending: readonly DeferredPluginMigration[]) =>
-    pending.map(({ reason: _reason, command: _command, ...fields }) => fields);
+    pending
+      .map(({ reason: _reason, command: _command, ...fields }) => fields)
+      .toSorted((left, right) =>
+        left.pluginId < right.pluginId ? -1 : left.pluginId > right.pluginId ? 1 : 0,
+      );
   return isDeepStrictEqual(inputs(current), inputs(expected));
 }
