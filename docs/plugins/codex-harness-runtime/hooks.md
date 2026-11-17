@@ -105,6 +105,15 @@ current run, even when warm threads reuse their hook commands and generation.
 Late callbacks cannot inherit a successor run's policy. Separately admitted
 direct children keep their existing retained authority.
 
+Each hook command carries a deadline a little under the Codex hook `timeout` it
+is installed with. Codex starts that timer before it spawns the hook, so the hook
+process counts its deadline from its own start. When the relay has not answered in
+time, the hook returns the same answer as an unavailable relay, which denies
+`PermissionRequest` and any `PreToolUse` the relay enforces. Codex treats a hook
+that it kills at its timeout, or that fails to start, as non-blocking and lets the
+call run. A hook process that cannot reach OpenClaw's code before the Codex
+timeout therefore cannot refuse.
+
 The cold hook CLI reads the locator without loading shared-state writer startup.
 On Node, this one-shot process uses a read-only connection with no SQLite lock
 wait; transient lock contention yields to the existing retry and deadline owner.
@@ -135,11 +144,17 @@ appends the relay ID. OCE generates this configuration for dedicated Codex Agent
 The deployment must supply a private directory outside the model workspace and
 file-transfer roots, and trusted CA certificates for hook processes. Before
 starting a turn, the adapter writes a credential through the authenticated Codex
-app-server filesystem API. Hook commands contain only that file's path. The
-callback accepts the current relay token and exact generation, then applies the
-same event policy and live-owner checks as the local bridge. It grants no Gateway
-operator access. Invalid explicit remote configuration or delivery failure stops
-the turn; callbacks never fall back to operator RPC or local SQLite.
+app-server filesystem API. That API writes through links and has no exclusive
+create, so the adapter first removes whatever is at the credential's name. Hook
+commands contain only that file's path. The callback accepts the current relay
+token and exact generation, then applies the same event policy and live-owner
+checks as the local bridge. Codex runs each tool hook once per tool use, so a
+`pre_tool_use` or `post_tool_use` callback must carry its `tool_use_id` and is
+accepted once per event; a repeat is refused. The Gateway logs every remote
+callback with the relay ID, event, tool use ID and status, and logs refusals as
+warnings. The callback grants no Gateway operator access. Invalid explicit remote
+configuration or delivery failure stops the turn; callbacks never fall back to
+operator RPC or local SQLite.
 
 The credential path stays stable for a relay generation so warm and incognito
 threads can reuse their hook commands. Each registration writes a new token;

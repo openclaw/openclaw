@@ -28,10 +28,12 @@ function relayFixture() {
     run: (
       options: Parameters<typeof runNativeHookRelayCliForTest>[0],
       deps: Parameters<typeof runNativeHookRelayCliForTest>[1],
+      startedAtMs?: number,
     ) =>
       runNativeHookRelayCliForTest(
         { ...relayOptions, ...options },
         { stdin: Readable.from(["{}"]), stdout, stderr, ...deps },
+        startedAtMs,
       ),
   };
 }
@@ -260,6 +262,48 @@ describe("native hook relay CLI", () => {
       }
     },
   );
+
+  it("counts the deadline from process start and refuses before Codex's hook timeout", async () => {
+    const entered = createDeferred<AbortSignal>();
+    const response = createDeferred<NativeHookRelayProcessResponse>();
+    const { stdout, stderr, run } = relayFixture();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const processStartedAtMs = performance.now();
+    // Codex's timeout includes process startup, which used most of this budget.
+    vi.advanceTimersByTime(20);
+    const pending = run(
+      { event: "pre_tool_use", timeout: "25" },
+      {
+        invokeBridge: ({ signal }) => {
+          if (!signal) {
+            throw new Error("Relay transport requires its cancellation signal");
+          }
+          entered.resolve(signal);
+          return response.promise;
+        },
+      },
+      processStartedAtMs,
+    );
+    try {
+      const signal = await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Relay finished before transport admission",
+      );
+      await vi.advanceTimersByTimeAsync(4);
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal.aborted).toBe(true);
+      response.resolve({ stdout: "late-allow", stderr: "", exitCode: 0 });
+      expect(await pending).toBe(0);
+      expect(JSON.parse(stdout.text()).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(stderr.text()).toContain("native hook relay timed out");
+    } finally {
+      response.resolve({ stdout: "", stderr: "", exitCode: 0 });
+      await pending;
+      vi.useRealTimers();
+    }
+  });
 
   it.each([60_000])("keeps a timely response after wall-clock shift %s", async (shift) => {
     let wallNow = 0;

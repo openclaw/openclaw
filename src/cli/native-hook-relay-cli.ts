@@ -41,7 +41,10 @@ class NativeHookRelayDeadlineError extends Error {
 }
 
 /** Parse and run the internal native relay directly from the process argument vector. */
-export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<number> {
+export async function runNativeHookRelayCliFromArgv(
+  argv: string[],
+  startedAtMs?: number,
+): Promise<number> {
   const relayIndex = argv.findIndex((arg, index) => arg === "relay" && argv[index - 1] === "hooks");
   if (relayIndex < 0) {
     throw new Error("native hook relay command path is required");
@@ -61,11 +64,20 @@ export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<num
     }
     opts[key] = value;
   }
-  return await runNativeHookRelayCli(opts);
+  return await runNativeHookRelayCli(opts, startedAtMs);
 }
 
-/** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
-export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Promise<number> {
+/**
+ * Run one native hook relay invocation from stdin JSON to stdout/stderr response streams.
+ *
+ * Codex starts its hook timeout before spawning this process and treats a hook it
+ * kills as non-blocking. The deadline therefore counts from process start
+ * (`performance.now()` origin), so slow startup still leaves time to refuse.
+ */
+export async function runNativeHookRelayCli(
+  opts: NativeHookRelayCliOptions,
+  startedAtMs = 0,
+): Promise<number> {
   const { stdin, stdout, stderr } = process;
   const provider = readRequiredOption(opts.provider, "provider");
   const relayId = readRequiredOption(opts.relayId, "relay-id");
@@ -79,7 +91,7 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     return 1;
   }
 
-  const deadline = createNativeHookRelayDeadline(timeoutMs);
+  const deadline = createNativeHookRelayDeadline(timeoutMs, startedAtMs);
   const writeResponse = (response: NativeHookRelayProcessResponse): number => {
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
@@ -278,15 +290,16 @@ function formatRelayCliError(prefix: string, error: unknown): string {
   return `${prefix}: ${message}\n`;
 }
 
-function createNativeHookRelayDeadline(timeoutMs: number) {
+function createNativeHookRelayDeadline(timeoutMs: number, startedAtMs: number) {
   const controller = new AbortController();
+  const expiresAtMs = startedAtMs + timeoutMs;
   const timer = setSafeTimeout(
     () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
-    timeoutMs,
+    expiresAtMs - performance.now(),
   );
   timer.unref?.();
   return {
-    expiresAtMs: performance.now() + timeoutMs,
+    expiresAtMs,
     signal: controller.signal,
     timeoutMs,
     dispose: () => clearTimeout(timer),

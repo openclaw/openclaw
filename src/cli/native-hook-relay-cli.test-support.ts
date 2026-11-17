@@ -50,16 +50,20 @@ async function withRelayTestDeps(
   }
 }
 
+// The test runner is not a fresh hook process: count the deadline from the call
+// unless a test supplies the process start it simulates.
 export function runNativeHookRelayCliForTest(
   options: NativeHookRelayCliOptions,
   deps: NativeHookRelayCliTestDeps,
+  startedAtMs = performance.now(),
 ): Promise<number> {
-  return withRelayTestDeps(deps, () => runNativeHookRelayCli(options));
+  return withRelayTestDeps(deps, () => runNativeHookRelayCli(options, startedAtMs));
 }
 
 export function runNativeHookRelayCliFromArgvForTest(
   argv: string[],
   deps: NativeHookRelayCliTestDeps,
+  startedAtMs = performance.now(),
 ): Promise<number> {
-  return withRelayTestDeps(deps, () => runNativeHookRelayCliFromArgv(argv));
+  return withRelayTestDeps(deps, () => runNativeHookRelayCliFromArgv(argv, startedAtMs));
 }
