@@ -74,7 +74,6 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
       timeoutMs?: number;
     };
     requesterOrigin?: RequesterOrigin;
-    pendingInputCancelledByUser?: true;
   };
 };
 

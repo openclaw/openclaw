@@ -33,6 +33,15 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
   expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();
   using restored = openNodeSqliteDatabase(":memory:");
+  expect(descriptor.preData).not.toContain('"end_cause"');
+  expect(descriptor.expectedCatalog).not.toContainEqual(
+    expect.objectContaining({
+      table: "session_pending_inputs",
+      kind: "column",
+      value: expect.objectContaining({ name: "end_cause" }),
+    }),
+  );
+  expect(descriptor.sqlite).not.toContain("end_cause");
   restored.exec(descriptor.sqlite);
   expect(
     restored
@@ -140,6 +149,42 @@ it.each([21, currentVersion])(
     expect(await fs.readFile(source)).toEqual(before);
   },
 );
+
+it("normalizes legacy user endings before port installs additive columns", async () => {
+  const root = tempDirs.make("agent-port-legacy-endings-");
+  const source = path.join(root, "source.sqlite");
+  const copy = path.join(root, "private.sqlite");
+  const descriptor = await loadAgentPortDescriptor();
+  const message = JSON.stringify({
+    role: "user",
+    content: "Stopped before upgrade",
+    __openclaw: { pendingInputCancelledByUser: true },
+  });
+  {
+    using db = openNodeSqliteDatabase(source);
+    db.exec(`${descriptor.sqlite}
+      PRAGMA user_version = ${currentVersion};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${currentVersion}, 'main', NULL, 1, 1);
+      ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('retained', 'agent:main:retained', 1, 1);`);
+    db.prepare(`INSERT INTO session_pending_inputs
+      (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+       message_json, lifecycle_generation, state, accepted_at)
+      VALUES ('stopped', 'agent:main:retained', 'retained', 'stopped', 'stopped',
+        'hash', ?, 'old', 'cancelled', 1)`).run(message);
+  }
+  const original = await fs.readFile(source);
+  await fs.copyFile(source, copy);
+  await migrateDatabasePortSource(copy, descriptor, currentVersion, () => {});
+  using migrated = openNodeSqliteDatabase(copy);
+  expect(
+    migrated.prepare("SELECT end_cause, message_json FROM session_pending_inputs").get(),
+  ).toEqual({ end_cause: "user-stop", message_json: message });
+  expect(await fs.readFile(source)).toEqual(original);
+});
 
 it.each(["vector", "text"])("omits rebuildable %s indexes", async (kind) => {
   const descriptor = await loadAgentPortDescriptor();

@@ -48,6 +48,7 @@ import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "../../state/openclaw-agent-memory-revision-migration.js";
+import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
@@ -222,6 +223,12 @@ export async function loadAgentPortDescriptor(
   const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
+      !(
+        historical &&
+        fact.table === "session_pending_inputs" &&
+        isColumn(fact) &&
+        fact.value.name === "end_cause"
+      ) &&
       !(legacyToolUsage && fact.table === "agent_tool_usage") &&
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
       !(legacyCreation && fact.table === "session_creation_operations") &&
@@ -429,6 +436,7 @@ export async function loadAgentPortDescriptor(
             file,
             async () => {
               ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false });
+              ensureSessionPendingInputsSchema(db);
               for (const {
                 tableName,
                 columnName,
@@ -492,7 +500,10 @@ export async function loadAgentPortDescriptor(
   const withoutLegacyColdArchive = (sql: string) =>
     legacyColdArchive ? withoutAgentPostgresColdArchiveChunks(sql) : sql;
   const withoutLaterSchema = (sql: string) => {
-    const toolUsage = legacyToolUsage ? withoutAgentPostgresToolUsage(sql) : sql;
+    const pendingInputs = sql.replace('  "end_cause" text COLLATE "C",\n', "");
+    const toolUsage = legacyToolUsage
+      ? withoutAgentPostgresToolUsage(pendingInputs)
+      : pendingInputs;
     const activeFacts = legacyActiveFacts
       ? withoutAgentPostgresActiveEventFacts(toolUsage)
       : toolUsage;
@@ -528,10 +539,9 @@ export async function loadAgentPortDescriptor(
   return {
     ...descriptor,
     version: sourceVersion,
-    sqlite: getOpenClawAgentMigrationSchema(sourceVersion).replace(
-      /^INSERT OR IGNORE INTO[^;]+;/gm,
-      "",
-    ),
+    sqlite: getOpenClawAgentMigrationSchema(sourceVersion)
+      .replace(/^INSERT OR IGNORE INTO[^;]+;/gm, "")
+      .replace("  end_cause TEXT,\n", ""),
     triggers: [
       ...(descriptor.triggers ?? []),
       ...(legacyRevision

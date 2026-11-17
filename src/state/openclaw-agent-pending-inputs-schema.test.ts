@@ -8,8 +8,10 @@ import {
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
+  readSessionPendingInput,
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -83,6 +85,52 @@ describe("pending input additive schema", () => {
     } finally {
       exec.mockRestore();
     }
+  });
+
+  it("backfills legacy user endings atomically when end_cause is first installed", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+    database.exec(
+      "PRAGMA foreign_keys = OFF; ALTER TABLE session_pending_inputs DROP COLUMN end_cause",
+    );
+    const messages = [
+      { role: "user", content: "stopped", __openclaw: { pendingInputCancelledByUser: true } },
+      { role: "user", content: "dismissed", display: false },
+      { role: "user", content: "retryable" },
+      { role: "user", content: "not a boolean", __openclaw: { pendingInputCancelledByUser: 1 } },
+    ].map((message) => JSON.stringify(message));
+    for (const [index, message] of messages.entries()) {
+      database
+        .prepare(
+          `INSERT INTO session_pending_inputs
+          (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+           message_json, lifecycle_generation, state, accepted_at)
+          VALUES (?, 'agent:main:test', 'test', ?, ?, 'hash', ?, 'old', 'cancelled', 1)`,
+        )
+        .run(String(index), String(index), String(index), message);
+    }
+    expect(() =>
+      runSqliteImmediateTransactionSync(database, () => {
+        ensureSessionPendingInputsSchema(database);
+        throw new Error("rollback first use");
+      }),
+    ).toThrow("rollback first use");
+    expect(tableHasColumn(database, "session_pending_inputs", "end_cause")).toBe(false);
+    ensureSessionPendingInputsSchema(database);
+    expect(
+      database
+        .prepare("SELECT message_json, end_cause FROM session_pending_inputs ORDER BY seq")
+        .all(),
+    ).toEqual(
+      messages.map((message_json, index) => ({
+        message_json,
+        end_cause: index < 2 ? "user-stop" : null,
+      })),
+    );
+    admitSqliteSchema(database);
+    const exec = vi.spyOn(database, "exec");
+    ensureSessionPendingInputsSchema(database);
+    expect(exec).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -278,4 +326,82 @@ describe("pending input additive schema", () => {
       expect(written.prepare("PRAGMA user_version").get()).toEqual(version);
     },
   );
+
+  it.each([
+    { marker: { __openclaw: { pendingInputCancelledByUser: true } }, retired: true },
+    { marker: { display: false }, retired: true },
+    { marker: {}, retired: false },
+  ])("uses canonical retirement for pre-end_cause input: %j", async ({ marker, retired }) => {
+    const options = fixture();
+    const scope = {
+      ...options,
+      sessionKey: "agent:main:legacy-retired",
+      sessionId: "legacy-retired-session",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sourceTurn = {
+      role: "user" as const,
+      content: "legacy retired input",
+      timestamp: 100,
+      idempotencyKey: "channel-user:v1:legacy-retired",
+    };
+    const stageInput = (
+      runId: string,
+      overrides: Partial<Parameters<typeof stageSessionPendingInput>[1]> = {},
+    ) =>
+      stageSessionPendingInput(scope, {
+        runId,
+        message: sourceTurn,
+        assertCurrent() {},
+        ...overrides,
+      });
+    const first = (await stageInput("legacy-attempt-1"))!;
+    first.finish("cancelled", "failed");
+    await first.settled?.();
+    const filename = openOpenClawAgentDatabase(options).path;
+    const legacyMessage = JSON.stringify({ ...sourceTurn, ...marker });
+    {
+      using old = await previousDatabase(filename);
+      old.exec("ALTER TABLE session_pending_inputs DROP COLUMN end_cause");
+      old
+        .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
+        .run(legacyMessage, first.inputId);
+    }
+    await runSessionStartupMigration({
+      cfg: { session: { store: filename } },
+      env: options.env,
+      agentIds: new Set(["main"]),
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    expect(await readSessionPendingInput(scope, first.inputId)).toMatchObject({
+      state: "cancelled",
+      ...(retired ? { endCause: "user-stop" } : {}),
+    });
+    if (retired) {
+      await expect(
+        stageInput("legacy-attempt-2", { reclaimCancelledSourceTurn: true }),
+      ).rejects.toThrow("idempotency key conflicts");
+      await expect(stageInput("legacy-attempt-1", { retryCancelled: true })).rejects.toThrow(
+        "ownership ended",
+      );
+    } else {
+      const renewed = (await stageInput("legacy-attempt-2", {
+        reclaimCancelledSourceTurn: true,
+      }))!;
+      try {
+        expect(renewed.inputId).toBe(first.inputId);
+        expect(await readSessionPendingInput(scope, first.inputId)).toMatchObject({
+          state: "queued",
+        });
+      } finally {
+        renewed.finish("interrupted", "failed");
+        await renewed.settled?.();
+      }
+    }
+    expect(
+      openOpenClawAgentDatabase(options)
+        .db.prepare("SELECT message_json FROM session_pending_inputs WHERE input_id = ?")
+        .get(first.inputId),
+    ).toEqual({ message_json: legacyMessage });
+  });
 });

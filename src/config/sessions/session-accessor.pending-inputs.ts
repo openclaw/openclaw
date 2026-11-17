@@ -388,12 +388,7 @@ async function stagePreparedPendingInput(
         );
       }
     };
-    // Pre-end_cause rows encoded intentional retirement only in their message.
-    const old =
-      existing?.state === "cancelled" && existing.end_cause == null
-        ? parseSessionPendingInputMessage(existing.message_json)
-        : undefined;
-    const reopen = old && old.display !== false && !old["__openclaw"]?.pendingInputCancelledByUser;
+    const reopen = existing?.state === "cancelled" && existing.end_cause == null;
     const reclaimsCancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&

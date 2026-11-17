@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
@@ -202,6 +204,63 @@ describe("Doctor canonical completion receipt repair", () => {
       });
     },
   );
+});
+
+describe("Doctor canonical pending-input repair", () => {
+  it("preserves legacy user-stop retirement and message bytes across owner repair and restart", async () => {
+    await withStateDirEnv("doctor-legacy-stopped-input-", async ({ stateDir }) => {
+      const f = fixture(stateDir);
+      f.create();
+      const first = await f.stage();
+      first.finish("cancelled", "failed");
+      await first.settled?.();
+      const filename = f.database().path;
+      await f.restart();
+      fs.copyFileSync(filename, `${filename}.previous`);
+      fs.renameSync(`${filename}.previous`, filename);
+      const legacyMessage = JSON.stringify({
+        ...first.message,
+        __openclaw: { pendingInputCancelledByUser: true },
+      });
+      {
+        using old = new DatabaseSync(filename);
+        old.exec("ALTER TABLE session_pending_inputs DROP COLUMN end_cause");
+        old
+          .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
+          .run(legacyMessage, first.inputId);
+      }
+
+      expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
+      await f.restart();
+      expect(
+        f
+          .database(true)
+          .db.prepare(
+            "SELECT input_id, session_key, state, end_cause, message_json FROM session_pending_inputs",
+          )
+          .all(),
+      ).toEqual([
+        {
+          input_id: first.inputId,
+          session_key: f.canonicalKey,
+          state: "cancelled",
+          end_cause: "user-stop",
+          message_json: legacyMessage,
+        },
+      ]);
+      expect(f.database().db.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
+      await expect(
+        stageSessionPendingInput(f.scope(true), {
+          runId: "announce:private-result",
+          message: first.message,
+          assertCurrent: () => {},
+          trackCompletion: true,
+          retryCancelled: true,
+        }),
+      ).rejects.toThrow("ownership ended");
+      expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
+    });
+  });
 });
 
 describe("doctor transcript owner repair", () => {

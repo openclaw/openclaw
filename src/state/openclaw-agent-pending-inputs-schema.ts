@@ -54,7 +54,15 @@ export function ensureSessionPendingInputsSchema(db: EngineConnection): void {
   ) {
     runSqliteImmediateTransactionSync(db, () => {
       ensurePendingInputConsumptionColumn(db);
-      ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause TEXT");
+      if (ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "end_cause TEXT")) {
+        // Pre-end_cause pending messages are plain JSON; normalize their user retirement facts once.
+        // sqlite-allow-raw -- Same-version additive migration preserves the accepted message bytes.
+        db.exec(`UPDATE session_pending_inputs SET end_cause = 'user-stop'
+          WHERE state = 'cancelled' AND end_cause IS NULL AND (
+            json_type(message_json, '$.__openclaw.pendingInputCancelledByUser') = 'true'
+            OR json_type(message_json, '$.display') = 'false'
+          )`);
+      }
     });
   }
 }

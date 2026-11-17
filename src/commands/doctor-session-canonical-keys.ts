@@ -48,6 +48,7 @@ import {
   type CanonicalSessionCandidate,
   type CanonicalSessionCandidateFact,
 } from "./doctor-session-canonical-candidates.js";
+import { prepareDoctorSessionPendingInputs } from "./doctor/shared/session-entry-rewrite.js";
 
 function createCanonicalRepairRemoval(
   candidate: CanonicalSessionCandidate,
@@ -526,6 +527,10 @@ export async function repairCanonicalSessionKeys(params: {
   if (params.apply) {
     for (const store of stores) {
       const options = resolveTargetSqliteOptions(store, env);
+      await prepareDoctorSessionPendingInputs(
+        { agentId: options.agentId, env, storePath: store.storePath },
+        () => {},
+      );
       const stored = withOpenClawAgentDatabaseReadOnly(readStoredCanonicalSessionMainKey, options);
       if (!stored.found || stored.value !== normalizeMainKey(params.cfg.session?.mainKey)) {
         setCanonicalSqliteSessionMainKey(

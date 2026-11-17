@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -16,11 +18,17 @@ import {
   loadTranscriptEvents,
   type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.js";
+import { runSessionStartupMigration } from "../../config/sessions/startup-migration-runtime.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
 import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
@@ -424,6 +432,50 @@ describe("pending input read boundary", () => {
       expect(message).toMatchObject({ ok: true, message: { content: receipt.message.content } });
       await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 2 });
       expect(await lookup()).toEqual({ ok: false, unavailableReason: "not_found" });
+    }));
+
+  it("projects a legacy stopped input with its canonical user-stop cause after startup admission", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = await createScope("legacy-stopped-input");
+      await using inputs = pendingInputs(scope);
+      const receipt = await inputs.stage("legacy-stopped-run");
+      receipt.finish("cancelled", "failed");
+      await receipt.settled?.();
+      const options = { agentId: scope.agentId };
+      const filename = openOpenClawAgentDatabase(options).path;
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      fs.copyFileSync(filename, `${filename}.previous`);
+      fs.renameSync(`${filename}.previous`, filename);
+      {
+        using old = new DatabaseSync(filename);
+        old.exec("ALTER TABLE session_pending_inputs DROP COLUMN end_cause");
+        old.prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?").run(
+          JSON.stringify({
+            ...receipt.message,
+            __openclaw: { pendingInputCancelledByUser: true },
+          }),
+          receipt.inputId,
+        );
+      }
+      await runSessionStartupMigration({
+        cfg: { session: { store: filename } },
+        env: state.env,
+        agentIds: new Set(["main"]),
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+      // Dismiss availability is derived from this canonical cause, not private message metadata.
+      expect(await readChatPendingInputs(scope, { limit: 20, maxChars: 1_000 })).toMatchObject({
+        total: 1,
+        items: [
+          {
+            id: receipt.inputId,
+            state: "cancelled",
+            endCause: "user-stop",
+            message: { content: "legacy-stopped-run" },
+          },
+        ],
+      });
     }));
 
   it("does not reveal an input hidden by the canonical history visibility policy", () =>

@@ -128,10 +128,14 @@ export async function runSessionStartupMigration(params: {
     let alreadyOpen: boolean | undefined;
     let handedOff = false;
     try {
-      const { repairLegacySessionRunOutcomes } =
+      const { prepareDoctorSessionPendingInputs, repairLegacySessionRunOutcomes } =
         await import("../../commands/doctor/shared/session-entry-rewrite.js");
       params.assertCurrent?.();
       alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+      await prepareDoctorSessionPendingInputs(
+        { agentId: options.agentId, env, storePath: databasePath },
+        () => params.assertCurrent?.(),
+      );
       const mainKey = params.cfg.session?.mainKey;
       try {
         if (
