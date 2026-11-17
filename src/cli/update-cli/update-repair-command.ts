@@ -299,7 +299,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
               trigger: "cli",
               settlement: {
                 reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                detail: `${settled.detail} Operation ${settled.operationId}${settled.retained ? `; evidence retained at ${settled.retained}` : ""}.`,
               },
             },
             options,

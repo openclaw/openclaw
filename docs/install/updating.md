@@ -1392,9 +1392,11 @@ selection described above apply only when the updater driving the update
 contains this fix. Installing a newer candidate cannot change that first hop.
 
 Pending package-publication recovery in either the CLI or selected service
-installation is checked before writable preparation. The updater settles eligible
-lost-lease recovery automatically; other unfinished operations still require the
-reported recovery command. Doctor does not clear those artifacts.
+installation is checked before writable preparation. The updater settles a
+leftover operation itself when that is safe (see
+[Unfinished publication and rollback](#unfinished-publication-and-rollback));
+other unfinished operations still require the reported recovery command. Doctor
+does not clear those artifacts.
 
 During an uninterrupted package update, the freshly installed private candidate
 is checked by directory identity, package version, and launchers instead of
@@ -1872,8 +1874,17 @@ live installation is still the recorded previous or candidate package. Candidate
 content and launchers must pass verification. Settlement preserves recovery
 evidence, reports a warning, and does not restart the Gateway or install a package.
 `--dry-run` verifies and reports the planned settlement without changing the
-journal, lease database, or recovery evidence. Other pending operations still
-require `openclaw update repair` or the recorded package recovery command. The lease database stays at its existing location.
+journal, lease database, or recovery evidence. The lease database stays at its
+existing location.
+
+A publication that was still moving its files into the recovery directory, or
+had recorded its publish intent, cannot be settled without that lease database:
+nothing else proves that the original updater has exited. `openclaw update`,
+`openclaw update repair`, and the recorded recovery command all refuse with
+`managed handoff lease database identity changed`. Reinstall OpenClaw with the
+[manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+then run `openclaw update`: the reinstall replaces the recorded package, and the
+update retires the superseded operation as described above.
 
 If a reboot or temporary-directory cleanup removes the lease database before
 publication starts, recovery can retire a `prepared` journal with no publication
@@ -2023,14 +2034,62 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 
 ### Unfinished publication and rollback
 
-`openclaw update` automatically settles a `prepared`, `publishing`, or
-`publication-complete` operation when the live candidate passes the same
-verification as repair, even when the update lease is unchanged. It also retires
-an untouched preparation after verifying the original package and launchers.
-This does not republish files beneath a running Gateway. A dry run previews
-settlement without changing recovery artifacts. Unfinished publication that
-still needs file changes, pending rollback, and failed verification retain their
-recovery artifacts and report the repair command.
+`openclaw update` and `openclaw update repair` settle a leftover operation before
+they continue, so a killed publication no longer needs its printed recovery
+command. A killed update usually also leaves its update run unreconciled, which
+is a separate check: `openclaw update` then stops with `Update <id> has
+unfinished recovery` until one `openclaw update repair` reconciles the run.
+Repair settles the publication in the same pass:
+
+- **Untouched preparation.** It is retired after the original package and
+  launchers are verified.
+- **Interrupted before the candidate was installed.** The publication was still
+  moving its files into the recovery directory, or had recorded its publish
+  intent, and the previous package is installed. The updater resumes it with the
+  recovery that the printed command runs, which aborts it: the candidate returns
+  to its own name, the operation is recorded as aborted, and its recovery
+  directory is removed. The installed package and launchers are not touched.
+- **Candidate installed.** A `prepared`, `publishing`, or `publication-complete`
+  operation is settled when the live candidate passes the same verification as
+  repair, even when the update lease is unchanged. Its recovery evidence is
+  retained.
+- **No package installed.** A publication without an atomic exchange was killed
+  between its two moves. An update or repair that reaches admission for that
+  installation publishes the recorded candidate into the gap and then verifies
+  it as above. `openclaw` cannot start from that installation, so the printed
+  recovery command is the usual way to finish this one.
+
+Resuming needs proof that the original updater is gone. The updater claims the
+installation in the recorded update lease store, which succeeds only after the
+recorded updater and helper processes have exited. It resumes only a journal
+that its own build wrote, so the code that resumes is the code of the recorded
+recovery helper. An installed package is never replaced or changed by this
+step. When the update reaches target preparation, its result and run history
+record a `package-publication-recovery` warning that names the operation and
+what was done; before that it is printed. `openclaw update repair` records a
+settlement entry under the operation ID. A dry run previews the settlement
+without changing recovery artifacts, and cannot check that the original updater
+has exited.
+
+The updater refuses, keeps the recovery artifacts, and reports the reason when:
+
+- Another updater or its helper still holds the installation. Wait for it, or
+  run `openclaw update repair` once it has exited.
+- `openclaw update repair` already holds a reclaimed handoff or cancelled-update
+  claim. That claim does not prove where the publication's updater went, so
+  repair reports the recovery command for the publication.
+- The update lease store is missing or was replaced, for example after a reboot
+  cleared the temporary directory, and the publication had started moving files
+  but had not installed its candidate. The recovery command refuses too.
+  Reinstall OpenClaw with the
+  [manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw update`, which retires the superseded operation.
+- The installed package, a launcher, or the recovery directory no longer matches
+  what the journal recorded. The refusal names the mismatch; a reinstall with
+  the manual procedure supersedes the operation.
+- A rollback is in progress, or candidate verification fails.
+- A different OpenClaw build wrote the journal. Use the reported recovery
+  command, which runs that build's recovery helper.
 
 After a managed-service update fails before stopping the original Gateway,
 the handoff checks whether that original version is still serving and records
