@@ -387,30 +387,33 @@ describe("2026.10.33 iOS screenshot exception", () => {
   });
 });
 
-it("admits only the authorized 2026.11.5 Kova failure without skipping qualification", () => {
-  const kova = {
-    ...child,
-    key: "productPerformance",
-    jobs: [{ ...failedJob, id: 133410712957, name: "Kova mock provider performance" }],
-  };
-  expect(terminalPolicyPass(kova, "2026.11.5")).toBe(true);
-  expect(kova.conclusion).toBe("failure");
-  expect(kova.jobs).toMatchObject([{ conclusion: "failure" }]);
-  expect(releaseQualificationExemptions("2026.11.5", "stable")).toEqual([]);
-  expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
-  expect(terminalPolicyPass({ ...kova, key: "normalCi" }, "2026.11.5")).toBe(false);
-  for (const conclusion of ["cancelled", "timed_out"]) {
+it.each(["2026.10.33", "2026.11.5"])(
+  "admits only the authorized %s Kova failure without skipping qualification",
+  (targetVersion) => {
+    const kova = {
+      ...child,
+      key: "productPerformance",
+      jobs: [{ ...failedJob, id: 133410712957, name: "Kova mock provider performance" }],
+    };
+    expect(terminalPolicyPass(kova, targetVersion)).toBe(true);
+    expect(kova.conclusion).toBe("failure");
+    expect(kova.jobs).toMatchObject([{ conclusion: "failure" }]);
+    expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
+    expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
+    expect(terminalPolicyPass({ ...kova, key: "normalCi" }, targetVersion)).toBe(false);
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      expect(
+        terminalPolicyPass({ ...kova, jobs: [{ ...kova.jobs[0], conclusion }] }, targetVersion),
+      ).toBe(false);
+    }
     expect(
-      terminalPolicyPass({ ...kova, jobs: [{ ...kova.jobs[0], conclusion }] }, "2026.11.5"),
+      terminalPolicyPass(
+        { ...kova, jobs: [...kova.jobs, { ...failedJob, id: 2, name: "Build candidate" }] },
+        targetVersion,
+      ),
     ).toBe(false);
-  }
-  expect(
-    terminalPolicyPass(
-      { ...kova, jobs: [...kova.jobs, { ...failedJob, id: 2, name: "Build candidate" }] },
-      "2026.11.5",
-    ),
-  ).toBe(false);
-});
+  },
+);
 
 it("admits only the authorized 2026.11.5 Telegram package failure", async () => {
   const name = "Run package acceptance / Telegram package acceptance / Run package Telegram E2E";
