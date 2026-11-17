@@ -25,6 +25,27 @@ import {
 import { writeProbeMcpServer } from "./mcp-cli.test-support.js";
 import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
+const afterConfigRead = vi.hoisted(() => ({
+  once: undefined as (() => Promise<void>) | undefined,
+}));
+
+// mock-isolation: Lands a competing edit between this command's read and its write.
+vi.mock("../config/mcp-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/mcp-config.js")>();
+  return {
+    ...actual,
+    listConfiguredMcpServers: async (
+      ...args: Parameters<typeof actual.listConfiguredMcpServers>
+    ) => {
+      const loaded = await actual.listConfiguredMcpServers(...args);
+      const competing = afterConfigRead.once;
+      afterConfigRead.once = undefined;
+      await competing?.();
+      return loaded;
+    },
+  };
+});
+
 const mcp = (...args: string[]) => runMcpCommand(["mcp", ...args]);
 const flags = (options: Record<string, string | true>) =>
   Object.entries(options).flatMap(([key, value]) => (value === true ? [key] : [key, value]));
@@ -39,6 +60,24 @@ const setServer = (
   server: object | string = { command: "node", args: ["server.mjs"] },
   name = "docs",
 ) => mcp("set", name, typeof server === "string" ? server : JSON.stringify(server));
+
+it("keeps a competing edit that lands after configure reads the server", async () => {
+  await setServer({ command: "node", args: ["server.mjs"] });
+  afterConfigRead.once = async () => {
+    const disabled = await setConfiguredMcpServer({
+      name: "docs",
+      server: { command: "node", args: ["server.mjs"], enabled: false },
+    });
+    expect(disabled.ok).toBe(true);
+  };
+  await mcp("configure", "docs", "--timeout", "12");
+  expect(await readServer()).toEqual({
+    command: "node",
+    args: ["server.mjs"],
+    enabled: false,
+    requestTimeoutMs: 12_000,
+  });
+});
 
 async function readJson(...args: string[]) {
   mockLog.mockClear();

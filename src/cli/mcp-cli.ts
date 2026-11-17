@@ -35,6 +35,7 @@ import {
 } from "./mcp-cli-probe.js";
 import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
 import {
+  applyMcpConfigureControls,
   applyMcpHttpControls,
   applyMcpServerControls,
   parseCsvList,
@@ -870,15 +871,7 @@ export function registerMcpCli(program: Command) {
         const apply = async () => {
           const loaded = await loadMcpConfig();
           const current = requireMcpServer(loaded, name);
-          const next = { ...current };
-          if (opts.enable) {
-            delete next.enabled;
-          }
-          if (opts.disable) {
-            next.enabled = false;
-          }
-          applyMcpServerControls(next, opts, fail);
-          applyMcpHttpControls(next, opts, fail);
+          const next = applyMcpConfigureControls(current, opts, fail);
           if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
@@ -887,7 +880,8 @@ export function registerMcpCli(program: Command) {
             });
           }
           if (opts.enable && Object.keys(next).length === 0) {
-            const result = await unsetMcpServer({ name });
+            // Removing an emptied override only applies to the definition read above.
+            const result = await unsetMcpServer({ name, expectedServer: current });
             if (!result.ok) {
               fail(result.error);
             }
@@ -896,7 +890,12 @@ export function registerMcpCli(program: Command) {
             );
             return;
           }
-          const result = await configureMcpServer({ name, update: () => next });
+          // Apply flags to the definition the write is bound to, so an edit that landed after
+          // the read above is kept rather than overwritten.
+          const result = await configureMcpServer({
+            name,
+            update: (server) => applyMcpConfigureControls(server, opts, fail),
+          });
           if (!result.ok) {
             fail(result.error);
           }

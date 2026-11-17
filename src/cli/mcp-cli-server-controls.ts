@@ -146,3 +146,21 @@ export function applyMcpHttpControls(
   setOptionalField(server, "clientCert", readNonBlankString(opts.clientCert));
   setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
 }
+
+/** `mcp configure` flags applied to one definition; callers pass the revision-bound server. */
+export function applyMcpConfigureControls(
+  server: Record<string, unknown>,
+  opts: McpServerControlOptions & { enable?: boolean; disable?: boolean },
+  fail: (message: string) => never,
+): Record<string, unknown> {
+  const next = { ...server };
+  if (opts.enable) {
+    delete next.enabled;
+  }
+  if (opts.disable) {
+    next.enabled = false;
+  }
+  applyMcpServerControls(next, opts, fail);
+  applyMcpHttpControls(next, opts, fail);
+  return next;
+}
