@@ -174,6 +174,8 @@ fn fresh_setup_exposes_only_gateway_owned_cli_before_baseline_and_preserves_pare
             if reject {
                 fs::write(fixture.0.join("path-reject"), "").unwrap();
             }
+            // Measure fresh(), excluding the CLI construction's version probe.
+            fs::remove_file(fixture.0.join("executables")).unwrap();
             let error = fresh(&cli, &candidate, &|| true).unwrap_err();
             let executed = fs::read_to_string(fixture.0.join("executables")).unwrap();
             let first = if purpose == Purpose::Gateway {
