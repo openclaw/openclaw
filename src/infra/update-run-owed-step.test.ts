@@ -139,11 +139,8 @@ describe("update run owed steps", () => {
       ),
     ).toEqual([line]);
 
-    for (let index = 0; index < 160; index += 1) {
-      record(`warning:noise:${index}`, "🦞".repeat(250));
-    }
-    for (let index = 0; index < 40; index += 1) {
-      record(`finalize:noise:${index}`, "🦞".repeat(250));
+    for (let index = 0; index < 200; index += 1) {
+      record(`${index < 160 ? "warning" : "finalize"}:noise:${index}`, "🦞".repeat(250));
     }
     state.closeOpenClawStateDatabaseForTest();
 
