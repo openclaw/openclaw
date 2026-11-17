@@ -41,9 +41,9 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
     label: "Continuation",
     name: "continue_work",
     description: [
-      "Arm your next turn in this session.",
-      "You run only when an inbound message arrives, a scheduled automation fires, or a continuation you armed wakes you; if you end a turn without arming one, nothing else wakes you.",
-      "Use this when concrete follow-up work remains that cannot finish in the current turn: reason names that work; the turn starts after this one ends, or delaySeconds later.",
+      "Need to come back and do a specific next step after this reply? Call continue_work now to arrange your own next turn in this same session; you do not need another message from the user.",
+      "For example, after starting an external build, schedule a turn to inspect its final receipt. Put the action you will take in reason, not just 'check later'; the turn starts after this one ends, or delaySeconds later.",
+      "Before ending with unfinished work, choose whether you will do it now, arm this next turn, or delegate a bounded independent part with continue_delegate. An unarmed intention will not wake you by itself.",
       "Do not use continue_work to wait, yield, stand by, park, or keep the session alive after all tasks are complete.",
       "To wait for a delegate or sub-agent you already started, use sessions_yield; its result wakes you. Otherwise schedule no continuation.",
     ].join(" "),
