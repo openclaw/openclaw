@@ -4,7 +4,7 @@ import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { attachHistoryActivity } from "../chat-history-request.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { createProps } from "../chat-thread.test-support.ts";
 import {
