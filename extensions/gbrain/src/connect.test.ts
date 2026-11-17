@@ -3,7 +3,6 @@ import {
   authoredGbrainEntry,
   connectGbrain,
   applyGbrainConnection,
-  type CommandResult,
   type ConnectDeps,
   type GbrainMcpServerEntry,
   type Health,
@@ -38,7 +37,11 @@ function fakeHost(initial: {
   const accepted = new Set(initial.acceptedTokens ?? []);
   const commands: string[] = [];
   let minted = 0;
-  const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "" });
+  const ok = (stdout = ""): Awaited<ReturnType<ConnectDeps["run"]>> => ({
+    code: 0,
+    stdout,
+    stderr: "",
+  });
   const deps: ConnectDeps = {
     home: HOME,
     env: {},
