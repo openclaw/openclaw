@@ -1,4 +1,5 @@
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import {
   automationsFilter,
   automationsFiltered,
@@ -7,7 +8,10 @@ import {
   type AutomationsFilter,
 } from "../lib/cron/automations-filter.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderSidebarSectionFilterMenu } from "./app-sidebar-section-filter.tsx";
+import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
@@ -17,7 +21,23 @@ const LAST_RUNS = ["all", "ok", "error"] as const;
 const SORTS = ["name", "nextRunAtMs", "updatedAtMs"] as const;
 
 /** The Automations sidebar filter: status, last activity and order. */
-export function renderSidebarAutomationsFilterMenuForMenus(menus: SidebarMenus) {
+export function renderSidebarAutomationsFilterMenuForMenus(
+  menus: SidebarMenus,
+  host: SidebarMenusOwner,
+) {
+  const context = host.sessionDataContext;
+  // Unset follows the agent selected now; the sidebar list resolves it the same way.
+  const agentValue = () => {
+    const agentId = automationsFilter().agentId;
+    return agentId === null
+      ? ""
+      : (agentId ?? (context ? resolveSessionNavigationAgentId(context) : ""));
+  };
+  const agents = () =>
+    listSelectableAgents(context?.agents.state.agentsList?.agents ?? []).map((agent) => ({
+      value: normalizeAgentId(agent.id),
+      label: normalizeAgentLabel(agent),
+    }));
   const set = (patch: Partial<AutomationsFilter>) =>
     setAutomationsFilter({ ...automationsFilter(), ...patch });
   return renderSidebarSectionFilterMenu(menus, "automationsFilter", {
@@ -26,6 +46,17 @@ export function renderSidebarAutomationsFilterMenuForMenus(menus: SidebarMenus) 
     filtered: automationsFiltered,
     onReset: () => setAutomationsFilter(DEFAULT_AUTOMATIONS_FILTER),
     pickers: () => [
+      ...(agents().length > 1
+        ? [
+            {
+              id: "sidebar-automations-agent",
+              label: t("agentScope.label"),
+              value: agentValue(),
+              options: [{ value: "", label: t("agentScope.allAgents") }, ...agents()],
+              onChange: (value: string) => set({ agentId: value || null }),
+            },
+          ]
+        : []),
       {
         id: "sidebar-automations-status",
         label: t("cron.runs.status"),
