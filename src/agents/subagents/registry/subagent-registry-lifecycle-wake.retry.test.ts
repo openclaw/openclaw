@@ -1,6 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -132,6 +136,57 @@ describe("requester settle retry lifetime", () => {
       } finally {
         release.resolve();
         await running;
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
+
+  it("reports a lost-run batch failure in the requester's current transcript", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records());
+      const requester = {
+        agentId: "main",
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: path.join(
+          path.dirname(database.path),
+          "agents",
+          "main",
+          "sessions",
+          "sessions.json",
+        ),
+      };
+      // A compaction successor replaced the transcript that admitted the yield.
+      await upsertSessionEntryCore(requester, {
+        sessionId: "successor",
+        lifecycleRevision: "rev-2",
+        updatedAt: Date.now(),
+      });
+      Object.assign(input.subagent, {
+        requesterStorePath: requester.storePath,
+        completionRequesterSessionId: "predecessor",
+        completionRequesterLifecycleRevision: "rev-1",
+      });
+      input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      const driver = seedDriver(database, input);
+      driver.wake.mockImplementation(async (params) => {
+        await params.completeBatch([params.settledEntry], 1, {
+          delivered: false,
+          path: "direct",
+          error: "requester turn failed",
+        });
+        return true;
+      });
+      try {
+        await driver.run();
+        const events = await loadTranscriptEvents({ ...requester, sessionId: "successor" });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            details: expect.objectContaining({ error: "requester turn failed" }),
+          }),
+        );
+      } finally {
         driver.controller.clearRuntimeState();
       }
     });

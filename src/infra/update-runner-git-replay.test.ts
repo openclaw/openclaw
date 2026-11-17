@@ -131,6 +131,115 @@ describe("Git update local replay", () => {
     );
   });
 
+  describe("local replay conflicts across candidates", () => {
+    const commitRemote = async (file: string, contents: string) => {
+      await fs.writeFile(path.join(remote, file), contents);
+      await git(remote, "add", ".");
+      await git(remote, "commit", "-m", `upstream ${file}`);
+      return git(remote, "rev-parse", "HEAD");
+    };
+    // Ten upstream commits push the deployed base out of the candidate window.
+    const commitRemoteFillers = async (count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        await commitRemote(`filler-${index}.txt`, `filler ${index}\n`);
+      }
+    };
+    const commitLocalPatch = async () => {
+      await fs.writeFile(path.join(root, "patch.txt"), "local patch\n");
+      await git(root, "add", ".");
+      await git(root, "commit", "-m", "local patch");
+      const local = await head();
+      await git(root, "checkout", "--detach", beforeSha);
+      return local;
+    };
+    const countReplays = () => {
+      const replayed: string[] = [];
+      const execute = runCommand;
+      runCommand = async (argv, options) => {
+        if (argv.includes("rebase") && !argv.includes("--abort")) {
+          replayed.push(argv.at(-1)!);
+        }
+        return execute(argv, options);
+      };
+      return replayed;
+    };
+    const conflictFacts = (result: Awaited<ReturnType<typeof update>>) =>
+      result.steps.findLast((step) => step.name === "preflight-rebase")?.failureFacts ?? [];
+
+    it(
+      "skips older candidates whose conflicted content is unchanged",
+      { timeout: 20_000 },
+      async () => {
+        const local = await commitLocalPatch();
+        await commitRemote("patch.txt", "upstream patch\n");
+        await commitRemoteFillers(10);
+        const target = await git(remote, "rev-parse", "HEAD");
+        const replayed = countReplays();
+        const result = await update();
+        expect(result).toMatchObject({
+          status: "error",
+          reason: "preflight-local-replay-conflict",
+        });
+        expect(replayed).toEqual([target]);
+        expect(conflictFacts(result)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "preflight-local-replay-conflict",
+              affectedKey: "patch.txt",
+            }),
+            expect.objectContaining({
+              code: "preflight-local-replay-conflict",
+              message: expect.stringContaining("patch.txt"),
+            }),
+          ]),
+        );
+        expect(fixture.stopped).toBe(false);
+        expect(events).not.toContain("build");
+        expect(await head()).toBe(beforeSha);
+        expect(await git(root, "rev-parse", "main")).toBe(local);
+      },
+    );
+
+    it(
+      "still replays an older candidate that differs at a conflicted path",
+      { timeout: 20_000 },
+      async () => {
+        await commitLocalPatch();
+        await commitRemote("patch.txt", "first upstream patch\n");
+        await commitRemoteFillers(8);
+        const differing = await git(remote, "rev-parse", "HEAD");
+        const target = await commitRemote("patch.txt", "second upstream patch\n");
+        const replayed = countReplays();
+        const result = await update();
+        expect(result).toMatchObject({
+          status: "error",
+          reason: "preflight-local-replay-conflict",
+        });
+        // The differing candidate conflicts again; the rest share its content.
+        expect(replayed).toEqual([target, differing]);
+        expect(await head()).toBe(beforeSha);
+      },
+    );
+
+    it(
+      "falls back to an older candidate that lacks the conflicted path",
+      { timeout: 20_000 },
+      async () => {
+        await commitLocalPatch();
+        await commitRemoteFillers(9);
+        const older = await git(remote, "rev-parse", "HEAD");
+        const target = await commitRemote("patch.txt", "upstream patch\n");
+        const replayed = countReplays();
+        const result = await update();
+        expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+        expect(replayed).toEqual([target, older]);
+        expect(await fs.readFile(path.join(root, "patch.txt"), "utf8")).toBe("local patch\n");
+        expect(await git(root, "merge-base", "--is-ancestor", older, "HEAD")).toBe("");
+        await expect(git(root, "merge-base", "--is-ancestor", target, "HEAD")).rejects.toThrow();
+      },
+    );
+  });
+
   it.for([
     "connected",
     "merge",

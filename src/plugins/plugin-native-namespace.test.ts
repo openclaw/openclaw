@@ -17,6 +17,56 @@ const originalBytes = Buffer.from("unchanged native companion\n");
 const changedBytes = Buffer.from("different native companion\n");
 const modifiedAt = new Date("2020-01-01T00:00:00Z");
 
+it.each([
+  { recapture: false, swap: false },
+  { recapture: true, swap: false },
+  { recapture: false, swap: true },
+  { recapture: true, swap: true },
+])(
+  "verifies copy-like links (recapture: $recapture, source swap: $swap)",
+  ({ recapture, swap }) => {
+    const root = dirs.make("plugin-copying-link-");
+    const sourceDirectory = path.join(root, "source");
+    fs.mkdirSync(sourceDirectory);
+    const source = path.join(sourceDirectory, "addon.node");
+    fs.writeFileSync(source, originalBytes);
+    const capture = (name: string, previous?: PluginNativeNamespaceFact) => {
+      const capturedRoot = path.join(root, name);
+      fs.mkdirSync(capturedRoot);
+      const result = capturePluginNativeNamespace({
+        sourceDirectory,
+        boundary: sourceDirectory,
+        capturedRoot,
+        managed: true,
+        copyOnly: false,
+        previous,
+      });
+      finishPluginNativeNamespace(result.fact);
+      return result;
+    };
+    const previous = recapture ? capture("previous").fact : undefined;
+    const link = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      fs.copyFileSync(from, to);
+      if (swap) {
+        fs.renameSync(from, `${String(from)}.original`);
+        fs.writeFileSync(from, changedBytes);
+      }
+    });
+    if (swap) {
+      expect(() => capture("next", previous)).toThrow(/Native plugin .*changed/);
+    } else {
+      const { fact, changed } = capture("next", previous);
+      const captured = path.join(fact.capturedRoot, "content", "addon.node");
+      expect(fs.readFileSync(captured)).toEqual(originalBytes);
+      expect(fs.readFileSync(captured)).toEqual(fs.readFileSync(source));
+      expect(fs.statSync(captured).ino).not.toBe(fs.statSync(source).ino);
+      expect(changed.size).toBe(0);
+      expect(pluginNativeNamespaceIsCurrent(fact, sourceDirectory)).toBe(true);
+    }
+    expect(link).toHaveBeenCalled();
+  },
+);
+
 function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") {
   const root = dirs.make("plugin-native-namespace-");
   const sourceDirectory = path.join(root, "source");

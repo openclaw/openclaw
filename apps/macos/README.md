@@ -23,6 +23,13 @@ SecurityAgent prompt during unattended work. The primary Gateway route still
 comes from the normal environment/config endpoint. Combine it with
 `--attach-only` when an external process owns the local Gateway.
 
+Gateway ownership and GUI presentation are independent: `--attach-only` does
+not require `--background-only` or `--no-activate`. Use those presentation flags
+only for an intentional unattended or nonactivating launch, not merely because
+an agent task runs in the background or should stay quiet. When an interactive
+app relaunch is authorized, preserve its normal windows, onboarding, and
+permission UI unless a different presentation mode is intended.
+
 For background Accessibility automation and window-ID capture, launch the app
 binary with `--no-activate --chat` (or `--dashboard`). Windows remain behind the
 active app; macOS permission/file dialogs and interactive Keychain access are
@@ -61,6 +68,32 @@ Profiles are not test sandboxes. PortGuardian intentionally shares its tunnel
 ledger and orphan cleanup across app instances, and port reservation inspects
 other profiles' Gateway service claims. Use a clean test account or VM when
 validation must not access or change operator state.
+
+## ClawHub catalog links (macOS)
+
+The app accepts the same identity-only contract for all three catalog families:
+
+```text
+openclaw://plugins/install?name=openclaw-hello-world
+openclaw://skills/install?name=%40alice%2Fcalendar
+openclaw://templates/install?name=%40maker%2Ftravel-planner
+```
+
+Encode the exact package name or publisher-qualified skill reference with
+`URLSearchParams`. Links open the matching review in the selected Gateway:
+plugin catalog details, the ClawHub skill review, or the published Template
+detail page. Skill installation retains the existing agent selection. Templates
+retain the existing Labs prerequisite and Add review/consent flow; links do not
+enable Labs or create an agent.
+
+The app accepts only one `name` parameter and a package identifier, not artifact
+URLs, versions, Gateway addresses, tokens, or install/enable commands. Opening a
+link never installs or enables code. The user explicitly confirms the existing
+Gateway-owned installation or Template Add flow and its policy checks.
+
+Browser pages cannot reliably detect whether a compatible app is installed or
+opened. CLI/Prompt remains the manual fallback. The Tauri desktop app has its own
+handler; native Windows Hub support is a separate app integration.
 
 ## Native tests
 

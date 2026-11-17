@@ -14,6 +14,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextTemplateAgentId } from "./add-agent-id.js";
+import { readRetainedTemplateInitialization } from "./add-checkpoint.js";
 import {
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
@@ -23,7 +24,12 @@ import { bindTemplateLifecycleTrust, projectTemplateAddPlan } from "./gateway-pl
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { preflightTemplatePackage } from "./packages.js";
 import { projectTemplatePluginCapabilityReviews } from "./plugin-capability-review.js";
-import type { TemplateAddPlan, TemplatePackagePreflight, TemplateReadResult } from "./types.js";
+import type {
+  TemplateAddPlan,
+  TemplateAddPlanContext,
+  TemplatePackagePreflight,
+  TemplateReadResult,
+} from "./types.js";
 
 type VerifiedTemplateSource = Extract<TemplateReadResult, { ok: true }>;
 
@@ -91,6 +97,7 @@ export type GatewayTemplateAddPlanningContext = {
   /** Trusted in-flight creation receipt; never a wire field. */
   admittedWorkspace?: string;
   packagePreflight?: TemplatePackagePreflight;
+  resolvePreferredModel?: TemplateAddPlanContext["resolvePreferredModel"];
 };
 
 export async function buildGatewayTemplateAddPlan(
@@ -121,6 +128,9 @@ export async function buildGatewayTemplateAddPlan(
       existingAgentIds,
       existingWorkspacePaths: existingWorkspaces,
       ...(context.admittedWorkspace ? { admittedWorkspace: context.admittedWorkspace } : {}),
+      ...(context.resolvePreferredModel
+        ? { resolvePreferredModel: context.resolvePreferredModel }
+        : {}),
       // Most Templates have no MCP declarations. Do not read and validate the
       // entire authored host configuration for an unrelated requirement type.
       existingMcpServers:
@@ -159,6 +169,32 @@ export async function planTemplateAddForGateway(
       source: ClawHubCoordinate;
     },
 ): Promise<TemplateLifecyclePlanResult> {
+  // Apply resumes an agent that a failed Add kept when its pending initialization
+  // matches this source. Review that agent as apply will: without its admission.
+  let context: GatewayTemplateAddPlanningContext = input;
+  const agentId = input.agentId ? normalizeAgentId(input.agentId) : undefined;
+  if (agentId && input.config.agents?.entries?.[agentId]) {
+    const workspace = await selectTemplateAgentWorkspace(input.config, agentId);
+    const retained = await readRetainedTemplateInitialization(
+      input.config,
+      agentId,
+      workspace,
+      input.source,
+      () => {},
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (retained) {
+      const entries = { ...input.config.agents.entries };
+      delete entries[agentId];
+      context = {
+        ...input,
+        config: { ...input.config, agents: { ...input.config.agents, entries } },
+        admittedWorkspace: workspace,
+      };
+    }
+  }
   const resolved = await withResolvedClawHubSource({
     coordinate: input.source,
     mode: "preview",
@@ -166,8 +202,8 @@ export async function planTemplateAddForGateway(
     ...(input.token ? { token: input.token } : {}),
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
     run: async (source, trust) => {
-      const plan = await buildGatewayTemplateAddPlan(source, input);
-      return projectGatewayTemplateAddPlan(plan, source, trust, input.config);
+      const plan = await buildGatewayTemplateAddPlan(source, context);
+      return projectGatewayTemplateAddPlan(plan, source, trust, context.config);
     },
   });
   return resolved.value;

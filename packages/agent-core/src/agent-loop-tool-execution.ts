@@ -1,9 +1,7 @@
 import type { AgentEventSink, ExecutedToolCallBatch } from "./agent-stream-response.js";
 import {
   getInternalToolExecutionPreparer,
-  InternalToolLoopBlocked,
   type InternalToolExecutionPreparation,
-  type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
@@ -11,7 +9,6 @@ import {
   createErrorToolResult,
   immediateToolArgumentValidationError,
   immediateToolPreparationError,
-  TOOL_LOOP_BLOCKED_MESSAGE,
   createToolExecutionErrorResult,
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
@@ -21,7 +18,7 @@ import {
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
 import { USER_TOOL_INTERRUPTION_MESSAGE, type ToolInterruptions } from "./tool-interruption.js";
-import type { AgentTool, AgentToolCall, AgentToolResult, ToolLoopIntervention } from "./types.js";
+import type { AgentTool, AgentToolCall, AgentToolResult } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
 export type PreparedToolCall = {
@@ -66,7 +63,6 @@ export type ExecutedToolCallOutcome = {
   isError: boolean;
   executionStarted: boolean;
   callerCancelled?: true;
-  intervention?: ToolLoopIntervention;
 };
 
 export type ReadyToolCallExecution = {
@@ -236,19 +232,6 @@ export async function prepareToolCallExecution(
                 }
               : { result, isError: false, executionStarted };
           } catch (error) {
-            if (implementationStartError?.error instanceof InternalToolLoopBlocked) {
-              const { intervention } = implementationStartError.error;
-              return {
-                result: createErrorToolResult(TOOL_LOOP_BLOCKED_MESSAGE, {
-                  status: "blocked",
-                  deniedReason: "tool-loop",
-                  intervention,
-                }),
-                isError: true,
-                executionStarted: false,
-                intervention,
-              };
-            }
             executionFailure = { error: implementationStartError?.error ?? error };
             if (implementationStartError) {
               throw implementationStartError.error;
@@ -376,10 +359,6 @@ export async function prepareToolCallExecution(
 
 export type ToolPlanState = {
   executionStarted: boolean;
-  /** All tool batches from one provider response share the unseen recovery allowance. */
-  repeatedToolErrorRecoveryGranted?: boolean;
-  /** Closes all unstarted actions while already-started effects drain. */
-  terminalIntervention?: ToolLoopIntervention;
 };
 
 export type ReadyPreparedToolCall = PreparedToolCall & { execution: ReadyToolCallExecution };
@@ -396,37 +375,13 @@ type ParallelToolCallLaunches = {
   started: StartedToolCall[];
   completed: Array<Omit<StartedToolCall, "outcome"> & { outcome: ExecutedToolCallOutcome }>;
   rejected?: { index: number; error: unknown };
-  blocked?: { index: number; intervention: ToolLoopIntervention };
 };
 
 export async function launchParallelToolCalls(
   entries: FinalizedToolCallEntry[],
-  batchLifecycle: InternalToolBatchLifecycle | undefined,
   toolPlan: ToolPlanState,
 ): Promise<ParallelToolCallLaunches> {
   const ready = entries.flatMap((entry, index) => ("kind" in entry ? [{ entry, index }] : []));
-  /**
-   * Rejected calls never start, so they launch as lifecycle commits when the
-   * launch cursor passes their assistant-order position. Admission then records
-   * them between the prepared calls that commit as their implementations start.
-   */
-  let next = 0;
-  const launchRejectedBefore = (end: number): ParallelToolCallLaunches["rejected"] => {
-    for (; next < end; next += 1) {
-      const entry = entries[next];
-      if (!entry || "kind" in entry || entry.errorKind !== "argument-validation") {
-        continue;
-      }
-      try {
-        batchLifecycle?.commitReadyCalls?.([
-          { toolCallId: entry.toolCall.id, args: entry.toolCall.arguments },
-        ]);
-      } catch (error) {
-        return { index: next, error };
-      }
-    }
-    return undefined;
-  };
   const result: ParallelToolCallLaunches = { started: [], completed: [] };
   const preparations: Promise<void>[] = [];
   const reject = (index: number, error: unknown) => {
@@ -442,7 +397,6 @@ export async function launchParallelToolCalls(
   });
   const launchNext = () => {
     const current = ready[cursor++];
-    result.rejected ??= launchRejectedBefore(current?.index ?? entries.length);
     if (!current || result.rejected) {
       finish();
       return;
@@ -456,33 +410,15 @@ export async function launchParallelToolCalls(
     );
     const launchState: { outcome?: Promise<ExecutedToolCallOutcome> } = {};
     let started = false;
-    let rejected = false;
     const onStart = () => {
-      try {
-        if (toolPlan.terminalIntervention) {
-          throw new InternalToolLoopBlocked(toolPlan.terminalIntervention);
-        }
-        batchLifecycle?.commitReadyCalls?.([
-          { toolCallId: current.entry.toolCall.id, args: current.entry.execution.args },
-        ]);
-      } catch (error) {
-        if (error instanceof InternalToolLoopBlocked) {
-          result.blocked = { index: current.index, intervention: error.intervention };
-          throw error;
-        }
-        rejected = true;
-        reject(current.index, error);
-        finish();
-        throw error;
-      }
       started = true;
       resolvePreparation();
       toolPlan.executionStarted = true;
       if (launchState.outcome) {
         result.started.push({ ...current, outcome: launchState.outcome });
       }
-      // Advance only from the final source-start callback so guard → commit → implementation stays
-      // adjacent while started bodies overlap; pre-source completion advances below without commit.
+      // Advance only from the source-start callback so started bodies overlap in order;
+      // pre-source completion advances below.
       queueMicrotask(launchNext);
     };
     const outcome = current.entry.execution.execute(onStart);
@@ -493,13 +429,9 @@ export async function launchParallelToolCalls(
     void outcome.then(
       (completed) => {
         resolvePreparation();
-        if (!started && !rejected) {
+        if (!started) {
           result.completed.push({ ...current, outcome: completed });
-          if (result.blocked) {
-            finish();
-          } else {
-            queueMicrotask(launchNext);
-          }
+          queueMicrotask(launchNext);
         }
       },
       (error: unknown) => {
@@ -511,7 +443,7 @@ export async function launchParallelToolCalls(
   };
   launchNext();
   await done;
-  // Already-invoked guards retain custody until they start or settle, even after a sibling fails.
+  // Already-invoked sources retain custody until they start or settle, even after a sibling fails.
   await Promise.all(preparations);
   return result;
 }

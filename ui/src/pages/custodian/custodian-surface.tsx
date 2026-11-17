@@ -15,6 +15,11 @@ import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
@@ -329,7 +334,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     };
   });
   const handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    if (event.key !== "Enter" || event.shiftKey || isComposingKeyboardEvent(event)) {
       return;
     }
     event.preventDefault();
@@ -536,7 +541,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                         }}
                         onBeforeInput={handleTextareaOverflowInteraction}
                         onCompositionStart={handleTextareaOverflowInteraction}
-                        onBlur={handleTextareaOverflowInteraction}
+                        onCompositionEnd={recordCompositionEnd}
+                        onKeyUp={clearCompositionEnd}
+                        onBlur={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          clearCompositionEnd(event);
+                        }}
                         onWheel={handleTextareaOverflowInteraction}
                         onPointerDown={handleTextareaOverflowInteraction}
                         onScroll={handleTextareaOverflowScroll}
@@ -552,6 +562,9 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                       disabled={sending() || !store().canSend}
                       onInput={(event) => store().setInput(event.currentTarget.value)}
                       onKeyDown={handleKeydown}
+                      onCompositionEnd={recordCompositionEnd}
+                      onKeyUp={clearCompositionEnd}
+                      onBlur={clearCompositionEnd}
                     />
                   </Show>
                   <span class="agent-chat__composer-placeholder" aria-hidden="true">

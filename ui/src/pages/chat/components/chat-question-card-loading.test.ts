@@ -100,12 +100,13 @@ it("defers controls, retries loading, and mounts only the current connected requ
   const alert = () => card.querySelector('[role="alert"]');
   const retry = async () => {
     card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-    await waitForSolid(() => expect(status()).not.toBeNull());
+    await waitForSolid(() => expect(alert()).toBeNull());
   };
   const expectError = (message: string) =>
     waitForSolid(() => expect(alert()?.textContent).toContain(message));
   await Promise.all([card.updateComplete, loadStarted.promise]);
-  expect(status()).not.toBeNull();
+  // The deferred panel reserves no loading placeholder in the transcript.
+  expect(status()).toBeNull();
   expect(card.querySelector("openclaw-chat-question-panel")).toBeNull();
   initialLoad.reject(new Error("Synthetic load failure"));
   await expectError("Synthetic load failure");

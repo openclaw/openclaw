@@ -33,6 +33,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectResolvedQuestionPrompts } from "./chat-question-placement.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
@@ -49,7 +50,11 @@ import {
   prepareChatStreamOnset,
   type ChatThreadDisplayProps,
 } from "./chat-thread-display.ts";
-import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
+import {
+  displayChatHistory,
+  isHiddenChatCommentary,
+  type ChatItemsFacts,
+} from "./chat-thread-facts.ts";
 import {
   placeChatInputs,
   type ChatInputOrderState,
@@ -84,7 +89,11 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import {
+  createRecordedToolKeyLookup,
+  createStreamSegmentProjector,
+} from "./chat-thread-stream-projection.ts";
+import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps &
@@ -159,7 +168,7 @@ export function buildChatItems(
     mode !== "history" && props.persistCommentary === false && (props.runWorking || props.runActive)
       ? normalizeOptionalString(resolveProgress().runId)
       : undefined;
-  const history = displayChatHistory(props, activeCommentaryRunId);
+  const history = displayChatHistory(props);
   if (facts) {
     facts.history = history;
   }
@@ -205,6 +214,16 @@ export function buildChatItems(
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
+    if (isHiddenChatCommentary(props, msg, activeCommentaryRunId)) {
+      items.push({
+        kind: "notice",
+        key: `activity-boundary:${itemKey}`,
+        text: "",
+        timestamp: rawMessageTimestamp(msg) ?? 0,
+        activityBoundary: true,
+      });
+      continue;
+    }
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
     if (facts && msg === facts.probe) {
@@ -329,7 +348,9 @@ export function buildChatItems(
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
       !hasHandoffToolCall(msg) &&
-      !permissionInMessage(msg)
+      !permissionInMessage(msg) &&
+      // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+      !readProjectedContinuation(msg)
     ) {
       continue;
     }
@@ -508,28 +529,11 @@ export function buildChatItems(
       });
     }
   }
-  const appendStreamSegment = (
-    segment: Pick<ChatStreamSegment, "ts" | "runId" | "afterUserSendId">,
-    key: string,
-    text: string,
-    thinking?: string,
-    beforeKey?: string,
-  ) => {
-    const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
-    projections.push({
-      item: {
-        kind: "stream",
-        key,
-        text,
-        ...(thinking ? { thinking } : {}),
-        startedAt: segment.ts,
-        isStreaming: false,
-        ...optionalRunIdentity(segment.runId),
-        ...optionalBoundaryIdentity(segment.runId),
-      },
-      bounds: beforeKey ? { ...bounds, beforeKey } : bounds,
-    });
-  };
+  const appendStreamSegment = createStreamSegmentProjector(
+    items,
+    projections,
+    resolveProjectionBounds,
+  );
   let previousAccumulatedStreamText: string | null = null;
   const maxLen = Math.max(indexedSegments.length, toolItems.length);
   for (let i = 0; i < maxLen; i++) {
@@ -569,32 +573,28 @@ export function buildChatItems(
       projections.push(tool.projection);
     }
   }
-  // Keyed commentary does not advance cumulative text and follows the indexed
-  // stream/tool pairs on timestamp ties.
+  // Keyed commentary does not advance cumulative text. Its next root call is
+  // a stronger boundary than provider timestamps, including after persistence.
+  const recordedToolKey = keyedSegments.some((segment) => segment.toolCallId)
+    ? createRecordedToolKeyLookup(historyItems)
+    : undefined;
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
     if (text.length > 0) {
-      appendStreamSegment(segment, `stream-seg:${props.sessionKey}:${segment.itemId}`, text);
+      const streamKey = `stream-seg:${props.sessionKey}:${segment.itemId}`;
+      const runId = normalizeOptionalString(segment.runId);
+      const callId = segment.toolCallId?.trim();
+      appendStreamSegment(segment, streamKey, text, undefined, recordedToolKey?.(runId, callId));
+      const tool = toolLookup.get(runId, callId);
+      if (tool) {
+        tool.predecessorKey = streamKey;
+      }
     }
   }
 
-  for (const prompt of props.questionPrompts ?? []) {
-    // Pending questions live in the composer dock. Their terminal summaries are
-    // timestamped transient projections, so keep their historical placement.
-    if (prompt.status === "pending") {
-      continue;
-    }
-    const questionItem: ChatItem = {
-      kind: "question",
-      key: `question:${prompt.id}`,
-      questionId: prompt.id,
-      startedAt: prompt.createdAtMs,
-    };
-    projections.push({
-      item: questionItem,
-      bounds: prompt.runId ? resolveProjectionBounds(prompt.runId) : undefined,
-    });
-  }
+  projections.push(
+    ...projectResolvedQuestionPrompts(props.questionPrompts, resolveProjectionBounds),
+  );
 
   const visibleText = trimAccumulatedStreamPrefix(
     sanitizeStreamText(props.stream ?? ""),

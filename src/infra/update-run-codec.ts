@@ -11,6 +11,7 @@ import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
+import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
@@ -204,7 +205,10 @@ function boundedJson(
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
-          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
+          !(
+            typeof item.step === "string" &&
+            (item.step.startsWith("finalize:doctor-lint:") || isUpdateOwedStepRow(item.step))
+          )
             ? {
                 ...item,
                 detail: undefined,
@@ -266,6 +270,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     requester,
     sessionKey,
@@ -281,6 +286,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
@@ -296,6 +302,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
         updateRecoveryCapture,
         managedHandoff,
         packageStage,
+        packageRelease,
         windowsUserSid,
         ...routing,
       })
@@ -319,6 +326,8 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     "candidateVersion",
     "installedVersion",
     "fallbackReason",
+    // A closed enum: halving it would make the stored record fail validation on read.
+    "cause",
   ]);
   const minimumDiagnostics = JSON.stringify(
     mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
@@ -372,6 +381,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
     ...originDiagnostics
   } = input.origin;
@@ -403,6 +413,7 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     updateRecoveryCapture,
     managedHandoff,
     packageStage,
+    packageRelease,
     windowsUserSid,
   });
   // Shipped readers parse recovery strictly. Its named risk lives in a retained step fact.

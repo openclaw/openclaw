@@ -151,6 +151,7 @@ it.for(["discovery", "pricing", "scan admission"])(
           },
         );
       } else if (phase === "pricing") {
+        seedUsage("stop-during-pricing");
         const prepare = modelPricing.prepareModelPricingContext;
         vi.spyOn(modelPricing, "prepareModelPricingContext").mockImplementationOnce(
           async (...args) => {

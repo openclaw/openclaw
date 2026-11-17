@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import childProcess, { type ChildProcess, type SpawnOptions } from "node:child_process";
 import { Socket } from "node:net";
 import path from "node:path";
 import { serialize } from "node:v8";
@@ -62,7 +62,7 @@ export function createSqliteReadOnlyWorkerSession(
     pooledRead?: boolean;
     argv: string[];
     requestArgs: (pathname: string, options: SqliteReadOnlyWorkerOptions) => string[];
-    readBudget: (pathname: string) => { timeoutMs: number; size: string };
+    readBudget: (pathname: string) => Promise<{ timeoutMs: number; size: string }>;
     deadlineOwnedByCaller: () => boolean;
     timeoutError: (pathname: string, timeoutMs: number, size: string) => Error;
     closeTimeoutMs: number;
@@ -88,7 +88,7 @@ export function createSqliteReadOnlyWorkerSession(
   const child: ChildProcess =
     transport.kind === "broker"
       ? transport.owner.spawn(executable, argv, spawnOptions)
-      : spawn(executable, argv, spawnOptions);
+      : childProcess.spawn(executable, argv, spawnOptions);
   recordChildProcessSpawn(
     executable,
     child,
@@ -340,10 +340,6 @@ export function createSqliteReadOnlyWorkerSession(
         outputBytes = 0;
         const abort = () => retire(options.signal?.reason);
         let timer: ReturnType<typeof setTimeout> | undefined;
-        if (!host.deadlineOwnedByCaller()) {
-          const { timeoutMs, size } = host.readBudget(pathname);
-          timer = setTimeout(() => retire(host.timeoutError(pathname, timeoutMs, size)), timeoutMs);
-        }
         const id = ++sequence;
         pending = {
           id,
@@ -365,11 +361,24 @@ export function createSqliteReadOnlyWorkerSession(
           abort();
           return;
         }
-        const send = () => {
-          if (retired) {
-            return;
-          }
+        const send = async () => {
           try {
+            if (!host.deadlineOwnedByCaller()) {
+              const { timeoutMs, size } = await host.readBudget(pathname);
+              if (retired) {
+                return;
+              }
+              timer = setTimeout(
+                () => retire(host.timeoutError(pathname, timeoutMs, size)),
+                timeoutMs,
+              );
+            }
+            if (ready) {
+              await ready;
+              if (retired) {
+                return;
+              }
+            }
             const request = {
               id,
               args: host.requestArgs(pathname, options),
@@ -377,10 +386,12 @@ export function createSqliteReadOnlyWorkerSession(
                 ? {
                     [options.mode === "operation" ? "operation" : "auth"]: {
                       expectedIdentity: options.expectedIdentity,
+                      expectedBirthtime: options.expectedBirthtime,
                       artifactPreserving: options.artifactPreserving,
                       ...(options.mode === "operation"
                         ? { command: serialize(options.command).toString("base64") }
                         : {
+                            immutable: options.immutable,
                             retainReader:
                               !host.pooledRead &&
                               options.source === "canonical" &&
@@ -405,11 +416,7 @@ export function createSqliteReadOnlyWorkerSession(
             retire(error);
           }
         };
-        if (ready) {
-          void ready.then(send);
-        } else {
-          send();
-        }
+        void send();
       }));
     },
     setIdle,

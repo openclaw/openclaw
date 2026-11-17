@@ -288,7 +288,22 @@ describe("private session source staging", () => {
       path.join(fixture.paths.memory, "transfer.md"),
       "Violet transfer source.\n".repeat(30_000),
     );
-    const opened = vi.spyOn(syncFs, "openSync");
+    // Admission opens retained identity descriptors asynchronously; retirement closes them.
+    const shadows: number[] = [];
+    const open = syncFs.open;
+    vi.spyOn(syncFs, "open").mockImplementation(((file: syncFs.PathLike, ...args: unknown[]) => {
+      const callback = args.pop() as (error: NodeJS.ErrnoException | null, fd: number) => void;
+      return (open as (...params: unknown[]) => void)(
+        file,
+        ...args,
+        (error: NodeJS.ErrnoException | null, fd: number) => {
+          if (!error && String(file).includes(".memory-reindex-")) {
+            shadows.push(fd);
+          }
+          callback(error, fd);
+        },
+      );
+    }) as typeof syncFs.open);
     const closed = vi.spyOn(syncFs, "closeSync");
     await manager.sync({ reason: "baseline", force: true });
     const before = snapshot(db);
@@ -316,10 +331,7 @@ describe("private session source staging", () => {
     await manager.sync({ reason: "retry", force: true });
     expect(snapshot(db)).toEqual(before);
     // Completed and failed rebuilds both delete their shadow; neither may keep it open.
-    const shadows = opened.mock.results.filter((_, call) =>
-      String(opened.mock.calls[call]![0]).includes(".memory-reindex-"),
-    );
     expect(shadows).not.toHaveLength(0);
-    expect(closed.mock.calls.flat()).toEqual(expect.arrayContaining(shadows.map((r) => r.value)));
+    expect(closed.mock.calls.flat()).toEqual(expect.arrayContaining(shadows));
   });
 });

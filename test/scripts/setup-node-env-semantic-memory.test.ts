@@ -75,7 +75,7 @@ it.runIf(process.platform !== "win32")("rejects an unsupported runner with setup
 
 it("qualifies tagged source with the workflow-pinned containment script", () => {
   const workflow = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
-  const steps = workflow.jobs.check_openclaw_npm.steps;
+  const steps = workflow.jobs.check_openclaw_npm_stage.steps;
   const source = steps.find((step: { name?: string }) => step.name === "Checkout");
   const harness = steps.find(
     (step: { name?: string }) => step.name === "Checkout trusted package source preflight",

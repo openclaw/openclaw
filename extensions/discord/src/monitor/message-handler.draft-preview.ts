@@ -477,6 +477,7 @@ export function createDiscordDraftPreviewController(params: {
     flush,
     async cleanup({ failed = false }: { failed?: boolean } = {}) {
       try {
+        progressNarratorLifecycle?.stopTurn();
         progressDraft.cancel();
         await lifecycle.cleanup({ failed });
         await draftStream?.cleanupPendingMessages();

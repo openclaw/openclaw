@@ -71,6 +71,7 @@ import {
   type NewSessionPageProps,
   type PageHost,
 } from "./new-session-page-owner.ts";
+import { PickerSkeleton } from "./picker.tsx";
 import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -241,14 +242,7 @@ function DraftBlock(props: {
             />
           </Show>
         }
-        placeSelect={
-          <NewSessionPlaceControls
-            params={placeOptions()}
-            ref={(read) => {
-              placeElements = read;
-            }}
-          />
-        }
+        placeSelect={null}
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -280,6 +274,18 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        contextControls={
+          <div class="new-session-page__triggers">
+            <Loading fallback={<PickerSkeleton tray checkout={place().checkoutVisible} />}>
+              <NewSessionPlaceControls
+                params={placeOptions()}
+                ref={(read) => {
+                  placeElements = read;
+                }}
+              />
+            </Loading>
+          </div>
+        }
         surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,

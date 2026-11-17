@@ -6,6 +6,10 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as runtimeConfig from "../agents/agent-runtime-config.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
+import {
+  deferWorkspaceBootstrap as holdWorkspaceBootstrap,
+  seedDeferredWorkspaceDefaults,
+} from "../agents/workspace-preparation.js";
 import { readCanonicalWorkspaceStateSnapshot } from "../agents/workspace-state-read.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
@@ -308,6 +312,8 @@ it("retains package bootstrap custody through a fresh process after setup fails"
       agentRetained: true,
       error: { message: expect.stringContaining("Fixture dependency failure") },
     });
+    // The offline CLI gives the kept agent its default files; BOOTSTRAP.md stays held.
+    await seedDeferredWorkspaceDefaults(plan.agent.workspace);
     await closeOpenClawStateDatabaseAsync();
     const script = [
       'import { ensureAgentWorkspace } from "./src/agents/workspace.ts";',
@@ -336,7 +342,12 @@ it("retains package bootstrap custody through a fresh process after setup fails"
         timeout: 60_000,
       },
     );
-    expect(await fs.readdir(plan.agent.workspace)).toEqual(["SOUL.md"]);
+    expect((await fs.readdir(plan.agent.workspace)).toSorted()).toEqual([
+      "AGENTS.md",
+      "IDENTITY.md",
+      "SOUL.md",
+      "USER.md",
+    ]);
     expect(await fs.readFile(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(soul);
     expect(
       (await readCanonicalWorkspaceStateSnapshot(plan.agent.workspace)).setup,
@@ -348,5 +359,18 @@ it("retains package bootstrap custody through a fresh process after setup fails"
     expect(await fs.readFile(path.join(plan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
       bootstrap,
     );
+  });
+});
+
+it.each([
+  [{ skipOptionalBootstrapFiles: ["USER.md" as const] }, ["AGENTS.md", "IDENTITY.md", "SOUL.md"]],
+  [{ skipBootstrap: true }, []],
+])("held defaults honor configured bootstrap suppression (%j)", async (defaults, files) => {
+  await withOpenClawTestState({ label: "deferred-workspace-defaults" }, async (state) => {
+    const workspace = state.path("workspace");
+    await fs.mkdir(workspace);
+    await holdWorkspaceBootstrap(workspace);
+    await seedDeferredWorkspaceDefaults(workspace, defaults);
+    expect((await fs.readdir(workspace)).toSorted()).toEqual(files);
   });
 });

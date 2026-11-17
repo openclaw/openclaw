@@ -1,17 +1,14 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
-  classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import {
-  AGENT_RUN_SUPERSEDED_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
+import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -21,7 +18,7 @@ import { SessionWorkStartError } from "../../config/sessions/session-work-start.
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -29,6 +26,7 @@ import { claimSystemEventTurn } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -49,6 +47,7 @@ import {
   claimSessionEventOccurrenceInput,
   buildSessionEventContext,
   prepareSessionEventInput,
+  stageSessionEventInput,
   resolveSessionEventExecRequestOwners,
 } from "./session-event-context.js";
 import type {
@@ -70,6 +69,7 @@ import {
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
+import { resolveSessionEventTerminalOutcome } from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
 export { combineSessionEventTargetsForHost } from "./session-event-target.js";
@@ -99,14 +99,13 @@ function enqueueSessionEventAttempt(
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
   readmissionAttempt: number,
 ): SessionEventReceipt {
-  let acceptanceAssertion = assertAcceptanceCurrent;
-  acceptanceAssertion?.();
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
   const { cfg, agentId, sessionKey, env, storePath, operatorAuthority } = prepareSessionEventInput(
     text,
     options,
   );
+  let acceptanceAssertion = cronRunAcceptance(sessionKey, assertAcceptanceCurrent);
   const cleanupContinuation = prepareCronRunContinuationCleanup(sessionKey, storePath, env);
   let target = options.expectedTarget;
   let generationLease: Awaited<ReturnType<typeof prepareSessionEventTargetForHost>> | undefined;
@@ -169,6 +168,7 @@ function enqueueSessionEventAttempt(
   // Placeholder text; the operation's recorded cause is more actionable when present.
   let genericFailure: string | undefined;
   let terminalOutcome: AgentRunTerminalOutcome | undefined;
+  let errorReason: SessionEventOutcome["errorReason"];
   let nextCheckMs: number | undefined;
   let sourceDeliveryOutcome: SourceDeliveryOutcome | undefined;
   let automationResult: SessionEventOutcome["automationResult"];
@@ -343,48 +343,15 @@ function enqueueSessionEventAttempt(
       }
       settlement = "finished";
       const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
-      const result = operation?.result;
-      const failed = result?.kind === "failed";
-      const aborted = result?.kind === "aborted";
-      const terminalSignal = operation?.abortSignal.aborted ? operation.abortSignal : signal;
-      const cause = failed ? result.cause : undefined;
-      const terminalError = cause ?? failure;
-      if (!failure && cause !== undefined) {
-        failure = cause instanceof Error ? cause : formatErrorMessage(cause);
-      }
-      failure ??= genericFailure;
-      // Frozen supersession records cancellation without aborting its signal.
-      // Watchdog failures may abort the backend without being cancellation;
-      // retain typed deadline facts ahead of the recorded cancellation defaults.
-      terminalOutcome = mergeAgentRunTerminalOutcome(
+      const terminal = resolveSessionEventTerminalOutcome({
+        operation,
+        signal,
+        failure,
+        genericFailure,
         terminalOutcome,
-        buildAgentRunTerminalOutcomeFromLifecycleEvent({
-          phase: failed || aborted || failure ? "error" : "end",
-          data: {
-            ...(aborted ? { aborted: true } : {}),
-            ...(aborted && result.code === "aborted_for_supersession"
-              ? { stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON }
-              : {}),
-            ...resolveAgentRunErrorLifecycleFields(
-              terminalError ?? terminalSignal.reason,
-              failed ? undefined : terminalSignal,
-            ),
-            ...resolveAgentRunErrorLifecycleFields(
-              terminalError ?? terminalSignal.reason,
-              undefined,
-            ),
-            error: terminalError,
-          },
-          abortSignal: failed ? undefined : terminalSignal,
-        }),
-      );
-      const classification = classifyAgentRunTerminalOutcome(terminalOutcome);
-      const status =
-        classification === "cancellation"
-          ? "cancelled"
-          : classification === "success"
-            ? "completed"
-            : "failed";
+      });
+      ({ failure, terminalOutcome } = terminal);
+      const { status } = terminal;
       if (status === "failed" && !canReadmit) {
         log.error("session event execution failed", {
           source: options.source,
@@ -458,6 +425,7 @@ function enqueueSessionEventAttempt(
         status,
         executionStarted: started,
         terminalOutcome,
+        errorReason: status === "failed" ? errorReason : undefined,
         interruptedByRestart: terminalOutcome.stopReason === "restart",
         delivered,
         conversationResultCommitted,
@@ -550,7 +518,7 @@ function enqueueSessionEventAttempt(
     isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
     assertOwnerCurrent();
     const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
-    const { prepareSessionGenerationFacts } =
+    const { prepareChatLease } =
       await import("../../config/sessions/session-delivery-generation.js");
     target ??= await captureSessionEventTargetForHost(agentId, sessionKey, {
       env,
@@ -634,19 +602,12 @@ function enqueueSessionEventAttempt(
           operation = owned;
         },
         internalEventExecution: {
+          // The admitted source authorizes board writes, not a disconnected inline renderer.
+          pinnedWidgetAuthoring:
+            options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            if (
-              !recorder.stageApproved ||
-              !(await recorder.stageApproved({
-                runId: occurrenceId,
-                assertCurrent,
-                // Only this live policy retry can reclaim its cancelled attempt.
-                retryCancelled: readmissionAttempt > 0,
-              }))
-            ) {
-              throw new Error("Session event input was not durably admitted");
-            }
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmissionAttempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,
@@ -681,6 +642,13 @@ function enqueueSessionEventAttempt(
           beforeStart: () => prepareStart(),
           ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
           onStarted: start,
+          onTerminalEvent: (event) => {
+            const observation = event.data.errorObservation;
+            errorReason =
+              event.data.phase === "error" && isRecord(observation)
+                ? FAILOVER_REASONS.find((reason) => reason === observation.failoverReason)
+                : undefined;
+          },
           onTerminal: async (runId, outcome, deliveryEvidence) => {
             // Settlement rechecks authority and can reject after Stop. Capture the
             // runtime's timeout/cancellation facts before that asynchronous boundary.
@@ -763,13 +731,7 @@ function enqueueSessionEventAttempt(
             ) {
               generationLease?.release();
               generationLease = undefined;
-              generationLease = await prepareSessionGenerationFacts({
-                agentId,
-                storePath,
-                sessionKey,
-                sessionId: preparedBinding.sessionId,
-                lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
-              });
+              generationLease = await prepareChatLease(chatRef({ agentId, storePath, sessionKey }));
             }
             await prepareCurrent();
             await options.onAdopted?.();

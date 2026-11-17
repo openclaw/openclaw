@@ -4,6 +4,9 @@ import {
   runSubagentStateWorkerOperation,
   useSubagentControlFixture,
 } from "./subagent-control.test-support.js";
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../../auto-reply/reply/queue.js";
@@ -23,7 +26,11 @@ import { registerInternalHook, unregisterInternalHook } from "../../../hooks/int
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { isPidAlive } from "../../../shared/pid-alive.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { getSession, listRunningSessions } from "../../bash-process-registry.js";
+import { createExecTool } from "../../bash-tools.exec-run.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -487,4 +494,77 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
       unregisterInternalHook("command:reset", replaceParent);
     }
   },
+);
+
+it.each(["chat", "rpc"] as const)(
+  "%s reset stops the session's background service and a survivor before committing",
+  async (boundary) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const storePath = await writeSession(parentKey, "parent", "before-reset");
+    const { read } = sessions(storePath);
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "reset-exec-"));
+    const sleeper = `${JSON.stringify(process.execPath)} -e 'setTimeout(() => {}, 60000)'`;
+    const pids: number[] = [];
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "reset-exec-test",
+          OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
+          SHELL: "/bin/sh",
+        },
+        async () => {
+          const exec = createExecTool({
+            host: "gateway",
+            mode: "full",
+            ask: "off",
+            allowBackground: true,
+            notifyOnExit: false,
+            scopeKey: parentKey,
+            cwd,
+          });
+          const service = await exec.execute("service", {
+            command: `echo PID=$$; exec ${sleeper}`,
+            background: true,
+          });
+          const { sessionId } = service.details as { sessionId: string };
+          for (
+            let attempt = 0;
+            attempt < 100 && !/PID=\d+/.test(getSession(sessionId)?.aggregated ?? "");
+            attempt += 1
+          ) {
+            await new Promise((resolve) => {
+              setTimeout(resolve, 50);
+            });
+          }
+          pids.push(Number(/PID=(\d+)/.exec(getSession(sessionId)!.aggregated)![1]));
+          const left = await exec.execute("left", {
+            command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+          });
+          pids.push(
+            Number(/PID=(\d+)/.exec((left.details as { aggregated: string }).aggregated)![1]),
+          );
+        },
+      );
+      expect(pids.every(isPidAlive)).toBe(true);
+      const respond = vi.fn();
+      await (boundary === "chat" ? resetChat() : resetRpc(respond));
+      if (boundary === "rpc") {
+        expectResetResponse(respond, true);
+      }
+      expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+      expect(pids.filter(isPidAlive)).toEqual([]);
+      expect(listRunningSessions().filter((session) => session.scopeKey === parentKey)).toEqual([]);
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+  },
+  60_000,
 );

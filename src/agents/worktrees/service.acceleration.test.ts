@@ -614,7 +614,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       const replacement = await readTemplateAsync(env, original.cacheKey);
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
-      await expect(fs.access(original.path)).resolves.toBeUndefined();
+      await fs.access(original.path);
       expect((await fs.readdir(created.path)).toSorted()).toEqual([
         ".git",
         ".gitignore",
