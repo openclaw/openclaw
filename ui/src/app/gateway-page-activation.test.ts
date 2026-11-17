@@ -28,7 +28,7 @@ function setup(phase: ApplicationGatewayPhase, stale = true, hidden = false) {
     client: {
       needsWakeReconnect: stale,
       needsReachabilityReconnect: false,
-      probeOnWake: () => {},
+      checkInboundSilence: () => {},
       gatewayUrl: "ws://localhost",
     },
   };

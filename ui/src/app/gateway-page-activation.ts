@@ -13,7 +13,7 @@ export function startGatewayPageActivation(
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
-        "needsWakeReconnect" | "needsReachabilityReconnect" | "probeOnWake" | "gatewayUrl"
+        "needsWakeReconnect" | "needsReachabilityReconnect" | "checkInboundSilence" | "gatewayUrl"
       > | null;
     };
     connect: () => void;
@@ -140,7 +140,7 @@ export function startGatewayPageActivation(
           gateway.connect();
         } else {
           // A socket that died while the app was away still looks open until it fails to answer.
-          client.probeOnWake();
+          client.checkInboundSilence(true);
         }
       }
       syncProbe(0);
