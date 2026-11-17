@@ -5,4 +5,4 @@
 # the link only after the Gateway applies the committed server, and the pinned-client refusal that keeps
 # saved credentials. The mcp.authLogin suite harness moved to a test-support file to stay under the
 # 1000-line test cap.
-361
+373
