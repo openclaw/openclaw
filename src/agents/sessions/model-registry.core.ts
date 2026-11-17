@@ -21,7 +21,6 @@ import {
 } from "../models-config.merge.js";
 import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.catalog.js";
 import {
-  filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
   inspectLegacyPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
@@ -54,6 +53,7 @@ import {
   projectProviderRequestConfig,
   type ProviderRequestConfig,
   type CustomModelsResult,
+  readGeneratedPluginModelCatalogProviders,
   readModelRegistryPluginCatalogs,
   type RegistryProviderSources,
   type ResolvedRequestAuth,
@@ -473,7 +473,7 @@ export class ModelRegistry {
 
       const providers =
         options.requireGeneratedCatalog === true
-          ? filterGeneratedPluginModelCatalogProviders({
+          ? readGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
               config: this.config,
               isProviderAvailable: (providerId) =>

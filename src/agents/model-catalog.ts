@@ -371,7 +371,8 @@ export async function buildPreparedModelCatalogSnapshot(
     ),
   ]);
   // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Only live registry or refreshed rows may publish those provider models; the registry
+  // already carries their catalog details (readGeneratedPluginModelCatalogProviders).
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(
