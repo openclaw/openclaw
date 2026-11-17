@@ -37,17 +37,19 @@ See [Onboarding (macOS app)](/start/onboarding) for eligibility and fallbacks.
 
 ### Terminal commands
 
-The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLite.
+The app creates `<state>/bin/openclaw` to run its bundled CLI with Bun and SQLite,
+unless that would replace an existing operator-selected terminal default.
 By default, `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`.
 
 When the app runs from a persistent location, it also links `openclaw-mac` beside
 that command. The first persistent installation adds `~/.openclaw/bin` to the
-usual Bash, zsh, fish, or POSIX sh startup files. A fresh named-profile install
+usual Bash, zsh, fish, or POSIX sh startup files, respecting `ZDOTDIR` and
+`XDG_CONFIG_HOME` without overriding an existing PATH-selected command. A fresh named-profile install
 links its profile command there, so plain `openclaw qr` selects that installation.
 Open a new terminal after installation.
 
 Later installations preserve that terminal default, even when its Gateway is
-offline. Existing configuration for another profile prevents a named install
+offline. Existing configuration for another profile prevents a later install
 from claiming the default. No configuration or Gateway state is moved or merged.
 For a different installation, use its full command path, for example
 `~/.openclaw-<profile>/bin/openclaw qr`. Explicit `--profile` flags and inherited

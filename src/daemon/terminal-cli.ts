@@ -1,18 +1,88 @@
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile, readRegularFileSync, sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errno.js";
+import { resolveExecutablePathAsync } from "../infra/executable-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { lstatIfExists } from "../infra/path-existence.js";
-import { resolveServiceEntrypoint, resolveServiceEntrypointIndex } from "./service-layout.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { appendShellProfilePath, resolveShellConfigRoot } from "../infra/shell-profile.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
+import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 const signature = "#!/bin/sh\n# OpenClaw managed terminal CLI\n";
+type Snapshot = Awaited<ReturnType<typeof readRegularFile>> | undefined;
 
-/** Install the verified service's CLI, without replacing another installation's terminal default. */
+async function snapshot(file: string): Promise<Snapshot> {
+  if (!(await lstatIfExists(file))) {
+    return undefined;
+  }
+  const value = await readRegularFile({ filePath: file, maxBytes: 1024 * 1024 });
+  if (value.stat.uid !== process.getuid?.()) {
+    throw new Error("file is not user-owned");
+  }
+  return value;
+}
+
+/** Publish only over the exact inspected file, never through a replacement link or editor save. */
+async function publish(
+  file: string,
+  root: string,
+  previous: Snapshot,
+  content: string,
+  mode: number,
+) {
+  const physicalRoot = resolvePathViaExistingAncestorSync(root);
+  const physical = resolvePathViaExistingAncestorSync(file);
+  if (!isPathInside(physicalRoot, physical)) {
+    throw new Error("terminal integration path is linked outside its configured directory");
+  }
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await replaceFileAtomic({
+    filePath: file,
+    content,
+    mode,
+    tempPrefix: ".openclaw-terminal",
+    assertBeforeMutation: () => {
+      if (resolvePathViaExistingAncestorSync(file) !== physical) {
+        throw new Error("terminal integration path changed during installation");
+      }
+      if (!previous) {
+        try {
+          lstatSync(file);
+        } catch (error) {
+          if (isMissingPathError(error)) {
+            return;
+          }
+          throw error;
+        }
+      } else {
+        const current = readRegularFileSync({ filePath: file, maxBytes: 1024 * 1024 });
+        if (
+          sameFileIdentity(current.exactIdentity, previous.exactIdentity) &&
+          current.buffer.equals(previous.buffer) &&
+          current.stat.mode === previous.stat.mode &&
+          current.stat.uid === previous.stat.uid
+        ) {
+          return;
+        }
+      }
+      throw new Error(
+        "terminal integration file changed during installation; keeping operator changes",
+      );
+    },
+  });
+}
+
+/** Install only the verified package CLI, preserving an established terminal selection. */
 export async function installGatewayTerminalCli(params: {
   env: NodeJS.ProcessEnv;
   command: Pick<
@@ -22,24 +92,39 @@ export async function installGatewayTerminalCli(params: {
   warn: (message: string) => void;
 }): Promise<void> {
   if (process.platform === "win32") {
-    return; // Windows installation owns command discovery through its package manager.
-  }
-  const { env, command, warn } = params;
-  const entrypoint = resolveServiceEntrypoint(command);
-  const index = resolveServiceEntrypointIndex(command.programArguments);
-  if (!entrypoint || index === undefined) {
-    warn(
-      "Terminal CLI setup skipped: the installed Gateway command has no reusable CLI entrypoint.",
-    );
     return;
   }
-  const home = resolveRequiredHomeDir(env);
-  const profile = normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default";
-  const state = resolveProfileStateDir(profile, env, () => home);
-  const prefix = [...command.programArguments.slice(0, index), entrypoint];
-  const contextual = prefix.map(quoteCliArg).join(" ") + " --profile " + profile;
+  const { env, command, warn } = params;
   try {
-    // Profile flags populate these variables too; accept only canonical profile paths.
+    const index = resolveServiceEntrypointIndex(command.programArguments);
+    const layout = await summarizeGatewayServiceLayout(command);
+    const entrypoint = layout?.entrypoint;
+    const packageRoot = layout?.packageRoot;
+    const runtime = command.programArguments[0] ?? "";
+    const packaged =
+      index !== undefined &&
+      index > 0 &&
+      (isNodeRuntime(runtime) || isBunRuntime(runtime)) &&
+      packageRoot &&
+      entrypoint &&
+      ["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js"].some(
+        (name) => path.join(packageRoot, name) === entrypoint,
+      );
+    if (
+      index === undefined ||
+      !entrypoint ||
+      (!packaged && !(index === 0 && isStandaloneRuntimeExecutable(runtime)))
+    ) {
+      warn(
+        "Terminal CLI setup skipped: the installed Gateway command has no reusable CLI entrypoint.",
+      );
+      return;
+    }
+    const home = resolveRequiredHomeDir(env);
+    const profile = normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default";
+    const state = resolveProfileStateDir(profile, env, () => home);
+    const prefix = [...command.programArguments.slice(0, index), entrypoint];
+    const contextual = prefix.map(quoteCliArg).join(" ") + " --profile " + profile;
     if (
       path.resolve(resolveStateDir(env)) !== state ||
       path.resolve(resolveConfigPath(env)) !== path.join(state, "openclaw.json")
@@ -50,68 +135,83 @@ export async function installGatewayTerminalCli(params: {
       );
       return;
     }
-    const launcher = path.join(state, "bin", "openclaw");
+    const launcher = path.join(state, "bin/openclaw");
+    const terminal = path.join(home, ".openclaw/bin/openclaw");
     const existing = await lstatIfExists(launcher);
-    if (
-      existing &&
-      (!existing.isFile() || !(await fs.readFile(launcher, "utf8")).startsWith(signature))
-    ) {
+    const previous = existing?.isFile() ? await snapshot(launcher) : undefined;
+    if (existing && !previous?.buffer.toString("utf8").startsWith(signature)) {
       warn("Keeping existing terminal CLI at " + launcher + "; this Gateway: " + contextual);
+      return;
+    }
+    const selected = await resolveExecutablePathAsync("openclaw", {
+      env: { ...env, PATH: env.PATH ?? "" },
+      useCache: false,
+    });
+    const selectedOther =
+      selected &&
+      (await fs.realpath(selected)) !== (await fs.realpath(launcher).catch(() => launcher));
+    const terminalExists = await lstatIfExists(terminal);
+    let otherConfigured = false;
+    if (!terminalExists) {
+      for (const name of await fs.readdir(home)) {
+        if (
+          (name === ".openclaw" || name.startsWith(".openclaw-")) &&
+          path.join(home, name) !== state &&
+          (await lstatIfExists(path.join(home, name, "openclaw.json")))
+        ) {
+          otherConfigured = true;
+          break;
+        }
+      }
+    }
+    // The canonical pathname alone is not proof of selection ownership.
+    if (!previous && launcher === terminal && (selectedOther || otherConfigured)) {
+      warn(
+        "Terminal default unchanged" +
+          (otherConfigured ? ": another profile is configured" : ": keeping " + selected) +
+          "; this Gateway: " +
+          contextual,
+      );
       return;
     }
     const sqlite = command.environment?.OPENCLAW_SQLITE_LIBRARY?.trim();
     const sqliteLine = sqlite ? `export OPENCLAW_SQLITE_LIBRARY=${quoteCliArg(sqlite)}\n` : "";
     const shim = `${signature}export OPENCLAW_PROFILE="\${OPENCLAW_PROFILE:-${profile}}"\n${sqliteLine}exec ${prefix.map(quoteCliArg).join(" ")} "$@"\n`;
-    await fs.mkdir(path.dirname(launcher), { recursive: true });
-    if (!existing) {
-      await fs.writeFile(launcher, shim, { flag: "wx", mode: 0o755 });
-    } else if ((await fs.readFile(launcher, "utf8")) !== shim) {
-      await fs.writeFile(launcher, shim, { mode: 0o755 });
+    if (previous?.buffer.toString("utf8") !== shim || (previous.stat.mode & 0o777) !== 0o755) {
+      await publish(launcher, home, previous, shim, 0o755);
     }
-    await fs.chmod(launcher, 0o755);
-
-    const defaultBin = path.join(home, ".openclaw", "bin");
-    const terminal = path.join(defaultBin, "openclaw");
+    if (selectedOther || otherConfigured) {
+      warn(
+        "Terminal default unchanged" +
+          (otherConfigured ? ": another profile is configured" : ": keeping " + selected) +
+          "; this Gateway: " +
+          launcher,
+      );
+      return;
+    }
     if (launcher !== terminal) {
-      const selected = await lstatIfExists(terminal);
-      if (selected) {
-        if (!selected.isSymbolicLink() || (await fs.readlink(terminal)) !== launcher) {
+      if (terminalExists) {
+        if (!terminalExists.isSymbolicLink() || (await fs.readlink(terminal)) !== launcher) {
           warn("Terminal default unchanged; this Gateway: " + launcher);
           return;
         }
       } else {
-        // Configuration establishes selection even when a Gateway is offline. Do not probe services.
-        const others = (await fs.readdir(home)).filter(
-          (name) =>
-            (name === ".openclaw" || name.startsWith(".openclaw-")) &&
-            path.join(home, name) !== state,
-        );
-        for (const name of others) {
-          try {
-            await fs.lstat(path.join(home, name, "openclaw.json"));
-            warn(
-              "Terminal default unchanged: another profile is configured; this Gateway: " +
-                launcher,
-            );
-            return;
-          } catch (error) {
-            if (!isMissingPathError(error)) {
-              throw error;
-            }
-          }
+        const bin = path.dirname(terminal);
+        if (
+          !isPathInside(
+            resolvePathViaExistingAncestorSync(home),
+            resolvePathViaExistingAncestorSync(bin),
+          )
+        ) {
+          throw new Error("terminal bin directory points outside HOME");
         }
-        await fs.mkdir(defaultBin, { recursive: true });
-        await fs.symlink(launcher, terminal); // Exclusive: never replace an operator's command.
+        await fs.mkdir(bin, { recursive: true });
+        await fs.symlink(launcher, terminal);
       }
     }
-    await installShellPath({ home, bin: defaultBin, env, warn });
+    await installShellPath({ home, bin: path.dirname(terminal), env, warn });
   } catch (error) {
-    warn(
-      "Gateway installed, but terminal CLI setup failed: " +
-        String(error) +
-        "; this Gateway: " +
-        contextual,
-    );
+    warn("Gateway installed, but terminal CLI setup failed: " + String(error));
   }
 }
 
@@ -122,80 +222,65 @@ async function installShellPath(params: {
   warn: (message: string) => void;
 }) {
   const { home, bin, env, warn } = params;
-  const exists = async (name: string) =>
-    fs.lstat(path.join(home, name)).then(
-      () => true,
-      () => false,
-    );
-  const bashLogin = (await exists(".bash_profile"))
+  const bashLogin = (await lstatIfExists(path.join(home, ".bash_profile")))
     ? ".bash_profile"
-    : (await exists(".bash_login"))
+    : (await lstatIfExists(path.join(home, ".bash_login")))
       ? ".bash_login"
       : ".profile";
-  const fish = ".config/fish/conf.d/openclaw.fish";
+  const zsh = resolveShellConfigRoot("zsh", env, home);
+  const fish = resolveShellConfigRoot("fish", env, home);
+  const candidates = [
+    { file: path.join(home, ".bashrc"), root: home, shell: "bash" },
+    { file: path.join(home, bashLogin), root: home, shell: "bash" },
+    { file: appendShellProfilePath(zsh, path.posix, ".zshrc"), root: zsh, shell: "zsh" },
+    { file: appendShellProfilePath(zsh, path.posix, ".zprofile"), root: zsh, shell: "zsh" },
+    {
+      file: appendShellProfilePath(fish, path.posix, "fish", "config.fish"),
+      root: env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? fish : home,
+      shell: "fish",
+    },
+  ];
   const shell = path.basename(env.SHELL ?? "/bin/sh");
-  const primary: string[] =
-    shell === "bash"
-      ? [".bashrc", bashLogin]
-      : shell === "zsh"
-        ? [".zshrc", ".zprofile"]
-        : shell === "fish"
-          ? [fish]
-          : shell === "sh"
-            ? [".profile"]
-            : [];
-  if (!primary.length) {
+  if (!["bash", "zsh", "fish", "sh"].includes(shell)) {
     warn("Terminal CLI installed; add " + bin + " to PATH for " + shell + ".");
     return;
   }
-  const candidates = [".bashrc", bashLogin, ".zshrc", ".zprofile", fish];
-  const targets = new Set([
-    ...primary,
-    ...(
-      await Promise.all(candidates.map(async (name) => ((await exists(name)) ? name : undefined)))
-    ).filter((name): name is string => name !== undefined),
-  ]);
+  if (shell === "sh" && bashLogin !== ".profile") {
+    candidates.push({ file: path.join(home, ".profile"), root: home, shell: "sh" });
+  }
   const fishPath = "'" + bin.replaceAll("\\", "\\\\").replaceAll("'", "\\'") + "'";
-  for (const target of targets) {
-    const file = path.join(home, target);
+  for (const target of candidates) {
+    if (
+      target.shell !== shell &&
+      !(shell === "sh" && path.basename(target.file) === ".profile") &&
+      !(await lstatIfExists(target.file))
+    ) {
+      continue;
+    }
     try {
-      const resolved = resolvePathViaExistingAncestorSync(file);
-      const relative = path.relative(await fs.realpath(home), resolved);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) {
-        throw new Error("shell file points outside HOME");
-      }
-      const attrs = await fs.stat(resolved).catch((error: unknown) => {
-        if (isMissingPathError(error)) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (attrs && (!attrs.isFile() || attrs.uid !== process.getuid?.())) {
-        throw new Error("shell file is not user-owned");
-      }
-      const current = attrs ? await fs.readFile(resolved, "utf8") : "";
+      const previous = await snapshot(target.file);
+      const current = previous?.buffer.toString("utf8") ?? "";
+      // Append after normal initialization, and never precede a deliberate command selection.
       const line =
-        target === fish
-          ? "fish_add_path -- " + fishPath
-          : "export PATH=" + quoteCliArg(bin) + ':"$PATH"';
-      if (current.split("\n")[0] === line) {
+        target.shell === "fish"
+          ? "if not type -q openclaw; fish_add_path --path --append -- " + fishPath + "; end"
+          : 'if ! command -v openclaw >/dev/null 2>&1; then export PATH="$PATH":' +
+            quoteCliArg(bin) +
+            "; fi";
+      if (current.split("\n").includes(line)) {
         continue;
       }
-      await fs.mkdir(path.dirname(resolved), { recursive: true });
-      await fs.writeFile(
-        resolved,
-        line +
-          "\n" +
-          current
-            .split("\n")
-            .filter((value) => value !== line)
-            .join("\n"),
-        { mode: attrs?.mode ?? 0o644 },
+      await publish(
+        target.file,
+        target.root,
+        previous,
+        current + (current.endsWith("\n") || !current ? "" : "\n") + line + "\n",
+        previous ? previous.stat.mode & 0o777 : 0o644,
       );
     } catch (error) {
       warn(
         "Shell PATH setup skipped " +
-          file +
+          target.file +
           ": " +
           String(error) +
           "; add " +

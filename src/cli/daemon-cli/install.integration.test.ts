@@ -522,6 +522,7 @@ describe("runDaemonInstall integration", () => {
       });
       const entrypoint = path.join(accountHome, "package/dist/index.mjs");
       await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+      await fs.writeFile(path.join(accountHome, "package/package.json"), '{"name":"openclaw"}');
       await fs.writeFile(
         entrypoint,
         "console.log(JSON.stringify({profile:process.env.OPENCLAW_PROFILE,args:process.argv.slice(2)}))",
@@ -535,6 +536,9 @@ describe("runDaemonInstall integration", () => {
           OPENCLAW_STATE_DIR: tempHome,
           OPENCLAW_CONFIG_PATH: configPath,
           SHELL: "/bin/bash",
+          PATH: "/usr/bin:/bin",
+          ZDOTDIR: undefined,
+          XDG_CONFIG_HOME: undefined,
         },
         async () => {
           await runDaemonInstall({ json: true, force: true, runtimePath: node });
