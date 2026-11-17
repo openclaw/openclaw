@@ -16,6 +16,16 @@ export const SessionsSearchParamsSchema = Object.assign(
         requesterAgentId: NonEmptyString,
         requesterSessionKey: NonEmptyString,
         sandboxed: Type.Optional(Type.Boolean()),
+        /** Pinned tool policy can restrict, never widen, current Gateway visibility. */
+        visibility: Type.Optional(stringLiteralUnion(["self", "tree", "agent", "all"])),
+        mainSessionKey: Type.Optional(NonEmptyString),
+        restrictToSpawned: Type.Optional(Type.Boolean()),
+        agentToAgent: Type.Optional(
+          closedObject({
+            enabled: Type.Boolean(),
+            allow: Type.Optional(Type.Array(Type.String())),
+          }),
+        ),
       }),
     ),
     /** Search the complete visible roster selected by these membership filters. */

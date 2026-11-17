@@ -359,6 +359,13 @@ export function createSessionsSearchTool(opts?: {
                     recall: {
                       requesterAgentId,
                       requesterSessionKey: effectiveRequesterKey,
+                      visibility,
+                      mainSessionKey,
+                      restrictToSpawned,
+                      agentToAgent: {
+                        enabled: a2aPolicy.enabled,
+                        allow: cfg.tools?.agentToAgent?.allow,
+                      },
                       ...(opts?.sandboxed ? { sandboxed: true } : {}),
                     },
                   }),

@@ -213,7 +213,13 @@ test.each([false, true])(
       await seed("main", "other", owner, "needle");
       const result = await search(requestContext(cfg), identifiedClient(owner), {
         query: "needle",
-        recall: { requesterAgentId: "main", requesterSessionKey, sandboxed },
+        recall: {
+          requesterAgentId: "main",
+          requesterSessionKey,
+          sandboxed,
+          visibility: "all",
+          agentToAgent: { enabled: true },
+        },
       });
       expect(result.ok, result.error?.message).toBe(true);
       expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([child]);

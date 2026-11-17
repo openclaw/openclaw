@@ -14,6 +14,7 @@ import {
   resolveConfiguredSessionStoreTargets,
   type SessionStoreTarget,
 } from "../../config/sessions/targets.js";
+import { createAgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import {
@@ -65,15 +66,32 @@ export async function searchRecallSessionTranscripts(params: {
           agentSessionKey: recall.requesterSessionKey,
           sandboxed: recall.sandboxed,
         });
-        const guard = createSessionVisibilityRowChecker({
-          action: "history",
-          defaultAgentId: recall.requesterAgentId,
-          requesterAgentId: recall.requesterAgentId,
-          requesterSessionKey: context.effectiveRequesterKey,
-          mainSessionKey: context.mainSessionKey,
-          visibility: context.sessionVisibility,
-          a2aPolicy: context.a2aPolicy,
-        });
+        const restrictToSpawned = context.restrictToSpawned || recall.restrictToSpawned;
+        const guards = [
+          context,
+          ...(recall.visibility
+            ? [
+                {
+                  ...context,
+                  sessionVisibility: recall.visibility,
+                  mainSessionKey: recall.mainSessionKey,
+                  a2aPolicy: createAgentToAgentPolicy({
+                    tools: { agentToAgent: recall.agentToAgent },
+                  }),
+                },
+              ]
+            : []),
+        ].map((policy) =>
+          createSessionVisibilityRowChecker({
+            action: "history",
+            defaultAgentId: recall.requesterAgentId,
+            requesterAgentId: recall.requesterAgentId,
+            requesterSessionKey: context.effectiveRequesterKey,
+            mainSessionKey: policy.mainSessionKey,
+            visibility: policy.sessionVisibility,
+            a2aPolicy: policy.a2aPolicy,
+          }),
+        );
         const now = Date.now();
         const subagentRuns = read.state.rowContext.subagentRuns.atTime(now);
         return keys.map((key) => {
@@ -85,7 +103,7 @@ export async function searchRecallSessionTranscripts(params: {
             if (
               key !== "global" ||
               target.agentId !== recall.requesterAgentId ||
-              context.restrictToSpawned ||
+              restrictToSpawned ||
               (owner.kind !== "none" &&
                 (owner.kind !== "configured" || owner.agentId !== target.agentId))
             ) {
@@ -126,13 +144,15 @@ export async function searchRecallSessionTranscripts(params: {
             subagentRuns,
           });
           if (
-            context.restrictToSpawned &&
+            restrictToSpawned &&
             key !== context.effectiveRequesterKey &&
             !childOwnerSessionKeys.includes(context.effectiveRequesterKey)
           ) {
             return false;
           }
-          return guard.check({ key, agentId: row.agentId, childOwnerSessionKeys }).allowed;
+          return guards.every(
+            (guard) => guard.check({ key, agentId: row.agentId, childOwnerSessionKeys }).allowed,
+          );
         });
       },
     );
