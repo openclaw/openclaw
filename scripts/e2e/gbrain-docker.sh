@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Live Docker lane for the GBrain plugin: the repository docker-compose.yml plus the
 # deploy/gbrain/compose.yaml overlay, a released OpenClaw image, and the packed plugin.
 # Proves install, recall after restart, one PGLite holder, probe, inspect, doctor,
 # faults, gbrain upgrade and uninstall. Needs OPENAI_API_KEY (live model). Packs the plugin
 # with scripts/plugin-npm-publish.sh unless OPENCLAW_GBRAIN_PLUGIN_TGZ names a tarball.
-if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
-  exec /bin/bash "$0" "$@"
-fi
 set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
