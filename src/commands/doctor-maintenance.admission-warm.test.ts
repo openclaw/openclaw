@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
@@ -67,15 +66,12 @@ it("observes readonly worker requests without adding IPC listeners to other chil
         process.disconnect();
       });`,
     ],
-    { env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"] },
+    { env: process.env, stdio: ["ignore", "ignore", "inherit", "ipc"] },
   );
   // An error can reject readiness, but cleanup still joins the actual close event.
   const closed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
     child.once("close", (code, exitSignal) => resolve([code, exitSignal]));
   });
-  const stderr = createBoundedChildOutput();
-  child.stdout.resume();
-  child.stderr.on("data", stderr.append);
   try {
     const [listeners] = await withinTest(
       awaitGateBeforeSettlement(
@@ -85,7 +81,7 @@ it("observes readonly worker requests without adding IPC listeners to other chil
       ),
       signal,
     );
-    expect(await withinTest(closed, signal), stderr.text()).toEqual([0, null]);
+    expect(await withinTest(closed, signal)).toEqual([0, null]);
     const witness = JSON.parse(
       fs.readFileSync(
         path.join(context.env.OPENCLAW_STATE_DIR, `sqlite-open-guard-${child.pid}.json`),
