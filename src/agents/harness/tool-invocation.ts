@@ -2,7 +2,11 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
-import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
+import { classifyAgentToolSource } from "../../plugins/tool-metadata.js";
+import {
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
 import {
   consumeTrustedToolNoStartError,
@@ -61,6 +65,10 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
     if (params.prepareArguments) {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
+    }
+    // MCP servers own their schemas; forward their arguments as the model sent them.
+    if (params.validateArguments && classifyAgentToolSource(tool).source === "openclaw") {
+      preparedArgs = coerceToolExecutionArguments(tool, tool.parameters, preparedArgs);
     }
     const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
     // Preparation can mutate in place; otherwise the initial capture is already exact.

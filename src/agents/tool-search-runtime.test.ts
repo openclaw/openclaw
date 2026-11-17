@@ -243,12 +243,12 @@ describe("Tool Search terminal results", () => {
 
 describe("Tool Search input schemas", () => {
   it.each([
-    ["10", '"10" (string)'],
+    ["ten", "[redacted] (string)"],
     [false, "false (boolean)"],
     [null, "null (null)"],
     [["private payload"], "[array] (array)"],
     [{ password: "private payload" }, "[object] (object)"],
-  ])("explains rejected integer input %j without executing it", async (value, received) => {
+  ])("explains rejected integer input %j and coerces a quoted integer", async (value, received) => {
     const target = fakeTool(
       "strict_limit",
       Type.Object({ maxFires: Type.Integer({ minimum: 1 }) }),
@@ -259,7 +259,7 @@ describe("Tool Search input schemas", () => {
       `maxFires: expected integer; received ${received}`,
     );
     expect(target.execute).not.toHaveBeenCalled();
-    await expect(runtime.call("strict_limit", { maxFires: 10 })).resolves.toMatchObject({
+    await expect(runtime.call("strict_limit", { maxFires: "10" })).resolves.toMatchObject({
       result: { details: { input: { maxFires: 10 } } },
     });
     expect(target.execute).toHaveBeenCalledOnce();
