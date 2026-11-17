@@ -12,16 +12,22 @@ const prompt =
 const budget = { attachMaxChars: 2_000, cutMaxChars: 4_000 };
 
 describe("current input budget", () => {
-  it("bounds both limits by the runtime cap and the model window", () => {
-    expect(resolveCurrentInputBudget({ runtimeMaxChars: 1 << 20, contextTokens: 258_400 })).toEqual(
-      {
-        attachMaxChars: 697_680,
-        cutMaxChars: 904_400,
-      },
+  it("bounds both limits by the runtime cap and the model's input window", () => {
+    // gpt-5.4-mini: 400,000-token window with a 128,000-token reply allowance.
+    expect(resolveCurrentInputBudget({ contextTokens: 400_000, maxOutputTokens: 128_000 })).toEqual(
+      { attachMaxChars: 734_400, cutMaxChars: 979_200 },
     );
     expect(
-      resolveCurrentInputBudget({ runtimeMaxChars: 1 << 20, contextTokens: 1_050_000 }),
+      resolveCurrentInputBudget({
+        runtimeMaxChars: 1 << 20,
+        contextTokens: 1_050_000,
+        maxOutputTokens: 128_000,
+      }),
     ).toEqual({ attachMaxChars: 1 << 20, cutMaxChars: 1 << 20 });
+    expect(resolveCurrentInputBudget({ runtimeMaxChars: 1 << 20 })).toEqual({
+      attachMaxChars: 1 << 20,
+      cutMaxChars: 1 << 20,
+    });
     expect(resolveCurrentInputBudget({})).toBeUndefined();
   });
 

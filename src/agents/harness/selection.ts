@@ -442,6 +442,7 @@ export async function runAgentHarnessAttempt(
                   contextTokens:
                     policyAttemptParams.contextTokenBudget ??
                     policyAttemptParams.model?.contextWindow,
+                  maxOutputTokens: policyAttemptParams.model?.maxTokens,
                 }),
               )
             : policyAttemptParams;

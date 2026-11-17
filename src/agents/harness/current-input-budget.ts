@@ -4,14 +4,14 @@ import type { MediaFact } from "../../media/media-facts.js";
 
 const log = createSubsystemLogger("agent/input");
 
-// Conservative: natural English measured ~3.9 chars per token, dense text less.
-const ATTACH_CHARS_PER_TOKEN = 3;
 // Spill only what would not fit: a request that fits inline answers more reliably
 // than one the model must read back from a file (gpt-5.4-mini found a middle-only
 // fact 1/3 times from the attachment, gpt-5.4 3/3). History compaction owns the rest.
-const ATTACH_CONTEXT_SHARE = 0.9;
-// Without an attachment, cut only a request that would certainly overflow the window.
-const CUT_CHARS_PER_TOKEN = 3.5;
+const INPUT_WINDOW_SHARE = 0.9;
+// Conservative chars per token: natural English measured 3.9-4.5, dense text less.
+const ATTACH_CHARS_PER_TOKEN = 3;
+// Without an attachment, cut only a request that would clearly overflow the window.
+const CUT_CHARS_PER_TOKEN = 4;
 const CURRENT_INPUT_FILE_NAME = "current-request.txt";
 // Room for the attachment path note the host prepares.
 const CURRENT_INPUT_NOTE_MAX_CHARS = 4_096;
@@ -23,23 +23,23 @@ export type StageCurrentInputAttachment = (
   media: MediaFact[],
 ) => Promise<string | undefined>;
 
-/** Inline limits for the current request from the runtime cap and the model window. */
+/** Inline limits for the current request from the runtime cap and the model's input window. */
 export function resolveCurrentInputBudget(params: {
   runtimeMaxChars?: number;
   contextTokens?: number;
+  /** The model's reply allowance comes out of the same window. */
+  maxOutputTokens?: number;
 }): CurrentInputBudget | undefined {
   const cap =
     params.runtimeMaxChars && params.runtimeMaxChars > 0 ? params.runtimeMaxChars : Infinity;
   const tokens =
     params.contextTokens && params.contextTokens > 0 ? params.contextTokens : undefined;
-  const attachMaxChars = Math.min(
-    cap,
-    tokens ? Math.floor(tokens * ATTACH_CONTEXT_SHARE * ATTACH_CHARS_PER_TOKEN) : Infinity,
-  );
-  const cutMaxChars = Math.min(cap, tokens ? Math.floor(tokens * CUT_CHARS_PER_TOKEN) : Infinity);
-  return Number.isFinite(attachMaxChars) && Number.isFinite(cutMaxChars)
-    ? { attachMaxChars, cutMaxChars }
-    : undefined;
+  const inputTokens = tokens
+    ? (tokens - Math.min(Math.max(0, params.maxOutputTokens ?? 0), tokens / 2)) * INPUT_WINDOW_SHARE
+    : Infinity;
+  const attachMaxChars = Math.floor(Math.min(cap, inputTokens * ATTACH_CHARS_PER_TOKEN));
+  const cutMaxChars = Math.floor(Math.min(cap, inputTokens * CUT_CHARS_PER_TOKEN));
+  return Number.isFinite(attachMaxChars) ? { attachMaxChars, cutMaxChars } : undefined;
 }
 
 /**

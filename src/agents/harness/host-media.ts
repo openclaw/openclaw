@@ -118,6 +118,7 @@ export function bindHarnessMedia(params: {
     const budget = resolveCurrentInputBudget({
       runtimeMaxChars: request.runtimeMaxChars,
       contextTokens: attempt.contextTokenBudget ?? attempt.model?.contextWindow,
+      maxOutputTokens: attempt.model?.maxTokens,
     });
     return budget
       ? await fitOversizedCurrentInput({
