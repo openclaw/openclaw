@@ -19,6 +19,7 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
 } from "../infra/sqlite-staging-token.js";
 import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 
 /** The standalone process commits retirement before touching captured payload. */
 export async function retirePluginCapture(retirement: PluginCaptureRetirement): Promise<void> {
@@ -338,13 +339,11 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
     const [
       { deserialize },
       { runCommandBuffersWithTimeout },
-      { hasCommandProcessCleanupError },
       { withCommandProcessScope },
       { withChildProcessOperation },
     ] = await Promise.all([
       import("node:v8"),
       import("../process/exec-runner.js"),
-      import("../process/exec-result.js"),
       import("../process/exec-spawn.js"),
       import("../process/spawn-diagnostics.js"),
     ]);
