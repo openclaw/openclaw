@@ -137,7 +137,7 @@ export function createContext(
     agentIdentity: createAgentIdentityCapability(gateway),
     sessions: {
       // Scenarios script live search; the archived title lookup finds nothing.
-      list: (options) =>
+      list: (options: Parameters<ApplicationContext["sessions"]["list"]>[0]) =>
         options?.archivedFilter === "archived" ? Promise.resolve(null) : list(options),
       state: { result: null },
       subscribe: () => () => undefined,

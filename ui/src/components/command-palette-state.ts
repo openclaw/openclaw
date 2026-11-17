@@ -563,11 +563,12 @@ export class CommandPaletteState {
       .then((result) => ({ error: false as const, result }))
       .catch(() => ({ error: true as const, result: null }));
     try {
-      const result = await listCommandPaletteSessions(sessions, search);
+      const reads = listCommandPaletteSessions(sessions, search);
+      const result = await reads.live;
       if (!isCurrent() || !result) {
         return;
       }
-      const { visibleRows, archivedRows } = result;
+      const visibleRows = result.sessions;
       const visibleKeys = new Set(visibleRows.map((row) => row.key));
       const transcriptOutcome = await transcriptSearch;
       if (!isCurrent()) {
@@ -577,12 +578,16 @@ export class CommandPaletteState {
       this.sessionSearchPartial = transcriptOutcome.error;
       this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
       this.sessionSearchIndexing = transcriptResult?.indexing === true;
-      this.sessionItems = buildCommandPaletteSessionItems({
-        visibleRows,
-        visibleKeys,
-        transcriptResult,
-        archivedRows,
-        search,
+      const matches = { visibleRows, visibleKeys, transcriptResult, search };
+      this.sessionItems = buildCommandPaletteSessionItems(matches);
+      void reads.archived.then((archived) => {
+        if (isCurrent() && archived?.sessions.length) {
+          this.sessionItems = buildCommandPaletteSessionItems({
+            ...matches,
+            archivedRows: archived.sessions,
+          });
+          this.changed();
+        }
       });
     } catch {
       // Keep search failures visible rather than presenting a successful empty result.

@@ -1352,9 +1352,9 @@ var External = [
     /(^sessionKey$|^agentId$|^environmentId$)/u,
     /(^environmentId$|^port$|^title$|^description$|^path$|^sessionKey$|^agentId$)/u,
     /(^id$|^environmentId$|^sessionKey$|^agentId$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^searchTitlesOnly$|^archived$)/u,
     /(^profileId$|^relationship$)/u,
-    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^archived$|^includeMessageBodies$)/u,
+    /(^source$|^ifRowsRevision$|^rowMode$|^limit$|^offset$|^activeMinutes$|^activityPulseBoundaries$|^activeOnly$|^requireLastInteraction$|^sortBy$|^includeGlobal$|^includeUnknown$|^excludeSubagents$|^excludeCron$|^excludeSystem$|^excludeDock$|^configuredAgentsOnly$|^includeDerivedTitles$|^includeLastMessage$|^includeActivitySummary$|^label$|^projectId$|^workspaceDir$|^group$|^pinned$|^boardFace$|^hasBoard$|^creatorId$|^ownerId$|^ownerFirst$|^involvingMe$|^profileRelation$|^involvingProfileId$|^includePeople$|^includeOwnerSessionCounts$|^spawnedBy$|^agentId$|^search$|^searchTitlesOnly$|^archived$|^includeMessageBodies$)/u,
     /(^kind$|^routeSegment$|^hostId$|^identifierAlphabet$|^fullLength$|^minPrefixLength$|^lookup$|^ambiguity$)/u,
     /^[a-z][a-z0-9-]*$/u,
     /(^catalogId$|^metadataOnly$|^cursors$|^agentId$|^progressId$|^allowPartialResults$|^search$|^limitPerHost$|^hostIds$)/u,
@@ -14572,6 +14572,9 @@ var External = [
     (value.spawnedBy === void 0 || !("spawnedBy" in value) || check_63(value.spawnedBy)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.search === void 0 || !("search" in value) || check_276(value.search)) &&
+    (value.searchTitlesOnly === void 0 ||
+      !("searchTitlesOnly" in value) ||
+      check_181(value.searchTitlesOnly)) &&
     (value.archived === void 0 || !("archived" in value) || check_2200(value.archived)),
   check_2188 = (value) =>
     value === "sidebar" ||
@@ -14688,6 +14691,9 @@ var External = [
     (value.spawnedBy === void 0 || !("spawnedBy" in value) || check_63(value.spawnedBy)) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.search === void 0 || !("search" in value) || check_276(value.search)) &&
+    (value.searchTitlesOnly === void 0 ||
+      !("searchTitlesOnly" in value) ||
+      check_181(value.searchTitlesOnly)) &&
     (value.archived === void 0 || !("archived" in value) || check_2200(value.archived)) &&
     (value.includeMessageBodies === void 0 ||
       !("includeMessageBodies" in value) ||
