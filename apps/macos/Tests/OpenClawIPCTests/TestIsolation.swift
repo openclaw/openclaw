@@ -10,6 +10,9 @@ actor TestIsolationLock {
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     func acquire() async {
+        let label = "\(ProcessInfo.processInfo.processIdentifier):\(Test.current?.name ?? "unknown test")"
+        print("[test-isolation] waiting \(label)")
+        defer { print("[test-isolation] acquired \(label)") }
         if !self.locked {
             self.locked = true
             return
@@ -21,6 +24,8 @@ actor TestIsolationLock {
     }
 
     func release() {
+        print(
+            "[test-isolation] released \(ProcessInfo.processInfo.processIdentifier):\(Test.current?.name ?? "unknown test")")
         if self.waiters.isEmpty {
             self.locked = false
             return
