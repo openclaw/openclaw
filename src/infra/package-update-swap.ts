@@ -42,6 +42,7 @@ import {
 } from "./package-update-swap-contract.js";
 import {
   canExchangeStagedPackageRoot,
+  publishJournaledPackageRoot,
   publishStagedPackageRoot,
 } from "./package-update-swap-publish.js";
 import { createPackageSwapResults } from "./package-update-swap-results.js";
@@ -109,7 +110,7 @@ async function swapStagedPackageDirectory(
   let packageBackedUp = false;
   let publishByExchange = false;
   let publicationUncertain = false;
-  let publication: string | null = null;
+  let publication: string | null;
   let displacedCandidateRoot: string | undefined;
   const baseline = createPackageIntegrityReader(params.timeoutMs);
   const launchers: PackageLauncherBackup = { entries: [] };
@@ -607,19 +608,17 @@ async function swapStagedPackageDirectory(
       params.onLiveMutation?.();
       liveMutationStarted = true;
       packageRollbackVerified = false;
-      await activation.publish(false, async (previous, copied) => {
-        if (copied) {
-          warnings.push("EXDEV during package backup rename; using a verified rollback copy.");
-        }
-        previousRoot = { kind: "directory", tree: previous };
-        packageBackedUp = true;
-        activePackageRoot = null;
-        activation!.assertCurrent();
-        await replayLocalOverrides?.({
-          backupRoot,
-          packageRoot: path.join(activation!.anchor, "candidate"),
-        });
-        activation!.assertCurrent();
+      publication = await publishJournaledPackageRoot({
+        activation,
+        liveRoot: targetSwapRoot,
+        backupRoot,
+        warnings,
+        replayLocalOverrides,
+        onDisplaced: (previous) => {
+          previousRoot = { kind: "directory", tree: previous };
+          packageBackedUp = true;
+          activePackageRoot = null;
+        },
       });
       activePackageRoot = targetPackageRoot;
       projectActivated = true;

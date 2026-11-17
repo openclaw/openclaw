@@ -809,6 +809,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           /release layout was not used/u,
           "The fallback was not recorded",
         );
+        // That swap publishes a plain directory through the publication journal. The image
+        // has a system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
+          /Package publication recovery: /u,
+          "The fallback swap prepared no publication journal",
+        );
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The journaled publication did not use the atomic exchange",
+        );
         assert.equal(
           fs.readlinkSync(path.join(bin, "openclaw")),
           npmLauncher,
