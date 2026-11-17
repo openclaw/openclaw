@@ -1,4 +1,3 @@
-import type { DiagnosticToolAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import type {
   OwnedWait,
   SessionWatchdogDecision,
@@ -6,6 +5,13 @@ import type {
 } from "./session-controller.watchdog-state.js";
 
 export type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
+
+export type DiagnosticToolAwaiting = Readonly<{
+  kind: "bridge";
+  method: string;
+  deadlineAtMs: number | null;
+  elapsedMs: number;
+}>;
 
 export type SessionWatchdogWait = {
   close: () => void;

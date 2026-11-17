@@ -1,6 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import type { DiagnosticToolAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { ReplyBackendTurnAssessment } from "./session-controller.turn-status.types.js";
+import type { DiagnosticToolAwaiting } from "./session-controller.watchdog.types.js";
 
 export class SessionWatchdogError extends Error {
   override name = "AbortError";

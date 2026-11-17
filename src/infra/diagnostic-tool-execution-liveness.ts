@@ -1,13 +1,10 @@
-import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
+import type {
+  DiagnosticToolAwaiting,
+  SessionControllerWatchdogAttempt,
+} from "../sessions/session-controller.watchdog.types.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type DiagnosticToolAwaiting = Readonly<{
-  kind: "bridge";
-  method: string;
-  deadlineAtMs: number | null;
-  elapsedMs: number;
-}>;
 export type DiagnosticToolExecutionLiveness = Readonly<{
   deadlineAtMs?: number;
   awaiting?: readonly DiagnosticToolAwaiting[];

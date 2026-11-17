@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import type { DiagnosticToolAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   createWatchdogAssessment,
   type WatchdogAssessmentBackend,
@@ -18,6 +17,7 @@ import {
   type SessionWatchdogSnapshot,
 } from "./session-controller.watchdog-state.js";
 import type {
+  DiagnosticToolAwaiting,
   SessionControllerWatchdog,
   SessionControllerWatchdogAttempt,
   SessionWatchdogEffect,
