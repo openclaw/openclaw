@@ -6,7 +6,6 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import type { ComposerDictationFailure } from "./composer-dictation.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -105,13 +104,13 @@ export class ComposerDictationCommits {
   }
 }
 
-export function describeDictationStartError(error: unknown): [string, ComposerDictationFailure] {
+export function describeDictationStartError(error: unknown): [string, "busy" | "start"] {
   // Stopped recordings hold their Gateway sessions until transcribed; a full
   // connection refuses the next one before its microphone opens.
   const details = asOptionalObjectRecord(asOptionalObjectRecord(error)?.details);
   return details?.code === "TALK_SESSION_CAPACITY"
-    ? [t("chat.dictation.busy"), { kind: "busy", preservesText: false }]
-    : [formatDictationError(error), { kind: "start", preservesText: false }];
+    ? [t("chat.dictation.busy"), "busy"]
+    : [formatDictationError(error), "start"];
 }
 
 function isAbortError(error: unknown): boolean {

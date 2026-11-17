@@ -14,7 +14,7 @@ const HOLD_ARM_DELAY_MS = 150,
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
 
-export type ComposerDictationFailure = {
+type ComposerDictationFailure = {
   kind: "interrupted" | "start" | "busy";
   preservesText: boolean;
 };
@@ -230,7 +230,11 @@ export class ComposerDictationOwner extends EventTarget {
 
   cancel(): void {
     this.clearClickSuppression();
-    this.retirePendingCommits();
+    this.playback.stop();
+    if (this.commits?.size) {
+      this.commits.retire();
+      this.pendingCommitsChanged();
+    }
     void this.stop({ commit: false });
   }
 
@@ -334,9 +338,9 @@ export class ComposerDictationOwner extends EventTarget {
     if (this.captureStart !== captureStart) {
       return;
     }
-    let describeStartError = (error: unknown): [string, ComposerDictationFailure] => [
+    let describeStartError = (error: unknown): [string, ComposerDictationFailure["kind"]] => [
       formatUiError(error),
-      { kind: "start", preservesText: false },
+      "start",
     ];
     try {
       // Preserve Safari playback activation before the lazy capture module loads.
@@ -388,7 +392,8 @@ export class ComposerDictationOwner extends EventTarget {
       if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
         return;
       }
-      this.options.onError(...describeStartError(error));
+      const [message, kind] = describeStartError(error);
+      this.options.onError(message, { kind, preservesText: false });
       await this.stop({ commit: false });
     }
   }
@@ -438,12 +443,6 @@ export class ComposerDictationOwner extends EventTarget {
     });
     this.pendingCommitsChanged();
     return committed;
-  }
-
-  private retirePendingCommits(): void {
-    this.commits?.retire();
-    this.playback.stop();
-    this.pendingCommitsChanged();
   }
 
   private releasePlayback(): void {
