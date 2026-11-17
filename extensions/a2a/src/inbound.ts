@@ -126,6 +126,11 @@ export async function dispatchA2aInbound(params: {
   };
   deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
 
+  // A steered turn is injected into an active run, so no final reply is routed
+  // back through this dispatch; the consuming run's terminal outcome is the
+  // only settlement signal this task will ever receive.
+  let steeredIntoActiveRun = false;
+
   const dispatch = await params.channelRuntime.inbound.dispatch({
     cfg: params.config,
     channel: "a2a",
@@ -150,6 +155,10 @@ export async function dispatchA2aInbound(params: {
       onAgentRunTerminalOutcome: (outcome) => {
         if (outcome === "failed") {
           void params.store.fail(params.taskId, "Agent run failed").catch(reportPersistenceError);
+        } else if (outcome === "completed" && steeredIntoActiveRun) {
+          void params.store
+            .complete(params.taskId, undefined)
+            .catch(reportPersistenceError);
         }
       },
     },
@@ -162,7 +171,12 @@ export async function dispatchA2aInbound(params: {
     );
   } else if (!dispatch.dispatched) {
     await params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
-  } else if (!dispatch.dispatchResult.deferredToActiveRun) {
-    await params.store.complete(params.taskId, undefined);
+  } else {
+    if (dispatch.dispatchResult.deferredToActiveRun === "steer") {
+      steeredIntoActiveRun = true;
+    }
+    if (!dispatch.dispatchResult.deferredToActiveRun) {
+      await params.store.complete(params.taskId, undefined);
+    }
   }
 }
