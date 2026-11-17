@@ -76,9 +76,10 @@ suite.define(() => {
         expect(requests.at(-1)?.params).toHaveProperty("patch");
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.schedule");
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.state");
-        await expect.poll(() => input.inputValue()).toBe("2026-10-30T12:00");
+        await input.waitFor({ state: "detached" });
         await openAutomationActivity(page);
         await editAutomation(page, job.id);
+        expect(await input.inputValue()).toBe("2026-10-30T12:00");
         await expect
           .poll(() => summary.textContent())
           .toContain("Next activity at 10/30/2026, 12:10 PM");
