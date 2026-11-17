@@ -206,6 +206,18 @@ provider against a deterministic loopback HTTP server. It checks normalized
 answers, completed request counts, accepted TCP connections, and explicit
 transport-pool teardown. No credentials or billed inference are used.
 
+In GitHub Actions, dispatch `OpenClaw Performance` with mode
+`decision-transport`, `baseline_ref=<before-sha>`, and `target_ref=<after-sha>`.
+Both refs must be exact lowercase commit SHAs. The workflow revision supplies
+the shared helper, independently of either measured revision. It uses separate
+frozen installs with matching package-manager pins, runs 20 samples of 50
+requests per revision, and uploads results without live credentials, caches,
+Kova, or report publication. Dispatch a fresh run instead of rerunning one.
+The job denies cache access through GitHub's native `cache-mode: none` and checks
+the runner's effective mode before executing either measured revision.
+The artifact includes source/build identities, raw samples, terminal status,
+and visible Linux CPU-quota evidence. Hidden ancestor quotas remain unknown.
+
 Prepare separate, clean source checkouts with their own frozen dependencies for
 the baseline and candidate. Overlay the same benchmark builder, worker, and
 `scripts/lib/{benchmark-harness,arg-utils}.mts` on both checkouts. Build once in

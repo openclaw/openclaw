@@ -16,13 +16,14 @@ on:
           - kova
           - vitest-pair
           - gateway-concurrency
+          - decision-transport
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
         required: false
         default: ""
         type: string
       baseline_ref:
-        description: Exact baseline SHA for vitest-pair mode
+        description: Exact baseline SHA for vitest-pair or decision-transport mode
         required: false
         default: ""
         type: string
@@ -99,7 +100,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
+    if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'decision-transport')) }}
     runs-on: &linux_runner_ubuntu >-
       ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
@@ -267,7 +268,7 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
+    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.mode != 'decision-transport') }}
     permissions:
       contents: read
     runs-on: &linux_runner_large >-
@@ -765,7 +766,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
+    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.mode != 'decision-transport') }}
     runs-on: *linux_runner_large
     timeout-minutes: 120
     env:
@@ -1131,7 +1132,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.mode != 'decision-transport')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     permissions:
@@ -1588,7 +1589,7 @@ jobs:
   artifact_only_guard:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.mode != 'decision-transport' && inputs.publish_reports != true }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     permissions:
@@ -1916,6 +1917,250 @@ jobs:
             exit 1
           fi
 
+  decision_transport:
+    name: Decision transport paired benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'decision-transport' }}
+    runs-on: *linux_runner_ubuntu
+    # Candidate installs execute arbitrary source; disabling cache actions is not an authority boundary.
+    cache-mode: none
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      DECISION_ROOT: ${{ github.workspace }}/.artifacts/decision-transport
+      DECISION_OUTPUT: ${{ github.workspace }}/.artifacts/decision-transport/results
+      BASELINE_REF: ${{ inputs.baseline_ref }}
+      TARGET_REF: ${{ inputs.target_ref }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      # Version probes must not synchronize a historical checkout's manager lock.
+      PNPM_CONFIG_FROZEN_LOCKFILE: "true"
+    steps:
+      - name: Initialize Decision transport artifact
+        shell: bash
+        run: mkdir -p "$DECISION_OUTPUT"
+
+      - name: Verify Decision transport cache denial
+        # The runner exposes effective cache mode to JavaScript actions, not shell steps.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            if (process.env.ACTIONS_CACHE_MODE !== 'none') {
+              core.setFailed('Decision transport requires runner-enforced cache denial.');
+            }
+
+      - name: Validate Decision transport request
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "1" ]] || {
+            echo "::error::Dispatch a fresh Decision transport run instead of rerunning."
+            exit 1
+          }
+          for ref in "$BASELINE_REF" "$TARGET_REF" "$WORKFLOW_SHA"; do
+            [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::Decision transport requires exact lowercase 40-character SHAs."
+              exit 1
+            }
+          done
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
+
+      - name: Checkout Decision transport helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/decision-transport/helper
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Decision transport baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .artifacts/decision-transport/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Decision transport candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          path: .artifacts/decision-transport/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Decision transport Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+          check-latest: false
+          package-manager-cache: false
+
+      - name: Verify Decision transport source identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in helper baseline candidate; do
+            case "$variant" in
+              helper) expected="$WORKFLOW_SHA" ;;
+              baseline) expected="$BASELINE_REF" ;;
+              candidate) expected="$TARGET_REF" ;;
+            esac
+            actual="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$DECISION_ROOT/$variant" rev-parse HEAD)"
+            [[ "$actual" == "$expected" ]]
+          done
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pins = ['helper', 'baseline', 'candidate'].map(variant =>
+            JSON.parse(readFileSync(`${process.env.DECISION_ROOT}/${variant}/package.json`, 'utf8')).packageManager);
+          assert.equal(typeof pins[0], 'string');
+          assert(pins[0].startsWith('pnpm@'));
+          assert(pins.every(pin => pin === pins[0]), 'Use matching package-manager pins for paired runs');
+          NODE
+
+      - name: Set up baseline pnpm
+        uses: ./.artifacts/decision-transport/helper/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: .artifacts/decision-transport/baseline/package.json
+          lockfile-path: .artifacts/decision-transport/baseline/pnpm-lock.yaml
+          node-version: 24.21.0
+          cache-mode: off
+
+      - name: Install baseline dependencies
+        timeout-minutes: 15
+        working-directory: .artifacts/decision-transport/baseline
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up candidate pnpm
+        uses: ./.artifacts/decision-transport/helper/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: .artifacts/decision-transport/candidate/package.json
+          lockfile-path: .artifacts/decision-transport/candidate/pnpm-lock.yaml
+          node-version: 24.21.0
+          cache-mode: off
+
+      - name: Install candidate dependencies
+        timeout-minutes: 15
+        working-directory: .artifacts/decision-transport/candidate
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Decision transport workers
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in baseline candidate; do
+            for file in scripts/build-decision-transport-bench.mts \
+              scripts/bench-decision-transport-worker.ts \
+              scripts/lib/benchmark-harness.mts scripts/lib/arg-utils.mts; do
+              cp "$DECISION_ROOT/helper/$file" "$DECISION_ROOT/$variant/$file"
+            done
+            case "$variant" in
+              baseline) revision="$BASELINE_REF"; manifest_key=BASELINE_MANIFEST ;;
+              candidate) revision="$TARGET_REF"; manifest_key=CANDIDATE_MANIFEST ;;
+            esac
+            manifest="$(cd "$DECISION_ROOT/$variant" && \
+              node --import ./scripts/tsx.mjs scripts/build-decision-transport-bench.mts "$revision")"
+            [[ -f "$manifest" ]]
+            cp "$manifest" "$DECISION_OUTPUT/$variant-manifest.json"
+            printf '%s=%s\n' "$manifest_key" "$manifest" >> "$GITHUB_ENV"
+          done
+
+      - name: Record Decision transport runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep kernel evidence for quota attribution; hidden ancestor limits remain unknown.
+          {
+            printf 'requested-runner=ubuntu-24.04\n'
+            printf 'runner-os=%s runner-arch=%s\n' "$RUNNER_OS" "$RUNNER_ARCH"
+            uname -srmo
+            printf '\nprocess-cgroup\n'
+            cat /proc/self/cgroup
+            printf '\ncgroup-mounts\n'
+            grep ' - cgroup' /proc/self/mountinfo
+            printf '\nvisible-cpu-quotas\n'
+            timeout 5s find /sys/fs/cgroup -type f \( -name cpu.max -o \
+              -name cpu.cfs_quota_us -o -name cpu.cfs_period_us \) -print -exec head -c 256 {} \;
+          } > "$DECISION_OUTPUT/runner-capacity.txt"
+          [[ "$(wc -c < "$DECISION_OUTPUT/runner-capacity.txt")" -le 262144 ]]
+
+      - name: Measure Decision transport pair
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$DECISION_ROOT/helper/scripts/bench-decision-transport.mts" \
+            --baseline "$BASELINE_MANIFEST" --candidate "$CANDIDATE_MANIFEST" \
+            --runs 20 --requests 50 --json --output "$DECISION_OUTPUT/report.json"
+
+      - name: Finalize Decision transport artifact
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DECISION_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { existsSync, writeFileSync } from 'node:fs';
+          const env = process.env;
+          const reportPresent = existsSync(`${env.DECISION_OUTPUT}/report.json`);
+          const outcome = {
+            version: 1, status: env.JOB_STATUS === 'success' && reportPresent ? 'success' : 'failure',
+            jobStatus: env.JOB_STATUS, reportPresent, helper: env.WORKFLOW_SHA,
+            baseline: env.BASELINE_REF, candidate: env.TARGET_REF,
+            runId: env.GITHUB_RUN_ID, runAttempt: env.GITHUB_RUN_ATTEMPT,
+          };
+          writeFileSync(`${env.DECISION_OUTPUT}/terminal-manifest.json`, JSON.stringify(outcome, null, 2) + '\n');
+          NODE
+
+      - name: Upload Decision transport artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: decision-transport-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/decision-transport/results
+          if-no-files-found: error
+          retention-days: 14
+
+  decision_transport_guard:
+    name: Verify Decision transport isolation
+    needs:
+      [
+        resolve_target,
+        kova,
+        source_performance,
+        publish,
+        artifact_only_guard,
+        gateway_concurrency,
+        vitest_pair,
+        vitest_pair_guard,
+        decision_transport,
+      ]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'decision-transport' }}
+    runs-on: *linux_runner_ubuntu
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify isolated Decision transport result
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          for (const [name, outcome] of Object.entries(JSON.parse(process.env.NEEDS_JSON))) {
+            assert.equal(outcome.result, name === 'decision_transport' ? 'success' : 'skipped', name);
+          }
+          NODE
+
   seal_release_child_evidence:
     name: Seal full release child evidence
     needs:
@@ -1927,7 +2172,9 @@ jobs:
       - gateway_concurrency
       - vitest_pair
       - vitest_pair_guard
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+      - decision_transport
+      - decision_transport_guard
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'decision-transport' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     permissions:
       contents: read
       actions: read
