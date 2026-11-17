@@ -21,6 +21,7 @@ import {
 } from "./update-post-core-context.js";
 
 const fixture = vi.hoisted(() => ({
+  engineActive: false,
   close: vi.fn<() => Promise<void>>(),
   closeNative: vi.fn<() => Promise<void>>(),
   closePostgres: vi.fn<() => Promise<void>>(),
@@ -42,6 +43,18 @@ vi.mock("./database-engine/admission-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./database-engine/admission-scope.js")>();
   return { ...actual, installDatabaseProcessRole: vi.fn(actual.installDatabaseProcessRole) };
 });
+
+// The worker must retain its database scope through finalization and terminal reads.
+vi.mock("../cli/update-cli/update-command-database-engine.js", () => ({
+  withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => {
+    fixture.engineActive = true;
+    try {
+      return await run();
+    } finally {
+      fixture.engineActive = false;
+    }
+  },
+}));
 
 // Exercise the executable's output boundary without update, service, or database effects.
 vi.mock("node:fs/promises", () => ({ default: { writeFile: fixture.writeFile } }));
@@ -351,6 +364,7 @@ it.each(["json", "human", "check"] as const)(
       return 300_000;
     });
     fixture.finish.mockImplementation(async () => {
+      expect(fixture.engineActive).toBe(true);
       if (mode === "json") {
         defaultRuntime.writeJson(result);
       } else {
@@ -359,6 +373,7 @@ it.each(["json", "human", "check"] as const)(
       return result;
     });
     fixture.terminal.mockImplementation(() => {
+      expect(fixture.engineActive).toBe(true);
       log.debug("terminal snapshot diagnostic");
       return { runId: "synthetic-run", status: "ok" };
     });

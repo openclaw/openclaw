@@ -13,6 +13,7 @@ const input: {
   readOnlyEntrypoint: unknown;
   replay?: { path: string; refuseStep?: string };
   progressGate?: string;
+  serviceAbsent?: true;
 } = JSON.parse(runtimeEntry);
 const { readOnlyEntrypoint, replay, progressGate } = input;
 const source = (relative: string) =>
@@ -85,7 +86,7 @@ replace(
      export async function readManagedGatewayServiceForUpdate(env) {
        if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(scratch)}) throw new Error("Non-fixture service environment");
        ${serviceAction}
-       throw new Error(${JSON.stringify(MIGRATED_FIXTURE_NO_SERVICE)});
+       ${input.serviceAbsent ? "return null;" : `throw new Error(${JSON.stringify(MIGRATED_FIXTURE_NO_SERVICE)});`}
      }`,
 );
 // Keep the candidate, executor delegation, recovery recording, and terminal ledger real.
