@@ -4,17 +4,14 @@ import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { PresenceEntry } from "../../../packages/gateway-protocol/src/index.ts";
 import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
-import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav, cronRuns } from "./cron-fixtures.test-support.ts";
 import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -106,7 +103,6 @@ const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
   { route: "usage", contentSelector: ".settings-page" },
-  { route: "cron", contentSelector: ".settings-page" },
   { route: "appearance", contentSelector: ".settings-page" },
   { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
@@ -119,66 +115,12 @@ const responsiveViewports = [
   { width: 1440, height: 900 },
 ] as const;
 const standaloneHeaderCases = [
-  { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
   {
     route: "memory-import",
     subtitle: "Bring Codex and Claude Code memory into an agent workspace.",
   },
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
-
-function createCronLayoutMethodResponses() {
-  const jobs: CronJob[] = [
-    {
-      id: "healthy",
-      configRevision: "healthy-revision",
-      name: "Healthy automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "healthy" },
-      state: { lastRunStatus: "ok" },
-    },
-    {
-      id: "failing",
-      configRevision: "failing-revision",
-      name: "Failing automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "failing" },
-      state: { lastRunStatus: "error" },
-    },
-  ];
-  return {
-    "agents.list": {
-      agents: [
-        { id: "main", identity: { name: "Molty" }, name: "Molty" },
-        { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-      ],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    },
-    "cron.list": cronListResponseFixture({
-      jobs,
-      snapshotRevision: "settings-layout",
-      total: jobs.length,
-      offset: 0,
-      limit: 50,
-      hasMore: false,
-      nextOffset: null,
-    }),
-    "cron.runs": cronRuns([]),
-    "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
-  };
-}
 
 suite.define(() => {
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
@@ -264,18 +206,13 @@ suite.define(() => {
   it("aligns settings-style workspace headers with their content columns", async () => {
     const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: createCronLayoutMethodResponses(),
-    });
+    await installMockGateway(page);
 
     try {
       for (const { route, subtitle } of standaloneHeaderCases) {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-        if (route === "cron") {
-          await collapseNav(page);
-        }
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
         await Promise.all([header.waitFor(), content.waitFor()]);
@@ -745,90 +682,6 @@ suite.define(() => {
         await page.locator(trigger).first().click();
         await expect.poll(readRows).toEqual([28]);
         await page.keyboard.press("Escape");
-      }
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps Automations search above one tab-and-action row", async () => {
-    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: createCronLayoutMethodResponses(),
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}automations`);
-      await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
-      await collapseNav(page);
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-
-        await expect
-          .poll(() =>
-            page.evaluate(() => {
-              const primary = document.querySelector<HTMLElement>(".cron-toolbar__primary");
-              const filters = document.querySelector<HTMLElement>(".cron-toolbar__filters");
-              const actions = document.querySelector<HTMLElement>(".cron-toolbar__actions");
-              const table = document.querySelector<HTMLElement>(".cron-table");
-              const tabGroup = document.querySelector<HTMLElement>(".cron-list-hub-tabs");
-              if (!primary || !filters || !actions || !table || !tabGroup) {
-                return null;
-              }
-              const primaryBox = primary.getBoundingClientRect();
-              const filtersBox = filters.getBoundingClientRect();
-              const actionsBox = actions.getBoundingClientRect();
-              const tableBox = table.getBoundingClientRect();
-              const tabBox = tabGroup.getBoundingClientRect();
-              return {
-                actionsAboveTable: actionsBox.bottom <= tableBox.top,
-                actionsRightAligned: Math.abs(tableBox.right - actionsBox.right) <= 1,
-                actionsInlineWithTabs:
-                  Math.abs(
-                    actionsBox.top + actionsBox.height / 2 - (tabBox.top + tabBox.height / 2),
-                  ) <= 1,
-                filtersAbovePrimary: filtersBox.bottom <= primaryBox.top,
-                primaryContainsActions: primary.contains(actions),
-              };
-            }),
-          )
-          .toEqual({
-            actionsAboveTable: true,
-            actionsInlineWithTabs: true,
-            actionsRightAligned: true,
-            filtersAbovePrimary: true,
-            primaryContainsActions: true,
-          });
-
-        expect(
-          (await page.locator(".cron-list-hub-tabs .hub-tab").allTextContents()).map((label) =>
-            label.trim(),
-          ),
-        ).toEqual(["All", "Active", "Paused", "Activity history"]);
-        expect(await page.locator(".cron-toolbar__filters").getByRole("radiogroup").count()).toBe(
-          0,
-        );
-        expect(await page.locator(".cron-stats").count()).toBe(0);
-        expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
-        expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([
-          "Failing automation",
-          "Healthy automation",
-        ]);
-
-        await captureSettingsLayout(page, `automations-toolbar-${viewport.width}.png`);
-        await page.locator(".agent-select__trigger").click();
-        const pickerTitle = page.locator(".agent-select__menu .oc-menu-heading__label");
-        await pickerTitle.waitFor();
-        expect(await pickerTitle.textContent()).toBe("Agent");
-        expect(
-          await page
-            .locator(".agent-select__menu")
-            .evaluate((menu) => getComputedStyle(menu).opacity),
-        ).toBe("1");
-        await captureSettingsLayout(page, `automations-agent-picker-${viewport.width}.png`);
-        await page.keyboard.press("Escape");
-        await pickerTitle.waitFor({ state: "hidden" });
       }
     } finally {
       await context.close();

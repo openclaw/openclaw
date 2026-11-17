@@ -8,7 +8,13 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation run feedback ownership",
@@ -25,6 +31,7 @@ function job(id: string, name: string) {
 function cronResponses(jobs: CronJob[]) {
   return {
     "cron.list": cronListResponseFixture(cronList(jobs, `run-feedback-${jobs.length}`)),
+    "cron.get": { cases: jobs.map((entry) => ({ match: { id: entry.id }, response: entry })) },
     "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
     "cron.status": { enabled: true, jobs: jobs.length, triggersEnabled: true },
   };
@@ -34,14 +41,15 @@ suite.define(() => {
   it.each([
     { reason: "queued", selection: "same" },
     { reason: "error", selection: "other" },
-    { reason: "queued", selection: "overview" },
-    { reason: "error", selection: "overview" },
+    { reason: "queued", selection: "activity" },
+    { reason: "error", selection: "activity" },
   ])("attributes $reason feedback with $selection selection", async ({ reason, selection }) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const alpha = job("feedback-alpha", "Alpha synthetic automation");
       const beta = job("feedback-beta", "Beta synthetic automation");
       const selected = selection === "same" ? alpha : beta;
       const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: cronResponses([alpha, beta]),
       });
       const message =
@@ -50,21 +58,20 @@ suite.define(() => {
           : "Run queued. Run ID: synthetic-run-alpha";
       const role = reason === "error" ? "alert" : "status";
       await page.goto(suite.server.baseUrl + "cron");
-      await collapseNav(page);
+      await openAutomation(page, alpha.id);
       await gateway.deferNext("cron.run", { id: alpha.id, mode: "force" });
-      await page.locator('[data-test-id="cron-row-run-feedback-alpha"]').click();
+      const selectedRun = page.locator('[data-test-id="cron-run-now"]');
+      await selectedRun.click();
       expect((await gateway.waitForRequest("cron.run")).params).toMatchObject({
         id: alpha.id,
         mode: "force",
       });
-      const selectedRun = page.locator('[data-test-id="cron-run-now"]');
-      if (selection !== "overview") {
-        await page
-          .locator('[data-test-id="cron-row-' + selected.id + '"] .cron-table__name')
-          .click();
-        await expect
-          .poll(() => page.locator(".cron-detail-title").textContent())
-          .toContain(selected.name);
+      if (selection === "activity") {
+        await openAutomationActivity(page);
+      } else {
+        if (selection === "other") {
+          await openAutomation(page, selected.id);
+        }
         await expect.poll(() => selectedRun.isEnabled()).toBe(false);
         expect(await page.locator(".callout.danger").count()).toBe(0);
       }
@@ -77,11 +84,11 @@ suite.define(() => {
           runId: "synthetic-run-alpha",
         });
       }
-      if (selection !== "overview") {
+      if (selection !== "activity") {
         await expect.poll(() => selectedRun.isEnabled()).toBe(true);
         expect(await page.locator(".cron-detail-title").textContent()).toContain(selected.name);
       } else {
-        expect(await page.locator('[data-panel-mode="overview"]').count()).toBe(1);
+        expect(await page.locator('[data-panel-mode="activity"]').count()).toBe(1);
       }
       await expect
         .poll(() => page.getByRole(role).filter({ hasText: message }).allTextContents())
@@ -95,14 +102,14 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const alpha = job("feedback-alpha", "Alpha synthetic automation");
       await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: {
           ...cronResponses([alpha]),
           "cron.run": { ok: true, enqueued: true, runId: "synthetic-run-alpha" },
         },
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      await collapseNav(page);
-      await page.locator(`[data-test-id="cron-row-${alpha.id}"] .cron-table__name`).click();
+      await openAutomation(page, alpha.id);
       await page.locator('[data-test-id="cron-run-now"]').click();
       const notice = page.getByRole("status").filter({ hasText: "Run queued" });
       await expect.poll(() => notice.count()).toBe(1);

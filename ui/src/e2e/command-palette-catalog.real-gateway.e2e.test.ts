@@ -506,7 +506,8 @@ suite.define(() => {
           expect.objectContaining({ provider: "ollama", id: "refresh-fixture:latest" }),
         );
         expect(JSON.stringify(failed)).not.toContain("private upstream error body");
-        const create = page.locator(".sidebar-automations__new");
+        // Without an automation, the page's empty state offers New automation.
+        const create = automations.locator('[data-test-id="cron-new-task"]');
         await create.click();
         await automations.getByText(warning, { exact: true }).waitFor({ state: "visible" });
         await automations

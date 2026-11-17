@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { collapseNav, cronRuns } from "./cron-fixtures.test-support.ts";
+import { cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron run filter typography E2E",
@@ -39,12 +39,7 @@ suite.define(() => {
             },
           });
 
-          await page.goto(`${suite.server.baseUrl}cron`);
-          // Phones show the list without a sidebar beside it.
-          if (viewport.width > 900) {
-            await collapseNav(page);
-          }
-          await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+          await page.goto(`${suite.server.baseUrl}cron?activity`);
           const labels = page.locator(
             ".cron-run-filters .cron-filter-dropdown__trigger > .oc-menu-item__label > span",
           );

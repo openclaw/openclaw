@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
-import { sidebarSectionForRoute } from "../app-navigation.ts";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import {
   LazySettingsSaveStatus,
@@ -22,7 +21,6 @@ import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { createSectionSidebarSource } from "../lib/section-navigation.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -109,14 +107,6 @@ export function ApplicationShell(props: {
   const view = createMemo(() => {
     props.host.shellRevision();
     return readShellView(props.host);
-  });
-  // A section's sidebar stands beside its page only when expanded on a desktop layout; a native
-  // embed shows no section sidebar.
-  createSectionSidebarSource(() => {
-    const current = view();
-    return current.navCollapsed || current.mobileNavLayout || current.nativeEmbed
-      ? undefined
-      : sidebarSectionForRoute(current.activeRoute);
   });
   // A page with a sidebar opens it at once after a page without one. Its next collapse
   // change clears this, so the explicit toggle keeps its motion.

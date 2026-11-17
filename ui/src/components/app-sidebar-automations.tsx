@@ -1,11 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, latest, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { createMsFormatter } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -13,11 +14,13 @@ import { formatCronCadence } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { sectionLocation } from "../lib/section-navigation.ts";
+import { createSectionItemsSource, sectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
+import { SidebarListGroup } from "./sidebar-list-group.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
 
@@ -39,8 +42,11 @@ function automationByline(job: CronCompactJob): string {
   return [next, cadence].filter(Boolean).join(" · ");
 }
 
-/** The Automations section: New automation, then active and (collapsed) paused automations. */
-export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.Element {
+/** The Automations section: New automation, Activity, then active and (collapsed) paused
+    automations. */
+export function SidebarAutomations(props: {
+  host: Pick<AppSidebarRenderHost, "basePath" | "activeRouteId" | "onNavigate">;
+}): JSX.Element {
   const app = useApplication();
   const gateway = projectGateway(app.gateway);
   const [revision, setRevision] = createSignal(0);
@@ -51,75 +57,112 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
       }
     }),
   );
-  const jobs = createMemo(async () => {
-    revision();
-    gateway.revision();
-    const snapshot = app.gateway.snapshot;
-    if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
-      return [];
-    }
-    const result = await readCronInventory(snapshot.client, {
-      includeDisabled: true,
-      compact: true,
-      limit: 200,
-      offset: 0,
-      sortBy: "name",
-      sortDir: "asc",
-    }).catch(() => null);
-    return result?.jobs ?? [];
+  const inventory = createMemo(
+    async (): Promise<{ jobs: CronCompactJob[]; error: string | null }> => {
+      revision();
+      gateway.revision();
+      const snapshot = app.gateway.snapshot;
+      if (!snapshot.client || !canCallGatewayMethod(snapshot, "cron.list", "operator.read")) {
+        return { jobs: [], error: null };
+      }
+      // The sidebar is the only list beside the Automations page, so it reads every page.
+      const rows: CronCompactJob[] = [];
+      let offset = 0;
+      try {
+        while (true) {
+          const page = await readCronInventory(snapshot.client, {
+            includeDisabled: true,
+            compact: true,
+            limit: 200,
+            offset,
+            sortBy: "name",
+            sortDir: "asc",
+          });
+          rows.push(...page.jobs);
+          if (!page.hasMore || !page.nextOffset || page.nextOffset <= offset) {
+            return { jobs: rows, error: null };
+          }
+          offset = page.nextOffset;
+        }
+      } catch (error) {
+        return { jobs: [], error: formatUiError(error) };
+      }
+    },
+  );
+  // The automations of the filter's agent. Unset follows the agent selected now; automations
+  // without one run on the default agent.
+  const scoped = createMemo(() => {
+    const filterAgentId = automationsFilter().agentId;
+    const agentId =
+      filterAgentId === null
+        ? null
+        : normalizeAgentId(filterAgentId ?? resolveSessionNavigationAgentId(app));
+    const defaultAgentId = app.agents.state.agentsList?.defaultId;
+    return inventory().jobs.filter(
+      (job) =>
+        agentId === null || normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId,
+    );
   });
+  // With no automation in its agent's scope the section shows only the rail and the page's empty
+  // state. An agent picked in the filter keeps the sidebar, so the filter stays in reach.
+  const listed = createMemo(
+    () =>
+      Boolean(inventory().error) ||
+      typeof automationsFilter().agentId === "string" ||
+      scoped().length > 0,
+    { loadingValue: undefined },
+  );
+  createSectionItemsSource("automations", () => latest(listed));
   // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
   const shown = createMemo(() => {
     const filter = automationsFilter();
-    // Unset follows the agent selected now; automations without one run on the default agent.
-    const agentId =
-      filter.agentId === null
-        ? null
-        : normalizeAgentId(filter.agentId ?? resolveSessionNavigationAgentId(app));
-    const defaultAgentId = app.agents.state.agentsList?.defaultId;
-    const order = (job: CronCompactJob) =>
-      filter.sort === "nextRunAtMs"
-        ? (job.nextRunAtMs ?? Number.POSITIVE_INFINITY)
-        : -(job.updatedAtMs ?? 0);
-    return jobs()
+    const direction = filter.sortDir === "desc" ? -1 : 1;
+    return scoped()
       .filter(
         (job) =>
-          agentId === null ||
-          normalizeAgentId(job.agentId ?? defaultAgentId ?? agentId) === agentId,
+          (filter.scheduleKind === "all" || job.scheduleKind === filter.scheduleKind) &&
+          (filter.lastRun === "all" || (job.lastRunStatus ?? "unknown") === filter.lastRun) &&
+          (filter.trigger === "all" || (filter.trigger === "conditional") === Boolean(job.trigger)),
       )
-      .filter(
-        (job) =>
-          filter.lastRun === "all" ||
-          (filter.lastRun === "error" ? job.lastRunStatus === "error" : job.lastRunStatus === "ok"),
-      )
-      .toSorted((left, right) =>
-        filter.sort === "name"
-          ? (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
-          : order(left) - order(right),
-      );
+      .toSorted((left, right) => {
+        if (filter.sort === "name") {
+          return (
+            direction *
+            (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
+          );
+        }
+        const leftMs = left[filter.sort];
+        const rightMs = right[filter.sort];
+        // Automations without the time sort last in either direction.
+        return leftMs == null || rightMs == null
+          ? Number(leftMs == null) - Number(rightMs == null)
+          : direction * (leftMs - rightMs);
+      });
   });
+  const activeJobs = () =>
+    automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled);
+  const pausedJobs = () =>
+    automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled);
   const [activeOpen, setActiveOpen] = createSignal(true);
   const [pausedOpen, setPausedOpen] = createSignal(false);
-  // The sidebar learns the route, not its query, so it keeps the job it last opened.
-  const [selected, setSelected] = createSignal(
-    new URLSearchParams(
-      window.location.search || sectionLocation(app.gateway, "automations")?.options.search,
-    ).get("job"),
-  );
+  // What the page has open, as the page records it for returning to Automations.
+  const opened = () =>
+    new URLSearchParams(sectionLocation(app.gateway, "automations")?.options.search ?? "");
+  const openedJob = () => opened().get("job");
+  const activityCurrent = () => props.host.activeRouteId === "cron" && opened().has("activity");
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {
     const href = () => `${cronPath()}?job=${encodeURIComponent(row.job.id)}`;
-    const current = () => props.host.activeRouteId === "cron" && selected() === row.job.id;
+    const current = () => props.host.activeRouteId === "cron" && openedJob() === row.job.id;
     return (
       <a
         class={["nav-item sidebar-automations__row", { "nav-item--active": current() }]}
         href={href()}
         aria-current={current() ? "page" : undefined}
         onClick={(event) =>
-          handleNavigationClick(event, () => {
-            setSelected(row.job.id);
-            props.host.onNavigate?.("cron", { search: `?job=${encodeURIComponent(row.job.id)}` });
-          })
+          handleNavigationClick(event, () =>
+            props.host.onNavigate?.("cron", { search: `?job=${encodeURIComponent(row.job.id)}` }),
+          )
         }
       >
         <span class="sidebar-automations__copy">
@@ -132,46 +175,31 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
       </a>
     );
   };
-  // Group headings share the Sessions sidebar's group heading.
-  const Group = (group: {
-    label: string;
-    jobs: CronCompactJob[];
-    open: boolean;
-    onToggle: () => void;
-  }) => (
-    <Show when={group.jobs.length > 0}>
-      <div class="sidebar-automations__group" role="group" aria-label={group.label}>
-        <div class="sidebar-recent-sessions__head">
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded={group.open ? "true" : "false"}
-            onClick={() => group.onToggle()}
-          >
-            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-              <span class="sidebar-session-group-toggle__icon">
-                <Icon name={group.open ? "chevronDown" : "chevronRight"} />
-              </span>
-            </span>
-            <span class="sidebar-recent-sessions__label-text">{group.label}</span>
-          </button>
-        </div>
-        <Show when={group.open}>
-          <For each={group.jobs}>{(job) => <Row job={job} />}</For>
-        </Show>
-      </div>
-    </Show>
-  );
   return (
     <nav class="sidebar-automations" aria-label={t("tabs.cron")}>
+      <Show when={inventory().error}>
+        {(error) => (
+          <InlineAlert
+            tone="danger"
+            action={
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={() => setRevision((value) => value + 1)}
+              >
+                {t("common.retry")}
+              </button>
+            }
+          >
+            {error()}
+          </InlineAlert>
+        )}
+      </Show>
       <a
         class="nav-item sidebar-automations__new"
         href={`${cronPath()}?new`}
         onClick={(event) =>
-          handleNavigationClick(event, () => {
-            setSelected(null);
-            props.host.onNavigate?.("cron", { search: "?new" });
-          })
+          handleNavigationClick(event, () => props.host.onNavigate?.("cron", { search: "?new" }))
         }
       >
         <span class="nav-item__icon" aria-hidden="true">
@@ -179,19 +207,40 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         </span>
         <span class="nav-item__text">{t("cron.list.newTask")}</span>
       </a>
-      <Group
-        label={t("cron.tabs.active")}
-        jobs={automationsFilter().status === "paused" ? [] : shown().filter((job) => job.enabled)}
-        open={activeOpen()}
-        onToggle={() => setActiveOpen(!activeOpen())}
-      />
-      <Group
-        label={t("cron.tabs.paused")}
-        jobs={automationsFilter().status === "active" ? [] : shown().filter((job) => !job.enabled)}
-        // Paused is the one group shown when the filter asks for it.
-        open={pausedOpen() || automationsFilter().status === "paused"}
-        onToggle={() => setPausedOpen(!pausedOpen())}
-      />
+      <a
+        class={["nav-item", { "nav-item--active": activityCurrent() }]}
+        href={`${cronPath()}?activity`}
+        aria-current={activityCurrent() ? "page" : undefined}
+        onClick={(event) =>
+          handleNavigationClick(event, () =>
+            props.host.onNavigate?.("cron", { search: "?activity" }),
+          )
+        }
+      >
+        <span class="nav-item__icon" aria-hidden="true">
+          <Icon name="activity" />
+        </span>
+        <span class="nav-item__text">{t("cron.list.runHistory")}</span>
+      </a>
+      <Show when={activeJobs().length > 0}>
+        <SidebarListGroup
+          label={t("cron.tabs.active")}
+          open={activeOpen()}
+          onToggle={() => setActiveOpen(!activeOpen())}
+        >
+          <For each={activeJobs()}>{(job) => <Row job={job} />}</For>
+        </SidebarListGroup>
+      </Show>
+      <Show when={pausedJobs().length > 0}>
+        <SidebarListGroup
+          label={t("cron.tabs.paused")}
+          // Paused is the one group shown when the filter asks for it.
+          open={pausedOpen() || automationsFilter().status === "paused"}
+          onToggle={() => setPausedOpen(!pausedOpen())}
+        >
+          <For each={pausedJobs()}>{(job) => <Row job={job} />}</For>
+        </SidebarListGroup>
+      </Show>
     </nav>
   );
 }

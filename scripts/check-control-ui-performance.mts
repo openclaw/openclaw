@@ -70,16 +70,16 @@ const controlUiPerformanceBudgets = {
   // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
   // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
   // over its merge base plus 64 B headroom.
-  // Vyctor-approved navigation stack (#199833): +3,959 B vs paired base 1d82bed0.
+  // Vyctor-approved navigation stack (#200010): +4,128 B vs paired base 1d82bed0.
   // Preserve the original main headroom; no additional margin.
-  chatBootJsGzipBytes: 1_329_539,
+  chatBootJsGzipBytes: 1_329_708,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
   // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
-  // Vyctor-approved navigation stack (#199833): +4,143 B vs paired base 1d82bed0.
+  // Vyctor-approved navigation stack (#200010): +3,997 B vs paired base 1d82bed0.
   // Preserve the original main headroom; no additional margin.
-  newBootJsGzipBytes: 820_775,
+  newBootJsGzipBytes: 820_629,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -94,9 +94,9 @@ const controlUiPerformanceBudgets = {
   // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
   // plus 64 B headroom.
   // Continuation wakes (#200056): measured 572,376 B plus 64 B.
-  // Vyctor-approved navigation stack (#199833): +3,714 B vs paired base 1d82bed0.
+  // Vyctor-approved navigation stack (#200010): +3,615 B vs paired base 1d82bed0.
   // Preserve the original main headroom; no additional margin.
-  largestJsGzipBytes: 576_154,
+  largestJsGzipBytes: 576_055,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,

@@ -1768,8 +1768,6 @@ div.shell.shell--onboarding {
 .agent-chat__goal-copy,
 .agent-chat__goal-label,
 .agent-chat__goal-objective,
-.cron-table__name-text,
-.cron-table__cell-value,
 .chat-queue__error-text,
 .multi-select__chip-label {
   min-width: 0;
@@ -2316,7 +2314,7 @@ div.shell.shell--onboarding {
   gap: 2px;
 }
 
-.sidebar-automations__group {
+.sidebar-list-group {
   display: flex;
   flex-direction: column;
   gap: 2px;

@@ -10,6 +10,7 @@ import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { sectionListsItems } from "../lib/section-navigation.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
@@ -196,12 +197,17 @@ export function readShellView(host: ShellViewHost) {
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
   // A page without a sidebar shows only the rail; the saved collapse preference is untouched.
+  // Automations without any automation shows only the rail beside its empty state.
+  const pageSidebar = sidebarViewForPage(
+    activeRoute,
+    activePluginRef ? pluginTabKey(activePluginRef) : undefined,
+  );
   const navPageHidden =
     !nativeEmbed &&
     !onboarding &&
     !settingsTakeover &&
-    sidebarViewForPage(activeRoute, activePluginRef ? pluginTabKey(activePluginRef) : undefined) ===
-      undefined;
+    (pageSidebar === undefined ||
+      (pageSidebar === "automations" && !sectionListsItems("automations")));
   const navCollapsed = () =>
     !nativeEmbed &&
     (navigationSnapshot.navCollapsed || navPageHidden) &&
