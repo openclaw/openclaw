@@ -1190,9 +1190,7 @@ function releaseExecutionPlanShape(payload) {
         : []),
       ...(Object.hasOwn(payload, "telegramWaiver") ? ["targetVersion", "telegramWaiver"] : []),
       ...(Object.hasOwn(payload, "coveragePolicy") ? ["targetVersion", "coveragePolicy"] : []),
-      ...(payload.evidenceReuse?.requested === true && Object.hasOwn(payload, "targetVersion")
-        ? ["targetVersion"]
-        : []),
+      ...(Object.hasOwn(payload, "targetVersion") ? ["targetVersion"] : []),
       ...(Object.hasOwn(payload, "sourceAdmissionContract")
         ? ["sourceAdmissionContract", "sourceAdmission"]
         : []),
@@ -1278,6 +1276,7 @@ function executionPlanDigestPayload(plan) {
     ...(attemptAware ? { repository: plan.repository } : {}),
     rerunGroup: plan.rerunGroup,
     targetSha: plan.targetSha,
+    targetVersion: plan.targetVersion,
     trustedWorkflow: plan.trustedWorkflow,
     version: plan.version,
     workflowRef: plan.workflowRef,
@@ -1410,7 +1409,7 @@ export function buildReleaseExecutionPlanArtifact({
     workflowRef: boundedString(expected.workflowRef, MAX_LABEL_LENGTH),
     workflowSha: boundedString(expected.workflowSha, MAX_LABEL_LENGTH),
     targetSha: boundedString(expected.targetSha, MAX_LABEL_LENGTH),
-    ...(normalizedReuse.requested ? { targetVersion: normalizedTargetVersion } : {}),
+    targetVersion: normalizedTargetVersion,
     trustedWorkflow: normalizedTrustedWorkflow(trustedWorkflow),
     releaseProfile: boundedString(releaseProfile, MAX_LABEL_LENGTH),
     rerunGroup: boundedString(rerunGroup, MAX_LABEL_LENGTH),
@@ -1540,10 +1539,14 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   }
   if (plan.candidate !== null) {
     const candidate = validateFullReleaseCandidateBinding(plan.candidate);
-    if (JSON.stringify(candidate.request) !== JSON.stringify(request)) {
+    normalizeReleaseTelegramWaiver({ ...plan, candidateVersion: candidate.package.version });
+    if (
+      JSON.stringify(candidate.request) !== JSON.stringify(request) ||
+      // Historical strict plans omitted targetVersion; absence grants no waiver.
+      (Object.hasOwn(plan, "targetVersion") && plan.targetVersion !== candidate.package.version)
+    ) {
       throw new Error("release candidate binding request differs from the execution plan");
     }
-    normalizeReleaseTelegramWaiver({ ...plan, candidateVersion: candidate.package.version });
   }
 }
 

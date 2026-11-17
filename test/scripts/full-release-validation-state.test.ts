@@ -152,6 +152,21 @@ function collectorArtifact(
 }
 
 describe("full release execution plan", () => {
+  it("binds the candidate version in fresh plans without legacy coverage or reuse", () => {
+    const candidate = candidateBinding();
+    const fresh = executionPlan(
+      { childPhaseVersion: 3 },
+      { attemptEvidenceVersion: 3, candidateRequest: canonicalCandidateRequest(), candidate },
+    );
+    expect(fresh.targetVersion).toBe(candidate.package.version);
+    expect(validateReleaseExecutionPlanArtifact(fresh)).toEqual(fresh);
+    const changed = { ...fresh, targetVersion: "2026.10.33" };
+    changed.sha256 = releaseExecutionPlanSha256(changed);
+    expect(() => validateReleaseExecutionPlanArtifact(changed)).toThrow(
+      "release candidate binding request differs from the execution plan",
+    );
+  });
+
   it("seals mixed child reuse identities without replacing fresh children or current admission", () => {
     const original = executionPlan(
       { childPhaseVersion: 3 },
@@ -286,7 +301,9 @@ describe("full release execution plan", () => {
       { childPhaseVersion: 3, rerunGroup: "ci" },
       { attemptEvidenceVersion: 3, candidateRequest: canonicalCandidateRequest() },
     );
-    // The published v2026.9.6 artifact hashes this ordered wire shape.
+    // The published v2026.9.6 artifact predates the explicit target version.
+    delete current.targetVersion;
+    // Preserve its ordered wire shape.
     const digestPayload = {
       knownFlakyJobs: [],
       ...Object.fromEntries(
