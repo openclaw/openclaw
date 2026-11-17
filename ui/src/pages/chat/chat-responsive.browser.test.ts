@@ -927,10 +927,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(defaults.thread.width).toBeCloseTo(768, 0);
       expect(defaults.composer.width).toBeCloseTo(defaults.thread.width, 0);
       expect(defaults.prs.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
-      expect(defaults.shell.width).toBeCloseTo(760, 0);
-      expect(defaults.activity.width).toBeCloseTo(760, 0);
-      expect(defaults.framedActivity.width).toBeCloseTo(defaults.activity.width, 0);
+      // Tool rows end where reply text does, at the default width as at a saved one.
+      for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
+        expect(defaults[key].width).toBeCloseTo(defaults.thread.width, 0);
+      }
 
       const configured = await renderFixture(true);
       for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {

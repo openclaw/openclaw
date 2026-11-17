@@ -1,3 +1,8 @@
+/* Inherited values stay editable on every form surface, including cold Channels. */
+.cfg-default-control {
+  opacity: 0.55;
+}
+
 /* The one switch (components/solid/switch.tsx). Sizes only change geometry;
    colors, knob, focus and direction are shared. */
 .settings-toggle {

@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,6 +17,48 @@ async function expectWorkRefused(work: GatewayConnectionWork) {
 }
 
 describe("Gateway connection work", () => {
+  it("restores its service facts for detached work without restoring startup authority", async () => {
+    const caller = new AsyncLocalStorage<string>();
+    const installation = {
+      root: "/fixture/installed",
+      version: "2026.11.3",
+      cliVersion: "2026.11.4",
+      databasePath: "/fixture/state/openclaw.sqlite",
+    };
+    const work = caller.run("startup", () =>
+      withGatewayServiceInstallation({ installation }, () => new GatewayConnectionWork()),
+    );
+    const uninstalled = new GatewayConnectionWork();
+    try {
+      await caller.run("request", () =>
+        work.track(async () => {
+          expect(getGatewayServiceInstallation()).toEqual(installation);
+          expect(caller.getStore()).toBe("request");
+          await nextTurn();
+          expect(getGatewayServiceInstallation()).toEqual(installation);
+          expect(caller.getStore()).toBe("request");
+        }),
+      );
+      await withGatewayServiceInstallation(
+        { installation: { ...installation, root: "/fixture/another" } },
+        async () => {
+          await work.trackCleanup(async () => {
+            await nextTurn();
+            expect(getGatewayServiceInstallation()).toEqual(installation);
+          });
+          await uninstalled.track(async () => {
+            await nextTurn();
+            expect(getGatewayServiceInstallation()).toBeUndefined();
+          });
+          expect(getGatewayServiceInstallation()?.root).toBe("/fixture/another");
+        },
+      );
+      expect(getGatewayServiceInstallation()).toBeUndefined();
+    } finally {
+      await Promise.all([work.drain(), uninstalled.drain()]);
+    }
+  });
+
   it("starts received work synchronously and joins connection cleanup after transport close", async () => {
     const work = new GatewayConnectionWork();
     const requestGate = createDeferredCore();

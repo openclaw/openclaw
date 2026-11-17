@@ -47,7 +47,10 @@ afterEach(() => {
 
 function setup(
   read: () => Promise<OpenClawIdStatusResult>,
-  requests: Pick<OpenClawIdPeopleLink, "invites" | "nodeInvites"> = {},
+  requests: Pick<
+    OpenClawIdPeopleLink,
+    "invites" | "nodeInvites" | "browserRequests" | "recoveryUses"
+  > = {},
 ) {
   let enabled = true;
   let publication: OpenClawIdPublication = superseded;
@@ -114,6 +117,15 @@ function memberRequest(inviteId: string, name: string, decideByMs = Date.now() +
   };
 }
 const tunnelOwner = { ...status, channel: "tunnel" as const, status: { state: "on" as const } };
+const recoveryUse = {
+  seq: 9,
+  accountId: "member-mira",
+  memberName: "Mira Example",
+  deviceLabel: "Firefox on Linux",
+  peerKey: `iroh:${"1".repeat(64)}`,
+  peerFp: `fp:${"1".repeat(64)}`,
+  usedAt: 1_800_000_000,
+};
 const promptTitle = () => document.querySelector(".exec-approval-title")?.textContent ?? null;
 function press(label: string) {
   [...document.querySelectorAll("button")].find((button) => button.textContent === label)?.click();
@@ -308,4 +320,99 @@ it("schedules the next time-left change, not only the expiry", async () => {
   const lastHour = now + 216_000_000 - 1_800_000;
   expect(attention?.nextChangeAt(lastHour)).toBe(lastHour + 5_000);
   expect(attention?.nextChangeAt(now + 216_000_000)).toBeUndefined();
+});
+
+it.each(["local_operator", "tunnel"] as const)(
+  "projects bounded member browser notices with a usable %s owner action",
+  async (channel) => {
+    const now = Date.now();
+    const request = {
+      requestId: "request-one",
+      accountId: "raw-account-id",
+      displayName: "Alice Example",
+      email: "alice@example.test",
+      label: "Safari on iOS",
+      location: "Example City",
+      requestedAt: Math.floor(now / 1000),
+      expiresAt: Math.floor(now / 1000) + 1800,
+    };
+    const gateway = client(
+      vi.fn(async (method: string) =>
+        method === "openclawId.status"
+          ? { ...tunnelOwner, channel }
+          : { link: { browserRequests: [request] } },
+      ),
+    );
+    const attention = await readOpenClawIdAttention(gateway, () => true);
+    expect(attention?.items(now)).toMatchObject([
+      {
+        kind: "openClawIdBrowserRequest",
+        label: "Browser request from Alice Example",
+        detail:
+          "Safari on iOS · 30m left\nalice@example.test\nLocation reported by OpenClaw ID: Example City",
+        arrivedAtMs: request.requestedAt * 1000,
+        action: { kind: "openClawIdBrowserApproval", remote: channel === "tunnel" },
+      },
+    ]);
+    expect(JSON.stringify(attention?.items(now))).not.toContain("raw-account-id");
+    expect(attention?.nextChangeAt(now)).toBe(now + 5000);
+    expect(attention?.items(request.expiresAt * 1000)).toEqual([]);
+    expect(attention?.nextChangeAt(request.expiresAt * 1000)).toBeUndefined();
+  },
+);
+
+it("does not read browser requests for a non-owner, even with administrative scopes", async () => {
+  const request = vi.fn(async () => ({ ...tunnelOwner, owner: false }));
+  const attention = await readOpenClawIdAttention(client(request), () => true);
+  expect(attention?.items(Date.now())).toEqual([]);
+  expect(request.mock.calls).toEqual([["openclawId.status", {}]]);
+});
+
+it.each(["tunnel", null] as const)(
+  "does not read or show recovery history to a non-owner (%s)",
+  async (channel) => {
+    const h = setup(async () => ({ ...tunnelOwner, channel, owner: false }), {
+      recoveryUses: [recoveryUse],
+    });
+    await waitForFast(() => expect(h.request).toHaveBeenCalledWith("openclawId.status", {}));
+    expect(store?.entries).toEqual([]);
+    expect(h.request).not.toHaveBeenCalledWith("openclawId.people", {});
+  },
+);
+
+it("shows each recovery use with a literal time and dismisses only that use across refreshes", async () => {
+  const uses = { recoveryUses: [recoveryUse] };
+  const h = setup(async () => tunnelOwner, uses);
+  await waitForFast(() => expect(store?.entries).toHaveLength(1));
+  const entry = store!.entries[0]!;
+  expect(entry).toMatchObject({
+    type: "attention",
+    kind: "openClawIdRecoveryUse",
+    severity: "warning",
+    requiresAction: true,
+    label: "Mira Example used a recovery kit",
+    detail: "Firefox on Linux was added. Review access in Access → People.",
+    arrivedAtMs: 1_800_000_000_000,
+    meta: { status: expect.stringMatching(/2027/) },
+    action: {
+      kind: "navigate",
+      routeId: "plugin",
+      search: `?plugin=openclaw-id-access&id=access&${new URLSearchParams({ "p.member": recoveryUse.accountId, "p.device": recoveryUse.peerKey })}`,
+    },
+  });
+  expect(entry.dismissal).toEqual({
+    kind: "openClawIdRecoveryUse",
+    signature: JSON.stringify(["test-claw", 9]),
+  });
+  store!.dismiss(entry.dismissal!);
+  expect(store!.entries).toEqual([]);
+  h.requestsChanged({ recoveryUses: [recoveryUse, { ...recoveryUse, seq: 10 }] });
+  await waitForFast(() => expect(store?.entries).toHaveLength(1));
+  expect(store!.entries[0]!.dismissal?.signature).toBe(JSON.stringify(["test-claw", 10]));
+  // Reconnection starts other inventories before the owner-only history read completes.
+  store!.dispose();
+  const reloaded = setup(async () => tunnelOwner, uses);
+  await waitForFast(() => expect(reloaded.request).toHaveBeenCalledWith("openclawId.people", {}));
+  await Promise.resolve();
+  expect(store!.entries).toEqual([]);
 });

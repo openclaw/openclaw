@@ -12,9 +12,6 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
-export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
-const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
-
 export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
     entry.execution.status !== "running" &&
@@ -25,41 +22,6 @@ export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean 
 
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
   return entry.delivery?.status !== "delivered";
-}
-
-/**
- * Only a known missing result, or an effect-free run whose transcript write was
- * rejected or aborted, or a saved-state repair may continue; private retries reconcile.
- */
-export function resolveRequesterSettleRetryState(params: {
-  state: RequesterSettleWakeBatchState;
-  delivery: SubagentAnnounceDeliveryResult;
-  attemptCount: number;
-  parentOnly: boolean;
-  now: number;
-}): RequesterSettleWakeBatchState | undefined {
-  const { state, delivery, attemptCount, parentOnly } = params;
-  const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
-  if (
-    delivery.disposition !== "retryable" ||
-    (!parentOnly &&
-      delivery.reason !== "visible_reply_missing" &&
-      delivery.reason !== "requester_aborted" &&
-      delivery.reason !== "requester_state_conflict" &&
-      delivery.reason !== "requester_transcript_conflict") ||
-    delivery.reason === "requester_abandoned" ||
-    attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
-    retryDelay === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...state,
-    status: "pending",
-    attemptCount,
-    nextAttemptAt: params.now + retryDelay,
-    lastError: delivery.error ?? delivery.reason ?? "undelivered",
-  };
 }
 
 type RequesterSettleWakeBatchCallbacks = {

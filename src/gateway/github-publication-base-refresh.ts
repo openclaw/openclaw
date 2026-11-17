@@ -168,6 +168,7 @@ export async function integrateManagedWorkspaceSource(
       // This operation prepares an existing private checkout; it never creates a new binding.
       state.current();
       await state.settle();
+      quiescence?.markPhase("operation.gitState");
       previousBase = state.current().base_commit ?? undefined;
       const check = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
         assertSource();
@@ -236,6 +237,7 @@ export async function integrateManagedWorkspaceSource(
             }
           }
           if (initialImport && !recoveredImport) {
+            quiescence?.markPhase("operation.pristine");
             const source = params.source!;
             const admittedPaths = await state.canonicalPaths();
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
@@ -289,6 +291,7 @@ export async function integrateManagedWorkspaceSource(
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
+            quiescence?.markPhase("operation.gitState");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               await integrationSource?.accept();
@@ -305,6 +308,7 @@ export async function integrateManagedWorkspaceSource(
             if (ancestor.code !== 0 && ancestor.code !== 1) {
               throw new Error("The selected base ancestry could not be verified.");
             }
+            quiescence?.markPhase("operation.snapshot");
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
               { cwd, assertCurrent: check },
               policy,
@@ -315,6 +319,7 @@ export async function integrateManagedWorkspaceSource(
               snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))
             ) {
               // Index-only installation preserves every working byte, including accepted ignored data.
+              quiescence?.markPhase("operation.commit");
               await git(["read-tree", snapshot.workspaceTree]);
               await git([
                 "-c",
@@ -326,6 +331,7 @@ export async function integrateManagedWorkspaceSource(
               ]);
             }
           }
+          quiescence?.markPhase("operation.gitState");
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
           if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
             await integrationSource?.accept();
@@ -470,11 +476,13 @@ export async function integrateManagedWorkspaceSource(
               conflictPaths,
             };
           }
+          quiescence?.markPhase("operation.snapshot");
           const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
             { cwd, assertCurrent: check },
             policy,
             await state.canonicalPaths(),
           );
+          quiescence?.markPhase("operation.commit");
           const markers = await probe(["diff", "--check", sourceHead, "--", ...conflictPaths]);
           if (conflictPaths.length && markers.stdout.includes("conflict marker")) {
             throw new Error(

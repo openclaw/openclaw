@@ -176,12 +176,10 @@ export function* createPluginFrozenGenerationSteps(
         await (artifact.captureRecoverySourceAsync?.() ?? artifact.captureRecoverySource()),
       ),
     ),
-    retainSourceCustody: markPluginSourceCaptureOperation(() => ({
-      source: recover(),
-      files: artifact.sourceSnapshotFacts!.files,
-      executionAliases: artifact.executionAliases,
-      executionSources: artifact.executionSources,
-    })),
+    retainSourceCustody: markPluginSourceCaptureOperation(() => {
+      const custody = artifact.retainSourceCustody();
+      return { ...custody, source: freezeCapturedRecovery(custody.source) };
+    }),
     hasSource: (source) => snapshot.sourcePaths.has(inputFor(sourceInputFor(source))),
     resolve: (source, rejectHardlinks) => {
       const input = inputFor(sourceInputFor(source));

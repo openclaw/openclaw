@@ -8,6 +8,13 @@ import type {
 // type-only import cycle.
 import type { AgentRoleId } from "../agents/agent-roles.js";
 
+/** Host-recorded declared-capability review; never accepted from model arguments. */
+export type SystemAgentPluginCapabilityReview = {
+  pluginId: string;
+  reviewToken: string;
+  description: string;
+};
+
 export type SystemAgentTemplateOperation =
   | ({ kind: "template-review" } & TemplatesAddPlanParams)
   | ({
@@ -51,7 +58,11 @@ export type SystemAgentOperation =
   | { kind: "models" }
   | { kind: "plugin-list" }
   | { kind: "plugin-search"; query: string }
-  | { kind: "plugin-install"; spec: string }
+  | {
+      kind: "plugin-install";
+      spec: string;
+      capabilityReview?: SystemAgentPluginCapabilityReview;
+    }
   | { kind: "plugin-activate-artifact"; path: string; sha256: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }

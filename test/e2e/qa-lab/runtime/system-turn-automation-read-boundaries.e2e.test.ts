@@ -231,21 +231,6 @@ it(
       return held.promise;
     };
     const removalHeld = createDeferred();
-    const assertRemovedReadRefusal = (outcome: RunsOutcome | undefined) => {
-      expect(outcome).toEqual({
-        id: jobs.owned!.id,
-        ok: false,
-        payload: {
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining(`Automation not found: ${jobs.owned!.id}.`),
-          details: { code: "CRON_JOB_NOT_FOUND", jobId: jobs.owned!.id },
-        },
-      });
-      assert(
-        outcome?.payload && typeof outcome.payload === "object" && "message" in outcome.payload,
-      );
-      return outcome.payload.message;
-    };
     let step = 0;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     let requester: GatewayClient | undefined;
@@ -404,22 +389,10 @@ it(
                   void holdNextHistoryRead().then(() => removalHeld.resolve());
                   call("automations", "runs_removed", { action: "runs", jobId: owned() });
                   break;
-                case 17: {
-                  expect(lastOutput?.call_id).toBe("call_runs_removed");
-                  const error = assertRemovedReadRefusal(
-                    seams.runsOutcomes.findLast((outcome) => outcome.id === owned()),
+                case 17:
+                  throw new Error(
+                    "Removed automation made another provider request from its retired notice",
                   );
-                  expect(JSON.parse(lastOutput?.output ?? "null")).toEqual({
-                    status: "error",
-                    tool: "automations",
-                    error,
-                  });
-                  expect(lastOutput?.output).not.toContain('"entries"');
-                  expect(lastOutput?.output).not.toContain("Owned proof");
-                  expect(lastOutput?.output).not.toContain("RUN-MARKER-");
-                  reply("Stopped.");
-                  break;
-                }
                 // The second notice turn's read is closed before disclosure.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
@@ -542,10 +515,13 @@ it(
         await live.client.request("cron.remove", { id: jobs.owned.id });
         releaseHold();
         const removedOutcome = await observe(removed.promise);
-        // The handler can deny a read before its model roundtrip and turn finish.
-        // Keep that original notice settled before advancing the shared provider script.
+        // Removal retires the notice's restored operator source. Wait for the original
+        // notice to settle and prove it cannot make another provider request.
         await observe(noticeReceipt(jobs.owned).settled);
-        expect(step).toBe(18);
+        expect(step).toBe(17);
+        expect(outputs.has("runs_removed")).toBe(false);
+        // Only the next notice may consume the next scripted continuation.
+        step = 18;
 
         expect(await runDue(jobs.closing)).toMatchObject({ status: "error" });
         // The notice run closes while its awaited history read is in flight.
@@ -609,8 +585,11 @@ it(
           expect(outputs.get(id)).toContain("Other actions need the owner's authority");
         }
         expect(outputs.get("gateway")).toContain("gateway needs the owner's authority");
-        // A deleted job returns only its canonical refusal, never its hydrated history.
-        assertRemovedReadRefusal(removedOutcome);
+        // Removal revokes the notice source during the read: no response or history escapes.
+        expect(removedOutcome).toEqual({
+          id: jobs.owned.id,
+          threw: expect.stringContaining("agent runtime authority is no longer active"),
+        });
         // Closed during the awaited read: the handler responds with nothing at all.
         expect(closedOutcome).toEqual({
           id: jobs.closing.id,

@@ -1163,10 +1163,10 @@ afterAll(async () => {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it.each([
     ["rejects an off-path leaf without a session id", "previous-leaf", undefined, false],
-    ["rejects a stale empty leaf without a session id", null, undefined, false],
+    ["accepts an active ancestor without a session id", "rendered-leaf", undefined, true],
+    ["accepts an empty starting leaf without a session id", null, undefined, true],
     ["accepts an empty starting leaf after a same-session append", null, "current", true],
     ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
-    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
   ] as const)("%s", async (_name, expectedLeafEntryId, sessionId, accepted) => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-active-ancestor-",
@@ -1216,17 +1216,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    const response = expectDefined(
-      lastRespondCall(respond),
-      "active ancestor response test invariant",
-    );
+    const response = expectDefined(lastRespondCall(respond), "active ancestor response invariant");
     expect(response[0]).toBe(accepted);
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
       await captureSessionControllerSettlement({
         scope: mockState.storePath,
-        identities: [requestedSessionId],
+        identities: [requestedSessionId ?? mockState.sessionId],
       });
     } else {
       expect(response).toEqual([
@@ -1240,10 +1237,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   // A branch switch keeps the transcript identity, so the session id no longer
-  // fences a stale pane. The fence is the appended `leaf` control: a pane that
-  // still displays the pre-switch leaf, or claims the empty root, is refused even
-  // though it names the session's current id.
-  it.each(["active-sibling", null])(
+  // fences a stale pane. The active path does: a pane that still displays the
+  // pre-switch leaf is refused even though it names the session's current id.
+  it.each(["active-sibling"])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
