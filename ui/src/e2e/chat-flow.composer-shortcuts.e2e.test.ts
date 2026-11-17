@@ -296,21 +296,133 @@ suite.define(() => {
     const stop = button("Stop");
     await stop.waitFor({ state: "visible" });
 
-    // An open menu owns Escape; closing it leaves the run alone.
-    await pane
-      .locator('.chat-bubble[data-entry-id="escape-outside-source"]')
-      .click({ button: "right" });
-    const menu = page.locator(".chat-reply-context-menu");
-    await menu.waitFor({ state: "visible" });
-    // The menu installs its document keyboard listener on the next frame.
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        }),
-    );
-    await page.keyboard.press("Escape");
-    await menu.waitFor({ state: "hidden" });
+    // Retain event-time ownership facts: a timeout snapshot cannot show who consumed Escape.
+    const escapeTrace = await page.evaluateHandle(() => {
+      const records: object[] = [];
+      const identities = new WeakMap<Element, number>();
+      const listeners = new AbortController();
+      let nextIdentity = 0;
+      const identity = (element: Element) => {
+        let value = identities.get(element);
+        if (value === undefined) {
+          value = ++nextIdentity;
+          identities.set(element, value);
+        }
+        return value;
+      };
+      const describe = (target: EventTarget | null) =>
+        target instanceof Element
+          ? { tag: target.tagName, role: target.getAttribute("role") }
+          : null;
+      const snapshot = () => ({
+        focused: describe(document.activeElement),
+        menus: [...document.querySelectorAll(".chat-reply-context-menu")].map(identity),
+        tooltips: [...document.querySelectorAll("openclaw-tooltip[open]")].map((element) => ({
+          identity: identity(element),
+          open: element.hasAttribute("open"),
+          trigger: describe(element.firstElementChild),
+        })),
+      });
+      const record = (entry: object) => {
+        if (records.length < 64) {
+          records.push(entry);
+        }
+      };
+      for (const [target, phase, capture] of [
+        [window, "window-capture", true],
+        [document, "document-capture", true],
+        [document, "document-bubble", false],
+        [window, "window-bubble", false],
+      ] as const) {
+        target.addEventListener(
+          "keydown",
+          (event) => {
+            if (event instanceof KeyboardEvent && event.key === "Escape") {
+              record({
+                phase,
+                prevented: event.defaultPrevented,
+                target: describe(event.target),
+                ...snapshot(),
+              });
+            }
+          },
+          { capture, signal: listeners.signal },
+        );
+      }
+      const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (
+            mutation.type === "attributes" &&
+            mutation.target instanceof Element &&
+            mutation.target.matches("openclaw-tooltip")
+          ) {
+            record({
+              change: "tooltip",
+              identity: identity(mutation.target),
+              open: mutation.target.hasAttribute("open"),
+            });
+          }
+          for (const [change, nodes] of [
+            ["added", mutation.addedNodes],
+            ["removed", mutation.removedNodes],
+          ] as const) {
+            for (const node of nodes) {
+              if (!(node instanceof Element)) {
+                continue;
+              }
+              const menus = [node, ...node.querySelectorAll(".chat-reply-context-menu")];
+              for (const menu of menus) {
+                if (menu.matches(".chat-reply-context-menu")) {
+                  record({ change, menu: identity(menu) });
+                }
+              }
+            }
+          }
+        }
+      });
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["open"],
+      });
+      return {
+        read: () => ({ records, current: snapshot() }),
+        dispose: () => {
+          observer.disconnect();
+          listeners.abort();
+        },
+      };
+    });
+    try {
+      // An open menu owns Escape; closing it leaves the run alone.
+      await pane
+        .locator('.chat-bubble[data-entry-id="escape-outside-source"]')
+        .click({ button: "right" });
+      const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      // The menu installs its document keyboard listener on the next frame.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      await page.keyboard.press("Escape");
+      await menu.waitFor({ state: "hidden" });
+    } catch (error) {
+      console.info(
+        "[composer-escape-diagnostic]",
+        JSON.stringify(await escapeTrace.evaluate((trace) => trace.read())),
+      );
+      throw error;
+    } finally {
+      try {
+        await escapeTrace.evaluate((trace) => trace.dispose());
+      } finally {
+        await escapeTrace.dispose();
+      }
+    }
     await expectRequestCountStable(gateway, "chat.abort", 0);
     expect(await stop.isVisible()).toBe(true);
 
