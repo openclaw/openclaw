@@ -80,3 +80,31 @@ it("lists named commands, sessions, archived sessions, loose matches, then messa
     "messages:message hit",
   ]);
 });
+
+it("keeps a named setting before the catalog cap excludes loose matches", () => {
+  const catalogItems: CommandPaletteItem[] = Array.from({ length: 10 }, (_, index) => ({
+    id: `loose-${index}`,
+    label: `A setting ${index}`,
+    description: "voice",
+    icon: "settings",
+    category: "settings",
+    action: "nav:appearance",
+  }));
+  catalogItems.push({
+    id: "named",
+    label: "Talk voice",
+    icon: "settings",
+    category: "settings",
+    action: "nav:appearance",
+  });
+  const items = filterCommandPaletteItems({
+    query: "voice",
+    includeSlashCommands: false,
+    sessionItems: [],
+    catalogItems,
+    desktopAvailable: false,
+    custodianAvailable: false,
+  });
+  expect(items[0]?.id).toBe("named");
+  expect(items.filter((item) => catalogItems.some(({ id }) => id === item.id))).toHaveLength(10);
+});

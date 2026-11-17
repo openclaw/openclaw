@@ -18,8 +18,8 @@ const ARCHIVED_SESSION_RESULT_LIMIT = 3;
 export { SESSION_SEARCH_SCOPE };
 const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
 
-/** Reads live matches and the archived title lookup together. */
-export async function listCommandPaletteSessions(
+/** Start both reads; the optional archive lookup must not delay live results. */
+export function listCommandPaletteSessions(
   sessions: Pick<ApplicationContext["sessions"], "list">,
   search: string,
 ) {
@@ -29,12 +29,13 @@ export async function listCommandPaletteSessions(
     search,
     limit: SESSION_SEARCH_LIMIT,
   } as const;
-  const [live, archived] = await Promise.all([
-    sessions.list(options),
+  return {
+    live: sessions.list(options),
     // Best effort: a failed lookup only omits archived rows until the next search.
-    sessions.list({ ...options, archivedFilter: "archived" }).catch(() => null),
-  ]);
-  return live && { visibleRows: live.sessions, archivedRows: archived?.sessions ?? [] };
+    archived: sessions
+      .list({ ...options, archivedFilter: "archived", searchTitlesOnly: true })
+      .catch(() => null),
+  };
 }
 
 export function buildCommandPaletteSessionItems(params: {
