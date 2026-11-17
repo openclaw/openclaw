@@ -49,7 +49,9 @@ it("observes readonly worker requests without adding IPC listeners to other chil
     });
     const reader = new DatabaseSync(snapshot, { readOnly: true });
     try {
-      expect(reader.prepare("SELECT status FROM update_runs").all()).toEqual([{ status: "succeeded" }]);
+      expect(reader.prepare("SELECT status FROM update_runs").all()).toEqual([
+        { status: "succeeded" },
+      ]);
     } finally {
       reader.close();
     }
@@ -76,7 +78,11 @@ it("observes readonly worker requests without adding IPC listeners to other chil
   child.stderr.on("data", stderr.append);
   try {
     const [listeners] = await withinTest(
-      awaitGateBeforeSettlement(once(child, "message"), closed, "IPC child exited before reporting"),
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "IPC child exited before reporting",
+      ),
       signal,
     );
     expect(await withinTest(closed, signal), stderr.text()).toEqual([0, null]);
