@@ -143,7 +143,10 @@ private actor ChatSendHydrationGateway {
             let text = try XCTUnwrap(params["message"] as? String)
             let runID = try XCTUnwrap(params["idempotencyKey"] as? String)
             self.messages.append(SentMessage(
-                id: UUID().uuidString, text: text, runID: runID, sessionKey: Self.sessionKey(params),
+                id: UUID().uuidString,
+                text: text,
+                runID: runID,
+                sessionKey: Self.sessionKey(params),
                 timestamp: Date().timeIntervalSince1970 * 1000))
             payload = ["runId": runID, "status": self.acknowledgesStartedRun ? "started" : "ok"]
         case "agent.wait":
@@ -233,8 +236,13 @@ final class ChatSendHydrationTests: XCTestCase {
         options.deviceAuthGatewayID = stableID
         func config(stableID: String, token: String = "synthetic-account") -> GatewayConnectConfig {
             GatewayConnectConfig(
-                url: url, stableID: stableID, tls: nil, token: token,
-                bootstrapToken: nil, password: nil, nodeOptions: options)
+                url: url,
+                stableID: stableID,
+                tls: nil,
+                token: token,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
         }
         appModel.activeGatewayConnectConfig = config(stableID: stableID)
         let owner = appModel.chatPresentation
@@ -246,14 +254,21 @@ final class ChatSendHydrationTests: XCTestCase {
         }
         do {
             try await appModel.operatorSession.connect(
-                url: url, credentials: .init(), connectOptions: options,
+                url: url,
+                credentials: .init(),
+                connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: session),
-                onConnected: {}, onDisconnected: { _ in },
+                onConnected: {},
+                onDisconnected: { _ in },
                 onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
             owner.sync(appModel: appModel)
             let original = try XCTUnwrap(owner.viewModel)
             // Hold write-through, not history: this handoff cannot be rescued by disk prepaint.
-            original.pendingCacheWriteTask = Task { for await _ in cacheGate { break } }
+            original.pendingCacheWriteTask = Task {
+                for await _ in cacheGate {
+                    break
+                }
+            }
             await original.bootstrapTask?.value
             let store = try XCTUnwrap(original.transcriptCache as? OpenClawChatSQLiteTranscriptCache)
             let cached = await store.loadTranscript(sessionKey: "main")
@@ -286,7 +301,7 @@ final class ChatSendHydrationTests: XCTestCase {
             if transition == .pendingAttachment {
                 XCTAssertTrue(owner.viewModel === original)
                 XCTAssertEqual(original.attachments.map(\.fileName), ["synthetic.png"])
-                original.removeAttachment(try XCTUnwrap(original.attachments.first?.id))
+                try original.removeAttachment(XCTUnwrap(original.attachments.first?.id))
                 owner.sync(appModel: appModel)
             }
             let replacement = try XCTUnwrap(owner.viewModel)
@@ -381,8 +396,13 @@ final class ChatSendHydrationTests: XCTestCase {
         options.deviceAuthGatewayID = stableID
         func config(token: String) -> GatewayConnectConfig {
             GatewayConnectConfig(
-                url: url, stableID: stableID, tls: nil, token: token,
-                bootstrapToken: nil, password: nil, nodeOptions: options)
+                url: url,
+                stableID: stableID,
+                tls: nil,
+                token: token,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
         }
         appModel.activeGatewayConnectConfig = config(token: "synthetic-first-account")
         let owner = appModel.chatPresentation

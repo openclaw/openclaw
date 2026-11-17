@@ -210,7 +210,8 @@ struct ChatViewModelTranscriptCacheTests {
                 _ = await iterator.next()
             }
             return OpenClawChatHistoryPayload(
-                sessionKey: key, sessionId: "canonical-session",
+                sessionKey: key,
+                sessionId: "canonical-session",
                 messages: request == 1
                     ? [liveHistoryMessage(role: "assistant", text: "Keep this answer", timestamp: 1)] : [],
                 thinkingLevel: nil,
@@ -218,7 +219,9 @@ struct ChatViewModelTranscriptCacheTests {
                 deltaCursor: request == 1 ? "accepted-cursor" : nil)
         }
         let vm = OpenClawChatViewModel(
-            sessionKey: "main", transport: transport, activeAgentId: "main",
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "main",
             sessionRoutingContract: "per-sender|main|main")
         defer { vm.detachTransport() }
         vm.load()
@@ -246,7 +249,7 @@ struct ChatViewModelTranscriptCacheTests {
 
     @Test(arguments: ["per-sender|main|main", "global|main|main"])
     @MainActor
-    func `routing hydration retains only the accepted canonical destination`(contract: String) async throws {
+    func `routing hydration retains only the accepted canonical destination`(contract: String) async {
         let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
         defer { releaseHistory.finish() }
         let transport = GatedHistoryChatTransport { key, request in
@@ -255,7 +258,8 @@ struct ChatViewModelTranscriptCacheTests {
                 _ = await iterator.next()
             }
             return OpenClawChatHistoryPayload(
-                sessionKey: key, sessionId: "initial-session",
+                sessionKey: key,
+                sessionId: "initial-session",
                 messages: [liveHistoryMessage(role: "assistant", text: "Known owner", timestamp: 1)],
                 thinkingLevel: nil,
                 sessionInfo: .init(hasActiveRun: false, key: "agent:main:main", agentId: "main"))
@@ -273,7 +277,7 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test @MainActor
-    func `retained presentation cannot keep a deleted answer on a foreground refresh`() async throws {
+    func `retained presentation cannot keep a deleted answer on a foreground refresh`() async {
         let transport = GatedHistoryChatTransport { key, _ in
             OpenClawChatHistoryPayload(
                 sessionKey: key, sessionId: "empty-session", messages: [], thinkingLevel: nil)
@@ -347,7 +351,7 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(await MainActor.run { vm.isShowingCachedTranscript })
     }
 
-    @Test func `live history is written through to cache`() async throws {
+    @Test func `live history is written through to cache`() async {
         let cache = TestTranscriptCache()
         let transport = GatedHistoryChatTransport { sessionKey, _ in
             historyPayload(
@@ -397,7 +401,8 @@ struct ChatViewModelTranscriptCacheTests {
     @Test @MainActor func `late cache prepaint cannot replace a live transient roster row`() async throws {
         func rows(_ label: String, date: Int) throws -> [OpenClawChatSessionEntry] {
             try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
-            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"\#(label)","updatedAt":\#(date)}]}
+            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread",
+            "label":"\#(label)","updatedAt":\#(date)}]}
             """#.utf8)).sessions
         }
         let (started, startedSignal) = AsyncStream<Void>.makeStream()
@@ -554,7 +559,7 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test(arguments: ["main", "gadget"])
-    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async throws {
+    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async {
         var matchingBare = cacheSessionEntry(key: "shared-tool", updatedAt: 2000)
         matchingBare.agentId = "main"
         var foreignBare = cacheSessionEntry(key: "foreign-tool", updatedAt: 1750)
