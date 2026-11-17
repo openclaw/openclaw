@@ -245,7 +245,7 @@ describe("full release execution plan", () => {
       blockers: [
         expect.objectContaining({
           kind: "reused_evidence_invalid",
-          message: expect.stringContaining("same tooling is required"),
+          message: expect.stringContaining("release child provenance changed"),
         }),
       ],
     });

@@ -1,6 +1,8 @@
 export interface ReusableReleaseChildRequest {
   repository: string;
   targetSha: string;
+  /** Version resolved from the current admitted candidate, not the old receipt. */
+  targetVersion?: string;
   workflowSha: string;
   role: string;
   inputs: Record<string, string | boolean | number>;
@@ -33,6 +35,7 @@ export interface ReusableReleaseChildSelection {
 
 export interface ReusableReleaseChildDependencies {
   report?: (message: string) => void;
+  getJobLog?: (jobId: string | number) => Promise<string>;
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;

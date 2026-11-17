@@ -1259,6 +1259,8 @@ jobs:
             .github/workflows
           persist-credentials: false
 
+      - *qualification_evidence_verifier_checkout
+
       - &child_reuse_runtime
         name: Setup child reuse runtime
         if: env.CHILD_EVIDENCE_REUSE == 'true'
@@ -1365,7 +1367,13 @@ jobs:
             local dispatch_output dispatch_status dispatch_run_ids matches_json match_count run_id run_json child_head_sha child_run_attempt url encoded_workflow_ref current_workflow_sha expected_workflow_id
 
             if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
-              if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
+              local reuse_script=workflow/scripts/find-reusable-release-child.mjs
+              if [[ "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}" == true ]]; then
+                reuse_script=qualification-verifier/scripts/find-reusable-release-child.mjs
+              fi
+              if TARGET_VERSION="${{ needs.resolve_target.outputs.target_version }}" \
+                CHILD_WORKFLOW_DIRECTORY="$GITHUB_WORKSPACE/workflow/.github/workflows" \
+                node "$reuse_script" "$workflow" "$@"; then
                 return 0
               else
                 dispatch_status=$?
@@ -1682,6 +1690,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch plugin prerelease independent phase
@@ -1714,6 +1723,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch plugin prerelease candidate phase
@@ -1750,6 +1760,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch release checks independent phase
@@ -1793,6 +1804,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch release checks candidate phase
@@ -1836,6 +1848,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch npm Telegram E2E
@@ -1864,6 +1877,7 @@ jobs:
       child_reuse: ${{ steps.dispatch.outputs.child_reuse }}
     steps:
       - *child_reuse_checkout
+      - *qualification_evidence_verifier_checkout
       - *child_reuse_runtime
 
       - name: Dispatch OpenClaw Performance

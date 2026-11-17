@@ -85,6 +85,16 @@ manifest writing, and final validation. Candidate workflows still run every
 selected test; a waiver does not omit a test or change its raw conclusion.
 State, manifest, and summary retain each waived failure and its reason.
 
+Changing P alone does not invalidate retained evidence for unchanged C/Q,
+coverage, inputs, and source digests. With `reuse_evidence=true`, a capable
+candidate workflow uses admitted P to reevaluate sealed child receipts, including
+failed children now covered by exact waivers. The original failures remain in the
+evidence. A failed parent without a final manifest is recovered from those child
+receipts, not reused as a successful parent. A fresh parent must complete its
+admission, collection, and final verification successfully, but need not rerun the
+retained child workloads. Missing, expired, or incompatible receipts still require
+fresh work.
+
 Waiver support requires a candidate workflow that routes state operations to
 admitted P. Pre-cutover frozen workflows retain strict validation; changing P
 alone does not retrofit waiver support. Readers still accept the historical empty

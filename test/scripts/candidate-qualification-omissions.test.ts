@@ -169,3 +169,76 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
     expect(dispatch.includes("allow_frozen_target_scenario_omissions=true")).toBe(distinct);
   },
 );
+
+it.each([false, true])(
+  "adopts child evidence with current policy without dispatch (admitted P=%s)",
+  (admitted) => {
+    const root = tempDirs.make("release-reuse-policy-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const calls = join(root, "calls");
+    const node = join(bin, "node");
+    writeFileSync(
+      node,
+      `#!` +
+        process.execPath +
+        `
+const fs = require('node:fs');
+fs.writeFileSync(process.env.CALLS, JSON.stringify({args: process.argv.slice(2), version: process.env.TARGET_VERSION, directory: process.env.CHILD_WORKFLOW_DIRECTORY}));
+`,
+    );
+    chmodSync(node, 0o755);
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!/bin/sh
+exit 91
+`,
+    );
+    chmodSync(gh, 0o755);
+    const run = String(step("normal_ci", "Dispatch CI").run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    execFileSync("bash", ["-c", run], {
+      cwd: root,
+      timeout: 10_000,
+      env: {
+        ...workflowEnv(),
+        PATH: bin + delimiter + process.env.PATH,
+        CALLS: calls,
+        GITHUB_WORKSPACE: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        CHILD_EVIDENCE_REUSE: "true",
+        CHILD_WORKFLOW_KIND: "ci",
+        TARGET_REF: targetSha,
+      },
+    });
+    const observed = JSON.parse(readFileSync(calls, "utf8"));
+    expect(observed).toMatchObject({
+      version: "2026.9.23",
+      directory: join(root, "workflow/.github/workflows"),
+    });
+    expect(observed.args.slice(0, 2)).toEqual([
+      (admitted ? "qualification-verifier" : "workflow") +
+        "/scripts/find-reusable-release-child.mjs",
+      "ci.yml",
+    ]);
+    expect(observed.args).toContain("target_ref=" + targetSha);
+    for (const job of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+    ]) {
+      expect(step(job, "Checkout admitted qualification verifier").with).toMatchObject({
+        path: "qualification-verifier",
+      });
+    }
+  },
+);

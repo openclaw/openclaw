@@ -443,23 +443,27 @@ Its `workloadConclusion` excludes the running publisher. Collection failure
 loses reuse metadata without changing workload qualification. With
 `reuse_evidence=true`, dispatch scans at most 100 recent runs, probes at most 40
 target receipt inventories, and fully validates at most five matching receipts
-per role within two minutes. Other-target and other-tooling runs do not spend
+per role within two minutes. Other-target runs do not spend
 the full-validation budget. Empty-string inputs equal absent inputs because GitHub omits them from
 `github.event.inputs`; non-empty defaults and candidate descriptor bytes must
-match exactly. It can adopt green children from failed, cancelled, or active
-parents only at the same Tooling SHA as the current parent, still requiring main
-ancestry. Missing or different parent tooling fails closed; no paths are exempt.
+match exactly. It can adopt successful children, or failed children whose exact
+failures are accepted by current P's checked-in waiver policy, from failed,
+cancelled, or active parents. Original producer provenance and main ancestry
+(or the exact candidate-owned Q) remain required, but changing current tooling
+alone does not invalidate the receipt. Admitted P evaluates reuse policy; frozen
+Q still supplies the requested workflow inputs.
 Dispatch logs identify reused children, explain each evaluated rejection, and
 summarize skipped runs and fresh dispatches. The current-parent adoption witness
 and immutable execution plan bind each selection. Collectors and final verification
-recheck the live child attempt and conclusion, same tooling, main ancestry, inputs,
+recheck the live child attempt and raw conclusion, current waiver policy, provenance, inputs,
 artifact identity/digest/expiry, and successful trusted seal/upload steps. A newer
 attempt invalidates reuse; do not rerun an adopted child to repair a collector.
-Current-parent source/publication admission and the separate successful-parent
-changelog reuse path remain unchanged. Artifact producers retain their existing
-sealed receipts. Candidate admission does not widen this per-child receipt
-reuse contract: a divergent Q runs fresh children; whole-parent authenticated
-evidence reuse retains its separate original-Q contract.
+Current-parent source/publication admission still applies. Artifact producers
+retain their separate sealed receipts. Whole-parent reuse independently
+authenticates original and current P while retaining C/Q, coverage, complete
+inputs, and source digests; identical P SHAs are not required. Failed parents
+without final manifests are recovered through child receipts, not manufactured
+successful parent manifests.
 
 An early standalone product-performance run is optional beta confidence. If
 useful, start it against the frozen Code SHA in parallel with release work:

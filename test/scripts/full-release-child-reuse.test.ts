@@ -10,11 +10,13 @@ import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
+import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const REPOSITORY = "openclaw/openclaw";
 const TOOLING = "a".repeat(40);
 const TARGET = "b".repeat(40);
+const TARGET_VERSION = "2026.9.23";
 const PUBLISHER = "Seal full release child evidence / Seal child receipt";
 const NOW = Date.parse("2026-09-23T12:00:00Z");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,6 +46,7 @@ async function fixture(
   const request = {
     repository: REPOSITORY,
     targetSha: TARGET,
+    targetVersion: TARGET_VERSION,
     workflowSha,
     role,
     inputs,
@@ -246,30 +249,118 @@ describe("independent release child reuse", () => {
     expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
   });
 
-  it.each([
-    { workflowSha: "", reason: "current parent workflow SHA is invalid" },
-    { workflowSha: "c".repeat(40), reason: "same tooling is required" },
-  ])("rejects invalid current-parent tooling: $reason", async ({ workflowSha, reason }) => {
+  it("rejects an invalid current-parent tooling identity", async () => {
     const data = await fixture();
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    data.request.workflowSha = workflowSha;
+    data.request.workflowSha = "";
     await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      reason,
+      "current parent workflow SHA is invalid",
     );
-    if (!workflowSha) {
-      await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
-      return;
-    }
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `run 101 ${data.run.display_title}: rejected: tooling ${TOOLING} differs from current parent ${"c".repeat(40)}`,
-      ),
-    );
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining('evaluated 0; dispatching fresh work; skipped {"other tooling":1}'),
+    await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(
+      "current parent workflow SHA is invalid",
     );
   });
+
+  it.each([TOOLING, TARGET])(
+    "reuses original producer %s after current tooling changes",
+    async (producerSha) => {
+      const data = await fixture("normalCi", undefined, producerSha);
+      data.request.workflowSha = "c".repeat(40);
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      expect(selection).toMatchObject({ workflowSha: producerSha, targetSha: TARGET });
+      await expect(
+        validateReusableReleaseChild(selection, data.request, data.deps),
+      ).resolves.toMatchObject({ receipt: { workflowSha: producerSha } });
+      expect(
+        await discoverReusableReleaseChild(
+          { ...data.request, targetSha: "d".repeat(40) },
+          data.deps,
+        ),
+      ).toBeNull();
+    },
+  );
+
+  it.each(["npmTelegram", "releaseChecksIndependent"])(
+    "reuses a failed %s receipt only under the current exact waiver",
+    async (role) => {
+      const data = await fixture(role);
+      const leaf =
+        role === "npmTelegram"
+          ? "Run package Telegram E2E"
+          : "Run repo/live E2E validation / Native live suites (Native live provider)";
+      const names = role === "npmTelegram" ? [leaf] : [leaf, "Verify release checks"];
+      for (const [index, name] of names.entries()) {
+        Object.assign(data.jobs[index]!, { name, conclusion: "failure" });
+        Object.assign(data.receipt.jobs[index]!, { name, conclusion: "failure" });
+      }
+      if (role === "releaseChecksIndependent") {
+        data.jobs[1]!.steps = [
+          {
+            name: "Verify release check results",
+            status: "completed",
+            conclusion: "failure",
+          },
+        ];
+      }
+      data.run.conclusion = "failure";
+      data.receipt.workloadConclusion = "failure";
+      data.receipt.compositeJobsSha256 = jsonDigest({
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+        jobs: data.receipt.jobs,
+      });
+      await data.seal();
+      data.request.workflowSha = "c".repeat(40);
+      const deps = {
+        ...data.deps,
+        getJobLog: async () => "::error::live_repo_e2e_release_checks ended with failure",
+      };
+      expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
+      const waiver = {
+        targetVersion: TARGET_VERSION,
+        childRole: role,
+        jobName: leaf,
+        reason: "Synthetic provider outage",
+      };
+      RELEASE_VALIDATION_WAIVERS.push(waiver);
+      try {
+        const selected = await discoverReusableReleaseChild(data.request, deps);
+        expect(selected).toMatchObject({ runId: "101", workflowSha: TOOLING });
+        await expect(
+          validateReusableReleaseChild(selected, data.request, deps),
+        ).resolves.toMatchObject({ receipt: { workloadConclusion: "failure" } });
+        expect(
+          await discoverReusableReleaseChild(
+            {
+              ...data.request,
+              targetVersion: "2026.9.24",
+            },
+            deps,
+          ),
+        ).toBeNull();
+        if (role === "releaseChecksIndependent") {
+          await expect(
+            validateReusableReleaseChild(selected, data.request, {
+              ...deps,
+              getJobLog: async () => "::error::artifact integrity failed",
+            }),
+          ).rejects.toThrow("unwaived failure");
+        } else {
+          data.jobs[1]!.conclusion = "failure";
+          data.receipt.jobs[1]!.conclusion = "failure";
+          data.receipt.compositeJobsSha256 = jsonDigest({
+            effectiveRunAttempt: 1,
+            plannedRunAttempt: 1,
+            jobs: data.receipt.jobs,
+          });
+          await data.seal();
+          expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
+        }
+      } finally {
+        RELEASE_VALIDATION_WAIVERS.splice(RELEASE_VALIDATION_WAIVERS.indexOf(waiver), 1);
+      }
+    },
+  );
 
   it.each(["active parent", "publisher cleanup failure"])(
     "reuses sealed green work despite %s",
@@ -355,11 +446,11 @@ describe("independent release child reuse", () => {
       (data) => void (data.lineage.status = "diverged"),
       "not a main ancestor",
     ],
-    ["new child attempt", (data) => void (data.run.run_attempt = 2), "current successful attempt"],
+    ["new child attempt", (data) => void (data.run.run_attempt = 2), "current terminal attempt"],
     [
-      "failed child",
+      "unwaived failed child",
       (data) => void (data.run.conclusion = "failure"),
-      "current successful attempt",
+      "child does not pass current release policy",
     ],
     [
       "different workflow",
@@ -369,7 +460,7 @@ describe("independent release child reuse", () => {
     [
       "foreign repository",
       (data) => void (data.run.head_repository.full_name = "other/repo"),
-      "current successful attempt",
+      "current terminal attempt",
     ],
     [
       "expired artifact",
@@ -445,7 +536,7 @@ describe("independent release child reuse", () => {
           return github(endpoint);
         };
       },
-      "current successful attempt",
+      "current terminal attempt",
     ],
   ])("rejects %s at revalidation and discovery", async (_name, mutate, error) => {
     const data = await fixture();
@@ -514,7 +605,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
     {
       limit: "absent receipts",
       probes: 40,
-      summary: `no reusable normalCi child for ${TARGET}: scanned 100 runs, evaluated 0; dispatching fresh work; skipped {"not-green":1,"other role/suffix":2,"target receipt absent":40,"budget exhausted":57}`,
+      summary: `no reusable normalCi child for ${TARGET}: scanned 100 runs, evaluated 0; dispatching fresh work; skipped {"not-terminal":1,"other role/suffix":2,"target receipt absent":40,"budget exhausted":57}`,
     },
     { limit: "deadline", probes: 0, summary: '"budget exhausted":1' },
   ])("bounds discovery by $limit", async ({ limit, probes, summary }) => {
@@ -527,7 +618,7 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
         data.lineage.status = "diverged";
       } else if (limit === "absent receipts") {
         data.runInventory.unshift(
-          { ...data.run, conclusion: "failure" },
+          { ...data.run, conclusion: "cancelled" },
           { ...data.run, display_title: "Other role" },
           { ...data.run, display_title: "CI full-release-validation-77-1-other-suffix" },
           ...Array.from({ length: 100 }, (_, index) => ({ ...data.run, id: 200 + index })),

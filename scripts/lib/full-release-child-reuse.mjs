@@ -4,6 +4,7 @@ import {
   composeReleaseChildAttemptEvidence,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  terminalPolicyPass,
   validateReleaseChildRunProvenance,
 } from "../full-release-validation-policy.mjs";
 import {
@@ -17,6 +18,10 @@ import {
 } from "./full-release-evidence.mjs";
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
 const MAX_ARTIFACT_PROBES = 40;
@@ -112,6 +117,13 @@ function dependencies(repository, deps) {
           artifactMetadata: await github(`actions/artifacts/${params.expected.artifactId}`),
         };
       }),
+    getJobLog:
+      deps.getJobLog ??
+      ((id) =>
+        execGhReadAsync(["api", `repos/${repository}/actions/jobs/${id}/logs`], {
+          timeout: Math.min(60_000, remaining()),
+          maxBuffer: 4 * 1024 * 1024,
+        })),
     deadlineMs,
     now: deps.now ?? Date.now(),
     token: deps.token ?? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
@@ -168,9 +180,9 @@ function validateRun(run, selection, request) {
     run.run_attempt === selection.runAttempt &&
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
-      run.conclusion === "success" &&
+      ["success", "failure"].includes(run.conclusion) &&
       run.head_repository?.full_name === request.repository,
-    "child is not the current successful attempt",
+    "child is not the current terminal attempt",
   );
 }
 
@@ -257,10 +269,8 @@ function validateSelectionIdentity(selection, request) {
 }
 
 async function validateEvidence(selection, request, deps) {
-  requireEvidence(
-    selection.workflowSha === request.workflowSha,
-    `tooling ${selection.workflowSha} differs from current parent ${request.workflowSha}; same tooling is required`,
-  );
+  // Authenticate the retained producer below; current release tooling can change
+  // without changing the candidate or the workload this receipt proves.
   validateSelectionIdentity(selection, request);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
@@ -330,7 +340,7 @@ async function validateEvidence(selection, request, deps) {
       receipt.dispatchId === origin(selection, request) &&
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
-      receipt.workloadConclusion === "success" &&
+      ["success", "failure"].includes(receipt.workloadConclusion) &&
       canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
@@ -349,12 +359,35 @@ async function validateEvidence(selection, request, deps) {
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
   requireEvidence(
     composite.jobs.length > 0 &&
-      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
+      receipt.workloadConclusion ===
+        (composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))
+          ? "success"
+          : "failure") &&
       Object.entries(composite).every(
         ([key, value]) => canonical(receipt[key]) === canonical(value),
       ),
     "receipt does not match the complete live composite workload",
   );
+  const policyChild = {
+    key: request.role,
+    status: run.status,
+    conclusion: run.conclusion,
+    jobs: composite.jobs,
+  };
+  const policy = evaluateReleaseChildPolicy({
+    child: policyChild,
+    targetVersion: request.targetVersion,
+  });
+  requireEvidence(
+    terminalPolicyPass(policyChild, request.targetVersion),
+    "child does not pass current release policy",
+  );
+  const acceptedJobs = composite.jobs.map((job) =>
+    attempts
+      .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+      .jobs.find((raw) => raw.name === job.name),
+  );
+  await validateReleaseWaiverAggregates({ policy, jobs: acceptedJobs, getJobLog: deps.getJobLog });
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
   );
@@ -402,8 +435,8 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
     scanned += 1;
-    if (run.status !== "completed" || run.conclusion !== "success") {
-      skip("not-green");
+    if (run.status !== "completed" || !["success", "failure"].includes(run.conclusion)) {
+      skip("not-terminal");
       continue;
     }
     const prefix = `${normalized.spec.displayName} full-release-validation-`;
@@ -446,14 +479,6 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         skip("target receipt absent");
         continue;
       }
-      // Older tooling cannot pass validation; keep it off the full-validation budget.
-      if (run.head_sha !== request.workflowSha) {
-        skip("other tooling");
-        report(
-          `run ${run.id} ${run.display_title}: rejected: tooling ${run.head_sha} differs from current parent ${request.workflowSha}; same tooling is required`,
-        );
-        continue;
-      }
       evaluated += 1;
       requireEvidence(matching.length === 1, "receipt artifact is ambiguous");
       const selection = {
@@ -472,7 +497,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         inputs: normalized.inputs,
       };
       const verified = await validateEvidence(selection, normalized, resolved);
-      report(`run ${run.id} ${run.display_title}: reused: verified receipt and same tooling`);
+      report(`run ${run.id} ${run.display_title}: reused: verified receipt and original producer`);
       summary(true);
       return verified.selection;
     } catch (error) {
