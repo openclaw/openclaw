@@ -1,7 +1,8 @@
 // This client-only card uses the signals export to keep its deferred runtime lazy.
 import { createDeferred } from "@solidjs/signals";
-import { createMemo, createSignal, Errored, isPending, Loading, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, isPending, Loading, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
@@ -33,8 +34,9 @@ type CardPresentation = Pick<
 type CardStatus = CardPresentation & {
   installed: boolean;
   canInstall: boolean;
-  /** An installed plugin still has an account this operator can sign in to. */
-  needsSignIn: boolean;
+  restricted: boolean;
+  disabled: boolean;
+  connection?: "connected" | "connecting" | "sign-in";
 };
 type StatusRead =
   | { status: "empty" }
@@ -57,13 +59,7 @@ export function ChatClawHubCardBody(
     const current = status();
     return !statusPending() && current.status === "ready" ? current.result : undefined;
   };
-  const readFailure = () => {
-    const current = status();
-    if (!statusPending() && current.status === "failed") {
-      throw current.error;
-    }
-    return null;
-  };
+  const readFailed = () => !statusPending() && status().status === "failed";
   const state: {
     iconUrls: Record<string, string>;
     pluginIconUrls: Record<string, string>;
@@ -167,6 +163,15 @@ export function ChatClawHubCardBody(
         try {
           const result = await (async (): Promise<CardStatus> => {
             if (card.kind === "plugin") {
+              if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+                return {
+                  ...card,
+                  installed: false,
+                  canInstall: false,
+                  restricted: true,
+                  disabled: false,
+                };
+              }
               const { plugin } = await loadPluginDiscoveryDetail(client, card.id, signal);
               signal.throwIfAborted();
               const pluginId = plugin.local.installed ? plugin.local.pluginId : undefined;
@@ -189,10 +194,19 @@ export function ChatClawHubCardBody(
                 pluginId: plugin.local.pluginId,
                 official: plugin.catalog.official,
                 installed: plugin.local.installed,
-                canInstall: plugin.local.action === "install",
-                needsSignIn: Boolean(
-                  inspection?.mcpAuth?.some((server) => server.state !== "authorized"),
-                ),
+                canInstall:
+                  plugin.local.action === "install" &&
+                  hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+                restricted: !hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+                disabled: plugin.local.installed && plugin.local.state === "disabled",
+                // These are configured MCP server connections, not universal plugin accounts.
+                connection: inspection?.mcpAuth?.length
+                  ? inspection.mcpAuth.some((server) => server.state === "pending-authorization")
+                    ? "connecting"
+                    : inspection.mcpAuth.some((server) => server.state !== "authorized")
+                      ? "sign-in"
+                      : "connected"
+                  : undefined,
               };
             }
             if (!agentId) {
@@ -223,7 +237,8 @@ export function ChatClawHubCardBody(
               official: detail.skill.isOfficial === true,
               installed,
               canInstall: detail.skill.isOfficial === true && !installed,
-              needsSignIn: false,
+              restricted: false,
+              disabled: false,
             };
           })();
           if (!current()) {
@@ -272,11 +287,39 @@ export function ChatClawHubCardBody(
           Boolean(current?.iconUrl && catalogIcons.isLoading(current.iconUrl)) ||
           (statusPending() && !current?.pluginId && !current?.iconUrl);
   };
+  const statusLabel = () => {
+    const result = readyStatus();
+    if (!result) {
+      return t("chat.clawhub.statusUnavailable");
+    }
+    if (!result.installed) {
+      return result.canInstall
+        ? ""
+        : t(result.restricted ? "chat.clawhub.permissionRequired" : "chat.clawhub.unavailable");
+    }
+    return t(
+      result.disabled
+        ? "chat.clawhub.disabled"
+        : result.connection === "connecting"
+          ? "chat.clawhub.connecting"
+          : result.connection === "sign-in"
+            ? "chat.clawhub.signInNeeded"
+            : result.connection === "connected"
+              ? "chat.clawhub.connected"
+              : "pluginsPage.installed",
+    );
+  };
+  const online = () => {
+    read();
+    return context.gateway.snapshot.phase === "connected";
+  };
   const statusSkeleton = (
-    <>
-      <span class="skeleton chat-clawhub-card__status-skeleton" aria-hidden="true" />
-      <span class="sr-only">{t("common.loading")}</span>
-    </>
+    <span class="chat-clawhub-card__status-skeleton">
+      <Show when={online()}>
+        <span class="btn__spinner" aria-hidden="true" />
+      </Show>
+      <span>{t(online() ? "chat.clawhub.checking" : "chat.clawhub.statusUnavailable")}</span>
+    </span>
   );
   return (
     <>
@@ -349,58 +392,97 @@ export function ChatClawHubCardBody(
                     </span>
                   </Show>
                 </span>
-                <Show when={current().description}>
-                  {(description) => <span class="card-sub">{description()}</span>}
-                </Show>
+                <span class="chat-clawhub-card__status" aria-live="polite">
+                  <Loading fallback={statusSkeleton}>
+                    <Show
+                      when={statusPending()}
+                      fallback={
+                        <span class={{ "chat-clawhub-card__installed": readyStatus()?.installed }}>
+                          <Show
+                            when={
+                              readyStatus()?.connection === "connecting" && !readyStatus()?.disabled
+                            }
+                          >
+                            <span class="btn__spinner" aria-hidden="true" />
+                          </Show>
+                          <Show
+                            when={
+                              readyStatus()?.installed &&
+                              !readyStatus()?.disabled &&
+                              (!readyStatus()?.connection ||
+                                readyStatus()?.connection === "connected")
+                            }
+                          >
+                            <Icon name="check" />
+                          </Show>
+                          <span>{statusLabel()}</span>
+                        </span>
+                      }
+                    >
+                      {statusSkeleton}
+                    </Show>
+                  </Loading>
+                </span>
               </span>
             </button>
-            <div class="chat-clawhub-card__actions" aria-live="polite">
-              <Loading fallback={statusSkeleton}>
-                <Show when={statusPending()}>{statusSkeleton}</Show>
-                <Errored
-                  fallback={() => (
-                    <button
-                      type="button"
-                      class="btn chat-clawhub-card__dismiss"
-                      onClick={() => load(true)}
-                    >
-                      {t("chat.clawhub.retryStatus")}
-                    </button>
-                  )}
-                >
-                  {readFailure()}
-                </Errored>
+            <div class="chat-clawhub-card__actions">
+              <button
+                type="button"
+                class="btn chat-clawhub-card__details"
+                onClick={() => props.onOpenListing()}
+              >
+                {t("chat.clawhub.details")}
+              </button>
+              <Loading>
+                <Show when={readFailed() || !online()}>
+                  <button
+                    type="button"
+                    class="btn primary chat-clawhub-card__retry"
+                    onClick={() => {
+                      if (!online()) {
+                        context.gateway.connect();
+                      }
+                      load(true);
+                    }}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </Show>
                 <Show when={readyStatus()}>
                   {(result) => (
                     <Show
                       when={result().installed}
                       fallback={
-                        <button
-                          type="button"
-                          class="btn primary chat-clawhub-card__install"
-                          onClick={() => props.onOpenListing(readyStatus()?.canInstall === true)}
-                        >
-                          {t("pluginsPage.install")}
-                        </button>
+                        <Show when={result().canInstall}>
+                          <button
+                            type="button"
+                            class="btn primary chat-clawhub-card__install"
+                            onClick={() => props.onOpenListing(true)}
+                          >
+                            {t("pluginsPage.install")}
+                          </button>
+                        </Show>
                       }
                     >
-                      <Show
-                        when={result().needsSignIn}
-                        fallback={
-                          <span class="chip chip-ok chat-clawhub-card__installed">
-                            <Icon name="check" />
-                            <span>{t("pluginsPage.installed")}</span>
-                          </span>
-                        }
+                      <button
+                        type="button"
+                        class={[
+                          "btn primary",
+                          {
+                            "chat-clawhub-card__sign-in":
+                              result().connection === "sign-in" && !result().disabled,
+                            "chat-clawhub-card__manage":
+                              result().connection !== "sign-in" || result().disabled,
+                          },
+                        ]}
+                        onClick={() => props.onOpenListing()}
                       >
-                        <button
-                          type="button"
-                          class="btn primary chat-clawhub-card__sign-in"
-                          onClick={() => props.onOpenListing()}
-                        >
-                          {t("chat.clawhub.signIn")}
-                        </button>
-                      </Show>
+                        {t(
+                          result().connection === "sign-in" && !result().disabled
+                            ? "chat.clawhub.connect"
+                            : "chat.clawhub.manage",
+                        )}
+                      </button>
                     </Show>
                   )}
                 </Show>

@@ -38,9 +38,17 @@ const enPluginManagement = {
   },
   chat: {
     clawhub: {
-      retryStatus: "Status unavailable · Retry",
-      viewDetails: "View details",
-      signIn: "Sign in",
+      details: "Details",
+      manage: "Manage",
+      connect: "Connect",
+      checking: "Checking installation",
+      statusUnavailable: "Status unavailable",
+      signInNeeded: "Installed · Sign in needed",
+      connecting: "Waiting for authorization",
+      connected: "Connected",
+      disabled: "Disabled",
+      permissionRequired: "Permission required",
+      unavailable: "Unavailable",
     },
   },
   custodian: {

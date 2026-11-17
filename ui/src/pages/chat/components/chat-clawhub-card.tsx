@@ -63,15 +63,15 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                         </span>
                       </Show>
                     </span>
-                    <Show when={card().description}>
-                      {(description) => <span class="card-sub">{description()}</span>}
-                    </Show>
+                    <span class="chat-clawhub-card__status" aria-live="polite">
+                      <span class="chat-clawhub-card__status-skeleton">
+                        <span class="btn__spinner" aria-hidden="true" />
+                        <span>{t("common.loading")}</span>
+                      </span>
+                    </span>
                   </span>
                 </button>
-                <div class="chat-clawhub-card__actions" aria-live="polite">
-                  <span class="skeleton chat-clawhub-card__status-skeleton" aria-hidden="true" />
-                  <span class="sr-only">{t("common.loading")}</span>
-                </div>
+                <div class="chat-clawhub-card__actions" />
               </div>
             )}
           </Show>
