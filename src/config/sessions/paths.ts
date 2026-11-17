@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
+import { resolveOrdinaryRealpathInWorker } from "../../infra/exec-realpath-worker.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { canAccess, realpathOrResolve } from "../../infra/path-existence.js";
+import { canAccess } from "../../infra/path-existence.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -145,7 +147,7 @@ async function resolveSessionPathAsync<T>(steps: SessionPathResolution<T>): Prom
     const probe = step.value;
     step = steps.next(
       probe.kind === "realpath"
-        ? await realpathOrResolve(path.resolve(probe.path))
+        ? await resolveOrdinaryRealpathInWorker(probe.path, getFsSafeNativeConfig().mode)
         : (await canAccess(probe.path))
           ? probe.path
           : undefined,

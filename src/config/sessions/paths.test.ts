@@ -22,6 +22,30 @@ afterEach(() => {
 
 describe("resolveSessionFilePath cross-root reroot", () => {
   it.skipIf(process.platform === "win32")(
+    "preserves parent normalization inside an expanded symlink target",
+    async () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-parent-")));
+      tempDirs.push(root);
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      const siblingDir = path.join(root, "agents", "worker", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(path.join(siblingDir, "child"), { recursive: true });
+      const expected = path.join(sessionsDir, "record.jsonl");
+      fs.writeFileSync(expected, "main\n");
+      fs.writeFileSync(path.join(siblingDir, "record.jsonl"), "worker\n");
+      fs.symlinkSync(path.join(siblingDir, "child"), path.join(sessionsDir, "link"), "dir");
+      const alias = path.join(sessionsDir, "alias.jsonl");
+      fs.symlinkSync("link/../record.jsonl", alias);
+      const entry = { sessionFile: alias };
+      const options = { sessionsDir, agentId: "worker" };
+
+      expect(resolveSessionFilePathCore("fallback", entry, options)).toBe(expected);
+      await expect(resolveSessionFilePathCoreAsync("fallback", entry, options)).resolves.toBe(
+        expected,
+      );
+    },
+  );
+  it.skipIf(process.platform === "win32")(
     "preserves lexical parent normalization before following links",
     async () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-path-parent-")));
