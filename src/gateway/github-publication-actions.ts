@@ -184,6 +184,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     ((params.action !== "inspect" && (!edit || editsMetadata) && !params.requestId) ||
       (params.requestId && params.requestId !== publication.requestId) ||
       (!editsMetadata &&
+        params.action !== "ready" &&
         params.expectedHeadCommit &&
         params.expectedHeadCommit !== publication.headCommit))
   ) {

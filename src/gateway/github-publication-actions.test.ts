@@ -216,7 +216,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     async (action) => {
       const f = await fixture();
       const actor = action === "close" ? "admin" : "guest";
-      if (action === "edit") {
+      if (action === "edit" || action === "ready") {
         f.state.head.sha = "b".repeat(40);
       }
       const args =
@@ -226,7 +226,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
               expectedTitle: f.state.title,
               expectedHeadCommit: f.state.head.sha,
             }
-          : {};
+          : { expectedHeadCommit: f.state.head.sha };
       if (action === "request_review" || action === "ready") {
         f.onRead(async () => {
           mocks.matchesIdentity.mockReturnValue(false);
@@ -488,58 +488,60 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.state.title).toBe("Human title");
   });
 
-  it("rejects metadata edits when the live target or selected publisher changes", async () => {
-    const f = await fixture();
-    const original = structuredClone(f.state);
-    const identity = await mocks.prepareIdentity();
-    const actual = await vi.importActual<typeof import("../agents/github-tool-identity.js")>(
-      "../agents/github-tool-identity.js",
-    );
-    mocks.matchesIdentity.mockImplementation(actual.matchesPreparedGitHubPublicationIdentity);
-    const config = { ...f.config, tools: { github: { profileId: identity.profileId } } };
-    for (const change of ["url", "repository", "branch", "publisher", "profile"]) {
-      Object.assign(f.state, structuredClone(original));
-      f.state.head.sha = "b".repeat(40);
-      setRuntimeConfigSnapshot(config);
-      mocks.prepareIdentity.mockResolvedValue(
-        change === "publisher"
-          ? { ...identity, account: { ...identity.account, accountId: 99 } }
-          : identity,
+  it.each(["edit", "ready"])(
+    "rejects %s when the live target or selected publisher changes",
+    async (action) => {
+      const f = await fixture();
+      const original = structuredClone(f.state);
+      const identity = await mocks.prepareIdentity();
+      const actual = await vi.importActual<typeof import("../agents/github-tool-identity.js")>(
+        "../agents/github-tool-identity.js",
       );
-      f.onRead(async () => {
-        if (change === "url") {
-          f.state.html_url += "0";
-        }
-        if (change === "repository") {
-          f.state.base.repo.full_name = "other/repository";
-        }
-        if (change === "branch") {
-          f.state.head.ref = "other-branch";
-        }
-        if (change === "profile") {
-          setRuntimeConfigSnapshot({
-            ...config,
-            tools: { github: { profileId: "ghp_22222222222222222222222222222222" } },
-          });
-        }
-      });
-      await expect(
-        f.action("guest", "edit", {
-          expectedHeadCommit: f.state.head.sha,
-          expectedTitle: f.state.title,
-          title: "New title",
-        }),
-        change,
-      ).rejects.toThrow(
-        change === "publisher"
-          ? "GitHub publication identity changed"
-          : change === "profile"
-            ? "publisher changed"
-            : "invalid pull request state",
-      );
-      expect(f.writes, change).toEqual([]);
-    }
-  });
+      mocks.matchesIdentity.mockImplementation(actual.matchesPreparedGitHubPublicationIdentity);
+      const config = { ...f.config, tools: { github: { profileId: identity.profileId } } };
+      for (const change of ["url", "repository", "branch", "publisher", "profile"]) {
+        Object.assign(f.state, structuredClone(original));
+        f.state.head.sha = "b".repeat(40);
+        setRuntimeConfigSnapshot(config);
+        mocks.prepareIdentity.mockResolvedValue(
+          change === "publisher"
+            ? { ...identity, account: { ...identity.account, accountId: 99 } }
+            : identity,
+        );
+        f.onRead(async () => {
+          if (change === "url") {
+            f.state.html_url += "0";
+          }
+          if (change === "repository") {
+            f.state.base.repo.full_name = "other/repository";
+          }
+          if (change === "branch") {
+            f.state.head.ref = "other-branch";
+          }
+          if (change === "profile") {
+            setRuntimeConfigSnapshot({
+              ...config,
+              tools: { github: { profileId: "ghp_22222222222222222222222222222222" } },
+            });
+          }
+        });
+        await expect(
+          f.action("guest", action, {
+            expectedHeadCommit: f.state.head.sha,
+            ...(action === "edit" ? { expectedTitle: f.state.title, title: "New title" } : {}),
+          }),
+          change,
+        ).rejects.toThrow(
+          change === "publisher"
+            ? "GitHub publication identity changed"
+            : change === "profile"
+              ? "publisher changed"
+              : "invalid pull request state",
+        );
+        expect(f.writes, change).toEqual([]);
+      }
+    },
+  );
 
   it("reports a head change after PATCH without retrying or denying that metadata was applied", async () => {
     const f = await fixture();
@@ -561,6 +563,44 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.state.title).toBe("New title");
     expect(f.readReceipt(f.publication.requestId)).toEqual(receipt);
   });
+
+  it.each(["local", "repository"] as const)(
+    "readies the reviewed current %s head without rewriting its historical publication",
+    async (backend) => {
+      const f = await fixture(backend);
+      const receipt = structuredClone(f.readReceipt(f.publication.requestId));
+      const localHead = await f.local?.git("rev-parse", "HEAD");
+      const checkpointsBefore = checkpoint.mock.calls.length;
+      const headCommit = "b".repeat(40);
+      f.state.head.sha = headCommit;
+      expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+        headCommit,
+        publication: f.publication,
+      });
+      for (const extra of [
+        { expectedHeadCommit: f.publication.headCommit },
+        { requestId: randomUUID() },
+        { requestId: undefined },
+      ]) {
+        await expect(
+          f.action("guest", "ready", { expectedHeadCommit: headCommit, ...extra }),
+        ).rejects.toThrow(/head changed|publication changed/u);
+      }
+      const args = { action: "ready", ...f.expected, expectedHeadCommit: headCommit };
+      f.loseResponse();
+      for (const raw of [false, true]) {
+        expect((await f.invoke("guest", args, SESSION_KEY, { raw })).details).toMatchObject({
+          state: "open",
+          headCommit,
+          publication: f.publication,
+        });
+      }
+      expect(f.writes.map((write) => write.action)).toEqual(["ready"]);
+      expect(f.readReceipt(f.publication.requestId)).toEqual(receipt);
+      expect(checkpoint.mock.calls.length).toBe(checkpointsBefore);
+      expect(await f.local?.git("rev-parse", "HEAD")).toBe(localHead);
+    },
+  );
 
   it("rejects guest readiness for another publishing target, foreign work or an unbound workspace", async () => {
     const f = await fixture();
@@ -738,7 +778,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect(f.writes, `${action}: ${refusal}`).toEqual([]);
     }
     f.state.head.sha = "b".repeat(40);
-    for (const action of ["inspect", "edit", "ready", "request_review", "close", "merge"]) {
+    for (const action of ["inspect", "edit", "request_review", "close", "merge"]) {
       await expect(
         f.action("admin", action, {
           expectedHeadCommit: f.state.head.sha,
