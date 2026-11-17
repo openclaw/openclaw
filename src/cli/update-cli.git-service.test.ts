@@ -22,6 +22,12 @@ import {
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 import { createGlobalUserServiceCommand } from "./update-cli/update-command-service-state.test-support.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 const f = createUpdateCliFixture();

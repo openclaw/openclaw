@@ -93,7 +93,9 @@ that budget because a filesystem can decline reflinking. Insufficient space
 reports the exact required, available, and missing bytes. Copies of at least
 256 MiB log their byte count, file count, elapsed time, and throughput.
 
-Replaced files remain as `<file>.pre-<version>`. Startup prunes older unpinned
+Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
+them, so two builds of one version each keep their own predecessor. Builds without a
+build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
 generations only for files it owns. It leaves retired startup-migration backups,
 SQLite `.bak` files, and media-persistence recovery images in place, reporting
 file counts and bytes within the inspected copy scope. These are operator or
