@@ -164,6 +164,25 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
+With `--no-restart`, the package is replaced under a running Gateway, and that
+Gateway restarts itself when its installation check sees the new files. On a
+Linux systemd service the restart can land while a maintenance stop, such as
+update Doctor's, is draining and stopping the Gateway. The stop then finds a
+different process than the one it inspected. If the latest shutdown the Gateway
+recorded belongs to the inspected process and names the replaced installation,
+the stop inspects the service once more, rechecks its ownership and definition,
+records a warning in update history, and drains and stops the restarted process.
+The update continues. A process change without that record is still refused with
+`Gateway process changed during maintenance drain`, and so is a second change.
+A stop that inspects the service during systemd's restart delay (`RestartSec=5`
+in the managed unit), while neither process is running, is also still refused. Its
+service ownership check then reports the service as unavailable.
+
+This handling is part of the new version's maintenance stop, which the installed
+updater runs from the replaced package. It applies to the first update to a
+release that contains it, provided the running Gateway records its
+installation-replacement restart.
+
 Maintenance drain uses the service's local credentials, including an existing
 paired operator identity when no shared token or password is configured. It does
 not create an identity or request new pairing. Older installed updaters that omit
