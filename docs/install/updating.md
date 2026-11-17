@@ -357,9 +357,13 @@ For released updaters that still rehearse Doctor on private state, the candidate
 snapshot worker preserves file-backed cold transcript rows and projects their
 payloads into the private `sessions/cold/` directories. Immutable regular files
 use hard links, with a reflink or byte copy when linking is unavailable. Existing
-files are never rewritten or chmodded through those links. Rehearsal reads keep
-the normal archive integrity checks; a corrupt payload remains corrupt in the
-copy, and a missing referenced file refuses capture. The candidate inventory
+files are never rewritten or chmodded through those links. Windows always copies,
+because removing a hard link on a filesystem without POSIX delete semantics, such
+as an SMB share, clears the read-only attribute of the shared live file.
+Rehearsal reads keep the normal archive integrity checks; a corrupt payload
+remains corrupt in the copy, and a referenced file already missing from live
+state stays missing. Capture continues with a snapshot warning, so only a Doctor
+repair that reads that archive fails, as it would on live state. The candidate inventory
 adds cold-file bytes to the historical `pluginBytes` allowance so released
 parents budget the full copy fallback and its I/O time. Inventory reads archive
 names from a read-only database snapshot and measures the referenced files;

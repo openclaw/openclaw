@@ -231,12 +231,12 @@ export async function readUpdateCandidateStateInventoryInProcess(
     });
     const coldArchives = await import("./update-candidate-cold-archives.worker.js");
     await fs.writeFile(planPath, JSON.stringify(plugins));
+    const cold = await coldArchives.measureColdArchiveBytes(files, input.targetStateDir);
     return {
       databases: files,
-      pluginBytes:
-        plugins.bytes + (await coldArchives.measureColdArchiveBytes(files, input.targetStateDir)),
+      pluginBytes: plugins.bytes + cold.bytes,
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
-      warnings: plugins.warnings,
+      warnings: [...plugins.warnings, ...cold.warnings],
     };
   };
   if (await updateStateDatabaseExists(shared)) {
