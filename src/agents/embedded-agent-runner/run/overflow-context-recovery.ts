@@ -528,9 +528,12 @@ async function recoverContextPressure(
       ? `${reasonClass === "timeout" ? "Auto-compaction timed out" : providerUnavailable ? "Auto-compaction could not reach the model provider" : "Auto-compaction failed"} ${failurePhase}. Try again or run /compact.` +
         renderRecoverySideEffectCaution(input.attempt)
       : CONTEXT_OVERFLOW_ERROR_MESSAGE + renderRecoverySideEffectCaution(input.attempt);
-  log.warn(
-    `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
-      `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
-  );
+  // Declined maintenance is reported by its owner; it does not block the run.
+  if (!maintenance) {
+    log.warn(
+      `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
+        `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
+    );
+  }
   return { action: "surface", kind, errorText: failureText, userText };
 }
