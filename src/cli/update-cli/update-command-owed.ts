@@ -19,6 +19,7 @@ import { CLI_NAME } from "../cli-name.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   listOwedPluginSteps,
+  pluginPhaseConverged,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins-internals.js";
 import {
@@ -128,7 +129,7 @@ export function retryOwedPluginSteps(
   plugins: PostCorePluginUpdateResult | undefined,
   doctorCompleted: boolean,
 ): OwedStepRetries {
-  const converged = plugins?.status === "ok" || plugins?.status === "warning";
+  const converged = pluginPhaseConverged(plugins);
   const owedNow = new Map<string, string>(
     listOwedPluginSteps(plugins).map((step) => [step.id, step.reason]),
   );

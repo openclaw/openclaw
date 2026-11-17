@@ -151,6 +151,17 @@ export function listOwedPluginSteps(
 }
 
 /**
+ * Whether a kept plugin phase finished convergence. One deferred by a config conflict rolled its
+ * plugin work back, so it proves nothing about what an earlier run owes.
+ */
+export function pluginPhaseConverged(plugins: PostCorePluginUpdateResult | undefined): boolean {
+  return (
+    (plugins?.status === "ok" || plugins?.status === "warning") &&
+    !plugins.warnings?.some((warning) => warning.reason === "plugin-config-conflict")
+  );
+}
+
+/**
  * A cohort rollback restores the previous plugin set after most failures. These are different:
  * config, Doctor, child processes or update authority are unsettled, so the update still fails.
  */

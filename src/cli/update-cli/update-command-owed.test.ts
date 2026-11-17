@@ -62,3 +62,39 @@ it.each([
     );
   },
 );
+
+it.each([
+  { phase: "converged", warnings: [], owed: false },
+  {
+    phase: "was deferred by a config conflict",
+    warnings: [{ reason: "plugin-config-conflict", message: "config changed", guidance: [] }],
+    owed: true,
+  },
+])(
+  "an earlier update's plugin convergence stays owed=$owed when repair's plugin phase $phase",
+  async ({ warnings, owed }) => {
+    const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-owed-") } };
+    // Runs are ordered by creation time.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
+    const earlier = ledger.createUpdateRun({ trigger: "cli" }, options).runId;
+    ledger.finishUpdateRun(earlier, { status: "succeeded" }, options);
+    const step = { id: "plugin-convergence" as const, reason: "plugin registry exploded" };
+    ledger.recordUpdateRunOwedStep(earlier, step.id, step.reason, options);
+    vi.advanceTimersByTime(1_000);
+    const run = { runId: ledger.createUpdateRun({ trigger: "cli" }, options).runId, ...options };
+
+    const reported = await settleOwedStepsAfterFinalization(run, {
+      root: "/unused",
+      plugins: createPostCorePluginUpdateResult({
+        status: warnings.length ? "warning" : "ok",
+        warnings,
+      }),
+      timeoutMs: 1_000,
+    });
+
+    expect(reported).toEqual(owed ? [step] : []);
+    expect(ledger.readOwedUpdateSteps(options)).toEqual(
+      owed ? [{ ...step, runId: run.runId }] : [],
+    );
+  },
+);
