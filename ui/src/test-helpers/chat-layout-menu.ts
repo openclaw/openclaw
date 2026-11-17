@@ -113,11 +113,21 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
     abandoned = true;
     return null;
   });
+  const item = menu
+    .getByRole("menuitem", { name, exact: true })
+    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
+  let beforeClickRead = false;
   try {
-    await menu
-      .getByRole("menuitem", { name, exact: true })
-      .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
-      .click();
+    if (observation) {
+      beforeClickRead = await withTimeout(
+        item.evaluate((target, recorder) => {
+          recorder?.captureBeforeClick(target);
+          return recorder !== null;
+        }, observation),
+        500,
+      ).catch(() => false);
+    }
+    await item.click();
     await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
   } catch (error) {
     await rethrowWithControlUiE2eFailureFacts(
@@ -125,6 +135,8 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
       error,
       "layoutMenuFactsRead",
       async () => ({
+        // A late diagnostic evaluation must not be mistaken for a pre-click sample.
+        layoutMenuBeforeClickRead: beforeClickRead,
         layoutMenu: observation
           ? await observation.evaluate((recorder) => recorder?.read() ?? null)
           : null,
