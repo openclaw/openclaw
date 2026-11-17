@@ -214,8 +214,20 @@
   margin: 0;
 }
 
+/* The dictation row eases in instead of pushing the draft down in one frame. Clipping
+   drops the flex minimum height so the row can start from 0. */
 .agent-chat__input--dictating .agent-chat__composer-status-stack {
+  interpolate-size: allow-keywords;
+  overflow: hidden;
   padding: 12px 14px 0;
+  transition: 0.18s;
+}
+
+@starting-style {
+  .agent-chat__composer-status-stack {
+    block-size: 0;
+    opacity: 0;
+  }
 }
 
 /* Capture mode pares the footer back to the two decisions that matter: stop
@@ -685,8 +697,7 @@
 
 /* The dictation timeline takes the rest of the row, so it grows with the composer. */
 .agent-chat__dictation-status .agent-chat__voice-activity {
-  flex: 1 1 0;
-  width: auto;
+  flex: 1;
 }
 
 .chat-controls__account-selection {
@@ -708,7 +719,6 @@
      connecting. Talk's text status is screen-reader-only, so the shape carries it. */
   .agent-chat__voice-activity[data-status="listening"]::before {
     background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 6px repeat-x;
-    opacity: 0.8;
   }
 
   .agent-chat__voice-activity[data-status="thinking"]::after {
@@ -716,10 +726,6 @@
     inset: 0 33%;
     background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 12px repeat-x;
     content: "";
-  }
-
-  .agent-chat__voice-activity[data-status="connecting"]::after {
-    display: none;
   }
 
   .chat-send-btn--voice-live .agent-chat__voice-activity,
@@ -1204,6 +1210,11 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Phones: the timeline alone shows listening. */
+  .agent-chat__dictation-phase--listening {
+    display: none;
+  }
+
   .agent-chat__composer-alert .callout__dismiss {
     width: 44px;
     height: 44px;

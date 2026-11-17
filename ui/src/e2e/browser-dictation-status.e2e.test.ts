@@ -239,7 +239,8 @@ suite.define(() => {
             const phase = composer.locator(".agent-chat__dictation-phase");
             const stop = composer.getByRole("button", { name: "Stop and keep text" });
             const send = composer.getByRole("button", { name: "Send", exact: true });
-            await expect.poll(() => phase.isVisible()).toBe(true);
+            // Phones drop the label; the timeline alone shows listening.
+            await expect.poll(() => phase.isVisible()).toBe(false);
             await expect
               .poll(() => phase.textContent().then((text) => text?.trim()))
               .toBe("Listening…");
@@ -253,7 +254,7 @@ suite.define(() => {
             const layout = await composer.evaluate((element) => {
               const composerBox = element.getBoundingClientRect();
               const controls = [
-                ".agent-chat__dictation-phase",
+                ".agent-chat__dictation-status .agent-chat__voice-activity",
                 ".chat-mobile-dictation-action .chat-send-btn--dictating",
                 ".chat-send-btn--dictation-commit",
               ].map((selector) => {

@@ -33,9 +33,10 @@ export function ActiveDictationStatus(props: {
     return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
   });
   return (
-    <Show when={phase()} keyed>
-      {(current) => (
-        <div class="agent-chat__composer-status-stack">
+    // The stack outlives phase changes, so the row eases in once per dictation.
+    <div class="agent-chat__composer-status-stack">
+      <Show when={phase()} keyed>
+        {(current) => (
           <div
             class={[
               "agent-chat__dictation-status",
@@ -49,6 +50,9 @@ export function ActiveDictationStatus(props: {
                 "agent-chat__dictation-phase",
                 { "agent-chat__dictation-phase--listening text-shimmer": current === "listening" },
               ]}
+              // Listening can last a while, so its shimmer sweeps slower than running work.
+              // Set here rather than in CSS: the shared stylesheet is at its size ceiling.
+              style={{ "--text-shimmer-duration": "4s" }}
             >
               {current === "connecting" ? (
                 <DictationStartingLabel />
@@ -64,8 +68,8 @@ export function ActiveDictationStatus(props: {
               inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
             />
           </div>
-        </div>
-      )}
-    </Show>
+        )}
+      </Show>
+    </div>
   );
 }
