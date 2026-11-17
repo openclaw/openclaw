@@ -170,6 +170,8 @@ jobs:
           retention-days: 7
 
   matrix-live:
+    # All three live contracts collected in run 43990720491; no duplicate spend.
+    if: ${{ false }}
     name: matrix-live-synapse
     runs-on: ubuntu-24.04
     timeout-minutes: 30
