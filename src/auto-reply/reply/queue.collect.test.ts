@@ -388,7 +388,7 @@ describe("followup queue collect routing", () => {
         const stoppedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
         await vi.advanceTimersByTimeAsync(5);
         expect(sources.map((source) => source.heartbeat.mock.calls.length)).toEqual(stoppedCounts);
-        await vi.advanceTimersByTimeAsync(15);
+        await vi.advanceTimersByTimeAsync(515);
         expect(attempts).toBe(3);
         const resumedCounts = sources.map((source) => source.heartbeat.mock.calls.length);
         await vi.advanceTimersByTimeAsync(40);
@@ -2024,6 +2024,7 @@ describe("followup queue collect routing", () => {
         // Drain the first rejection while a late successful admission remains blocked.
         await vi.advanceTimersByTimeAsync(0);
         releaseFirstAdmission.resolve();
+        await vi.advanceTimersByTimeAsync(250);
         await withinTest(Promise.all(settlements), signal);
 
         expect(errors).toHaveLength(1);
@@ -2040,6 +2041,7 @@ describe("followup queue collect routing", () => {
       } finally {
         releaseFirstAdmission.resolve();
         clearFollowupQueue(q.key);
+        await vi.advanceTimersByTimeAsync(250);
         await Promise.allSettled(settlements);
         vi.useRealTimers();
       }

@@ -1,0 +1,3 @@
+293
+# Pending queued-input custody: replay before abandonment, bounded backoff and age floors, explicit consumption, pre-adoption runner failure, and shutdown cancellation.
+# Seven owner/consumer test files, exact net LF growth; existing fixture structure retained instead of unrelated source-test refactoring.
