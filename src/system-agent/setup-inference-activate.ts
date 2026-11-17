@@ -53,7 +53,7 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
-  validateSetupInferenceOwnerEvidence,
+  validateSetupInferenceEvidence,
   validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
@@ -491,14 +491,9 @@ async function verifyAndActivateCandidate(
     return failure(verification);
   }
   if ("auth" in verification) {
-    const ownerFailure = validateSetupInferenceOwnerEvidence({
-      runner: route.runner,
-      configuredHarnessId:
-        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-      auth: verification.auth,
-    });
-    if (ownerFailure) {
-      return failure(ownerFailure);
+    const evidenceFailure = validateSetupInferenceEvidence(route, verification);
+    if (evidenceFailure) {
+      return failure(evidenceFailure);
     }
   }
   const savedCredential = staged.authProfileId

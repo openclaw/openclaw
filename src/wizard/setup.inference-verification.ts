@@ -233,6 +233,7 @@ export async function offerLiveModelVerification(params: {
             config,
             agentId,
             runtime: params.runtime,
+            candidateSetup: true,
             ...(savedProfile?.credential.setup?.replacement
               ? {
                   onVerifiedExecution: (binding: SystemAgentVerifiedInferenceBinding) => {

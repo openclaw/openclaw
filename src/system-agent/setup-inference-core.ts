@@ -46,6 +46,30 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
  * Local servers, CLI runners and native harnesses keep the full budget for startup.
  */
 export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
+/**
+ * The tool-free check fits small windows, but a first real turn also sends the system prompt
+ * and tool schemas (measured 11.8K to 18.5K tokens), so setup refuses windows below this.
+ * Same floor guided Ollama and LM Studio setup use when picking a model.
+ */
+const SETUP_INFERENCE_MIN_CONTEXT_TOKENS = 16_384;
+
+/**
+ * Floor for a primary model being chosen in setup. Chat, existing routes and update repair keep the
+ * runtime guard; utility models run a reduced prompt and keep their own minimums.
+ */
+export function resolveSetupContextFloorError(
+  route: { modelLabel: string; modelTarget?: "utility" },
+  contextTokens: number | undefined,
+): string | undefined {
+  if (
+    route.modelTarget === "utility" ||
+    contextTokens === undefined ||
+    contextTokens >= SETUP_INFERENCE_MIN_CONTEXT_TOKENS
+  ) {
+    return undefined;
+  }
+  return `${route.modelLabel} has an effective context window of ${contextTokens} tokens; OpenClaw setup needs at least ${SETUP_INFERENCE_MIN_CONTEXT_TOKENS}. Raise the model's context limit (the server's context size, and contextWindow or contextTokens in its model settings), or choose a larger model.`;
+}
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
@@ -365,11 +389,26 @@ export function describeSetupInferenceError(
       };
 }
 
-export function validateSetupInferenceOwnerEvidence(params: {
-  runner: "cli" | "embedded";
-  configuredHarnessId?: string;
-  auth: AgentExecutionAuthBinding;
-}): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+/** Activation evidence: the setup context floor, then a runtime owner OpenClaw can reuse. */
+export function validateSetupInferenceEvidence(
+  route: {
+    runner: "cli" | "embedded";
+    agentHarnessRuntimeOverride?: string;
+    modelLabel: string;
+    modelTarget?: "utility";
+  },
+  verification: { auth: AgentExecutionAuthBinding; contextTokens?: number },
+): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+  const contextFloorError = resolveSetupContextFloorError(route, verification.contextTokens);
+  if (contextFloorError) {
+    return { ok: false, status: "unavailable", error: contextFloorError };
+  }
+  const params = {
+    runner: route.runner,
+    configuredHarnessId:
+      route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+    auth: verification.auth,
+  };
   let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&

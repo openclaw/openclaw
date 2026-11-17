@@ -57,6 +57,7 @@ export type AgentRunResultView = {
     timeoutPhase?: EmbeddedAgentRunResult["meta"]["timeoutPhase"];
     providerStarted?: boolean;
     executionTrace?: { winnerProvider?: string; winnerModel?: string };
+    agentMeta?: { contextTokens?: number };
     finalAssistantVisibleText?: string;
     finalAssistantRawText?: string;
     livenessState?: string;

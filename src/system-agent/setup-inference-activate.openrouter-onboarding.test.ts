@@ -33,6 +33,48 @@ afterEach(async () => {
   await temp?.restore();
 });
 
+it.each([8_192, 32_768])("activation applies the context floor (%i)", async (contextTokens) => {
+  const config = {
+    agents: { defaults: { model: { primary: "openrouter/auto" } }, entries: { main: {} } },
+    models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
+  };
+  await fs.writeFile(configPath, JSON.stringify(config));
+  vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+    params.onSuccessfulAuthBinding?.({
+      agentHarnessId: "openclaw",
+      authFingerprint: "synthetic-auth-fingerprint",
+    });
+    return {
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "OK",
+        agentMeta: {
+          sessionId: "probe",
+          provider: "openrouter",
+          model: "openrouter/auto",
+          contextTokens,
+        },
+        executionTrace: { winnerProvider: "openrouter", winnerModel: "openrouter/auto" },
+      },
+    };
+  });
+  vi.spyOn(configIO, "readConfigFileSnapshot").mockImplementation(readSnapshot);
+  const result = await activateSetupInference({
+    kind: "existing-model",
+    modelRef: "openrouter/auto",
+    surface: "gateway",
+    runtime: createSystemAgentTestRuntime().runtime,
+  });
+  const error = result.ok ? "" : result.error;
+  // The fixture must pass owner validation, so only the floor can refuse it.
+  expect(error).not.toContain("did not report an owner");
+  if (contextTokens < 16_384) {
+    expect(error).toContain("openrouter/auto has an effective context window of 8192 tokens");
+  } else {
+    expect(error).not.toContain("effective context window");
+  }
+});
+
 it.each([
   ["openrouter/auto", "openrouter/auto", undefined],
   ["openrouter/auto@openrouter:default", "openrouter/auto", undefined],

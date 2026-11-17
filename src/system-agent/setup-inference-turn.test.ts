@@ -24,14 +24,17 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import { resolveSetupContextFloorError } from "./setup-inference-core.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
   runSetupInferenceTurn,
+  verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import * as verifiedInference from "./verified-inference.js";
@@ -126,6 +129,72 @@ describe("setup inference plugin ownership", () => {
       ok: true,
       text: "OK",
     });
+  });
+
+  it.each([
+    [8_192, true, false],
+    [16_384, true, true],
+    [8_192, undefined, true],
+  ] as const)(
+    "checks a %i-token runtime context against the setup floor (candidate: %s)",
+    async (contextTokens, candidateSetup, ok) => {
+      const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
+      config.models = createFixtureProviderModels("http://127.0.0.1:18299/v1");
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => ({
+        payloads: [{ text: "OK" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: params.sessionId,
+            provider: params.provider ?? "fixture",
+            model: params.model ?? "direct-model",
+            contextTokens,
+          },
+          executionTrace: { winnerProvider: params.provider, winnerModel: params.model },
+        },
+      }));
+      const result = await verifySetupInferenceConfig({
+        config,
+        agentId: "main",
+        runtime: {
+          log: vi.fn<RuntimeEnv["log"]>(),
+          error: vi.fn<RuntimeEnv["error"]>(),
+          exit: vi.fn<RuntimeEnv["exit"]>(),
+        },
+        ...(candidateSetup ? { candidateSetup } : {}),
+      });
+      expect(result.ok, result.ok ? undefined : result.error).toBe(ok);
+      if (!result.ok) {
+        expect(result.status).toBe("unavailable");
+        expect(result.error).toContain(
+          "fixture/direct-model has an effective context window of 8192 tokens",
+        );
+        expect(result.error).toContain("at least 16384");
+      }
+    },
+  );
+
+  it("keeps utility models out of the primary context floor", () => {
+    const utility = { modelLabel: "apple/on-device", modelTarget: "utility" as const };
+    expect(resolveSetupContextFloorError(utility, 8_192)).toBeUndefined();
+    expect(resolveSetupContextFloorError({ modelLabel: "local/nemo" }, 8_192)).toContain(
+      "at least 16384",
+    );
+  });
+
+  it("leaves the context floor to setup callers, not the shared probe", async () => {
+    const route = embeddedRoute("openclaw");
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
+      const reply = probeReply(route);
+      const agentMeta = {
+        sessionId: "probe",
+        provider: route.provider,
+        model: route.model,
+        contextTokens: 8_192,
+      };
+      return { ...reply, meta: { ...reply.meta, agentMeta } };
+    });
+    await expect(runProbe(route)).resolves.toMatchObject({ ok: true, contextTokens: 8_192 });
   });
 
   it.each([
