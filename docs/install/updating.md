@@ -473,6 +473,15 @@ updaters. A different profile's database version must not block that inspection.
 The candidate worker must contain this repair; an older updater inspecting with
 its own worker still needs an updated runtime.
 
+For released updaters that still rehearse Doctor on private state, the candidate
+snapshot worker verifies and embeds file-backed cold transcript archives in the
+copied databases. Rehearsal reads then use those embedded payloads without
+depending on the live `sessions/cold/` directories. Missing or corrupt live
+archives still refuse the snapshot. This requires the candidate worker to contain
+the fix; no schema or updater protocol change is needed. Embedding adds archive
+reads and snapshot bytes; older updaters retain their shipped space and time
+allowances.
+
 Private Doctor and post-core workers validate command fields before entering maintenance.
 The delegated executor admits its grant data separately and still checks live process and
 installation ownership before effects. Callbacks and live deadline objects stay in the

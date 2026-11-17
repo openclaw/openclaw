@@ -541,6 +541,8 @@ export async function snapshotUpdateCandidateState(
   const { inspectSqliteSchemaHeaderInProcess } =
     await import("./sqlite-schema-header-inspection.js");
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
+  const { embedSessionColdArchivesInSnapshot } =
+    await import("../config/sessions/session-cold-storage-backup.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
@@ -652,69 +654,67 @@ export async function snapshotUpdateCandidateState(
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,
       onProgress: progress.onProgress,
-      ...(file === shared
-        ? {
-            transform: (db: DatabaseSync) => {
-              contentVersion = readStateSchemaContentVersion(db);
-              // Preserve the known source selector before rehearsal changes the state root.
-              // The migration still refuses an unmatched historical partition.
-              if (sourceStoreKey && tableExists(db, "config_machine_state")) {
-                migrateCronDefaultStoreIdentity(db, {
-                  previousVersion: contentVersion ?? userVersion,
-                  legacyDefaultStoreKey: sourceStoreKey,
-                });
-              }
-              const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
-              execApprovals.rebaseReceipt(db);
-              // Source process leases cannot own the independently opened rehearsal copy.
-              for (const table of leaseTables) {
-                if (tableExists(db, table)) {
-                  executeSqliteQuerySync(db, queries.deleteFrom(table));
-                }
-              }
-              for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
-                const rebound = targetPath(source);
-                const reboundStored = path.relative(input.targetStateDir, rebound);
-                const resolvedRebound = resolveOpenClawRegisteredAgentDatabasePath(
-                  shared,
-                  reboundStored,
-                );
-                // Extended-length \\?\ and plain spellings of one registered database
-                // are the same duplicate pair as a legacy absolute/relative pair.
-                const sameRegisteredDatabase =
-                  source === resolvedRebound ||
-                  (process.platform === "win32" &&
-                    normalizeWindowsPathPreservingCase(source) ===
-                      normalizeWindowsPathPreservingCase(resolvedRebound));
-                if (stored !== reboundStored && sameRegisteredDatabase) {
-                  // A legacy absolute/relative pair names exactly the same source.
-                  // Collapse only that duplicate in the copy before its unique-key update.
-                  executeSqliteQuerySync(
-                    db,
-                    queries
-                      .deleteFrom("agent_databases")
-                      .where("path", "=", stored)
-                      .where(
-                        "agent_id",
-                        "in",
-                        queries
-                          .selectFrom("agent_databases")
-                          .select("agent_id")
-                          .where("path", "=", reboundStored),
-                      ),
-                  );
-                }
-                executeSqliteQuerySync(
-                  db,
-                  queries
-                    .updateTable("agent_databases")
-                    .set({ path: reboundStored })
-                    .where("path", "=", stored),
-                );
-              }
-            },
+      transform: async (db: DatabaseSync) => {
+        if (file !== shared) {
+          // Released updaters need cold payloads bound to the private copy's rows.
+          await embedSessionColdArchivesInSnapshot({ database: db, sourceStorePath: file });
+          return;
+        }
+        contentVersion = readStateSchemaContentVersion(db);
+        // Preserve the known source selector before rehearsal changes the state root.
+        // The migration still refuses an unmatched historical partition.
+        if (sourceStoreKey && tableExists(db, "config_machine_state")) {
+          migrateCronDefaultStoreIdentity(db, {
+            previousVersion: contentVersion ?? userVersion,
+            legacyDefaultStoreKey: sourceStoreKey,
+          });
+        }
+        const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
+        execApprovals.rebaseReceipt(db);
+        // Source process leases cannot own the independently opened rehearsal copy.
+        for (const table of leaseTables) {
+          if (tableExists(db, table)) {
+            executeSqliteQuerySync(db, queries.deleteFrom(table));
           }
-        : {}),
+        }
+        for (const { stored, source } of collectRegisteredPaths(db, shared, files)) {
+          const rebound = targetPath(source);
+          const reboundStored = path.relative(input.targetStateDir, rebound);
+          const resolvedRebound = resolveOpenClawRegisteredAgentDatabasePath(shared, reboundStored);
+          // Extended-length \\?\ and plain spellings of one registered database
+          // are the same duplicate pair as a legacy absolute/relative pair.
+          const sameRegisteredDatabase =
+            source === resolvedRebound ||
+            (process.platform === "win32" &&
+              normalizeWindowsPathPreservingCase(source) ===
+                normalizeWindowsPathPreservingCase(resolvedRebound));
+          if (stored !== reboundStored && sameRegisteredDatabase) {
+            // A legacy absolute/relative pair names exactly the same source.
+            // Collapse only that duplicate in the copy before its unique-key update.
+            executeSqliteQuerySync(
+              db,
+              queries
+                .deleteFrom("agent_databases")
+                .where("path", "=", stored)
+                .where(
+                  "agent_id",
+                  "in",
+                  queries
+                    .selectFrom("agent_databases")
+                    .select("agent_id")
+                    .where("path", "=", reboundStored),
+                ),
+            );
+          }
+          executeSqliteQuerySync(
+            db,
+            queries
+              .updateTable("agent_databases")
+              .set({ path: reboundStored })
+              .where("path", "=", stored),
+          );
+        }
+      },
     });
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
