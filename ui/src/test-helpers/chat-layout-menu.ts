@@ -1,5 +1,8 @@
-import type { Locator, Page } from "playwright";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import type { JSHandle, Locator, Page } from "playwright";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { observeChatLayoutMenu } from "./chat-layout-menu-diagnostics.ts";
+import { rethrowWithControlUiE2eFailureFacts } from "./control-ui-e2e-diagnostics.ts";
 
 const button = (scope: Locator, name: string | RegExp) =>
   scope.getByRole("button", { name, exact: true });
@@ -87,12 +90,51 @@ export async function openChatPanels(
   return trigger;
 }
 
+const stopMenuObservation = (observation: JSHandle<ReturnType<typeof observeChatLayoutMenu>>) =>
+  withTimeout(
+    observation
+      .evaluate((recorder) => recorder?.stop())
+      .catch(() => {})
+      .then(() => observation.dispose()),
+    500,
+  ).catch(() => {});
+
 async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<void> {
-  await menu
-    .getByRole("menuitem", { name, exact: true })
-    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
-    .click();
-  await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+  let abandoned = false;
+  const pendingObservation = menu.evaluateHandle(observeChatLayoutMenu);
+  void pendingObservation
+    .then(async (late) => {
+      if (abandoned) {
+        await stopMenuObservation(late);
+      }
+    })
+    .catch(() => {});
+  const observation = await withTimeout(pendingObservation, 500).catch(() => {
+    abandoned = true;
+    return null;
+  });
+  try {
+    await menu
+      .getByRole("menuitem", { name, exact: true })
+      .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
+      .click();
+    await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+  } catch (error) {
+    await rethrowWithControlUiE2eFailureFacts(
+      menu.page(),
+      error,
+      "layoutMenuFactsRead",
+      async () => ({
+        layoutMenu: observation
+          ? await observation.evaluate((recorder) => recorder?.read() ?? null)
+          : null,
+      }),
+    );
+  } finally {
+    if (observation) {
+      await stopMenuObservation(observation);
+    }
+  }
 }
 
 async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): Promise<void> {

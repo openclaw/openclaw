@@ -2601,7 +2601,12 @@ state-owning account after that stop, then have the service owner start the unit
 On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
-references and unverified processes still preserve the affected artifacts.
+references and unverified same-account processes still preserve the affected
+artifacts. An unreadable service-marker environment from a known foreign account,
+including root, does not block cleanup without positive OpenClaw or runtime-path
+evidence. Unknown process ownership stays conservative. The Doctor performing
+cleanup must contain this fix; it can reclaim runtimes left by older updaters
+without changing their markers or requiring privileged process inspection.
 
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes

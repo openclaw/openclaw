@@ -19,6 +19,7 @@ import {
   createLocalWorkspaceCheckpointRejection,
   applyLocalWorkspaceCheckpoint,
   type LocalWorkspaceSyncOptions,
+  type LocalWorkspaceCheckpointUpdate,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -94,11 +95,8 @@ export function projectionOperations(
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
   const workerAuthority = bindLocalWorkspaceAuthority(owner, store.workerAuthority, selectCurrent);
-  const update = async (
-    patch: Parameters<typeof store.update>[1],
-    manifest?: Parameters<typeof store.update>[3],
-  ) => {
-    row = await store.update(current(), patch, owner.workerAuthority, manifest);
+  const update: LocalWorkspaceCheckpointUpdate = async (patch, manifest, publicationPack) => {
+    row = await store.update(current(), patch, owner.workerAuthority, manifest, publicationPack);
   };
   const rejection = createLocalWorkspaceCheckpointRejection({
     current,
