@@ -45,7 +45,6 @@ export function createModelProviderProfileActions(options: {
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
-  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
@@ -294,7 +293,12 @@ export function createModelProviderProfileActions(options: {
         if (!ownsProbe()) {
           return;
         }
-        options.setProbeError(cardId, modelProviderErrorMessage(error));
+        options.setProbeResult(cardId, {
+          provider: cardId,
+          status: "unknown",
+          error: modelProviderErrorMessage(error),
+          results: [],
+        });
       } finally {
         if (ownsProbe()) {
           options.setBusy(key, false);

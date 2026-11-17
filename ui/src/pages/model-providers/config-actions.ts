@@ -25,6 +25,7 @@ export function createModelProviderConfigActions(deps: {
   getAgentEpoch: () => number;
   canMutate: () => boolean;
   clearProbe: (provider: string) => void;
+  setProbeResult: (provider: string, result: ModelsProbeResult) => void;
   refresh: () => Promise<void>;
   setBusy: (key: string, busy: boolean) => void;
   setMessage: (key: string, message: ModelProviderRowMessage | null) => void;
@@ -38,6 +39,7 @@ export function createModelProviderConfigActions(deps: {
     getAgentEpoch,
     canMutate,
     clearProbe,
+    setProbeResult,
     refresh,
     setBusy,
     setMessage,
@@ -79,6 +81,7 @@ export function createModelProviderConfigActions(deps: {
     configKey: string;
     action: "edit" | "add";
     activateProfileId?: string;
+    isCurrent: () => boolean;
   }): Promise<ModelProviderRowMessage | null> {
     // With no usable model yet, activation runs the same check and makes the key the default.
     if (params.activateProfileId) {
@@ -106,11 +109,22 @@ export function createModelProviderConfigActions(deps: {
         agentId: params.agentId,
       });
     } catch (error) {
+      if (params.isCurrent()) {
+        setProbeResult(params.provider, {
+          provider: params.configKey,
+          status: "unknown",
+          error: modelProviderErrorMessage(error),
+          results: [],
+        });
+      }
       return {
         kind: "warning",
         text: t("modelProviders.apiKey.checkUnavailable"),
         warning: modelProviderErrorMessage(error),
       };
+    }
+    if (params.isCurrent()) {
+      setProbeResult(params.provider, result);
     }
     if (result.status === "ok") {
       return {
@@ -178,6 +192,7 @@ export function createModelProviderConfigActions(deps: {
                   provider,
                   configKey,
                   action,
+                  isCurrent,
                   ...(activate && receipt.profileId
                     ? { activateProfileId: receipt.profileId }
                     : {}),
