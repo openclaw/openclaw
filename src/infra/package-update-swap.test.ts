@@ -10,6 +10,7 @@ import {
   expectInstallation,
   expectNoCalls,
   expectVersion,
+  publishWithoutPathExchange,
   readText,
 } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
@@ -53,6 +54,7 @@ describe("retained package backup retirement", () => {
   });
 
   it("does not copy or remove the old package after a denied backup rename", async () => {
+    publishWithoutPathExchange();
     const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
     const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
@@ -543,3 +545,26 @@ describe("retained package transaction authority", () => {
     await expectVersion(packageRoot, "2.0.0");
   });
 });
+
+it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
+  "keeps the native pnpm package readable at every publication rename boundary",
+  async () => {
+    const { createNativePackageSwapFixture } =
+      await import("./package-update-swap.test-support.js");
+    const f = await createNativePackageSwapFixture(base);
+    const rename = fs.rename.bind(fs);
+    const missing: string[] = [];
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      try {
+        await fs.access(path.join(f.packageRoot, "package.json"));
+      } catch {
+        missing.push(String(args[1]));
+      }
+    });
+    const { result, transaction } = await captureSwap(f.params);
+    expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+    await transaction.complete({ activationVerified: true }, () => {});
+    expect(missing).toEqual([]);
+  },
+);

@@ -262,6 +262,15 @@ preserve the existing launcher's ownership when possible; otherwise they use the
 updater's effective user and group instead of inheriting an unusable bin-directory
 group. An ownership fallback produces a warning.
 
+On Linux and macOS, mutable package updates try an atomic directory exchange
+so the normal package path stays runnable if the updater is killed during
+publication. npm publication keeps recovery in its existing journal; pnpm and
+Bun exchange the staged project with the live project. Unsupported filesystems
+or unavailable exchange tools retain the two-move fallback, which can leave a
+missing package path if interrupted. Source-linked npm installations also keep
+their existing publication path. The installed updater must contain this fix;
+a downloaded candidate cannot change an updater already running.
+
 Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before

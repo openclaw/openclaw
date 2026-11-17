@@ -22,6 +22,7 @@ import { packageActivationRuntimeForTest } from "./package-update-activation-run
 import {
   assertNoPendingPackageActivation,
   runPackageActivationRecovery,
+  settlePendingPackageActivation,
 } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
@@ -32,8 +33,10 @@ import {
   withPublicationFence,
 } from "./package-update-publication.test-support.js";
 import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
+import { refusePathExchange } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import * as pathExchange from "./path-exchange.js";
 import * as snapshot from "./sqlite-snapshot.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
@@ -247,12 +250,8 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
       const rename = fsp.rename.bind(fsp);
       vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
         await rename(from, to);
-        if (
-          boundary === "publication" &&
-          from === path.join(anchor, "candidate") &&
-          to === f.packageRoot
-        ) {
-          change(f.packageRoot);
+        if (boundary === "publication" && from === path.join(anchor, "candidate")) {
+          change(String(to));
         }
       });
       await withPublicationFence(f.packageRoot, async (fence) => {
@@ -443,6 +442,7 @@ it
     fs.writeFileSync(path.join(f.packageRoot, "previous.payload"), "previous bytes");
     fs.symlinkSync("previous.payload", path.join(f.packageRoot, "payload.link"));
     const originalIdentity = packageActivationIdentity(f.packageRoot, true);
+    refusePathExchange("EXDEV: cross-device link not permitted");
     await withPublicationFence(f.packageRoot, async (fence) => {
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       const rename = fsp.rename.bind(fsp);
@@ -574,6 +574,7 @@ it.skipIf(process.platform === "win32")(
         const anchor = resolvePackageActivationAnchor(f.packageRoot);
         const rename = fsp.rename.bind(fsp);
         let refused = false;
+        refusePathExchange("EPERM: operation not permitted");
         vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
           if (!refused && from === f.packageRoot && to === path.join(anchor, "previous")) {
             refused = true;
@@ -645,5 +646,73 @@ it.skipIf(process.platform === "win32").each(["directory", "parent"] as const)(
         ),
       ).toEqual(before);
       expect(fs.existsSync(retained)).toBe(true);
+    }),
+);
+
+it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
+  "keeps the npm package readable at every publication rename boundary",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const rename = fsp.rename.bind(fsp);
+      const missing: string[] = [];
+      vi.spyOn(fsp, "rename").mockImplementation(async (...args) => {
+        await rename(...args);
+        if (!fs.existsSync(path.join(f.packageRoot, "package.json"))) {
+          missing.push(String(args[1]));
+        }
+      });
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+      });
+      expect(missing).toEqual([]);
+    }),
+);
+
+it.runIf(pathExchange.supportsPathExchange())(
+  "rolls back a publication stopped with the candidate under the previous name",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const versions = () =>
+        [f.packageRoot, path.join(anchor, "previous"), path.join(anchor, "candidate")].map(
+          (directory) =>
+            fs.existsSync(directory)
+              ? JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).version
+              : null,
+        );
+      // The updater stops after the candidate took the previous name, before the exchange.
+      vi.spyOn(pathExchange, "exchangePaths").mockRejectedValue(new Error("exchange stopped"));
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
+        expect(result.status).toBe("failed");
+        expect(result.step.stderrTail).toContain("exchange stopped");
+        expect(openPackageActivationJournal(anchor).read()).toMatchObject({
+          phase: "publishing",
+          intent: { kind: "publish" },
+          publications: [],
+        });
+        expect(versions()).toEqual(["1.0.0", "2.0.0", null]);
+        // Admission and `openclaw update repair` leave it for its recovery owner.
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow("incomplete");
+        await expect(settlePendingPackageActivation(f.packageRoot)).rejects.toThrow("incomplete");
+        expect(versions()).toEqual(["1.0.0", "2.0.0", null]);
+        if (!transaction) {
+          throw new Error("Failed publication did not retain its package transaction.");
+        }
+        await expect(transaction.rollback(fence.assertCurrent)).resolves.toMatchObject({
+          exitCode: 0,
+        });
+        expect(openPackageActivationJournal(anchor).read().phase).toBe("aborted");
+        expect(versions()).toEqual(["1.0.0", null, "2.0.0"]);
+        await transaction.complete({ activationVerified: true }, fence.assertCurrent);
+        expect(fs.existsSync(anchor)).toBe(false);
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      });
     }),
 );
