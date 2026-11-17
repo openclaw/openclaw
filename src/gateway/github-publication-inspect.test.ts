@@ -284,13 +284,13 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
   );
 
   it.each([false, true])(
-    "does not misdiagnose a publisher-authored PR as broken publisher credentials (raw=%s)",
+    "explains publisher PR eligibility and how to recover without changing credentials (raw=%s)",
     async (raw) => {
       const f = await fixture();
       f.pr.user = { id: 42, login: "publisher" };
       const before = session();
       await expect(f.invoke({}, raw)).rejects.toThrow(
-        "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR.",
+        "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
       );
       expect(session()).toEqual(before);
       expect(f.externalWrites).toEqual([]);

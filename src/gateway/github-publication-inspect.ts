@@ -331,7 +331,7 @@ export async function readOwnGitHubPullRequest(params: {
   }
   if (needsContribution && contributorAccountId === undefined) {
     throw new Error(
-      "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR.",
+      "This PR is not authored by a GitHub account linked to you, and no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
     );
   }
   const base = refFacts(pr.base, baseRepository);

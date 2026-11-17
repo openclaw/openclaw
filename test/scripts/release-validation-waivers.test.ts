@@ -323,6 +323,70 @@ it.each([
   ).resolves.toBeUndefined();
 });
 
+describe("2026.10.33 iOS screenshot exception", () => {
+  const names = ["ios-screenshots-iphone", "ios-screenshots-ipad-13"];
+  const iosJobs = names.map((name, id) => ({ ...failedJob, id, name }));
+  const iosChild = { ...child, jobs: [...iosJobs, gate] };
+  const input = { child: iosChild, targetVersion: "2026.10.33" };
+
+  it("accepts only the two authorized screenshot jobs and preserves raw failures", () => {
+    const policy = evaluateReleaseChildPolicy(input);
+    expect(policy.waivers.map((row) => row.jobName)).toEqual(names);
+    expect(terminalPolicyPass(iosChild, input.targetVersion)).toBe(true);
+    expect(iosChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(evaluateReleaseChildPolicy({ ...input, targetVersion: "2026.10.34" }).waivers).toEqual(
+      [],
+    );
+    expect(
+      evaluateReleaseChildPolicy({
+        ...input,
+        child: { ...iosChild, key: "releaseChecksCandidate" },
+      }).waivers,
+    ).toEqual([]);
+    for (const name of [
+      "ios-build",
+      "ios-screenshot-evidence",
+      "docker-seed-e2e",
+      "Seal artifact producer receipt",
+    ]) {
+      expect(
+        terminalPolicyPass(
+          { ...iosChild, jobs: [...iosChild.jobs, { ...failedJob, name }] },
+          input.targetVersion,
+        ),
+      ).toBe(false);
+    }
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      expect(
+        terminalPolicyPass(
+          { ...iosChild, jobs: [{ ...iosJobs[0], conclusion }] },
+          input.targetVersion,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("requires the exact screenshot aggregate cause without excusing other failures", async () => {
+    const policy = evaluateReleaseChildPolicy(input);
+    expect(policy.waivers).toHaveLength(2);
+    const log =
+      "::error title=CI job did not succeed::ios-screenshot-shard finished with failure (selected=true)";
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: iosChild.jobs, getJobLog: () => log }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: iosChild.jobs,
+        getJobLog: () => log + "\n##[error]docker-seed-e2e finished with failure (selected=true)",
+      }),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: iosChild.jobs, getJobLog: () => "" }),
+    ).rejects.toThrow("unwaived failure");
+  });
+});
+
 it("admits only the authorized 2026.11.5 Kova failure without skipping qualification", () => {
   const kova = {
     ...child,

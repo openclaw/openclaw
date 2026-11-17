@@ -25,6 +25,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
 import { VERSION } from "../version.js";
+import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -103,8 +104,13 @@ function openReadOnly(pathname: string): DatabaseSync {
   return openNodeSqliteDatabase(pathname, { readOnly: true });
 }
 
-function discoverDatabases(stateDir: string): DatabaseTarget[] {
+function discoverDatabases(stateDir: string): {
+  targets: DatabaseTarget[];
+  retainedAgentDirectories: string[];
+} {
   const targets: DatabaseTarget[] = [];
+  const retainedAgentDirectories: string[] = [];
+  let retainedAgentIds = new Set<string>();
   const realStateDir = fs.realpathSync(stateDir);
   const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
     if (!isSqliteFile(pathname)) {
@@ -121,6 +127,9 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
     const version = withRecoveredSource(pathname, (readable) => {
       const db = openReadOnly(readable);
       try {
+        if (kind === "state") {
+          retainedAgentIds = new Set(readRetainedAgentDeletionIds(db));
+        }
         return readVersion(db, kind);
       } finally {
         db.close();
@@ -136,9 +145,15 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
     // No agents yet.
   }
   for (const agentId of agents) {
+    const agentDirectory = path.join(stateDir, "agents", agentId);
+    if (retainedAgentIds.has(agentId)) {
+      // Completed retention belongs to deletion, including during another store's upgrade.
+      retainedAgentDirectories.push(agentDirectory);
+      continue;
+    }
     add("agent", path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"), agentId);
   }
-  return targets;
+  return { targets, retainedAgentDirectories };
 }
 
 const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
@@ -151,8 +166,7 @@ const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
  * the report and set-aside rows have no SQLite home, so SQLite agent databases there
  * keep the previous path (Doctor).
  */
-function outdatedDatabases(stateDir: string): DatabaseTarget[] {
-  const targets = discoverDatabases(stateDir);
+function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
   if (targets.some((target) => target.kind === "state" && target.version === 0)) {
     return [];
   }
@@ -169,7 +183,7 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   return (
     fs.existsSync(stateDir) &&
     (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
-      outdatedDatabases(stateDir).length > 0)
+      outdatedDatabases(discoverDatabases(stateDir).targets).length > 0)
   );
 }
 
@@ -367,7 +381,9 @@ export async function upgradeStateDirectory(params: {
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  const outdated = outdatedDatabases(stateDir);
+  const { targets, retainedAgentDirectories } = discoverDatabases(stateDir);
+  excludedRoots.push(...retainedAgentDirectories);
+  const outdated = outdatedDatabases(targets);
   if (outdated.length === 0) {
     if (resumed) {
       finish(stateDir, undefined, resumedFiles);
