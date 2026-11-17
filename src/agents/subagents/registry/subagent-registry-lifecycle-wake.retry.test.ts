@@ -653,4 +653,45 @@ describe("requester settle retry lifetime", () => {
       }
     });
   });
+
+  it("ends a pause notice outcome superseded by a sibling adoption instead of replaying it", async () => {
+    await withSubagentCompletionWorkerState(async (database) => {
+      const input = armRequesterWake(records(), [records().subagent.runId, "paused-sibling"]);
+      input.subagent.pauseReason = "sessions_yield";
+      input.subagent.delivery = { status: "pending" };
+      input.subagent.requesterSettleWake = {
+        ...input.subagent.requesterSettleWake!,
+        requesterYieldBatch: true,
+        pauseNotice: { acknowledgment: "Waiting for direction" },
+      };
+      const driver = seedDriver(database, input);
+      driver.wake.mockImplementation(async (params) => {
+        const observed = currentCompletionRun(input);
+        if (driver.wake.mock.calls.length === 1) {
+          // Continuing the paused sibling remaps its run id across the cohort.
+          await mutateSubagentRuns([observed.runId], (rows) => {
+            const next = structuredClone(rows.get(observed.runId)!);
+            next.requesterSettleWake!.batchRunIds = [observed.runId, "sibling-successor"];
+            return { value: undefined, postimages: new Map([[next.runId, next]]) };
+          });
+        }
+        await params.completeBatch([observed], 1, { delivered: true, path: "direct" });
+        return true;
+      });
+      try {
+        await driver.run();
+        await driver.run(currentCompletionRun(input));
+        expect(driver.warn.mock.calls.map(([message]) => message)).toEqual([
+          "requester settle wake failed",
+        ]);
+        expect(driver.wake).toHaveBeenCalledTimes(2);
+        expect(storedWake(input)).toMatchObject({
+          batchRunIds: [input.subagent.runId, "sibling-successor"],
+        });
+        expect(storedWake(input)?.pauseNotice).toBeUndefined();
+      } finally {
+        driver.controller.clearRuntimeState();
+      }
+    });
+  });
 });

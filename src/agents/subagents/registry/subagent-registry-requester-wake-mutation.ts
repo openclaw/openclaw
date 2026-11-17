@@ -6,7 +6,10 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
+import {
+  mutateRequesterCompletionBatch,
+  SubagentCompletionSourceChangedError,
+} from "../completion/subagent-completion-admission.store.js";
 import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
@@ -191,18 +194,35 @@ export function createRequesterWakeSettlement(params: {
         (outcome !== undefined ||
           receipt.committed !== undefined ||
           members.length === batch.length);
-      if (
-        settlesMembers &&
-        !(await mutateRequesterSettleWakeBatch(
-          context,
-          members,
-          rearmGeneration,
-          outcome ? { kind: "settle", outcome } : { kind: "complete" },
-          stateContext,
-          receipt,
-        ))
-      ) {
-        return;
+      const releasePending = () => {
+        for (const member of batch) {
+          const key = getSubagentRunRuntimeKey(member);
+          if (pendingRequesterSettlements.get(key) === settlement) {
+            pendingRequesterSettlements.delete(key);
+          }
+        }
+      };
+      try {
+        if (
+          settlesMembers &&
+          !(await mutateRequesterSettleWakeBatch(
+            context,
+            members,
+            rearmGeneration,
+            outcome ? { kind: "settle", outcome } : { kind: "complete" },
+            stateContext,
+            receipt,
+          ))
+        ) {
+          return;
+        }
+      } catch (error) {
+        // An uncommitted outcome whose owner changed is superseded, never replayed:
+        // the current row's own evaluation owns whatever it still owes.
+        if (error instanceof SubagentCompletionSourceChangedError && !receipt.committed) {
+          releasePending();
+        }
+        throw error;
       }
       if (settlesMembers) {
         const requester = batch[0];
@@ -266,12 +286,7 @@ export function createRequesterWakeSettlement(params: {
         }
         await onCommitted?.();
       }
-      for (const member of batch) {
-        const key = getSubagentRunRuntimeKey(member);
-        if (pendingRequesterSettlements.get(key) === settlement) {
-          pendingRequesterSettlements.delete(key);
-        }
-      }
+      releasePending();
       if (settlesMembers) {
         release(members);
       }
