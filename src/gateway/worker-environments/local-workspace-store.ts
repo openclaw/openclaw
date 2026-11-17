@@ -14,12 +14,12 @@ import {
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
-import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
+import { withLocalWorkspaceLease } from "./local-workspace-lease.js";
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
@@ -95,15 +95,10 @@ export function withLocalWorkspaceStore<T>(
     throw new Error("Local workspace lease belongs to another database");
   }
   return withWorktreeRunEnd(env, () =>
-    withOpenClawStateLeaseAsync(
+    withLocalWorkspaceLease(
       {
-        scope: "workspace.local-reconciliation",
-        key: params.worktreeId,
-        leaseMs: 60_000,
-        waitMs: 600_000,
+        worktreeId: params.worktreeId,
         signal: params.signal,
-        leaseLabel: "local sandbox workspace",
-        operationLabel: "workspace.local-reconciliation",
       },
       context,
       (lease) => {

@@ -63,6 +63,12 @@ source preparation, not direct access to that host directory. Arbitrary external
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
+
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected
 by `.worktreeinclude`. Guest preparation does not run the repository's host setup
