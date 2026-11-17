@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -30,6 +31,7 @@ import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 
 export async function prepareEmbeddedRunTransport(input: {
   assertCurrent: () => void;
+  getAuthDeadline?: () => CommandQueueTaskDeadline | undefined;
   runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: Parameters<typeof resolveEmbeddedRunModelSetup>[0]["sessionAdmission"];
   provider: string;
@@ -346,6 +348,8 @@ export async function prepareEmbeddedRunTransport(input: {
     state: authState,
     assertCurrent: input.assertCurrent,
     signal: params.abortSignal,
+    timeoutMs: params.timeoutMs,
+    getDeadline: input.getAuthDeadline,
     ...(prepareModelForAuthProfile ? { prepareModelForAuthProfile } : {}),
     log,
   });
@@ -477,7 +481,7 @@ export async function prepareEmbeddedRunTransport(input: {
       attemptedThinking,
       advanceAttemptAuthProfile,
       maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
-      stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
+      stopRuntimeAuthRefreshTimer: authController.close,
       getApiKeyInfo: () => authState.apiKeyInfo,
       setThinkLevel: (next: ThinkLevel) => {
         authState.thinkLevel = next;
@@ -525,7 +529,7 @@ export async function prepareEmbeddedRunTransport(input: {
       }),
     };
   } catch (error) {
-    authController.stopRuntimeAuthRefreshTimer();
+    authController.close();
     throw error;
   }
 }
