@@ -4,7 +4,6 @@ import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
-import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -185,10 +184,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // Definite revocation must retire before finish can wake the mailbox.
-        if (!isOperatorAuthorityUnavailable(error)) {
-          retireSessionControllerInput(input);
-        }
         finish(false);
         if (input.abortSignal.aborted) {
           return false;

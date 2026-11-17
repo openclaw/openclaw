@@ -94,6 +94,8 @@ export type SessionEventOptions = {
     | "hook"
     | "restart"
     | "session"
+    // Watcher reconciliation is model-only input, unlike generic system-event wakes.
+    | "session_state"
     | "device"
     | "plugin"
     // A yielded tool's result resuming its own conversation; hidden from chat display.

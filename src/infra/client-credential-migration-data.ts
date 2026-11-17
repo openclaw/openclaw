@@ -5,7 +5,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { validateStoredDeviceIdentity } from "./device-identity-material.js";
-import { stripExecApprovalsRawSocketCredentials } from "./exec-approvals-config.js";
+import { stripExecApprovalsRawSocketCredentials } from "./exec-approvals-core.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 

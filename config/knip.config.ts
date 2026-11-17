@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
@@ -145,6 +146,8 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
+  // Full release validation invokes child-evidence reuse through a shell variable.
+  "scripts/find-reusable-release-child.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -1352,6 +1355,8 @@ const config = {
         "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",

@@ -776,6 +776,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           fixture.targetVersion,
           "The selected release was not updated",
         );
+        // A release behind its link is replaced without a journal. The image has a
+        // system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The in-place replacement did not use the atomic exchange",
+        );
         assert.match(
           fs.readFileSync(path.join(artifacts, "follow-up-update.stdout"), "utf8") +
             fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
@@ -800,6 +808,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           JSON.stringify(output("follow-up-update").steps ?? []),
           /release layout was not used/u,
           "The fallback was not recorded",
+        );
+        // That swap publishes a plain directory through the publication journal. The image
+        // has a system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
+          /Package publication recovery: /u,
+          "The fallback swap prepared no publication journal",
+        );
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The journaled publication did not use the atomic exchange",
         );
         assert.equal(
           fs.readlinkSync(path.join(bin, "openclaw")),
