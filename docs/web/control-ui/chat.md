@@ -387,7 +387,10 @@ The viewer includes images from the loaded part of the current conversation.
 Use the arrow buttons or Left/Right keys to step through them, or select a
 thumbnail in the bottom strip to jump directly. The current thumbnail stays
 highlighted and scrolls into view. Thumbnails load small previews as they become
-visible; browsing does not fetch earlier conversation history.
+visible; browsing does not fetch earlier conversation history. Local files and
+third-party URLs without bounded previews show numbered placeholders instead
+of downloading unselected originals. Select a placeholder to view that image
+through its normal access checks.
 Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
 and **Download image** inside its lower-right corner. Devices without hover keep
 these controls visible. Selecting the image itself still opens the viewer.

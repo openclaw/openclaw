@@ -10,7 +10,7 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { readImageOriginalBlob } from "./chat-message-image-open.ts";
+import { openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
@@ -139,6 +139,43 @@ describe("message image gallery loading", () => {
       ),
     ]);
   });
+
+  it.each(["/workspace/chart-2.png", "https://images.example.test/chart-2.png"])(
+    "keeps unselected original-only %s images out of thumbnail loading",
+    async (source) => {
+      const initial = { url: "data:image/png;base64,cG5n", alt: "Initial" };
+      const unselected = { url: source, alt: "Original-only" };
+      const fetch = vi.fn(async () => ticketResponse("local-image-ticket"));
+      vi.stubGlobal("fetch", fetch);
+      const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
+      openMessageImage(initial, initial.url, {
+        sessionKey: "agent:main:main",
+        messageId: "opener-message",
+        onOpenImage,
+        galleryImages: () => ({
+          index: 0,
+          items: [
+            { image: initial, messageId: "opener-message" },
+            { image: unselected, messageId: "original-message" },
+          ],
+        }),
+      });
+      const gallery = onOpenImage.mock.calls[0]![0].gallery!;
+      expect(await gallery.thumbnails![1]!.load()).toBeNull();
+      expect(fetch).not.toHaveBeenCalled();
+      const selected = await gallery.items[1]!();
+      expect(selected?.title).toBe("Original-only");
+      const url = new URL(selected!.src);
+      if (source.startsWith("/")) {
+        expect(url.searchParams.get("source")).toBe(source);
+        expect(url.searchParams.get("messageId")).toBe("original-message");
+        expect(url.searchParams.has("variant")).toBe(false);
+        expect(fetch).toHaveBeenCalledOnce();
+      } else {
+        expect(selected?.src).toBe(source);
+      }
+    },
+  );
 
   it("rejects an unsuccessful original image download", async () => {
     vi.stubGlobal(

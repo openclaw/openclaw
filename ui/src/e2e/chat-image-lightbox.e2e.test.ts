@@ -53,6 +53,49 @@ const imageDataUrls = (page: Page, sizes: ReadonlyArray<readonly [number, number
       }),
     sizes,
   );
+// A synthetic dashboard gives failure/fallback captures recognizable image content.
+const reviewImageDataUrl = (page: Page) =>
+  page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 800;
+    canvas.height = 480;
+    const draw = canvas.getContext("2d")!;
+    draw.fillStyle = "#f3f5f9";
+    draw.fillRect(0, 0, 800, 480);
+    draw.fillStyle = "#17253e";
+    draw.fillRect(0, 0, 800, 64);
+    draw.fillStyle = "white";
+    draw.font = "bold 22px sans-serif";
+    draw.fillText("Release quality dashboard", 28, 39);
+    draw.fillStyle = "#42526c";
+    draw.font = "14px sans-serif";
+    draw.fillText("Synthetic preview · Weekly validation", 28, 96);
+    ["Passed  128", "Needs review  3", "Coverage  94%"].forEach((label, index) => {
+      draw.fillStyle = "white";
+      draw.fillRect(28 + index * 252, 116, 236, 72);
+      draw.fillStyle = "#17253e";
+      draw.font = "bold 19px sans-serif";
+      draw.fillText(label, 44 + index * 252, 159);
+    });
+    draw.fillStyle = "white";
+    draw.fillRect(28, 208, 740, 244);
+    draw.fillStyle = "#42526c";
+    draw.font = "16px sans-serif";
+    draw.fillText("Successful checks by day", 48, 240);
+    [78, 108, 94, 132, 150, 142, 166].forEach((height, index) => {
+      draw.fillStyle = "#326bd1";
+      draw.fillRect(74 + index * 96, 418 - height, 52, height);
+      draw.fillStyle = "#42526c";
+      draw.font = "12px sans-serif";
+      draw.fillText(
+        ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][index]!,
+        87 + index * 96,
+        438,
+      );
+    });
+    return canvas.toDataURL("image/png");
+  });
+
 // Separate turns outgrow one viewport, and transcript rows mount only near it.
 async function revealImage(page: Page, image: string | Locator) {
   const tile = typeof image === "string" ? exactButton(page, `Open image ${image}`) : image;
@@ -437,6 +480,124 @@ suite.define(() => {
       await expect.poll(() => lightbox.count()).toBe(0);
       await expectFocused(trigger);
     }
+  });
+
+  it.each([1440, 390])(
+    "keeps failed image selection clear of thumbnails at %s px",
+    async (width) => {
+      const page = await newPage({ viewport: { width, height: 844 }, reducedMotion: "reduce" });
+      const data = await reviewImageDataUrl(page);
+      const sources = ["media://inbound/retained.png", "media://inbound/unavailable.png"];
+      await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.searchParams.get("meta") === "1") {
+          await route.fulfill({ json: mediaTicketPayload("failed-selection-proof", 300_000) });
+        } else if (
+          url.searchParams.get("source") === sources[1] &&
+          url.searchParams.get("width") !== "480"
+        ) {
+          await route.fulfill({ status: 503 });
+        } else {
+          await route.fulfill({
+            contentType: "image/png",
+            body: Buffer.from(data!.split(",")[1]!, "base64"),
+          });
+        }
+      });
+      const gateway = await installMockGateway(page, {
+        historyMessages: [
+          chatMessage("assistant", sources.map((source) => "MEDIA:" + source).join("\n")),
+        ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await exactButton(page, "Open image retained.png").click();
+      const lightbox = page.locator("openclaw-image-lightbox");
+      const image = lightbox.locator(".stage .image");
+      await expectLoadedImage(image);
+      await exactButton(lightbox, "Show image 2: unavailable.png").click();
+      const error = lightbox.getByRole("alert");
+      await polledText(error).toContain("Couldn’t load this image");
+      await polledAttribute(image, "alt").toBe("retained.png");
+      await counterValue(lightbox.locator(".gallery-counter")).toBe("1 / 2");
+      // Stress wrapping after reaching the real failure state, as with a longer translation.
+      await error.evaluate((element) => {
+        element.textContent =
+          "Couldn’t load this image. Your current image is still available. Try choosing the unavailable image again when its connection recovers.";
+      });
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        lightbox.locator(".lightbox"),
+        [image, error, lightbox.locator(".gallery-thumbnails")],
+        { animations: "disabled" },
+      );
+      await writeFile(path.join(suite.artifactDir, "selection-error-" + width + ".png"), frame.png);
+      const errorBox = (await error.boundingBox())!;
+      const stripBox = (await lightbox.locator(".gallery-thumbnails").boundingBox())!;
+      expect(errorBox.y + errorBox.height).toBeLessThanOrEqual(stripBox.y);
+      expect(errorBox.y).toBeGreaterThanOrEqual(0);
+      await exactButton(lightbox, "Zoom in").click();
+      await expect
+        .poll(() => exactButton(lightbox, "Reset zoom").textContent())
+        .not.toContain("100%");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => lightbox.count()).toBe(0);
+    },
+  );
+
+  it("opens an unmounted local image only after selecting its numbered placeholder", async () => {
+    const page = await newPage({ reducedMotion: "reduce" });
+    const data = await reviewImageDataUrl(page);
+    const local = "/workspace/chart-2.png";
+    const requests: URL[] = [];
+    await page.route("**/__openclaw__/assistant-media?**", async (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      await route.fulfill(
+        url.searchParams.get("meta") === "1"
+          ? { json: mediaTicketPayload("local-selection", 300_000) }
+          : { contentType: "image/png", body: Buffer.from(data!.split(",")[1]!, "base64") },
+      );
+    });
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        chatMessage("assistant", "MEDIA:" + local, { id: "local-message" }),
+        ...Array.from({ length: 16 }, (_, index) =>
+          chatMessage(
+            index % 2 ? "assistant" : "user",
+            "Review note " + index + "\n\n" + "Earlier context. ".repeat(100),
+          ),
+        ),
+        { role: "assistant", content: [{ type: "image", url: data, alt: "Current screenshot" }] },
+      ],
+    });
+    await page.goto(suite.server.baseUrl + "chat");
+    await gateway.waitForRequest("sessions.messages.subscribe");
+    await exactButton(page, "Open image Current screenshot").click();
+    const lightbox = page.locator("openclaw-image-lightbox");
+    const placeholder = exactButton(lightbox, "Show image 1: chart-2.png");
+    await placeholder.waitFor();
+    await polledText(placeholder).toBe("1");
+    expect(await exactButton(page, "Open image chart-2.png").count()).toBe(0);
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      lightbox.locator(".lightbox"),
+      [lightbox.locator(".stage .image"), placeholder],
+      { animations: "disabled" },
+    );
+    await writeFile(path.join(suite.artifactDir, "local-placeholder.png"), frame.png);
+    expect(requests).toHaveLength(0);
+    await placeholder.click();
+    await polledAttribute(lightbox.locator(".stage .image"), "alt").toBe("chart-2.png");
+    await counterValue(lightbox.locator(".gallery-counter")).toBe("1 / 2");
+    expect(requests.filter((url) => url.searchParams.get("meta") !== "1")).toHaveLength(1);
+    expect(
+      requests.every(
+        (url) => url.searchParams.get("source") === local && !url.searchParams.has("variant"),
+      ),
+    ).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => lightbox.count()).toBe(0);
   });
 
   it("navigates inline, user, and assistant images across turns in transcript order", async () => {

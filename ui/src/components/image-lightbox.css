@@ -12,7 +12,7 @@ openclaw-image-lightbox {
     width: 100vw;
     height: 100dvh;
     display: grid;
-    grid-template-rows: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
     overflow: hidden;
   }
 
@@ -358,18 +358,32 @@ openclaw-image-lightbox {
   }
 
   .stage.stage--thumbnails {
-    padding-bottom: calc(144px + var(--safe-area-bottom, 0px));
+    padding-bottom: 12px;
+  }
+
+  .gallery-dock {
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    justify-self: center;
+    gap: 8px;
+    max-width: calc(100vw - 32px);
+    padding-bottom: calc(64px + var(--safe-area-bottom, 0px));
+  }
+
+  .gallery-dock .gallery-error {
+    position: static;
+    transform: none;
+    justify-self: center;
+    max-width: min(640px, 100%);
+    overflow-wrap: anywhere;
   }
 
   .gallery-thumbnails {
-    position: fixed;
-    z-index: 1;
-    bottom: calc(64px + var(--safe-area-bottom, 0px));
-    left: 50%;
-    transform: translateX(-50%);
     display: flex;
+    justify-self: center;
     gap: 8px;
-    max-width: calc(100vw - 32px);
+    max-width: 100%;
     padding: 6px;
     overflow-x: auto;
     overscroll-behavior-x: contain;
@@ -402,7 +416,11 @@ openclaw-image-lightbox {
   }
 
   .gallery-thumbnail-image {
-    display: block;
+    display: grid;
+    place-items: center;
+    color: var(--media-foreground);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
     width: 100%;
     height: 100%;
     overflow: hidden;

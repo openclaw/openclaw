@@ -45,6 +45,8 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const gallery = createImageLightboxGallery();
   const galleryState = gallery.state;
   const hasGallery = () => galleryState().count > 1;
+  const thumbnails = () =>
+    props.mediaKind === "image" && hasGallery() ? props.gallery?.thumbnails : undefined;
   const currentImage = () => galleryState().current;
   const [originalRead, setOriginalRead] = createSignal(
     { result: Promise.resolve("") },
@@ -579,8 +581,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
               {
                 "stage--video": props.mediaKind === "video",
                 "stage--gallery": props.mediaKind !== "video" && hasGallery(),
-                "stage--thumbnails":
-                  props.mediaKind === "image" && hasGallery() && Boolean(props.gallery?.thumbnails),
+                "stage--thumbnails": Boolean(thumbnails()),
               },
             ]}
             ref={[
@@ -674,7 +675,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                 total: String(galleryState().count),
               })}
             </p>
-            <Show when={galleryState().failed}>
+            <Show when={galleryState().failed && !thumbnails()}>
               <p class="gallery-error" role="alert">
                 {t("chat.imageLightbox.loadFailed")}
               </p>
@@ -694,12 +695,13 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
               </Show>
             </p>
           </Show>
-          <Show when={props.mediaKind === "image" && hasGallery() && props.gallery?.thumbnails}>
+          <Show when={thumbnails()}>
             {(items) => (
               <LightboxThumbnails
                 items={items()}
                 index={galleryState().index}
                 busy={galleryState().busy}
+                failed={galleryState().failed}
                 focusableRef={focusableRef}
                 onSelect={(index) => void navigate(index - gallery.peek().index)}
               />

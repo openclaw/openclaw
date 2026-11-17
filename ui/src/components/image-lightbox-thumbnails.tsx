@@ -10,6 +10,7 @@ export function LightboxThumbnails(props: {
   items: readonly Thumbnail[];
   index: number;
   busy: boolean;
+  failed: boolean;
   focusableRef: () => (element: HTMLElement) => void;
   onSelect: (index: number) => void;
 }) {
@@ -22,46 +23,53 @@ export function LightboxThumbnails(props: {
     { region: () => region, revealAxis: "inline", revealTiming: "animation-frame" },
   );
   return (
-    <div
-      class="gallery-thumbnails"
-      ref={(element) => {
-        region = element;
-      }}
-      role="group"
-      aria-label={t("chat.imageLightbox.thumbnails")}
-    >
-      <For each={props.items}>
-        {(item, index) => (
-          <button
-            ref={[
-              (element) => {
-                buttons[index()] = element;
-              },
-              props.focusableRef(),
-            ]}
-            type="button"
-            class="gallery-thumbnail"
-            aria-label={t("chat.imageLightbox.thumbnail", {
-              current: String(index() + 1),
-              title: item.title,
-            })}
-            aria-current={index() === props.index ? "true" : undefined}
-            aria-disabled={props.busy ? "true" : "false"}
-            onClick={() => {
-              if (!props.busy && index() !== props.index) {
-                props.onSelect(index());
-              }
-            }}
-          >
-            <ThumbnailImage item={item} />
-          </button>
-        )}
-      </For>
+    <div class="gallery-dock">
+      <Show when={props.failed}>
+        <p class="gallery-error" role="alert">
+          {t("chat.imageLightbox.loadFailed")}
+        </p>
+      </Show>
+      <div
+        class="gallery-thumbnails"
+        ref={(element) => {
+          region = element;
+        }}
+        role="group"
+        aria-label={t("chat.imageLightbox.thumbnails")}
+      >
+        <For each={props.items}>
+          {(item, index) => (
+            <button
+              ref={[
+                (element) => {
+                  buttons[index()] = element;
+                },
+                props.focusableRef(),
+              ]}
+              type="button"
+              class="gallery-thumbnail"
+              aria-label={t("chat.imageLightbox.thumbnail", {
+                current: String(index() + 1),
+                title: item.title,
+              })}
+              aria-current={index() === props.index ? "true" : undefined}
+              aria-disabled={props.busy ? "true" : "false"}
+              onClick={() => {
+                if (!props.busy && index() !== props.index) {
+                  props.onSelect(index());
+                }
+              }}
+            >
+              <ThumbnailImage item={item} position={index() + 1} />
+            </button>
+          )}
+        </For>
+      </div>
     </div>
   );
 }
 
-function ThumbnailImage(props: { item: Thumbnail }) {
+function ThumbnailImage(props: { item: Thumbnail; position: number }) {
   let frame!: HTMLSpanElement;
   const [visible, setVisible] = createSignal(false);
   createIntersectionObserver(
@@ -92,12 +100,13 @@ function ThumbnailImage(props: { item: Thumbnail }) {
   return (
     <span
       class="gallery-thumbnail-image"
+      aria-hidden="true"
       ref={(element) => {
         frame = element;
       }}
     >
-      <Loading>
-        <Show when={preview()}>
+      <Loading fallback={props.position}>
+        <Show when={preview()} fallback={props.position}>
           {(item) => <img src={item().src} alt="" decoding="async" referrerpolicy="no-referrer" />}
         </Show>
       </Loading>
