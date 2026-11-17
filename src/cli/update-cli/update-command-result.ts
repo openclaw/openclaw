@@ -266,7 +266,7 @@ function primaryUpdateFailure(error: unknown): unknown {
 }
 
 export function createUpdateCommandFailureResult(
-  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
+  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs" | "runId"> & {
     failure: { cause: unknown; detail?: string };
     admission?: true;
     phase?: string;
@@ -520,7 +520,7 @@ export type UpdateAdmissionReportParams = {
 
 export function createPreMutationUpdateResult(
   params: UpdateAdmissionReportParams,
-  outcome: Pick<UpdateRunResult, "status" | "recovery">,
+  outcome: Pick<UpdateRunResult, "status" | "recovery" | "runId">,
   phase = "requested",
 ): UpdateRunResult {
   const run = params.opts.run;
