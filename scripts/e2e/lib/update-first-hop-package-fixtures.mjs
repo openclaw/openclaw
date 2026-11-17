@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveReleaseCompatibilityVersion } from "../../../src/version-compatibility.ts";
+import { resolveReleaseCompatibilityVersion } from "../../../release-compatibility.mjs";
 import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import {
   createPackageDistContentInventoryEntry,

@@ -48,6 +48,7 @@
     "gateway-shutdown-budget.mjs",
     "node-sqlite.mjs",
     "node-version.mjs",
+    "release-compatibility.mjs",
     "node-runtime-update.mjs",
     "node-runtime-env.mjs",
     "node-runtime-recovery.mjs",

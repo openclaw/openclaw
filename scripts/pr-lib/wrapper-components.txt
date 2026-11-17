@@ -7,6 +7,7 @@ worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
+release-compatibility.mjs
 package.json
 packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts

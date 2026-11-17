@@ -32,8 +32,13 @@ export const runNodeSourceRoots = [
   ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
-/** Root config files whose changes invalidate the dev build. */
-export const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
+/** Root build inputs whose changes invalidate the dev build. */
+export const runNodeConfigFiles = [
+  "tsconfig.json",
+  "package.json",
+  "tsdown.config.ts",
+  "release-compatibility.mjs",
+];
 /** Combined watch list used by the run-node wrapper. */
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 /** Plugin metadata files that require a runtime restart even without source edits. */

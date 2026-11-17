@@ -5327,12 +5327,12 @@ done
       .filter(
         (mount) =>
           mount.endsWith("/windows-cmd-helpers.mjs:ro") ||
-          mount.endsWith("/version-compatibility.ts:ro"),
+          mount.endsWith("/release-compatibility.mjs:ro"),
       );
 
     expect(mounts).toEqual([
-      "/trusted-harness/src/version-compatibility.ts:/app/src/version-compatibility.ts:ro",
-      "/trusted-harness/src/version-compatibility.ts:/tmp/openclaw-release-harness/src/version-compatibility.ts:ro",
+      "/trusted-harness/release-compatibility.mjs:/app/release-compatibility.mjs:ro",
+      "/trusted-harness/release-compatibility.mjs:/tmp/openclaw-release-harness/release-compatibility.mjs:ro",
       "/selected/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro",
     ]);
   });

@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveReleaseCompatibilityVersion } from "../release-compatibility.mjs";
 import { resolveLoadedCommitHash } from "./infra/git-commit.js";
-import { resolveReleaseCompatibilityVersion } from "./version-compatibility.js";
 
 const CORE_PACKAGE_NAME = "openclaw";
 
