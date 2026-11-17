@@ -381,11 +381,11 @@ it.each([
     if (phase === "before cleanup") {
       await changeOrigin();
     } else {
-      const withAllocation = allocation.withWorktreeAllocationLease;
-      vi.spyOn(allocation, "withWorktreeAllocationLease").mockImplementationOnce(
+      const withMutation = allocation.withWorktreeMutationLease;
+      vi.spyOn(allocation, "withWorktreeMutationLease").mockImplementationOnce(
         async (params, run) => {
           await changeOrigin();
-          return await withAllocation(params, run);
+          return await withMutation(params, run);
         },
       );
     }

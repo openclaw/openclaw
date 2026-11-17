@@ -75,6 +75,33 @@ async function buildStandaloneRuntimeProcess(name: string) {
 }
 
 describe("standalone runtime process build graph", () => {
+  it("keeps host logging out of transcript navigation static imports", async () => {
+    const entry = "src/agents/sessions/session-manager-navigation.ts";
+    const result = await build({
+      absWorkingDir: repoRoot,
+      entryPoints: [entry],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      packages: "external",
+      write: false,
+      metafile: true,
+    });
+    const reached = new Set<string>();
+    const visit = (input: string) => {
+      if (reached.has(input)) {
+        return;
+      }
+      reached.add(input);
+      for (const imported of result.metafile.inputs[input]?.imports ?? []) {
+        if (!imported.external && imported.kind !== "dynamic-import") {
+          visit(imported.path);
+        }
+      }
+    };
+    visit(entry);
+    expect(reached.has("src/logger.ts")).toBe(false);
+  });
   it("keeps small workers out of shared Gateway chunks", () => {
     const workers = [
       "infra/update-state-sizes.entry",

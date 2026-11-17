@@ -1524,7 +1524,6 @@ const checkpoint = () =>
 const { collectRetiredWorktreeArtifacts } =
   await import("../../src/agents/worktrees/gc-artifacts.js");
 const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
-const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
 // A populated default root with only registered checkouts is the recurring idle case.
 const maintained: LocalWorkspaceOwner["worktree"][] = [];
 if (values.mode === "maintenance") {
@@ -1987,7 +1986,7 @@ measurement: try {
       expiresBefore: 0,
       progress,
       orphanFailures: new Map(),
-      withAllocationLease: (run) => withWorktreeAllocationLease({ env: process.env }, run),
+      guard: {},
     });
     assert.equal(
       progress.result.outcome,

@@ -8,7 +8,7 @@ read_when:
 title: "Managed worktrees"
 ---
 
-Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) also requires a successful recovery snapshot.
+Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before ordinary removal. [Capacity eviction](#capacity-and-eviction) also preserves the checkout if its recovery snapshot cannot be completed.
 
 Projects cloned by OpenClaw always start new sessions in managed worktrees,
 including requests that omit `worktree` or set it to `false`. The shared clone is
@@ -314,7 +314,7 @@ See [Configuration reference](/gateway/config-runtime#worktreeroot) for the opti
 
 The policy is: **squashed/merged first, then by age including unsaved data**. Cleanup prefers branches merged into the repository's default branch, then branches detected as squash-landed, then idle checkouts ordered from oldest to newest by last use. Manual worktrees and moved branches remain capacity candidates. A failed recovery snapshot preserves the checkout, including nested repositories and unreadable contents; recorded retry and preservation receipts also protect it from capacity eviction. Commit or otherwise back up work you need to retain.
 
-Creation reserves a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates.
+Creation and snapshot restore reserve a persisted slot before preparing files. Name and owner checks happen at that reservation; materialization, ignored-file provisioning, and setup then run independently of other creates. Publication atomically replaces the pending slot with a live record. Concurrent requests for the same owner wait and reuse its completed checkout. Capacity admission waits for an in-progress creation when its slot prevents admission; pending checkouts are never eviction candidates. The global allocation lease covers reservation and count checks only. Snapshot capture, hydration, restoration, rollback, and recursive deletion retain checkout custody outside that lease, so slow maintenance does not block unrelated allocations. Eviction claims the selected checkout against run admission and checks its authoritative binding before destructive work.
 
 Sandbox projection preparation uses its existing worktree's mutation lease, so a cold
 dependency build does not hold global creation capacity. Preparations of the same
@@ -589,7 +589,7 @@ The Gateway keeps ownership of Git subprocesses, cancellation, operation leases,
 
 A snapshot reuses its operation's path inventories and pins the source HEAD while constructing its temporary index. Publication verifies HEAD atomically after waiting for other ref mutations. If HEAD changes during preparation, cleanup preserves the checkout and asks you to retry. Provisioned-file membership is checked again at capture time because ignore rules and the source index can change independently. Concurrent operations retain independent checkout custody and shared disk admission without weakening snapshot protection.
 
-Snapshot removal uses a smaller reserve of 128 MiB plus estimated snapshot writes, so safe cleanup remains possible below the operational reserve. If a required snapshot cannot fit, ordinary removal preserves the checkout and asks you to free space first; cap eviction permits snapshot loss.
+Snapshot removal uses a smaller reserve of 128 MiB plus estimated snapshot writes, so safe cleanup remains possible below the operational reserve. If a required snapshot cannot fit, ordinary removal and cap eviction preserve the checkout and report the capacity failure.
 
 ## Provision ignored files
 

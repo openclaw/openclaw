@@ -340,7 +340,7 @@ export const contract = defineFeatureContract({
     remember: {
       kind: "action",
       description:
-        "Cheapest durable save: 1–20 claims (decision, preference, commitment, fact, event, belief) in one call, no search or readback needed. Give short attribution and the supporting conversation excerpt; it is retained as their evidence. Optional subject (exact page ID, title or alias) links each claim to a uniquely matching page; otherwise it is saved unlinked and reported. Never creates pages. Exact repeats return duplicate with the saved claim. One claim per item; never agent inference. Commitments are not scheduled. Use knowledge-capture to revise page prose.",
+        "Cheapest durable save: 1–20 claims (decision, preference, commitment, fact, event, belief) in one call, no search or readback needed. Give short attribution and the supporting conversation excerpt; it is retained as their evidence. Optional subject (exact page ID, title or alias) links each claim to a uniquely matching page; otherwise it is saved unlinked and reported. Never creates pages. Exact repeats return duplicate with the saved claim. One claim per item; never agent inference. Save outcomes, not progress toward them, and prefer the user's words over your observations. Commitments are not scheduled. Use knowledge-capture to revise page prose.",
       input: RememberInput,
       output: Type.Union([LeanRememberOutput, RememberOutput]),
       tool: { name: "knowledge_remember", label: "Remember knowledge" },

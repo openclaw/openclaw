@@ -146,6 +146,8 @@
    whether its content is visible, hidden or absent, so revealing it never moves
    the next turn and every group ends the same distance above the turn gap. */
 .chat-group-footer {
+  -webkit-user-select: none;
+  user-select: none;
   --chat-action-gap: var(--chat-footer-offset);
   position: relative;
   display: flex;
@@ -1039,7 +1041,7 @@ img.chat-avatar {
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: 100%;
-  max-width: var(--chat-message-max-width, 760px);
+  max-width: var(--chat-message-max-width, 100%);
   padding: 0;
   border: 0;
   background: transparent;

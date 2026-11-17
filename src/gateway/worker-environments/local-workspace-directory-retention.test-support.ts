@@ -81,7 +81,7 @@ export async function proveAcceptedDirectoryRetention(
 
   let source = "original\n";
   if (mode === "interrupted eviction") {
-    const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+    const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
     const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
     const { hasWorkerWorkspaceResultRef, workerWorkspaceResultStaging } =
       await import("./workspace-result-staging.js");
@@ -90,7 +90,7 @@ export async function proveAcceptedDirectoryRetention(
       .mockRejectedValueOnce(new Error("archive staging interrupted"));
     try {
       await expect(
-        withWorktreeAllocationLease({ env: process.env }, (guard) =>
+        withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
           evictManagedWorktree({
             env: process.env,
             record: owner.worktree,

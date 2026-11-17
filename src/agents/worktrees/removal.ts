@@ -38,7 +38,7 @@ import {
   retireExactWorktree,
 } from "./removal-git.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
-import { abortWorktreeRemoval } from "./run-lease.js";
+import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { rebindLiveWorktreeRepository } from "./service-preparation.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import {
@@ -49,9 +49,33 @@ import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeRunEndCleanup,
+  ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
   WorktreeWorkerAuthority,
 } from "./types.js";
+
+export async function claimManagedRemoval(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  params: RemoveWorktreeParams,
+): Promise<string> {
+  const token = params.claimToken ?? randomUUID();
+  const claim = () =>
+    claimWorktreeRemoval(env, {
+      worktreeId: record.id,
+      token,
+      assertCurrent: params.commitGuard,
+      workerAuthority: {
+        ...params.workerAuthority,
+        assertCurrent: params.workerAuthority
+          ? params.workerAuthority.assertCurrent
+          : params.commitGuard,
+        predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "binding", record }],
+      },
+    });
+  await (params.withOwnerMutation ? params.withOwnerMutation(claim) : claim());
+  return token;
+}
 
 export type RemoveWorktreeParams = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
   workerAuthority?: WorktreeWorkerAuthority;

@@ -8,6 +8,7 @@ import type {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
+import type { MemberRecoveryUse } from "./member-recovery-use-contract.js";
 
 /** The signed-in account the Gateway's verified sign-in reports. */
 export type OpenClawIdAccount = {
@@ -45,6 +46,8 @@ export type StoredClaw = {
   member_approved_at?: Record<string, number | null>;
   /** Display-only browser notices and bounded replay/rate receipts for current members. */
   member_browser_requests?: Record<string, MemberBrowserRequestState>;
+  /** Accepted kit-use evidence; retained after kit, browser, and member removal. */
+  member_recovery_uses?: MemberRecoveryUse[];
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
@@ -127,6 +130,7 @@ type StoredClawCore = Omit<
   | "token_bindings"
   | "member_approved_at"
   | "member_browser_requests"
+  | "member_recovery_uses"
 > & {
   v: 2;
   authority: Omit<AuthorityState, "owner_devices" | "members" | "invites"> | null;
@@ -142,6 +146,7 @@ type ClawRows = {
   "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
   [key: `member-browser-requests:${number}`]: NonNullable<StoredClaw["member_browser_requests"]>;
   "token-bindings": StoredTokenBindings;
+  [key: `member-recovery-use:${number}`]: MemberRecoveryUse;
 };
 type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
 
@@ -165,6 +170,7 @@ export function clawStoreRows(record: StoredClaw): ClawRows {
     member_approved_at,
     member_browser_requests,
     token_bindings,
+    member_recovery_uses,
     ...core
   } = record;
   let anchor: StoredClawCore["authority"] = null;
@@ -196,6 +202,9 @@ export function clawStoreRows(record: StoredClaw): ClawRows {
     members: Object.fromEntries(memberEntries.slice(0, 32)),
     ...memberRows,
     ...browserRows,
+    ...Object.fromEntries(
+      (member_recovery_uses ?? []).map((use) => [`member-recovery-use:${use.seq}`, use]),
+    ),
     invites: authority?.invites ?? {},
     "invite-reports": invite_reports ?? {},
     "member-approvals": member_approved_at ?? {},
@@ -224,6 +233,11 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
     // SAFETY: these fixed keys are written together by clawStoreRows under this module's owner.
     return entries.get(key) as ClawRows[Key];
   };
+  const recoveryUses = [...entries]
+    .filter(([key]) => key.startsWith("member-recovery-use:"))
+    // SAFETY: only clawStoreRows writes these evidence rows, atomically with admission.
+    .map(([, value]) => value as MemberRecoveryUse)
+    .toSorted((a, b) => a.seq - b.seq);
   return {
     ...record,
     v: 1,
@@ -255,6 +269,7 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
           ),
         }
       : {}),
+    ...(recoveryUses.length ? { member_recovery_uses: recoveryUses } : {}),
     token_bindings: section("token-bindings").bindings,
   };
 }

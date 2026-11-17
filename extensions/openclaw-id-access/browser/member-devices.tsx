@@ -16,6 +16,7 @@ type MemberDevicesProps = {
   motion: PeopleMotion;
   disabled: boolean;
   readOnly?: boolean;
+  selectedDevice?: string;
   nowMs: number;
   onRemove: (member: Member, device: MemberDevice) => void;
 };
@@ -26,7 +27,12 @@ function DeviceRow(props: MemberDevicesProps & { device: MemberDevice }) {
     memberDeviceRemovalCount(props.member.devices ?? [], props.device),
   );
   return (
-    <li class="ocid-access__device">
+    <li
+      class={[
+        "ocid-access__device",
+        { "ocid-access__device--highlighted": props.device.peerKey === props.selectedDevice },
+      ]}
+    >
       <div class="ocid-access__device-info">
         <div class="ocid-access__title">{props.device.label}</div>
         <p class="ocid-access__hint">
@@ -84,12 +90,35 @@ function DeviceRow(props: MemberDevicesProps & { device: MemberDevice }) {
 /** Device details stay with their member; the page owns the signed removal. */
 export function MemberDevices(props: MemberDevicesProps) {
   return (
-    <Show when={props.member.devices?.length}>
-      <ul class="ocid-access__devices" aria-label={`${memberName(props.member)}'s devices`}>
-        <For each={props.member.devices} keyed={(device) => device.peerKey}>
-          {(device) => <DeviceRow {...props} device={device()} />}
-        </For>
-      </ul>
-    </Show>
+    <>
+      <Show
+        when={
+          props.selectedDevice &&
+          !props.member.devices?.some((device) => device.peerKey === props.selectedDevice)
+        }
+      >
+        <p class="ocid-access__device-missing ocid-access__hint" role="status">
+          This browser has been removed. It no longer has access.
+        </p>
+      </Show>
+      <Show when={props.member.devices?.length}>
+        <ul class="ocid-access__devices" aria-label={`${memberName(props.member)}'s devices`}>
+          <For
+            each={
+              props.selectedDevice
+                ? props.member.devices?.toSorted(
+                    (a, b) =>
+                      Number(b.peerKey === props.selectedDevice) -
+                      Number(a.peerKey === props.selectedDevice),
+                  )
+                : props.member.devices
+            }
+            keyed={(device) => device.peerKey}
+          >
+            {(device) => <DeviceRow {...props} device={device()} />}
+          </For>
+        </ul>
+      </Show>
+    </>
   );
 }

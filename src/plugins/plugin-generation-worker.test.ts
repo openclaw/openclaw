@@ -351,7 +351,16 @@ it.each(["content", "source-path"] as const)(
 it("keeps a native-only recovery fork after its worker and admission cache retire", async () => {
   await withWorkerFixture("worker-native-fork", async ({ fixture, cache }) => {
     preparePluginNativeAdmissions(fixture.index, cache);
-    const prepared = await prepare(fixture);
+    const { prepared, rootCalls } = await (async () => {
+      using observedFs = observeMainThreadFs();
+      const capture = await prepare(fixture);
+      return {
+        prepared: capture,
+        rootCalls: observedFs
+          .stacks()
+          .filter(({ stack }) => stack.includes("plugin-source-capture-directory")),
+      };
+    })();
     const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
     const recovery = prepared.artifact.captureRecoverySource();
     const native = recovery.native!.fork();
@@ -370,6 +379,7 @@ it("keeps a native-only recovery fork after its worker and admission cache retir
       await prepared.artifact.disposeAsync();
     }
     expect(fs.existsSync(captured)).toBe(false);
+    expect(rootCalls).toEqual([]);
   });
 });
 
@@ -509,6 +519,17 @@ it("finishes a capture after more than two minutes without retiring its worker",
   const cache = createPluginCache();
   const { promise: gate, resolve: releasePublication } = createDeferredCore();
   const { promise: started, resolve: publicationStarted } = createDeferredCore();
+  // Socket startup uses real timers; keep plugin preparation cold under the fake task clock.
+  const transport = await captureRetainedNativeWorkerSource({
+    runtimeGeneration: undefined,
+  }).captureIndependentResource(
+    new URL(
+      `data:text/javascript,${encodeURIComponent(
+        "export function createNativeWorkerResource() { return { async close() {} }; }",
+      )}`,
+    ),
+  );
+  await transport.close();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   try {
     await withInstalledCapture(root, cache, async () => {
