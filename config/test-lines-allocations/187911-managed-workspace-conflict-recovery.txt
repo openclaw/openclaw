@@ -3,4 +3,4 @@
 # candidate binding, partial-resolution acceptance, baseline overlay fidelity,
 # resolved-path rejection after newer guest edits, and ordinary saves staying
 # checkpoint-free.
-889
+937
